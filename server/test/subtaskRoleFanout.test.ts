@@ -158,6 +158,28 @@ describe("умная параллелизация подзадач (subtaskRoleF
     expect(res.json().plan.nodes.map((n: { role_key: string }) => n.role_key).sort()).toEqual(["builder", "qa"]);
   });
 
+  it("черновик не обходит ручные подзадачи: похожий шаг привязывается, лишняя подзадача становится шагом (19.10.2026)", async () => {
+    const taskId = await makeTaskWithSubtasks("Каркас приложения", "builder", ["Основа приложения: токены и две темы", "Купить молоко"]);
+    const res = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans`, headers: ownerAuth, payload: {
+      profile: "manual", rationale: "черновик",
+      nodes: [
+        { slot_key: "base", role_key: "builder", expected_result: "Основа: приложение, токены и темы" },
+        { slot_key: "check", role_key: "qa", expected_result: "Проверить вход и темы" },
+      ],
+      edges: [{ from_slot_key: "base", to_slot_key: "check", start_condition: "submitted" }],
+    } });
+    expect(res.statusCode).toBe(201);
+    const plan = res.json().plan;
+    const subs = db.prepare("SELECT id, title FROM subtasks WHERE task_id=?").all(taskId) as { id: string; title: string }[];
+    const idOf = (t: string) => subs.find((x) => x.title === t)!.id;
+    const base = plan.nodes.find((n: { slot_key: string }) => n.slot_key === "base");
+    expect(base.source_subtask_id).toBe(idOf("Основа приложения: токены и две темы"));
+    expect(base.requires_choice).toBe(true); // формулировки разные — выбор за владельцем
+    const extra = plan.nodes.find((n: { source_subtask_id: string | null }) => n.source_subtask_id === idOf("Купить молоко"));
+    expect(extra.role_key).toBe("builder");
+    expect(plan.edges.some((e: { from_slot_key: string; to_slot_key: string }) => e.from_slot_key === extra.slot_key && e.to_slot_key === "check")).toBe(true);
+  });
+
   // Галочка «Роли для подзадач» в разделе JEV (16.10.2026). TypeSafe не
   // зовём: fetch подменён ответом с выбором ролей по каждой подзадаче.
   describe("JEV подбирает роли подзадачам", () => {

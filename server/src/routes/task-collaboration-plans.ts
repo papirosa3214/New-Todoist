@@ -34,6 +34,7 @@ import { suggestFanoutFromSubtasks } from "../runtime/subtaskRoleFanout.js";
 import { pickPlanProfileByJev, type JevPlanProfilePick } from "../lib/planProfileJev.js";
 
 import { ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT } from "../runtime/orchestratedPlan.js";
+import { bindManualSubtasks } from "../lib/planManualSubtasks.js";
 const PROFILES = new Set<string>([...TEMPLATE_PROFILES, "manual"]);
 const CONDITIONS = new Set(["submitted", "accepted", "artifact_ready"]);
 const SLOT_KEY = /^[a-z][a-z0-9_]{1,63}$/;
@@ -478,6 +479,11 @@ function supersedePendingDrafts(taskId: string): void {
 }
 
 export function createDraftPlan(taskId: string, createdBy: string, profile: string, rationale: string, contextVersion: number | null, graph: { nodes: Node[]; edges: Edge[] }) {
+  // Шаги черновика привязываются к ручным подзадачам, чтобы не плодить
+  // дубли рядом с ними (владелец 19.10.2026). Служебные планы оркестратора
+  // и сборки ветки — со своими узлами, их не трогаем.
+  const service = graph.nodes.some((n) => [ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT, BRANCH_PREP_SLOT, "summary"].includes(n.slot_key));
+  if (!service) graph = bindManualSubtasks(taskId, graph);
   supersedePendingDrafts(taskId);
   const revision = ((db.prepare("SELECT MAX(revision) AS revision FROM task_collaboration_plans WHERE task_id = ?").get(taskId) as { revision: number | null }).revision ?? 0) + 1;
   const id = `tcp_${crypto.randomUUID()}`;
