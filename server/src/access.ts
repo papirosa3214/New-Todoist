@@ -694,6 +694,24 @@ export function allLabelsOwnedByUser(
 }
 
 /** Commentary is narrower than editing a card: an assigned approved slot may report its work. */
+/** Почему комментарий не принят. Людям — прежний 404 (не выдаём, что
+ *  карточка существует). ИИ-роли по карточке, которую ей видеть можно,
+ *  получают причину и следующий шаг: голый «Not found» они читали как
+ *  «у меня нет доступа» и жаловались владельцу (19.10.2026). */
+export function commentRefusal(taskId:string,userId:string):{status:number;error:string} {
+  const notFound = { status: 404, error: "Not found" };
+  if (callerOf(userId)?.type !== "ai") return notFound;
+  const row = taskById().get(taskId) as any;
+  if (!row || projectHiddenFrom(userId, getProjectRow(row.project_id))) return notFound;
+  if (row.archived_at) return { status: 409, error: "Карточка в архиве — комментарии к ней не принимаются. Если работа продолжается, напиши владельцу в чат." };
+  return {
+    status: 403,
+    error: "Комментировать карточку может только её исполнитель или роль с открытым шагом в утверждённом плане этой карточки. "
+      + "У тебя здесь открытого шага нет (или он уже сдан). Дальше: 1) если работаешь в своём шаге — пиши в карточку этого шага (taskflow_my_tasks покажет её id); "
+      + "2) если нужно сообщить участнику — taskflow_topic_send или чат с владельцем; 3) отчёт сохраняй через taskflow_doc_write.",
+  };
+}
+
 export function getTaskForComment(taskId:string,userId:string):any|undefined {
   const viaWrite = getTaskForWrite(taskId,userId);
   if (viaWrite) return viaWrite;

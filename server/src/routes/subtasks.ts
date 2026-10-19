@@ -13,7 +13,7 @@ import { logStepOutcome } from "../runtime/stepOutcome.js";
 import { announceStepState } from "../runtime/stepTopicProgress.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
-import { getTaskForRead, getTaskForWrite, getTaskForComment } from "../access.js";
+import { getTaskForRead, getTaskForWrite, getTaskForComment, commentRefusal } from "../access.js";
 import { isServiceUser } from "../serviceUser.js";
 import {
   blockedHelpError,
@@ -1188,7 +1188,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const task = getTaskForComment(req.params.taskId, req.userId) as any;
-      if (!task) return reply.code(404).send({ error: "Not found" });
+      if (!task) {
+        const refusal = commentRefusal(req.params.taskId, req.userId);
+        return reply.code(refusal.status).send({ error: refusal.error });
+      }
 
       // Шаг 3 карточки 8ca87c61: проверка attempt_id для комментария
       // агента — комментарий это тоже «сообщение от попытки».
