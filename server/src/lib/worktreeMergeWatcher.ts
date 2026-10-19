@@ -186,6 +186,23 @@ export function checkWorktreeMerge(): MergeWatchResult {
   return { ok: problems.length === 0, problems };
 }
 
+/**
+ * Что делать с очередью, когда встала. Текст уходит владельцу в
+ * уведомление, поэтому здесь только то, что реально помогает.
+ * 19.10.2026 поправлено: очередь НЕ «продолжит сама» после того, как
+ * помеха снята, — до правки возврата в очередь не было, и совет
+ * «просто закоммитить» оставлял карточку стоять на месте.
+ */
+export const MERGE_WATCH_ACTIONS: readonly string[] = [
+  '- Очередь: `sqlite3 -column server/taskflow.db "SELECT task_id, state, error, updated_at FROM worktree_merge_queue"`.',
+  "- Журнал: `tail ~/.local/state/taskflow-runs/worktrees/merge-journal.log`.",
+  "- Грязный main — закоммитить или убрать чужие правки в `~/Проекты/New-Todoist`: как только main станет чистым, эти строки вернутся в очередь сами (проход обслуживания ходит каждые несколько минут).",
+  "- Грязная копия роли — закоммитить в самой копии, строка вернётся в очередь сама.",
+  "- База падений не снимается — смотреть `merge-baseline.json` и прогон `npm test` в `server/`.",
+  "- Конфликт / красные тесты — это решение ответственного за интеграцию: починить в копии и сдать шаг снова. Автоповтора тут нет намеренно.",
+  "- main не доехал до хоста — `~/.local/state/taskflow-runs/worktrees/push-status.json`; после починки `~/infra-ops/git-sync/git-sync.sh ~/Проекты/New-Todoist`. Расхождение без слова владельца не форсить.",
+];
+
 function raise(problems: string[]) {
   const now = Date.now();
   if (now - lastRaisedAt < DAY_MS) return;
@@ -203,12 +220,7 @@ function raise(problems: string[]) {
     "происходит. Копии и ветки не убираются, хвост на диске растёт.",
     "",
     "## Что делать",
-    '- Очередь: `sqlite3 -column server/taskflow.db "SELECT task_id, state, error, updated_at FROM worktree_merge_queue"`.',
-    "- Журнал: `tail ~/.local/state/taskflow-runs/worktrees/merge-journal.log`.",
-    "- Грязный main — закоммитить или убрать чужие правки в `~/Проекты/New-Todoist`, очередь продолжит сама.",
-    "- База падений не снимается — смотреть `merge-baseline.json` и прогон `npm test` в `server/`.",
-    "- Конфликт / красные тесты — это решение ответственного за интеграцию: починить в копии и сдать шаг снова.",
-    "- main не доехал до хоста — `~/.local/state/taskflow-runs/worktrees/push-status.json`; после починки `~/infra-ops/git-sync/git-sync.sh ~/Проекты/New-Todoist`. Расхождение без слова владельца не форсить.",
+    ...MERGE_WATCH_ACTIONS,
   ].join("\n");
   raiseIncident({ key: INCIDENT_KEY, title, description, priority: PRIORITY });
 }
