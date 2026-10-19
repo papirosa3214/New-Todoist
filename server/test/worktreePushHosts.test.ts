@@ -8,6 +8,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   loadPushStatus,
+  pruneBackups,
   pushMainToHosts,
 } from "../src/lib/worktree/pushHosts.js";
 
@@ -86,8 +87,8 @@ describe("отправка main на хосты", () => {
     git(live, "remote", "add", "origin", host);
 
     const first = pushMainToHosts(live);
-    expect(first.results).toEqual([
-      { remote: "origin", state: "pushed", backup: undefined },
+    expect(first.results).toMatchObject([
+      { remote: "origin", state: "pushed", backup: undefined, pruned: 0 },
     ]);
     const before = git(host, "rev-parse", "main");
 
@@ -143,5 +144,40 @@ describe("отправка main на хосты", () => {
     expect(status.results.find((r) => r.remote === "github")?.state).toBe(
       "pushed",
     );
+  });
+
+  it("уборка: старые бэкапы этого хоста уходят, свежий и чужие имена остаются", () => {
+    const { live, bare } = fresh("prune");
+    const host = bare("host");
+    git(live, "remote", "add", "origin", host);
+    pushMainToHosts(live);
+    const keep = [
+      "backup-origin-main-20991231-235959", // свежий
+      "backup-github-main-20200101-000000", // другой хост
+      "backup-origin-main-manual", // не наш формат
+    ];
+    const old = [
+      "backup-origin-main-20200101-000000",
+      "backup-origin-main-20200102-120000",
+    ];
+    for (const name of [...keep, ...old]) git(host, "branch", name, "main");
+
+    expect(pruneBackups(live, "origin")).toBe(2);
+    const left = git(host, "branch", "--format=%(refname:short)").split("\n");
+    for (const name of keep) expect(left).toContain(name);
+    for (const name of old) expect(left).not.toContain(name);
+    expect(pruneBackups(live, "origin")).toBe(0);
+  });
+
+  it("уборка: единственный бэкап остаётся, даже старый", () => {
+    const { live, bare } = fresh("prune-one");
+    const host = bare("host");
+    git(live, "remote", "add", "origin", host);
+    pushMainToHosts(live);
+    git(host, "branch", "backup-origin-main-20200101-000000", "main");
+    expect(pruneBackups(live, "origin")).toBe(0);
+    expect(
+      git(host, "branch", "--list", "backup-origin-main-20200101-000000"),
+    ).not.toBe("");
   });
 });

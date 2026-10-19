@@ -20,6 +20,8 @@ import { worktreesBase } from "./paths.js";
 
 const NET_TIMEOUT_MS = 120_000;
 const BRANCH = "main";
+/** Ветки-бэкапы старше этого срока убираются с хоста (владелец 19.10.2026). */
+export const BACKUP_KEEP_DAYS = 30;
 
 export type HostPushState = "pushed" | "in_sync" | "diverged" | "failed";
 
@@ -28,6 +30,8 @@ export interface HostPushResult {
   state: HostPushState;
   detail?: string;
   backup?: string;
+  /** Сколько старых веток-бэкапов убрано с хоста в этом проходе. */
+  pruned?: number;
 }
 
 export interface PushStatus {
@@ -157,6 +161,55 @@ export function loadPushStatus(): PushStatus | null {
   }
 }
 
+const BACKUP_STAMP = /^(\d{8})-(\d{6})$/;
+
+/**
+ * Убрать с хоста ветки-бэкапы старше BACKUP_KEEP_DAYS. Трогаем только имена
+ * строго формата `backup-<remote>-main-ГГГГММДД-ЧЧММСС` (его пишут и эта
+ * отправка, и `infra-ops/git-sync/git-sync.sh`); дата — из имени. Самый
+ * свежий бэкап остаётся всегда, даже если он старше срока.
+ */
+export function pruneBackups(
+  cwd: string,
+  remote: string,
+  now = new Date(),
+): number {
+  const prefix = `backup-${remote}-${BRANCH}-`;
+  const names = run(
+    cwd,
+    ["ls-remote", "--heads", remote, `refs/heads/${prefix}*`],
+    NET_TIMEOUT_MS,
+  )
+    .split("\n")
+    .map((line) => line.split("\t")[1]?.replace("refs/heads/", "") ?? "")
+    .filter(
+      (name) =>
+        name.startsWith(prefix) && BACKUP_STAMP.test(name.slice(prefix.length)),
+    )
+    .sort();
+  if (names.length <= 1) return 0;
+  const cutoff = now.getTime() - BACKUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+  const stale = names.slice(0, -1).filter((name) => {
+    const [, d, t] = name.slice(prefix.length).match(BACKUP_STAMP)!;
+    const at = Date.UTC(
+      +d.slice(0, 4),
+      +d.slice(4, 6) - 1,
+      +d.slice(6, 8),
+      +t.slice(0, 2),
+      +t.slice(2, 4),
+      +t.slice(4, 6),
+    );
+    return at < cutoff;
+  });
+  if (!stale.length) return 0;
+  run(
+    cwd,
+    ["push", "--quiet", remote, ...stale.map((name) => `:refs/heads/${name}`)],
+    NET_TIMEOUT_MS,
+  );
+  return stale.length;
+}
+
 /** Отправить main во все хосты и записать итог для сторожа. */
 export function pushMainToHosts(cwd: string): PushStatus {
   const stamp = new Date()
@@ -166,9 +219,18 @@ export function pushMainToHosts(cwd: string): PushStatus {
     .replace("T", "-");
   let results: HostPushResult[];
   try {
-    results = uniqueRemotes(cwd).map((remote) =>
-      pushToHost(cwd, remote, stamp),
-    );
+    results = uniqueRemotes(cwd).map((remote) => {
+      const result = pushToHost(cwd, remote, stamp);
+      if (result.state === "pushed" || result.state === "in_sync") {
+        try {
+          result.pruned = pruneBackups(cwd, remote);
+        } catch (error) {
+          // Уборка — гигиена: её сбой не отменяет состоявшуюся отправку.
+          result.detail = `уборка бэкапов не прошла: ${reason(error)}`;
+        }
+      }
+      return result;
+    });
   } catch (error) {
     results = [{ remote: "*", state: "failed", detail: reason(error) }];
   }
