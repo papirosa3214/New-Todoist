@@ -83,7 +83,9 @@ export function secretaryThings3Tools(context: Things3ToolContext): Tool[] {
           arguments: p.arguments ?? {},
         })) as any;
 
-        if (!ответ?.ok) throw new Error(`Хост не выполнил: ${String(ответ?.error ?? "без текста")}`);
+        // Things3 на маке иногда не отвечает (закрыт или завис). Без следующего шага
+        // секретарь повторял тот же вызов (разбор отказов 19.10.2026).
+        if (!ответ?.ok) throw new Error(`Хост не выполнил: ${String(ответ?.error ?? "без текста")}. Дальше: повтори этот же вызов один раз; если снова не вышло — не перебирай другие операции Things, сообщи владельцу, что Things3 на маке не отвечает и его нужно открыть или перезапустить.`);
         const data = ответ.data as { ok?: boolean; error?: string; tool?: string; result?: string } | undefined;
         if (data?.ok === false) throw new Error(`Things3: ${data.error ?? data.result ?? "операция не выполнена"}`);
         return text(data?.result ?? JSON.stringify(ответ));

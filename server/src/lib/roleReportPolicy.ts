@@ -17,7 +17,7 @@ export const ROLE_REPORT_INSTRUCTION = [
   "Сервер сам сохраняет отчёт в папке задачи и прикрепляет ссылку к результату этапа. Отдельно doc_write для этого же отчёта не вызывай.",
 ].join("\n");
 export function validateRoleReport(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error("report_markdown обязателен: читаемый отчёт о результате этапа.");
+  if (typeof value !== "string" || !value.trim()) throw new Error("report_markdown обязателен: читаемый отчёт о результате этапа. Передай его в том же вызове — Markdown с разделами " + ROLE_REPORT_SECTIONS.map(s => "## " + s).join(", ") + "; каждый раздел не пустой.");
   const markdown = value.trim();
   if (markdown.length > 64000) throw new Error("report_markdown: максимум 64000 символов.");
   const prose = markdown.replace(/^[ \t]*(\x60{3,}|~{3,}).*[\s\S]*?^[ \t]*\1[ \t]*$/gm, "");

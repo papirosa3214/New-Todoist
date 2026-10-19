@@ -122,4 +122,18 @@ describe("secretaryThings3Tools", () => {
     await expect(secretaryThings3Tools({ role: "secretary" })[0].execute("1", { tool: "things_today" }, undefined as any)).rejects.toThrow(/Operation not permitted/);
   });
 
+  it("Things3 не ответил — отказ говорит: один повтор, потом сообщить владельцу", async () => {
+    (listMachines as any).mockReturnValue([{ id: "mac", name: "macbook", platform: "darwin", revoked_at: null }]);
+    (isMachineOnline as any).mockReturnValue(true);
+    (runOperation as any).mockResolvedValue({ ok: false, error: "Things3 не ответил на вызов" });
+    const { secretaryThings3Tools } = await import("../src/runtime/secretaryThings3Tools.js");
+    const [инструмент] = secretaryThings3Tools({ role: "secretary" });
+    await expect(инструмент.execute("2", { tool: "things_today", arguments: {} }, undefined as any))
+      .rejects.toThrow("сообщи владельцу");
+  });
+
+  it("пустой report_markdown — отказ перечисляет обязательные разделы", async () => {
+    const { validateRoleReport } = await import("../src/lib/roleReportPolicy.js");
+    expect(() => validateRoleReport("")).toThrow("## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы");
+  });
 });
