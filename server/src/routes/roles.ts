@@ -5,10 +5,11 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken, ownerOrApiToken } from "../auth.js";
-import { discoverExternalAgents, syncExternalAgents } from "../lib/externalAgents.js";
+import { agentBinary, discoverExternalAgents, syncExternalAgents } from "../lib/externalAgents.js";
 import {
   ROLE_NAMES,
   allRoles,
+  externalRuntime,
   loadRoleRouting,
   roleTitle,
   refreshRoles,
@@ -63,7 +64,7 @@ function readRolePrompt(role: RoleName): string {
 function roleAccount(role: RoleName) {
   return db
     .prepare(
-      `SELECT id, name, permissions, status, last_seen_at
+      `SELECT id, name, permissions, status, last_seen_at, avatar_url
          FROM users
         WHERE role_key = ? AND role = 'agent' AND type = 'ai'
         ORDER BY created_at
@@ -73,6 +74,7 @@ function roleAccount(role: RoleName) {
     | {
         id: string;
         name: string;
+        avatar_url?: string | null;
         permissions: string | null;
         status: string | null;
         last_seen_at: string | null;
@@ -238,25 +240,32 @@ function roleDetails(role: RoleName, piAlive: boolean) {
     .all(role) as Array<{ skill_name: string; description: string | null }>;
   const навыки = mergeRoleSkills(role, навыкиИзБазы);
 
+  // Внешний агент (Claude Code и т. п.) живёт в своём окружении: профиля Pi,
+  // промпта роли и модели в маршрутизации у него нет — проверяем только, что
+  // он установлен на машине.
+  const external = externalRuntime(role);
   let tools: string[] = [];
-  try {
-    tools = readRoleTools(role);
-  } catch (err) {
-    problems.push(`MCP-профиль не читается: ${(err as Error).message}`);
-  }
-
   let prompt = "";
-  try {
-    prompt = readRolePrompt(role);
-  } catch {
-    problems.push("системный промпт роли не найден");
+  if (!external) {
+    try {
+      tools = readRoleTools(role);
+    } catch (err) {
+      problems.push(`MCP-профиль не читается: ${(err as Error).message}`);
+    }
+    try {
+      prompt = readRolePrompt(role);
+    } catch {
+      problems.push("системный промпт роли не найден");
+    }
+  } else if (!agentBinary(external)) {
+    problems.push("агент не найден на машине — нажми «Найти агентов»");
   }
 
   const account = roleAccount(role);
   if (!account) problems.push("нет учётки роли в системе");
 
-  const model = routing.models[role];
-  if (!model) problems.push("в маршрутизации не задана модель");
+  const model = external ? null : routing.models[role];
+  if (!external && !model) problems.push("в маршрутизации не задана модель");
 
   const work = currentWorkOf(role);
 
@@ -272,7 +281,7 @@ function roleDetails(role: RoleName, piAlive: boolean) {
   let status: RoleStatus;
   if (problems.length) {
     status = "unavailable";
-  } else if (!piAlive) {
+  } else if (!piAlive && !external) {
     status = "unavailable";
   } else if (work?.agent_state === "in_progress") {
     status = "working";
@@ -319,8 +328,11 @@ function roleDetails(role: RoleName, piAlive: boolean) {
     // продолжает читать default_shell (legacy-alias), новое поле — для
     // новых потребителей (/api/runtime/*).
     runtime_id: "runtime:pi",
+    /** pi — внутренняя роль; иначе внешний агент (claude-code, …) в своём окружении. */
+    runtime: external ?? "pi",
+    avatar_url: account?.avatar_url ?? null,
     fallbacks: routing.fallbacks[role],
-    attempt_policy: attemptPolicyFor(model),
+    attempt_policy: model ? attemptPolicyFor(model) : null,
     current_task: work
       ? { id: work.id, title: work.title, state: work.agent_state }
       : null,
