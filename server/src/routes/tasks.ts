@@ -42,11 +42,24 @@ import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
 import { ensurePlanTopic, setTaskTopicClosed } from "../lib/projectTopics.js";
 import { closeTaskTree } from "../lib/taskCloseCascade.js";
 import { criticApproved } from "../lib/criticApproved.js";
+
 export { criticApproved };
 import { attemptLadderForTask } from "../lib/attemptLadder.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
+
+/** Событие запуска роли хранит весь манифест инструкций (≈25 КБ). В карточку
+ *  отдаём только суть — режим и «продолжение»; полный текст остаётся в базе. */
+function briefInstructionSnapshot(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const v = JSON.parse(raw) as { mode?: unknown; resumed?: unknown };
+    return JSON.stringify({ mode: v.mode ?? null, resumed: v.resumed ?? null });
+  } catch {
+    return null;
+  }
+}
 
 const ALLOWED_STATUS = ["active", "completed"];
 
@@ -856,7 +869,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
            FROM task_events e LEFT JOIN users u ON e.actor_id = u.id
            WHERE e.task_id = ? ORDER BY e.created_at, e.rowid`,
         )
-        .all(task.id);
+        .all(task.id)
+        .map((e: any) => (e.kind === "instruction_snapshot" ? { ...e, to_value: briefInstructionSnapshot(e.to_value) } : e));
 
       // Шаг 6 карточки 8ca87c61, ревью 11.09.2026: GET /api/tasks/:id
       // собирает карточку вручную мимо hydrateTask, и без явного запроса
@@ -872,6 +886,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
 
       return {
         ...withAgentStale(full, subtasks, children),
+        // Снимок промпта (десятки КБ) карточке не нужен: клиенты его не
+        // показывают, а телефон перекачивал его при каждом событии
+        // (владелец 20.10.2026: карточка тормозила на 422 КБ). В базе остаётся.
+        composed_prompt_snapshot: undefined,
         labels,
         subtasks,
         children,
