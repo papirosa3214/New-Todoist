@@ -1,6 +1,7 @@
 import {describe,it,expect,vi} from "vitest";
 import {Type} from "typebox";
-import {createUniversalTaskflow} from "../src/runtime/universalTaskflow.js";
+import {createUniversalTaskflow,memoryRequestStore} from "../src/runtime/universalTaskflow.js";
+import {ToolError} from "../src/runtime/inProcessRun.js";
 const context={actor:"role_builder",role:"builder",mode:"work" as const,runId:"test-run"};
 const tool=(execute=vi.fn(async()=>({content:[{type:"text",text:"done"}]})))=>({name:"taskflow_comment",description:"Комментарий в задачу",parameters:Type.Object({id:Type.String(),text:Type.String()}),execute});
 const decode=(r:any)=>JSON.parse(r.content[0].text);
@@ -33,5 +34,20 @@ describe("universal TaskFlow",()=>{
   const api=createUniversalTaskflow([t],context);
   const r=await api.execute("6",{action:"invoke",operation:t.name,version:1,arguments:{id:"t",text:"x"},request_id:"media"});
   expect(r.content.some((c:any)=>c.type==="image")).toBe(true);
+ });
+ it("request_id внутри arguments: запись закрывается, успех не превращается в сбой",async()=>{
+  const t=tool();const store=memoryRequestStore();const api=createUniversalTaskflow([t],context,store);
+  const r=decode(await api.execute("7",{action:"invoke",operation:t.name,version:1,arguments:{id:"t",text:"x",request_id:"in-args"}}));
+  expect(r.ok).toBe(true);expect(r.request_id).toBe("in-args");
+  expect(store.get(context.actor,"in-args")?.state).toBe("succeeded");
+ });
+ it("отказ по правилу — REJECTED с подсказкой; сбой хоста — по-прежнему OPERATION_FAILED",async()=>{
+  const store=memoryRequestStore();
+  const rule=createUniversalTaskflow([tool(vi.fn(async()=>{throw new ToolError("POST /x → 400: сначала возьми шаг",400);}) as any)],context,store);
+  const rej=decode(await rule.execute("8",{action:"invoke",operation:"taskflow_comment",version:1,arguments:{id:"t",text:"x"},request_id:"rule"}));
+  expect(rej.error.code).toBe("REJECTED");expect(rej.error.hint).toContain("новым request_id");
+  expect(store.get(context.actor,"rule")?.state).toBe("rejected");
+  const host=createUniversalTaskflow([tool(vi.fn(async()=>{throw new Error("Хост не выполнил");}) as any)],context);
+  expect(decode(await host.execute("9",{action:"invoke",operation:"taskflow_comment",version:1,arguments:{id:"t",text:"x"},request_id:"host"})).error.code).toBe("OPERATION_FAILED");
  });
 });

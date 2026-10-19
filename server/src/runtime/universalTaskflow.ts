@@ -39,6 +39,7 @@ const ПОДСКАЗКИ:Record<string,string>={
  UNKNOWN_OPERATION:"Операция не найдена. 1) discover — поиск по смыслу задачи, а не по точному имени; 2) describe — точная схема и версия; 3) старое имя может быть совместимым обращением — попробуй найти его в discover.",
  VERSION_MISMATCH:"Версия не та. Поддерживается version: 1 — получи describe и повтори с version 1.",
  CONFLICT:"Запрос с таким request_id уже в работе или использован с другими аргументами. 1) состояние — операция requests.status с этим request_id; 2) если аргументы другие — возьми новый request_id; 3) повтор того же действия с тем же request_id не запускает его заново.",
+ REJECTED:"Сервер отклонил вызов по правилу — действия не было. 1) в message написано правило и что исправить: выполни именно это (другие аргументы, другой порядок шагов, другой инструмент); 2) тот же вызов без изменений не повторяй — ответ будет тем же; 3) исправленный вызов отправляй с новым request_id; 4) если message прямо говорит ждать или что решение за владельцем — заверши ход и сообщи об этом, не перебирай.",
  OPERATION_FAILED:"Операция не выполнилась. 1) проверь состояние через requests.status; 2) если это внешний сервис или машина — сообщи владельцу: нужен код, текст и время; 3) не повторяй вслепую то же самое, сначала выясни причину.",
  DUPLICATE_OPERATION:"Один и тот же ход уже выполняется. Дождись текущего; второй запуск того же хода не нужен.",
 };
@@ -55,7 +56,7 @@ export function createUniversalTaskflow(tools:Tool[],context:Context,store:Reque
   arguments:Type.Optional(Type.Record(Type.String(),Type.Any())),request_id:Type.Optional(Type.String({minLength:1,maxLength:200})),
   offset:Type.Optional(Type.Integer({minimum:0})),limit:Type.Optional(Type.Integer({minimum:1,maximum:20}))
  }),execute:async(id,p,signal,onUpdate)=>{
-  const fail=(code:string,message:string)=>response({ok:false,operation:p?.operation,request_id:p?.request_id,error:{code,message,hint:ответнаяПодсказка(code)}});
+  const fail=(code:string,message:string)=>response({ok:false,operation:p?.operation,request_id:p?.request_id??(p?.arguments as any)?.request_id,error:{code,message,hint:ответнаяПодсказка(code)}});
   if(!p || !["discover","describe","invoke"].includes(p.action))return fail("INVALID_ARGUMENTS","action: discover, describe или invoke");
   const denied=(name:string)=>operationRestriction(name,context);
   if(p.action==="discover"){
@@ -102,7 +103,7 @@ export function createUniversalTaskflow(tools:Tool[],context:Context,store:Reque
    const current=store.get(context.actor,requestId!);
    if(current){
     if(current.scope!==scope || current.hash!==hash)return fail("CONFLICT","Этот request_id уже использован с другим контекстом или аргументами");
-    return current.result??response({ok:true,operation:tool.name,request_id:p.request_id,data:{state:current.state}});
+    return current.result??response({ok:true,operation:tool.name,request_id:requestId,data:{state:current.state}});
    }
    if(!store.begin({actor:context.actor,id:requestId!,scope,hash,operation:tool.name,state:"running"}))return fail("CONFLICT","Запрос уже принят; проверь requests.status");
   }
@@ -110,13 +111,18 @@ export function createUniversalTaskflow(tools:Tool[],context:Context,store:Reque
    const result=await tool.execute(id,args,signal,onUpdate);
    if(result?.isError)throw new Error("Адаптер вернул ошибку; проверь результат операции");
    const resultContent=result?.content??[];
-   const out=response({ok:true,operation:tool.name,version:1,request_id:p.request_id,data:{state:"succeeded",content:resultContent}},resultContent.filter((c:any)=>c.type!=="text"));
-   if(write)store.finish(context.actor,p.request_id,"succeeded",out);
+   const out=response({ok:true,operation:tool.name,version:1,request_id:requestId,data:{state:"succeeded",content:resultContent}},resultContent.filter((c:any)=>c.type!=="text"));
+   if(write)store.finish(context.actor,requestId!,"succeeded",out);
    return out;
   }catch(error){
    // A transport error can happen after a side effect. Never repeat it automatically.
-   const out=fail("OPERATION_FAILED",String((error as Error).message));
-   if(write)store.finish(context.actor,p.request_id,"unknown_outcome",out);
+   // Отказ по правилу (ToolError, 4xx) — действия не было, исход известен.
+   const status=(error as {status?:number}).status;
+   const rejected=(error as Error)?.name==="ToolError" && (status===undefined || status<500);
+   const out=fail(rejected?"REJECTED":"OPERATION_FAILED",String((error as Error).message));
+   // requestId, а не p.request_id: он мог прийти внутри arguments, и тогда
+   // запись оставалась running, а успешный вызов отдавался роли как сбой (19.10.2026).
+   if(write)store.finish(context.actor,requestId!,rejected?"rejected":"unknown_outcome",out);
    return out;
   }
  }};

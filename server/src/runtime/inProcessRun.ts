@@ -105,7 +105,16 @@ export function setInProcessApp(instance: FastifyInstance): void {
 
 type Json = Record<string, unknown>;
 
-export class ToolError extends Error {}
+/** Отказ по правилам сервера: побочного действия не было, роль должна исправить
+ *  аргументы или порядок шагов. status — HTTP-код внутреннего маршрута, если был. */
+export class ToolError extends Error {
+  readonly status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "ToolError";
+    this.status = status;
+  }
+}
 
 /** Внутренний вызов маршрута от имени роли. Подпись живёт в памяти сервера
  *  на один вызов: наружу не уходит, храниться нигде не нужно. */
@@ -136,7 +145,7 @@ export async function asControlActor(actorId: string, method: "GET" | "POST" | "
     data = { text: raw };
   }
   if (res.statusCode >= 400) {
-    throw new ToolError(`${method} ${url} → ${res.statusCode}: ${data?.error ?? raw.slice(0, 200)}`);
+    throw new ToolError(`${method} ${url} → ${res.statusCode}: ${data?.error ?? raw.slice(0, 200)}`, res.statusCode);
   }
   return data;
 }
