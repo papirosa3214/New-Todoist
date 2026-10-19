@@ -1602,6 +1602,7 @@ try {
   let runFailure: Error | null = null;
   /** Ход упёрся в лимит провайдера: перезапустим на запасной модели вместо блока. */
   let limitHit: string | null = null;
+  let stalledSettle: { subtaskId: string; madeProgress: boolean; failure: string | null } | null = null;
   const work = (async () => {
     try {
       const baseTask = input.prompt ?? (input.subtaskId
@@ -1707,17 +1708,17 @@ try {
       // Шаг плана закончил ход без сдачи: сервер сам продолжает его при прогрессе
       // (до 3 раз) или видимо блокирует. Раньше такой шаг молча оставался
       // «в работе» без запуска (находка А30, 06.10.2026).
+      // Только запоминаем: settle запускается после completion. Внутри хода
+      // его ждать нельзя — продолжение берёт замок слота (acquireSlotSession),
+      // а runRoleInProcess отпускает его лишь по completion этого же хода.
+      // Взаимная блокировка: попытка-продолжение создана, хода нет (с 06.10.2026
+      // каждое продолжение вытаскивал только сторож; шаг 38e1e969, 19.10.2026).
       if (input.subtaskId && mode === "work" && !limitHit && !runControl.replacementRequested) {
-        try {
-          const { settleStalledPlanNode } = await import("./planSubtaskAdmission.js");
-          await settleStalledPlanNode({
-            subtaskId: input.subtaskId,
-            madeProgress: runActivity >= STALLED_NODE_MIN_ACTIVITY,
-            failure: runFailure ? (runFailure as Error).message : null,
-          });
-        } catch (error) {
-          console.warn("[plan] продолжение/блокировка шага не удалась:", error);
-        }
+        stalledSettle = {
+          subtaskId: input.subtaskId,
+          madeProgress: runActivity >= STALLED_NODE_MIN_ACTIVITY,
+          failure: runFailure ? (runFailure as Error).message : null,
+        };
       }
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
@@ -1741,6 +1742,19 @@ try {
     if (runFailure) throw runFailure;
   });
   runControl.completion = completion;
+  // Замок слота отпускается обработчиком completion в runRoleInProcess; settle
+  // идёт следующим макрозадачей и уже не держит этот ход.
+  void completion.catch(() => {}).then(() => {
+    const params = stalledSettle;
+    if (!params) return;
+    setImmediate(() => {
+      const settled = import("./planSubtaskAdmission.js")
+        .then(({ settleStalledPlanNode }) => settleStalledPlanNode(params))
+        .then(() => {}, (error) => console.warn("[plan] продолжение/блокировка шага не удалась:", error));
+      pending.add(settled);
+      void settled.finally(() => pending.delete(settled));
+    });
+  });
   /** Лимит: помечаем провайдера, берём следующую модель цепочки и перезапускаем ход. */
   function scheduleProviderFailover(): void {
     const depth = input.failoverDepth ?? 0;
