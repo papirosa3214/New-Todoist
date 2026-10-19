@@ -97,20 +97,31 @@ export function canonicalizeWidget(json: unknown): Record<string, unknown> | nul
   // Если заполнено сразу несколько секций (metrics+chart+checklists) — это
   // композит; раскладываем в несколько виджетов через _composite, иначе
   // клиент iOS нарисует только первую секцию.
+  //
+  // Ключи остальных секций убираются ИЗ КАЖДОГО нового виджета. Раньше они
+  // оставались: секция собиралась копией всего объекта, а метки удалялись
+  // позже, уже из исходного объекта. Клиент получал блок с чужими полями,
+  // а проверка формата (карточка cea8d997) справедливо отвергала такой блок
+  // как лишние поля — то есть старый формат перестал бы проходить гейт.
   const composite: Array<Record<string, unknown>> = [];
+  const sections = ["metrics", "chart", "checklists"].filter((key) =>
+    Array.isArray(obj[key]) || (key === "chart" && obj[key] && typeof obj[key] === "object"),
+  ) as string[];
+  const shell: Record<string, unknown> = { ...obj };
+  for (const key of sections) delete shell[key];
   if (Array.isArray(obj.metrics)) {
-    composite.push(buildMetricsWidget(obj, obj.metrics));
+    composite.push(buildMetricsWidget(shell, obj.metrics));
     delete obj.metrics;
   }
   if (obj.chart && typeof obj.chart === "object") {
-    composite.push(buildChartWidget(obj, obj.chart as Record<string, unknown>));
+    composite.push(buildChartWidget(shell, obj.chart as Record<string, unknown>));
     delete obj.chart;
   }
   if (Array.isArray(obj.checklists)) {
     const checklists = obj.checklists as Array<Record<string, unknown>>;
     for (const c of checklists) {
       if (c && typeof c === "object") {
-        const w = buildChecklistWidget(obj, c);
+        const w = buildChecklistWidget(shell, c);
         if (w) composite.push(w);
       }
     }

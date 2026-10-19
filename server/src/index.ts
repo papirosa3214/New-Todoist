@@ -120,6 +120,7 @@ import { startNoteAccessWatcher } from "./lib/noteAccessWatcher.js";
 import { startKbTriageWatcher } from "./lib/kbTriageWatcher.js";
 import { startOllamaHealthWatcher } from "./lib/ollamaHealthWatcher.js";
 import { startWorktreeMergeWatcher } from "./lib/worktreeMergeWatcher.js";
+import { startRoleFormatWatcher } from "./lib/roleFormatWatcher.js";
 import { startInboxResultsWriter } from "./lib/inboxResultsWriter.js";
 import { registerSeedRoutes } from "./seed.js";
 import { registerEnrichmentRoutes } from "./routes/enrichment.js";
@@ -574,6 +575,11 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Автослияние веток ролей: очередь стоит, база падений протухла, main
     // грязный — уведомление в «Состояние системы» (LOCK-WORKTREE-MANAGER-20261019).
     startWorktreeMergeWatcher();
+    // Формат ответов ролей: прибор, которым рисует всё приложение. Ломается
+    // тихо (блок с неизвестным типом проходит нормализатор), поэтому у него
+    // свой сторож (карточка cea8d997, docs/watchers.md).
+    const stopRoleFormatWatcher = startRoleFormatWatcher();
+    app.addHook("onClose", async () => stopRoleFormatWatcher());
   }
   // Результаты: при закрытии карточки на диагностику/устранение дописывает
   // блок в файл уведомления (Phase 4, правило Maksim 27.09.2026 — внутри

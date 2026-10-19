@@ -3,6 +3,7 @@ import { readWorkPlan, saveWorkPlan, validateWorkPlan } from "../lib/subtaskWork
 import { sandboxSubmissionError } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { validateRoleContractV1 } from "../lib/roleContractV1.js";
+import { applyRoleFormat, roleFormatRefusal } from "../lib/roleFormat.js";
 import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
@@ -461,6 +462,19 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           return reply.code(409).send({error:"Передай artifact (summary, payload, evidence, report_markdown) результата «" + contractKey + "» в taskflow_subtask_done: структурный результат нельзя закрыть галочкой."});
         try { reportMarkdown = validateRoleReport(req.body?.report_markdown); }
         catch (error) { return reply.code(400).send({error:error instanceof Error ? error.message : String(error)}); }
+      }
+      // ФОРМАТ ОТВЕТА РОЛИ (карточка cea8d997). Текст роли проверяется в
+      // одной точке входа: нормализация блоков, автозамена очевидного
+      // (таблица Markdown → блок table и т.д.), затем проверка по каталогу.
+      // Не прошло — 400 с текстом ошибки и образцом правильного JSON: роль
+      // переписывает и сдаёт заново. Текст владельца и агента без блоков
+      // проходит без изменений.
+      if (typeof result === "string" && result.trim()) {
+        const formatted = applyRoleFormat(result);
+        if (formatted.problems.length) {
+          return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });
+        }
+        result = formatted.text;
       }
       if (result !== undefined) {
         db.prepare("UPDATE subtasks SET result = ? WHERE id = ?").run(
@@ -1220,11 +1234,23 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (!req.body?.text && attachmentIds.length === 0)
         return reply.code(400).send({ error: "text required" });
 
+      // ФОРМАТ КОММЕНТАРИЯ РОЛИ (карточка cea8d997): тот же гейт, что на
+      // результате шага — очевидное сервер заменяет сам, неверный блок
+      // возвращает роль с образцом.
+      let commentText = (req.body?.text ?? "") as string;
+      if (commentText.trim()) {
+        const formatted = applyRoleFormat(commentText);
+        if (formatted.problems.length) {
+          return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });
+        }
+        commentText = formatted.text;
+      }
+
       const id = uid();
       db.transaction(() => {
         db.prepare(
           "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
-        ).run(id, req.params.taskId, req.userId, req.body.text ?? "");
+        ).run(id, req.params.taskId, req.userId, commentText);
         if (
           String(task.assignee_id ?? "").startsWith("role_") &&
           task.assignee_id !== req.userId
