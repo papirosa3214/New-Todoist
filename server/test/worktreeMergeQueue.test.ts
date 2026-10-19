@@ -11,6 +11,7 @@ import db from "../src/db.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, requeueMerge, sweepUnmergedBranches } from "../src/runtime/worktreeMergeQueue.js";
 import { reloadServerSettings, setSetting } from "../src/lib/serverSettings.js";
+import { saveBaseline } from "../src/lib/worktree/testGate.js";
 
 // Хук `test/setup.ts` запрещает коммиты в живом репозитории и цепляется
 // ко всем git-вызовам прогона через GIT_CONFIG_*. Здесь работа идёт
@@ -51,6 +52,9 @@ function freshRepo(): Repo {
   git(live, "commit", "-q", "-m", "init");
   process.env.MAK70_LIVE_REPO = live;
   process.env.TASKFLOW_ROLE_WORKTREES = base;
+  // База падений main для гейта: в тестах main считается зелёным, иначе
+  // гейт запретит слияние раньше, чем проверка регрессии сможет что-то сказать.
+  saveBaseline([], git(live, "rev-parse", "main"));
   return { live, base };
 }
 
@@ -143,12 +147,12 @@ describe("очередь автослияния", () => {
     const repo = freshRepo();
     seedBranch(repo, "t-red");
     seedTask("t-red");
-    hooks.runTests = async () => ({ ok: false, output: "FAIL test/x" });
+    hooks.runTests = async () => ({ ok: false, output: " ❯ test/roles.test.ts (2 tests | 1 failed)" });
     const mainBefore = git(repo.live, "rev-parse", "main");
     enqueueMerge("t-red", "integration_step");
     const outcome = await processMerge("t-red");
     expect(outcome.state).toBe("test_failed");
-    expect(outcome.error).toContain("FAIL");
+    expect(outcome.error).toContain("новые падения");
     expect(git(repo.live, "rev-parse", "main")).toBe(mainBefore);
     expect(fs.existsSync(path.join(repo.base, "t-red"))).toBe(true);
     expect(git(repo.live, "branch", "--list", "roles/t-red")).not.toBe("");
@@ -195,7 +199,7 @@ describe("очередь автослияния", () => {
     const repo = freshRepo();
     seedBranch(repo, "t-keep-state");
     seedTask("t-keep-state");
-    hooks.runTests = async () => ({ ok: false, output: "FAIL test/y" });
+    hooks.runTests = async () => ({ ok: false, output: " ❯ test/worktreeInspect.test.ts (5 tests | 1 failed)" });
     enqueueMerge("t-keep-state", "integration_step");
     await processMerge("t-keep-state");
     expect(mergeQueueRow("t-keep-state")?.state).toBe("test_failed");
@@ -203,7 +207,7 @@ describe("очередь автослияния", () => {
     // стирать причину: иначе отказ невозможно увидеть и починить.
     sweepUnmergedBranches();
     expect(mergeQueueRow("t-keep-state")?.state).toBe("test_failed");
-    expect(mergeQueueRow("t-keep-state")?.error).toContain("FAIL");
+    expect(mergeQueueRow("t-keep-state")?.error).toContain("новые падения");
   });
 
   it("повторная сдача шага после конфликта возвращает карточку в очередь", async () => {

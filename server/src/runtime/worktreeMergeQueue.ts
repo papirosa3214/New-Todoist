@@ -24,6 +24,7 @@ import { logEvent } from "../agentState.js";
 import { getSetting } from "../lib/serverSettings.js";
 import { inspectWorktree } from "../lib/worktree/inspect.js";
 import { cleanupWorktree, sweepTestLeftovers } from "../lib/worktree/cleanup.js";
+import { checkForRegression, loadBaseline, refreshBaseline } from "../lib/worktree/testGate.js";
 import {
   GitError,
   dirtyFiles,
@@ -351,13 +352,16 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   const timeoutMs = getSetting("auto_merge_test_timeout_min") * 60_000;
   const tests = await hooks.runTests(path.join(dir, "server"), timeoutMs);
 
-  if (!tests.ok) {
+  // Решает не цвет прогона, а РЕГРЕССИЯ: на самом main уже есть своя
+  // красная база, требовать «все тесты зелёные» значит не сливать никогда.
+  const gate = checkForRegression(tests.output, live);
+  if (!gate.ok) {
     dropScratch(live, taskId);
     outcome.state = "test_failed";
     outcome.result_sha = mergedSha;
-    outcome.error = tail(tests.output);
+    outcome.error = tail(gate.reason ?? tail(tests.output));
     writeState(taskId, { state: outcome.state, result_sha: mergedSha, error: outcome.error });
-    journal({ task_id: taskId, state: "test_failed", main_sha_before: mainShaBefore, result_sha: mergedSha });
+    journal({ task_id: taskId, state: "test_failed", main_sha_before: mainShaBefore, result_sha: mergedSha, regressions: gate.regressions });
     safeLogEvent(taskId, "merge_test_failed", branch, mergedSha);
     return outcome;
   }
@@ -515,6 +519,14 @@ export async function sweepMergedWorkspaces(limit = 20): Promise<number> {
  * хвост тестовых каталогов. Вызывается планировщиком.
  */
 export async function worktreeMaintenancePass(): Promise<number> {
+  // База падений: снимаем, только если её нет или main уехал. Дорогой
+  // прогон, поэтому не каждый проход.
+  const baseline = loadBaseline();
+  const liveNow = liveRepo();
+  const mainSha = gitOrNull(liveNow, ["rev-parse", "main"], 30_000);
+  if (mergeMode() !== "off" && (!baseline || baseline.main_sha !== mainSha)) {
+    await refreshBaseline(hooks.runTests, getSetting("auto_merge_test_timeout_min") * 60_000, liveNow);
+  }
   const merged = (await drainMergeQueue(1)).filter((row) => row.state === "merged").length;
   const queued = mergeMode() === "off" ? 0 : sweepUnmergedBranches();
   const cleaned = await sweepMergedWorkspaces();
