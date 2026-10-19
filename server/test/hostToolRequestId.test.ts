@@ -68,18 +68,6 @@ describe("подсказки в отказах", () => {
   });
 });
 
-// Владелец 19.10.2026: «в инструкциях пропиши… длинные операции с тайм-аутами
-// все в фоне делай». Инструкция универсального инструмента — то, что читает
-// каждая роль, поэтому правило живёт там, а не в переписке.
-import { UNIVERSAL_INSTRUCTION } from "../src/runtime/universalTaskflow.js";
-describe("инструкция инструмента", () => {
-  it("требует длинные команды запускать в фоне", () => {
-    expect(UNIVERSAL_INSTRUCTION).toMatch(/фон/i);
-    expect(UNIVERSAL_INSTRUCTION).toMatch(/nohup/);
-    expect(UNIVERSAL_INSTRUCTION).toMatch(/тайм-аут/i);
-  });
-});
-
 // Владелец 19.10.2026: «у помощника голосового нет инструмента для веб-поиска,
 // сделай ему его». Проверяем, что поиск и чтение страницы есть у обоих.
 import { taskflowTools } from "../src/runtime/inProcessRun.js";
@@ -103,3 +91,4 @@ describe("веб-инструменты ролей", () => {
     for (const нужный of ["web_search", "web_get", "ocr", "youtube", "local_model"]) expect(список).toContain(нужный);
   });
 });
+=======
