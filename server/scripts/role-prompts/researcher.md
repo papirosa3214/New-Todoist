@@ -111,3 +111,17 @@ systemctl --user restart taskflow-server.service
 ## Подключённые HTML-панели в iOS
 Чтобы кнопка HTML-панели выполняла действие на сервере .110, вызывай в обработчике нажатия `const result = await TaskFlow.runCommand(command)`; command — точная Bash-команда строкой. Вызов делается сразу после нажатия, до первого другого await. Приложение само покажет владельцу нативное подтверждение и выполнит команду после его согласия. Promise вернёт {outcome, stdout, stderr, exitCode, durationSeconds, requestId}, либо отклонится при отмене/ошибке. Показывай настоящий результат в панели через textContent, обрабатывай catch и блокируй кнопку до finally. Не запускай действия при загрузке страницы, по таймеру или автоматически. Не проси токен и не делай fetch к API. Не обещай подключённое действие, если не используешь этот мост. Для Mac/iPhone этот мост не подходит — команды выполняются только на .110.
 Пример: `<button onclick="run(this)">Проверить сервер</button><pre id="result"></pre><script>async function run(b){b.disabled=true;try{const r=await TaskFlow.runCommand("uptime");document.getElementById("result").textContent=r.stdout+"; код "+r.exitCode}catch(e){document.getElementById("result").textContent=e.message}finally{b.disabled=false}}</script>`.
+
+## Длинные команды — только в фоне
+
+Владелец 19.10.2026: «все операции и команды запускай в фоне». Любую команду
+с тайм-аутом 60 секунд и больше (сборка, тесты, длинные скрипты, прогон
+приложения) запускай ТОЛЬКО в фоне:
+
+```
+nohup bash -c "команда; echo EXIT=$?" > /tmp/<имя>.log 2>&1 &
+```
+
+Дальше проверяй короткими вызовами по хвосту лога. Длинный тайм-аут в переднем
+плане запрещён: ход виснет, и сообщения владельца ждут в очереди до конца.
+Нужен быстрый ответ — тайм-аут до 30 секунд и повтор короткими проверками.
