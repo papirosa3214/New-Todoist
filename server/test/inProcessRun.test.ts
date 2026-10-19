@@ -765,6 +765,37 @@ describe("агент роли внутри сервера", () => {
     expect((db.prepare("SELECT done FROM subtasks WHERE id = ?").get(stepId) as { done: number }).done).toBe(0);
   });
 
+  it("шаг плана с прогрессом без сдачи: продолжение реально стартует, а не ждёт замок своего же хода", async () => {
+    // Регрессия 19.10.2026 (шаг 38e1e969): settle ждали внутри хода, а
+    // продолжение брало замок слота, который отпускается только после хода.
+    const { taskId, stepId } = slotWithPlan("Продолжение шага " + Date.now());
+    db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,routing_role,started_at,heartbeat_at) VALUES(?,?,?,'role_builder','builder',datetime('now'),datetime('now'))").run(`${taskId}-a1`, taskId, stepId);
+    db.prepare("UPDATE subtasks SET current_attempt_id=? WHERE id=?").run(`${taskId}-a1`, stepId);
+    const sessionsBefore = script.sessions.length;
+    let turns = 0;
+    script.steps = async (tools, prompt) => {
+      if (prompt.includes("резюме") || prompt.includes("остановил")) return;
+      turns += 1;
+      // Первый ход двигается (три комментария = активность), но шаг не сдаёт.
+      if (turns === 1) for (let i = 0; i < 3; i++) await tools.get("taskflow_comment").execute(`call-progress-${i}`, { id: taskId, text: `часть ${i}` });
+    };
+    try {
+      await runRoleInProcess({ taskId, role: "builder", subtaskId: stepId, mode: "work" });
+      // До правки второй сессии не появлялось никогда: продолжение висело на замке.
+      await vi.waitFor(() => expect(script.sessions.length - sessionsBefore).toBeGreaterThanOrEqual(2), { timeout: 3000 });
+      await vi.waitFor(async () => {
+        await _settleInProcessRunsForTests();
+        const open = db.prepare("SELECT COUNT(*) AS n FROM attempts WHERE subtask_id = ? AND ended_at IS NULL").get(stepId) as { n: number };
+        expect(open.n).toBe(0);
+      }, { timeout: 3000 });
+    } finally {
+      script.steps = null;
+    }
+    const outcomes = (db.prepare("SELECT outcome FROM attempts WHERE subtask_id = ? ORDER BY started_at, rowid").all(stepId) as { outcome: string }[]).map((r) => r.outcome);
+    expect(outcomes[0]).toBe("continued");
+    expect(outcomes.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("снимок предыдущей попытки приходит в задание следующей", async () => {
     const { taskId, stepId } = slotWithPlan("Снимок в задании " + Date.now());
     db.prepare(
