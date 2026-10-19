@@ -35,8 +35,10 @@ const TEXT_LIMIT = 24_000;
 
 /** Кто пишет: владелец/оркестратор — «owner», ИИ-роль — «role» с её ключом. */
 function authorOf(userId: string): { author: Author; roleKey: string | null } | null {
-  if (isOwner(userId) || isOrchestrator(userId)) return { author: { id: userId, kind: "owner" }, roleKey: null };
   const row = db.prepare("SELECT type, role_key FROM users WHERE id = ?").get(userId) as { type?: string; role_key?: string | null } | undefined;
+  // Секретарь и роли с правом orchestrate пишут как владелец, но «своя» память у них
+  // остаётся памятью их роли — иначе scope=role падает без role_key.
+  if (isOwner(userId) || isOrchestrator(userId)) return { author: { id: userId, kind: "owner" }, roleKey: row?.role_key ?? null };
   if (row?.type === "ai") return { author: { id: userId, kind: "role" }, roleKey: row.role_key ?? null };
   return null;
 }
@@ -84,7 +86,7 @@ export async function registerMemoryRoutes(app: FastifyInstance): Promise<void> 
       if (!who) return reply.code(403).send({ error: "нет доступа к памяти" });
       const q = String(req.query.q ?? "").trim();
       if (!q) return reply.code(400).send({ error: "нужен q — о чём вспомнить" });
-      const roleKey = who.author.kind === "role" ? who.roleKey : (req.query.role_key ?? null);
+      const roleKey = who.author.kind === "role" ? who.roleKey : (req.query.role_key ?? who.roleKey);
       return { items: await recall({ roleKey, projectId: req.query.project_id ?? null, query: q, limit: req.query.limit ? Number(req.query.limit) : 8 }) };
     },
   );
@@ -111,6 +113,8 @@ export async function registerMemoryRoutes(app: FastifyInstance): Promise<void> 
       body.scope ??= "role";
       if (body.scope === "role") body.role_key = who.roleKey;
       delete body.pinned;
+    } else if (body.scope === "role" && !body.role_key && who.roleKey) {
+      body.role_key = who.roleKey;
     }
     try {
       const result = await remember(body, who.author);

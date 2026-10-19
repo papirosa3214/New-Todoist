@@ -62,6 +62,14 @@ describe("память ролей", () => {
     expect(team.json().memory).toMatchObject({ scope: "team", role_key: null });
   });
 
+  it("секретарь (права оркестратора) пишет и вспоминает свою память роли", async () => {
+    const res = await post(as("u-secretary"), { text: "Владелец просит отвечать в Telegram коротко", scope: "role", kind: "preference" });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().memory).toMatchObject({ scope: "role", role_key: "secretary" });
+    const found = await app.inject({ method: "GET", url: "/api/memories/recall?q=" + encodeURIComponent("как отвечать в Telegram"), headers: as("u-secretary") });
+    expect(found.json().items.some((i: any) => i.id === res.json().memory.id)).toBe(true);
+  });
+
   it("владелец видит всё и правит любое; роль — только своё; закрепляет владелец", async () => {
     const mine = await post(owner, { text: "Отвечать коротко, без воды", scope: "team", kind: "preference" });
     const id = mine.json().memory.id;
