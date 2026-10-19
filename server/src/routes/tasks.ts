@@ -24,6 +24,7 @@ import {
   getProjectForFiling,
   isOwner,
   isOrchestrator,
+  isRoleAuthor,
   seesEveryTask,
 } from "../access.js";
 import {
@@ -1881,8 +1882,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // ФОРМАТ ОПИСАНИЯ РОЛИ (карточка cea8d997). Описание пишут в основном
       // роли; тот же гейт, что на результате шага: очевидное сервер заменяет
       // сам (таблица Markdown → блок table), неверный блок возвращает роль
-      // с образцом. Текст владельца без блоков проходит без изменений.
-      if (typeof body.description === "string" && body.description.trim()) {
+      // с образцом. Текст человека гейт не трогает: у владельца своя
+      // таблица — это его слова, молча переписывать их нельзя.
+      if (isRoleAuthor(req.userId) && typeof body.description === "string" && body.description.trim()) {
         const formatted = applyRoleFormat(body.description);
         if (formatted.problems.length) {
           return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });

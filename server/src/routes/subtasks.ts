@@ -14,7 +14,7 @@ import { logStepOutcome } from "../runtime/stepOutcome.js";
 import { announceStepState } from "../runtime/stepTopicProgress.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
-import { getTaskForRead, getTaskForWrite, getTaskForComment, commentRefusal, aiNotFound } from "../access.js";
+import { getTaskForRead, getTaskForWrite, getTaskForComment, commentRefusal, aiNotFound, isRoleAuthor } from "../access.js";
 import { isServiceUser } from "../serviceUser.js";
 import {
   blockedHelpError,
@@ -467,9 +467,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       // одной точке входа: нормализация блоков, автозамена очевидного
       // (таблица Markdown → блок table и т.д.), затем проверка по каталогу.
       // Не прошло — 400 с текстом ошибки и образцом правильного JSON: роль
-      // переписывает и сдаёт заново. Текст владельца и агента без блоков
-      // проходит без изменений.
-      if (typeof result === "string" && result.trim()) {
+      // переписывает и сдаёт заново. Текст человека гейт не трогает: шаг
+      // закрывают руками, и это слова человека, а не машины.
+      if (isRoleAuthor(req.userId) && typeof result === "string" && result.trim()) {
         const formatted = applyRoleFormat(result);
         if (formatted.problems.length) {
           return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });
@@ -1236,9 +1236,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
 
       // ФОРМАТ КОММЕНТАРИЯ РОЛИ (карточка cea8d997): тот же гейт, что на
       // результате шага — очевидное сервер заменяет сам, неверный блок
-      // возвращает роль с образцом.
+      // возвращает роль с образцом. Комментарий человека не переписывается.
       let commentText = (req.body?.text ?? "") as string;
-      if (commentText.trim()) {
+      if (isRoleAuthor(req.userId) && commentText.trim()) {
         const formatted = applyRoleFormat(commentText);
         if (formatted.problems.length) {
           return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });
