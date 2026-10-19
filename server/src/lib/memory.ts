@@ -113,6 +113,15 @@ function clean(text: unknown, max: number): string {
   return t.length > max ? t.slice(0, max) : t;
 }
 
+/** Роли часто передают в project_id id задачи — подскажем, какой проект верный. */
+function projectHint(p: string): string {
+  const base = p ? `нет проекта с project_id «${p}».` : "для памяти проекта нужен project_id.";
+  const task = p ? (db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(p) as { project_id: string | null } | undefined) : undefined;
+  if (task?.project_id) return `${base} Это id задачи, а не проекта: её проект — project_id «${task.project_id}». Повтори с ним.`;
+  if (task) return `${base} Это id задачи без проекта — запиши в scope role (своё) или team (общее) без project_id.`;
+  return `${base} Список проектов и их id — taskflow_projects. Если знание не про конкретный проект — scope role или team без project_id.`;
+}
+
 function checkScope(scope: unknown, roleKey: unknown, projectId: unknown): { scope: MemoryScope; role_key: string | null; project_id: string | null } {
   const s = String(scope ?? "team") as MemoryScope;
   if (!SCOPES.includes(s)) throw new MemoryError("scope: team | role | project");
@@ -123,7 +132,7 @@ function checkScope(scope: unknown, roleKey: unknown, projectId: unknown): { sco
   }
   if (s === "project") {
     const p = clean(projectId, 64);
-    if (!p || !db.prepare("SELECT 1 FROM projects WHERE id = ?").get(p)) throw new MemoryError("нет такого проекта");
+    if (!p || !db.prepare("SELECT 1 FROM projects WHERE id = ?").get(p)) throw new MemoryError(projectHint(p));
     return { scope: s, role_key: null, project_id: p };
   }
   return { scope: "team", role_key: null, project_id: null };

@@ -70,6 +70,17 @@ describe("память ролей", () => {
     expect(found.json().items.some((i: any) => i.id === res.json().memory.id)).toBe(true);
   });
 
+  it("память проекта: вместо голого «нет такого проекта» — подсказка, какой id нужен", async () => {
+    const projectId = (db.prepare("SELECT id FROM projects LIMIT 1").get() as { id: string }).id;
+    const taskId = `mem-task-${Date.now()}`;
+    db.prepare("INSERT INTO tasks (id, title, project_id) VALUES (?, 'Проверка подсказки', ?)").run(taskId, projectId);
+    const byTask = await post(as("role_architect"), { text: "Сборка проекта идёт из папки server", scope: "project", project_id: taskId });
+    expect(byTask.statusCode).toBe(400);
+    expect(byTask.json().error).toContain(`её проект — project_id «${projectId}»`);
+    const unknown = await post(as("role_architect"), { text: "Сборка проекта идёт из папки server", scope: "project", project_id: "нет-такого" });
+    expect(unknown.json().error).toContain("taskflow_projects");
+  });
+
   it("владелец видит всё и правит любое; роль — только своё; закрепляет владелец", async () => {
     const mine = await post(owner, { text: "Отвечать коротко, без воды", scope: "team", kind: "preference" });
     const id = mine.json().memory.id;
