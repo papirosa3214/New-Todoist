@@ -194,5 +194,5 @@ export async function runVoiceTool(ownerId: string, name: string, args: unknown)
   // the next-step hint, and the original request_id without flattening them.
   const result = await tool.execute(`voice:${ownerId}`, invocation);
   const envelope = (result?.content ?? []).map((part: any) => part?.text ?? "").join("\n");
-  return { ok: true, result: envelope.length > 12000 ? envelope.slice(0, 12000) + "\n…обрезано" : envelope };
+  return { ok: true, result: envelope };
 }

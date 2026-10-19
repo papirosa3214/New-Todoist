@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import { asRole, setInProcessApp } from "../src/runtime/inProcessRun.js";
+import * as catalogModule from "../src/runtime/roleToolCatalog.js";
 import { buildRoleToolCatalog } from "../src/runtime/roleToolCatalog.js";
 import { runVoiceTool, voiceToolManifest } from "../src/lib/secretaryVoiceTools.js";
 import { isOwner, isSecretary } from "../src/access.js";
@@ -55,6 +56,17 @@ describe("Помощник владельца — единые инструме�
       request_id: requestId,
       error: { code: "OPERATION_FAILED", hint: expect.any(String) },
     });
+  });
+
+  it("не обрезает большой JSON общего инструмента на границе 12000 символов", async () => {
+    const payload = { ok: true, data: { notes: "x".repeat(15000) } };
+    const spy = vi.spyOn(catalogModule, "buildRoleToolCatalog").mockReturnValue({
+      customTools: [{ name: "taskflow", execute: async () => ({ content: [{ type: "text", text: JSON.stringify(payload) }] }) }],
+    } as any);
+    try {
+      const response = await runVoiceTool("u-secretary", "taskflow", { action: "invoke" });
+      expect(JSON.parse(response.result)).toEqual(payload);
+    } finally { spy.mockRestore(); }
   });
 
   it("слоты и архивные действия доходят до серверных маршрутов; физическое удаление закрыто", async () => {
