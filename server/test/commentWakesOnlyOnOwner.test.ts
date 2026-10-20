@@ -97,4 +97,27 @@ describe("комментарий будит роль только от влад�
     expect(r.statusCode).toBeLessThan(300);
     expect(commentJobs(taskId)).toBe(0);
   });
+
+  it("комментарий владельца будит роль, чей слот в блоке, а старт слота её не вытесняет", async () => {
+    const { followSlotAssignee } = await import("../src/runtime/planSubtaskAdmission.js");
+    const taskId = await taskAssignedToBuilder();
+    db.prepare("UPDATE tasks SET assignee_id='role_qa' WHERE id=?").run(taskId);
+    db.prepare(
+      "INSERT INTO subtasks(id,task_id,title,agent_state,agent_id,block_type) VALUES(?,?,?,'blocked','role_builder','needs_input')",
+    ).run(`blocked-${taskId}`, taskId, "Шаг Разработчика ждёт владельца");
+    const assignee = () => (db.prepare("SELECT assignee_id FROM tasks WHERE id=?").get(taskId) as { assignee_id: string }).assignee_id;
+
+    const r = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/comments`,
+      headers: ownerAuth,
+      payload: { text: "Ответ на твой вопрос: делай вариант А" },
+    });
+    expect(r.statusCode).toBeLessThan(300);
+    expect(assignee()).toBe("role_builder");
+    expect(commentJobs(taskId)).toBe(1);
+
+    followSlotAssignee(taskId, "critic_verifier", "taskflow_system");
+    expect(assignee()).toBe("role_builder");
+  });
 });

@@ -214,10 +214,31 @@ export function planNodeAgentRefusal(subtaskId: string, userId: string, starting
  *  месте исполнителя не трогаем — его поставил владелец. */
 export function followSlotAssignee(taskId: string, roleKey: string, actorId: string): void {
   const next = roleUserId(roleKey);
+  // Приоритет у роли в блоке: пока её слот ждёт, новые старты её не
+  // вытесняют — иначе ответ владельца комментарием разбудил бы не её.
   const changed = db.prepare(
-    "UPDATE tasks SET assignee_id=?, updated_at=datetime('now') WHERE id=? AND (assignee_id IS NULL OR assignee_id LIKE 'role\\_%' ESCAPE '\\') AND COALESCE(assignee_id,'')<>?",
+    `UPDATE tasks SET assignee_id=?, updated_at=datetime('now')
+      WHERE id=? AND (assignee_id IS NULL OR assignee_id LIKE 'role\\_%' ESCAPE '\\') AND COALESCE(assignee_id,'')<>?
+        AND NOT EXISTS (SELECT 1 FROM subtasks s WHERE s.task_id=tasks.id AND s.agent_state='blocked' AND s.agent_id=tasks.assignee_id)`,
   ).run(next, taskId, next);
   if (changed.changes === 1) logEvent({ taskId, actorId, kind: "assignee_follows_slot", field: "assignee_id", toValue: next });
+}
+
+/** Комментарий владельца адресован в первую очередь роли, чей слот стоит в
+ *  блоке (владелец 20.10.2026): она ждёт его ответа. Делает её исполнителем
+ *  карточки — побудка по комментарию идёт к исполнителю. Возвращает, кого
+ *  поставили, или null, если слотов в блоке нет. */
+export function assigneeToBlockedSlot(taskId: string, actorId: string): string | null {
+  const blocked = db.prepare(
+    `SELECT s.agent_id FROM subtasks s JOIN tasks t ON t.id=s.task_id
+      WHERE s.task_id=? AND s.agent_state='blocked' AND s.agent_id LIKE 'role\\_%' ESCAPE '\\'
+        AND (t.assignee_id IS NULL OR t.assignee_id LIKE 'role\\_%' ESCAPE '\\')
+      ORDER BY CASE s.block_type WHEN 'needs_input' THEN 0 ELSE 1 END, s.agent_heartbeat_at DESC LIMIT 1`,
+  ).get(taskId) as { agent_id: string } | undefined;
+  if (!blocked) return null;
+  const changed = db.prepare("UPDATE tasks SET assignee_id=?, updated_at=datetime('now') WHERE id=? AND COALESCE(assignee_id,'')<>?").run(blocked.agent_id, taskId, blocked.agent_id);
+  if (changed.changes === 1) logEvent({ taskId, actorId, kind: "assignee_follows_slot", field: "assignee_id", toValue: blocked.agent_id });
+  return blocked.agent_id;
 }
 
 export async function startPlanSubtaskRun(subtaskId: string, actorId: string, options: { freshSession?: boolean } = {}): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {

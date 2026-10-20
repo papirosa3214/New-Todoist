@@ -1,4 +1,5 @@
 import { wakeAndDeliver } from "../runtime/orchestratorWake.js";
+import { assigneeToBlockedSlot } from "../runtime/planSubtaskAdmission.js";
 import { readWorkPlan, saveWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
 import { sandboxSubmissionError } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
@@ -1255,9 +1256,13 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         // 20.10.2026): служебные записи ролей («Материал собран», «Начинаю
         // проверку») будили исполнителя карточки и вставали в очередь перед
         // шагом Критика. Ролям между собой — чат, не комментарии.
+        // Если чей-то слот стоит в блоке — комментарий будит его роль.
+        const assignee = isOwner(req.userId)
+          ? (assigneeToBlockedSlot(req.params.taskId, req.userId) ?? task.assignee_id)
+          : task.assignee_id;
         if (
-          String(task.assignee_id ?? "").startsWith("role_") &&
-          task.assignee_id !== req.userId &&
+          String(assignee ?? "").startsWith("role_") &&
+          assignee !== req.userId &&
           isOwner(req.userId)
         ) {
           enqueueRoleRunJob({
