@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import db from "../src/db.js";
 import { reloadServerSettings, setSetting } from "../src/lib/serverSettings.js";
 import { saveBaseline } from "../src/lib/worktree/testGate.js";
-import { checkWorktreeMerge, LIMITS } from "../src/lib/worktreeMergeWatcher.js";
+import { checkWorktreeMerge, LIMITS, MERGE_WATCH_ACTIONS } from "../src/lib/worktreeMergeWatcher.js";
 
 const testEnv = { ...process.env };
 for (const key of Object.keys(testEnv)) {
@@ -157,5 +157,19 @@ describe("сторож автослияния", () => {
       }),
     );
     expect(checkWorktreeMerge().ok).toBe(true);
+  });
+
+  it("подсказка про снятие помехи обещает автовозврат, а не ручную правку БД", () => {
+    const text = MERGE_WATCH_ACTIONS.join("\n");
+    // Раньше здесь было «очередь продолжит сама» — этого не происходило:
+    // строка оставалась в стороне до повторной сдачи шага интеграции.
+    expect(text).not.toMatch(/очередь продолжит сама/);
+    expect(text).not.toMatch(/UPDATE worktree_merge_queue/);
+    expect(text).toMatch(/Грязный main/);
+    expect(text).toMatch(/вернутся в очередь сами/);
+    expect(text).toMatch(/Грязная копия роли/);
+    // Ручные разборы так и остаются ручными.
+    expect(text).toMatch(/Конфликт \/ красные тесты/);
+    expect(text).toMatch(/сдать шаг снова/);
   });
 });
