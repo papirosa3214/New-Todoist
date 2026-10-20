@@ -25,6 +25,10 @@
 // Тревога. Уведомление владельцу в «Состояние системы» (notifications, тип
 // tool_error_accounting_watch), не чаще одного раза в сутки. Карточек не
 // заводим: тревоги сторожей — шум для доски (владелец 13.10.2026).
+// Текст тревоги отвечает на три вопроса (CLAUDE.md, «Правило приборов и
+// сторожей», п.3): что сломано, что от этого ломается дальше, что делать.
+// Целый текст НЕ обрезается: режется только список замечаний, чтобы хвост
+// «что делать» не терялся (карточка 64af4c85, D2).
 
 import crypto from "node:crypto";
 
@@ -68,9 +72,27 @@ export type ToolAuditEvidence = {
   byOperation: Record<string, { calls: number; errors: number }>;
 };
 
+/**
+ * Что именно сломано. От области зависит, что тревога советует чинить:
+ * «запись отказов» и «счётчики» — разные поломки с разными последствиями
+ * (карточка 64af4c85, D3: при сломанной записи отказов счётчик успешных
+ * вызовов остаётся целым, и владельца нельзя уводить чинить счётчики).
+ */
+export type ToolAuditFaultArea = "audit" | "counters" | "gateway" | "probe";
+
+export type ToolAuditFault = {
+  /** Область поломки. */
+  area: ToolAuditFaultArea;
+  /** Текст замечания — в тревоге идёт владельцу. */
+  text: string;
+};
+
 export type ToolErrorAccountingWatchResult = {
   ok: boolean;
+  /** Замечания текстом — для журнала сервера и отчёта. */
   problems: string[];
+  /** Замечания с указанием, что именно сломано, — для тревоги. */
+  faults: ToolAuditFault[];
   probes: ToolAuditProbe[];
 };
 
@@ -293,55 +315,96 @@ function hasValue(
 /**
  * Суд по доказательствам: что именно сломалось. Отдельная чистая функция —
  * её проверяют тесты без базы.
+ *
+ * Различение поломок (D3 карточки 64af4c85). Запись вызова и счётчики идут
+ * ОДНОЙ транзакцией (toolAuditStore.ts), поэтому:
+ *  • если счётчик успешных вызовов цел, а строк об отказах нет — сломана
+ *    именно запись отказов (`role_tool_audit`);
+ *  • если не посчитан ни один вызов — сломаны счётчики, и строки об отказах
+ *    падают вместе с ними;
+ *  • следствие сломанной записи (потерянные счётчики отказов) отдельной
+ *    поломкой не считается: уводить владельца чинить счётчики, когда сломана
+ *    запись, — ложный след.
  */
 export function evaluateToolAudit(
   probes: ToolAuditProbe[],
   evidence: ToolAuditEvidence | null,
-): string[] {
-  const problems: string[] = [];
-  if (!probes.length) return problems;
+): ToolAuditFault[] {
+  const faults: ToolAuditFault[] = [];
+  if (!probes.length) return faults;
   const rejected = probes.filter((probe) => probe.kind === "rejected");
   const accepted = probes.filter((probe) => probe.kind === "accepted");
   if (!rejected.length)
-    problems.push(
-      "шлюз не отклонил пробный ошибочный вызов — проба не проверяет учёт",
-    );
+    faults.push({
+      area: "gateway",
+      text: "шлюз не отклонил пробный ошибочный вызов — проба не проверяет учёт",
+    });
   if (!evidence) {
-    problems.push("в базе нет следов пробного хода");
-    return problems;
+    faults.push({
+      area: "probe",
+      text: "в базе нет следов пробного хода",
+    });
+    return faults;
   }
-  if (!evidence.rows.length)
-    problems.push("отказ пробного вызова не попал в учёт");
-  else {
+  const notCounted = accepted.filter(
+    (probe) => (evidence.byOperation[probe.operation]?.calls ?? 0) < 1,
+  );
+  const rowsMissing = evidence.rows.length === 0;
+  if (rowsMissing) {
+    if (notCounted.length) {
+      // Не посчитан ни один вызов: первым падает счётчик, а запись отказов
+      // уезжает вместе с ним (одна транзакция).
+      faults.push({
+        area: "counters",
+        text: "счётчики вызовов сломаны: успешный вызов пробного хода не посчитан, и запись отказов падает вместе со счётчиком (одна транзакция) — строк об отказах тоже нет",
+      });
+    } else {
+      // Счётчик успешных вызовов цел — сломана именно запись отказов.
+      faults.push({
+        area: "audit",
+        text:
+          "запись отказов сломана: отказ пробного вызова не попал в учёт — строки об отказах не пишутся (счётчик успешных вызовов при этом цел: в счётчиках вызовов " +
+          String(evidence.calls) +
+          ", ошибок " +
+          String(evidence.errors) +
+          ")",
+      });
+    }
+  } else {
     if (!hasValue(evidence.rows, /role|роль/i))
-      problems.push("в записи об отказе нет роли");
+      faults.push({ area: "audit", text: "в записи об отказе нет роли" });
     if (!hasValue(evidence.rows, /model|модел/i))
-      problems.push("в записи об отказе нет модели");
+      faults.push({ area: "audit", text: "в записи об отказе нет модели" });
     if (!hasValue(evidence.rows, /operation|операц|tool|инструмент/i))
-      problems.push("в записи об отказе нет операции");
+      faults.push({ area: "audit", text: "в записи об отказе нет операции" });
     if (!hasValue(evidence.rows, /code|код/i))
-      problems.push("в записи об отказе нет кода ошибки");
+      faults.push({ area: "audit", text: "в записи об отказе нет кода ошибки" });
   }
   if (!evidence.countersSupported) {
-    problems.push("в таблице счётчиков нет колонок вызовов и ошибок");
-    return problems;
+    faults.push({
+      area: "counters",
+      text: "в таблице счётчиков нет колонок вызовов и ошибок",
+    });
+    return faults;
   }
-  if (evidence.calls + evidence.errors < probes.length)
-    problems.push("вызовы пробного хода не посчитаны в счётчиках");
-  if (evidence.errors < rejected.length)
-    problems.push("ошибки пробного хода не посчитаны в счётчиках");
-  for (const probe of accepted) {
-    const row = evidence.byOperation[probe.operation];
-    if (!row)
-      problems.push(
-        `успешный вызов (${probe.operation}) не посчитан — доля ошибок в сводке будет неверной`,
-      );
-    else if (row.calls < 1)
-      problems.push(
-        `успешный вызов (${probe.operation}) не посчитан — доля ошибок в сводке будет неверной`,
-      );
+  if (!rowsMissing) {
+    for (const probe of notCounted)
+      faults.push({
+        area: "counters",
+        text: `успешный вызов (${probe.operation}) не посчитан — доля ошибок в сводке будет неверной`,
+      });
+    if (evidence.errors < rejected.length)
+      faults.push({
+        area: "counters",
+        text: "счётчик ошибок не считает отказы пробного хода — доля ошибок в сводке будет неверной",
+      });
+    if (evidence.calls < probes.length)
+      faults.push({
+        area: "counters",
+        text: "счётчик вызовов не считает все вызовы пробного хода — доля ошибок в сводке будет неверной",
+      });
   }
-  return problems;
+  return faults;
 }
 
 /** Убрать следы пробы: статистика ошибок не должна искажаться пробой. */
@@ -375,19 +438,28 @@ function cleanupProbe(
 export async function checkToolErrorAccounting(): Promise<ToolErrorAccountingWatchResult> {
   const nonce = crypto.randomBytes(6).toString("hex");
   const since = sqliteTimestamp();
-  const problems: string[] = [];
+  const faults: ToolAuditFault[] = [];
   const auditTable = tableExists(AUDIT_TABLE) ? AUDIT_TABLE : null;
   const countersTable = tableExists(COUNTERS_TABLE) ? COUNTERS_TABLE : null;
   if (!auditTable)
-    problems.push(`в базе нет таблицы учёта отказов (${AUDIT_TABLE})`);
+    faults.push({
+      area: "audit",
+      text: `в базе нет таблицы учёта отказов (${AUDIT_TABLE})`,
+    });
   if (!countersTable)
-    problems.push(`в базе нет таблицы счётчиков (${COUNTERS_TABLE})`);
+    faults.push({
+      area: "counters",
+      text: `в базе нет таблицы счётчиков (${COUNTERS_TABLE})`,
+    });
   let probes: ToolAuditProbe[] = [];
   if (auditTable && countersTable) {
     try {
       probes = await runProbe(nonce);
     } catch (error) {
-      problems.push(`пробный ход не отработал: ${String(error)}`);
+      faults.push({
+        area: "probe",
+        text: `пробный ход не отработал: ${String(error)}`,
+      });
     }
   }
   const markers = [
@@ -408,17 +480,66 @@ export async function checkToolErrorAccounting(): Promise<ToolErrorAccountingWat
       byOperation: counters.byOperation,
     };
   }
-  const all = [...problems, ...evaluateToolAudit(probes, evidence)];
+  const all = [...faults, ...evaluateToolAudit(probes, evidence)];
   cleanupProbe(auditTable, countersTable, markers);
-  return { ok: all.length === 0, problems: all, probes };
+  return {
+    ok: all.length === 0,
+    problems: all.map((fault) => fault.text),
+    faults: all,
+    probes,
+  };
 }
+
+/**
+ * Что от поломки ломается дальше и что делать — по области поломки.
+ * Тревога обязана отвечать на три вопроса (CLAUDE.md, «Правило приборов и
+ * сторожей», п.3): что сломано, что от этого ломается дальше, что делать.
+ */
+const AREA_ADVICE: Record<
+  ToolAuditFaultArea,
+  { consequence: string; action: string }
+> = {
+  audit: {
+    consequence:
+      "сводка и выгрузка покажут ноль отказов или заниженную долю ошибок, а поломки шлюза видны только вручную по журналам ходов ролей",
+    action:
+      "Проверить запись отказов в role_tool_audit (server/src/runtime/toolAuditStore.ts) и шлюз ролей (server/src/runtime/universalTaskflow.ts)",
+  },
+  counters: {
+    consequence:
+      "доля ошибок в сводке и выгрузке будет неверной — часть вызовов в счётчиках не учтена",
+    action:
+      "Проверить счётчики role_tool_audit_counters и запись вызовов (server/src/runtime/toolAuditStore.ts)",
+  },
+  gateway: {
+    consequence:
+      "часть отказов ролей не доходит до учёта — сводка покажет меньше ошибок, чем было на самом деле",
+    action: "Проверить шлюз ролей (server/src/runtime/universalTaskflow.ts)",
+  },
+  probe: {
+    consequence:
+      "сторож может промолчать о поломке прибора — тогда поломку увидят только по журналам ходов",
+    action:
+      "Проверить пробный ход сторожа (server/src/runtime/toolErrorAccountingWatcher.ts)",
+  },
+};
+
+/** Сколько замечаний и какой длины входят в тревогу: лавина причин не должна
+ *  превращать уведомление в простыню, но хвост «что делать» не режется. */
+const ALERT_MAX_FAULTS = 6;
+const ALERT_MAX_FAULT_LENGTH = 200;
 
 /**
  * Тревога в «Состояние системы» — не чаще одного раза в сутки.
  * Возвращает true, если уведомление создано.
+ *
+ * Текст собирается из трёх частей и НЕ обрезается целиком: прежняя обрезка
+ * по 400 знаков отрезала хвост «что делать» на полуслове (карточка
+ * 64af4c85, D2). Режется только список замечаний — «что делать» остаётся
+ * целиком при любой длине поломки.
  */
-export function alertToolErrorAccounting(problems: string[]): boolean {
-  if (!problems.length) return false;
+export function alertToolErrorAccounting(faults: ToolAuditFault[]): boolean {
+  if (!faults.length) return false;
   try {
     const already = db
       .prepare(
@@ -429,14 +550,33 @@ export function alertToolErrorAccounting(problems: string[]): boolean {
     const owners = db
       .prepare("SELECT id FROM users WHERE role = 'owner'")
       .all() as Array<{ id: string }>;
-    const text = (
-      "Учёт ошибок вызовов инструментов ролей сломан: " +
-      problems.join("; ") +
-      ". Из-за этого сводка и выгрузка ошибок показывают ноль или неверную долю, " +
-      "а поломки шлюза видны только вручную по журналам ходов ролей. " +
-      "Проверить universalTaskflow.ts (запись отказов), миграцию role_tool_audit " +
-      "и выполнить checkToolErrorAccounting()."
-    ).slice(0, 400);
+    const shown = faults.slice(0, ALERT_MAX_FAULTS).map((fault) =>
+      fault.text.length > ALERT_MAX_FAULT_LENGTH
+        ? fault.text.slice(0, ALERT_MAX_FAULT_LENGTH - 1).trimEnd() + "…"
+        : fault.text,
+    );
+    const rest = faults.length - shown.length;
+    const broken =
+      shown.join("; ") + (rest > 0 ? `; и ещё ${rest} замечаний` : "");
+    const areas = [...new Set(faults.map((fault) => fault.area))];
+    const consequences = [
+      ...new Set(areas.map((area) => AREA_ADVICE[area].consequence)),
+    ].join("; ");
+    const actions = [
+      ...new Set(areas.map((area) => AREA_ADVICE[area].action)),
+    ].join("; ");
+    const text =
+      "Учёт ошибок вызовов инструментов ролей сломан. " +
+      "Что сломано: " +
+      broken +
+      ". " +
+      "Что от этого ломается дальше: " +
+      consequences +
+      ". " +
+      "Что делать: " +
+      actions +
+      ". " +
+      "После починки сторож сам перепроверит прибор пробным ходом (раз в 15 минут).";
     for (const owner of owners) {
       db.prepare(
         "INSERT INTO notifications (id, user_id, type, text) VALUES (?,?,?,?)",
@@ -457,7 +597,7 @@ export function startToolErrorAccountingWatcher(): () => void {
     running = true;
     try {
       const result = await checkToolErrorAccounting();
-      if (!result.ok) alertToolErrorAccounting(result.problems);
+      if (!result.ok) alertToolErrorAccounting(result.faults);
     } catch (error) {
       console.warn("[tool-audit-watch] проверка не отработала:", error);
     } finally {

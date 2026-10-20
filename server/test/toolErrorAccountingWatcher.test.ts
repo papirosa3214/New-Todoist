@@ -19,6 +19,7 @@ import {
   checkToolErrorAccounting,
   evaluateToolAudit,
   type ToolAuditEvidence,
+  type ToolAuditFault,
   type ToolAuditProbe,
 } from "../src/runtime/toolErrorAccountingWatcher.js";
 
@@ -84,6 +85,16 @@ const rejectedProbes: ToolAuditProbe[] = [
   { kind: "accepted", operation: "taskflow_rules", code: "OK" },
 ];
 
+/** Замечание о сломанной записи отказов. */
+function auditFault(text: string): ToolAuditFault {
+  return { area: "audit", text };
+}
+
+/** Замечание о сломанных счётчиках. */
+function countersFault(text: string): ToolAuditFault {
+  return { area: "counters", text };
+}
+
 describe("сторож учёта ошибок вызовов инструментов", () => {
   it("живой прибор: проба через настоящий шлюз записана, сторож молчит", async () => {
     const result = await checkToolErrorAccounting();
@@ -118,7 +129,7 @@ describe("сторож учёта ошибок вызовов инструмен
     expect(result.problems.join(" ")).toContain("не попал в учёт");
     // Шлюз при выключенной записи продолжает отвечать роли — учёт побочный.
     expect(result.probes.some((probe) => probe.kind === "rejected")).toBe(true);
-    expect(alertToolErrorAccounting(result.problems)).toBe(true);
+    expect(alertToolErrorAccounting(result.faults)).toBe(true);
     const rows = db
       .prepare("SELECT COUNT(*) AS n FROM notifications WHERE type = ?")
       .get(TOOL_ERROR_ACCOUNTING_WATCH_TYPE) as { n: number };
@@ -137,32 +148,36 @@ describe("сторож учёта ошибок вызовов инструмен
   });
 
   it("отказ не записан — суд называет поломку", () => {
-    const problems = evaluateToolAudit(rejectedProbes, {
+    const faults = evaluateToolAudit(rejectedProbes, {
       ...liveEvidence(),
       rows: [],
     });
-    expect(problems.join(" ")).toContain("не попал в учёт");
+    expect(faults.map((fault) => fault.text).join(" ")).toContain("не попал в учёт");
   });
 
   it("в записи нет кода ошибки — суд называет поломку", () => {
-    const problems = evaluateToolAudit(rejectedProbes, {
+    const faults = evaluateToolAudit(rejectedProbes, {
       ...liveEvidence(),
       rows: [{ id: "row-1", role: PROBE_ROLE, model: "m", operation: "op" }],
     });
-    expect(problems.join(" ")).toContain("кода ошибки");
+    expect(faults.map((fault) => fault.text).join(" ")).toContain("кода ошибки");
   });
 
   it("успешный вызов не посчитан — суд называет поломку", () => {
-    const problems = evaluateToolAudit(rejectedProbes, {
+    const faults = evaluateToolAudit(rejectedProbes, {
       ...liveEvidence(),
       byOperation: { taskflow_task: { calls: 1, errors: 1 } },
     });
-    expect(problems.join(" ")).toContain("доля ошибок");
+    expect(faults.map((fault) => fault.text).join(" ")).toContain("доля ошибок");
   });
 
   it("тревога: одно уведомление в сутки, а не по одному на каждый сбой", () => {
-    expect(alertToolErrorAccounting(["отказ не попал в учёт"])).toBe(true);
-    expect(alertToolErrorAccounting(["отказ не попал в учёт"])).toBe(false);
+    expect(alertToolErrorAccounting([auditFault("отказ не попал в учёт")])).toBe(
+      true,
+    );
+    expect(alertToolErrorAccounting([auditFault("отказ не попал в учёт")])).toBe(
+      false,
+    );
     const rows = db
       .prepare(
         "SELECT COUNT(*) AS n FROM notifications WHERE type = ? AND user_id = ?",
@@ -180,12 +195,65 @@ describe("сторож учёта ошибок вызовов инструмен
   });
 
   it("текст тревоги объясняет, что сломано и что делать", () => {
-    alertToolErrorAccounting(["отказ пробного вызова не попал в учёт"]);
+    alertToolErrorAccounting([auditFault("отказ пробного вызова не попал в учёт")]);
     const row = db
       .prepare("SELECT text FROM notifications WHERE type = ? LIMIT 1")
       .get(TOOL_ERROR_ACCOUNTING_WATCH_TYPE) as { text: string };
     expect(row.text).toContain("не попал в учёт");
     expect(row.text).toContain("сводка");
     expect(row.text).toContain("Проверить");
+  });
+
+  // D2 карточки 64af4c85: прежний текст тревоги обрезался собственным
+  // .slice(0, 400) — хвост «что делать» терялся на полуслове, и владелец
+  // видел незаконченную фразу.
+  it("D2: тревога не обрывается на полуслове — в ней есть и что делать", () => {
+    alertToolErrorAccounting([
+      auditFault(
+        "запись отказов сломана: отказ пробного вызова не попал в учёт — строки об отказах не пишутся (счётчик успешных вызовов при этом цел: в счётчиках вызовов 1, ошибок 0)",
+      ),
+      auditFault("в записи об отказе нет кода ошибки"),
+      countersFault("счётчик ошибок не считает отказы пробного хода"),
+    ]);
+    const row = db
+      .prepare("SELECT text FROM notifications WHERE type = ? LIMIT 1")
+      .get(TOOL_ERROR_ACCOUNTING_WATCH_TYPE) as { text: string };
+    // Три части тревоги на месте.
+    expect(row.text).toContain("Что сломано:");
+    expect(row.text).toContain("Что от этого ломается дальше:");
+    expect(row.text).toContain("Что делать:");
+    // Хвост не отрезан: текст не заканчивается на полуслове.
+    expect(row.text.endsWith("пробным ходом (раз в 15 минут).")).toBe(true);
+    expect(row.text.length).toBeGreaterThan(400);
+    // Владельцу сказано, что делать, а не только «проверить счётчики».
+    expect(row.text).toContain("Проверить запись отказов");
+  });
+
+  // D3 карточки 64af4c85: при отключённой записи теряются строки об отказах,
+  // а счётчик успешных вызовов остаётся целым. Сторож писал «вызовы пробного
+  // хода не посчитаны в счётчиках» — владельца уводило чинить счётчики.
+  it("D3: при сломанной записи сторож называет запись отказов, а не счётчики", async () => {
+    disableRecording();
+    const result = await checkToolErrorAccounting();
+    expect(result.ok).toBe(false);
+    const areas = result.faults.map((fault) => fault.area);
+    expect(areas).toContain("audit");
+    expect(areas).not.toContain("counters");
+    const text = result.faults.map((fault) => fault.text).join(" ");
+    expect(text).toContain("запись отказов сломана");
+    expect(text).not.toContain("не посчитаны в счётчиках");
+    // Счётчик успешных вызовов цел — об этом суд и говорит.
+    expect(text).toContain("счётчик успешных вызовов при этом цел");
+  });
+
+  it("D3: тревога при сломанной записи зовёт чинить запись отказов", async () => {
+    disableRecording();
+    const result = await checkToolErrorAccounting();
+    expect(alertToolErrorAccounting(result.faults)).toBe(true);
+    const row = db
+      .prepare("SELECT text FROM notifications WHERE type = ? LIMIT 1")
+      .get(TOOL_ERROR_ACCOUNTING_WATCH_TYPE) as { text: string };
+    expect(row.text).toContain("Проверить запись отказов");
+    expect(row.text).not.toContain("Проверить счётчики");
   });
 });
