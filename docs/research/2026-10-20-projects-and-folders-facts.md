@@ -214,3 +214,24 @@ docker ps --format '{{.Names}}\t{{.Ports}}'                  # контейне�
 (`/tmp/taskflow-backup-before-map-note-20261020.db`): инструмент `taskflow_doc_write` внутри задачи всегда кладёт
 заметку в папку карточки (в коде: `if (taskId) folderId = ensureTaskArtifactFolder(taskId)`), параметр
 `library_subfolder` при этом игнорируется.
+
+## 13. Рецепт: заметка в раздел библиотеки (для повтора)
+
+Навык роли оформить не удалось: папка `/home/maksim/taskflow/roles/researcher/skills/` закрыта для
+пользователя роли (`tfrole`), запись в неё запрещена. Рецепт хранится здесь — перенесите в навык, когда
+доступ появится.
+
+1. `taskflow_doc_write` (markdown) → заметка создаётся в папке карточки: в коде сервера
+   `server/src/runtime/inProcessRun.ts` сначала стоит `if (taskId) folderId = ensureTaskArtifactFolder(taskId)`,
+   и `library_subfolder` при наличии задачи игнорируется.
+2. `taskflow_kb_categorize` (note_id, category) — постоянная категория заметки; автор и дата не меняются.
+3. Перенос в папку раздела — прямым UPDATE в БД с горячим бэкапом:
+   `sqlite3 taskflow.db ".backup '/tmp/taskflow-backup-<дата>.db'"` и
+   `UPDATE user_notes SET folder_id=186 WHERE id='<id заметки>'`.
+   Папки: 182 корень, 183 Roles, 184 Workflows, 185 Norms, 186 Knowledge Base, 187 Projects
+   (сверить: `select id, name from journal_folders where parent_id = 182;`).
+4. Проверка: `taskflow_kb_search` по типовому запросу ролей; в отчёте — id заметки, её раздел и путь бэкапа.
+
+Грабли: правка существующей заметки через `taskflow_doc_write` с `id` дописывает, а не заменяет;
+удалять заметки инструмент разметки не умеет; папка карточки и раздел библиотеки — разные места,
+заметка в разделе не попадает в папку карточки.
