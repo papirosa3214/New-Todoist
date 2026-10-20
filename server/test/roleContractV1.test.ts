@@ -189,7 +189,7 @@ describe("JSON-контракт роли v1: разбор ответа роли"
     };
     expect(validateStructuredRoleContractV1(value)).toMatchObject({ valid: true });
     const parsed = parseRoleContractV1(JSON.stringify(value));
-    expect(parsed.text).toBe("Результат готов.\n\nПроверка\n\n1");
+    expect(parsed.text).toBe("Результат готов.\n\nПроверка\n\n| Этап |\n| --- |\n| 1 |");
     expect(parsed.structuredEnvelope).toEqual(value);
     expect(parsed.envelope).toBeNull();
   });
@@ -337,5 +337,37 @@ describe("JSON-контракт роли v1: чат и сдача этапа", {
     expect(note?.id).toBeTruthy();
     const receipt = (await app.inject({ method: "GET", url: `/api/subtasks/${f.step.id}/submission-receipt`, headers: { authorization: builder } })).json();
     expect(receipt).toMatchObject({ confirmed: true, authority: "primary", document_id: note.id });
+  });
+});
+
+describe("блоки command, link, widget и таблица (20.10.2026)", () => {
+  const env = (output: any[]) => ({ schema_version: 1, ok: true, output, artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: false });
+  it("принимает и переводит в текст, который рисуют клиенты", async () => {
+    const { validateStructuredRoleContractV1, structuredOutputText } = await import("../src/lib/roleContractV1.js");
+    const blocks = [
+      { type: "command", title: "Перезапуск", command: "systemctl --user restart taskflow-server" },
+      { type: "link", title: "Проект", url: "https://example.com/a?b=1" },
+      { type: "widget", widget: { type: "checklist", title: "Шаги", items: [{ text: "раз", done: true }] } },
+      { type: "table", title: "T", columns: ["a", "b"], rows: [["1", "x|y"]] },
+      { type: "chart", title: "C", kind: "bar", points: [{ label: "пн", value: 3 }] },
+    ];
+    expect(validateStructuredRoleContractV1(env(blocks)).errors).toEqual([]);
+    const text = structuredOutputText(blocks);
+    expect(text).toContain("```bash\nsystemctl --user restart taskflow-server\n```");
+    expect(text).toContain("[Проект](https://example.com/a?b=1)");
+    expect(text).toContain('```widget\n{"type":"checklist"');
+    expect(text).toContain("| a | b |\n| --- | --- |\n| 1 | x\\|y |");
+    expect(text).toContain('"points":[{"x":"пн","y":3}]');
+  });
+  it("отвергает ссылку не http(s), пустую команду и кривой виджет", async () => {
+    const { validateStructuredRoleContractV1 } = await import("../src/lib/roleContractV1.js");
+    const errors = validateStructuredRoleContractV1(env([
+      { type: "link", title: "x", url: "javascript:alert(1)" },
+      { type: "command", command: "  " },
+      { type: "widget", widget: { type: "chart", title: "x", kind: "bar", points: [{ label: "a", value: 1 }] } },
+    ])).errors.join("\n");
+    expect(errors).toMatch(/output\[0\]\.url/);
+    expect(errors).toMatch(/output\[1\]\.command/);
+    expect(errors).toMatch(/output\[2\]\.widget/);
   });
 });
