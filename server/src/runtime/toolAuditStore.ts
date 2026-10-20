@@ -17,7 +17,7 @@
 
 import crypto from "node:crypto";
 import db from "../db.js";
-import { providerOfModel } from "../roleRouting.js";
+import { parseModelRef } from "../lib/attemptModel.js";
 
 export const TOOL_AUDIT_SCHEMA = `
 CREATE TABLE IF NOT EXISTS role_tool_audit (
@@ -129,8 +129,12 @@ function isoToSqlite(value: string): string | null {
 export function recordToolAudit(event: ToolAuditEvent): void {
   try {
     const model = event.model ?? null;
+    // Провайдер — из самой модели: в ходе она приходит как «провайдер/модель»
+    // («opencode-go/deepseek-v4.1-flash»). Эвристика по названию знает только
+    // anthropic/openai и всё остальное зовёт minimax — по ней владелец не
+    // поймёт, у кого истёк ключ. Разбор модели — parseModelRef.
     const provider =
-      event.provider ?? (model ? providerOfModel(model) : null);
+      event.provider ?? (model ? parseModelRef(model).provider : null);
     const bucket = hourBucket();
     const operation = event.operation ?? "";
     const tool = event.tool ?? "taskflow";

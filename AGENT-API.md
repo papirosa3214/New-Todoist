@@ -416,6 +416,11 @@ curl -sS "http://localhost:3001/api/role-tool-audit/export?format=csv&from=2026-
 хранится только путь поля и ожидаемый тип (`error_field`, `error_expected`).
 Секреты и полные аргументы в выгрузку не попадают.
 
+Провайдер в записи берётся из префикса модели: `opencode-go/deepseek-v4.1-flash`
+→ `opencode-go`. По нему видно, у кого истёк ключ или исчерпан лимит. Модель
+без префикса получает провайдера по старой эвристике (`claude-…` → `anthropic`,
+`gpt-…` → `openai`, остальное → `minimax`).
+
 ### Health
 
 ```bash
