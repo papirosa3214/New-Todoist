@@ -61,6 +61,12 @@ type CacheEntry = { at: number; items: ComposioCatalogItem[]; error: string | nu
 const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<ComposioCatalogItem[]>>();
 
+/** Забыть копию каталога: тестам и смене ключа нужен чистый старт. */
+export function clearComposioCache(): void {
+  cache.clear();
+  inflight.clear();
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -172,14 +178,36 @@ export async function roleIntegrations(role: string, ownerId?: string): Promise<
 
   // Выборочный список: спрашиваем каталог по каждому сервису — так
   // нужный сервис найдётся даже когда каталог длиннее первой страницы.
-  const answers = await Promise.all(allowed.map((slug) => composioCatalog(policy.ownerId, slug)));
-  const toolkits = allowed.map((slug, index) => {
-    const found = answers[index].items.find((item) => item.slug === slug) ?? null;
+  const { items, error } = await resolveToolkits(policy.ownerId, allowed);
+  const toolkits = allowed.map((slug) => {
+    const found = items.find((item) => item.slug === slug) ?? null;
     return { slug, name: found?.name ?? null, connected: found ? found.connected : null };
   });
-  const error = answers.map((answer) => answer.error).find((message) => !!message) ?? null;
   const connected_known = error === null && toolkits.every((item) => item.connected !== null);
   return { enabled: true, toolkits, connected_known, error };
+}
+
+/**
+ * Сервисы по их ключам, не глядя на первую страницу каталога.
+ *
+ * Каталог Composio постраничный (первая страница — 50 сервисов), и нужного
+ * сервиса (например, todoist) в ней может не быть. Поэтому каждый ключ
+ * спрашиваем отдельно: экраны настроек получают его название и состояние,
+ * а не «состояние неизвестно» про подключённый сервис. Копия и таймаут —
+ * те же, что у страницы каталога (`composioCatalog`).
+ */
+export async function resolveToolkits(
+  ownerId: string,
+  slugs: string[],
+): Promise<{ items: ComposioCatalogItem[]; error: string | null }> {
+  const answers = await Promise.all(slugs.map((slug) => composioCatalog(ownerId, slug)));
+  const items: ComposioCatalogItem[] = [];
+  slugs.forEach((slug, index) => {
+    const found = answers[index].items.find((item) => item.slug === slug);
+    if (found) items.push(found);
+  });
+  const error = answers.map((answer) => answer.error).find((message) => !!message) ?? null;
+  return { items, error };
 }
 
 /**
