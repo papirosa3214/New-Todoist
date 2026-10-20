@@ -25,6 +25,28 @@ export const LIVE_BROADCAST_MS = 150;
 const DETAIL_MAX = 140;
 const TEXT_MAX = 20_000;
 const ITEMS_MAX = 200;
+const IO_MAX = 4000;
+
+function clipIO(text: string): string {
+  const safe = redactSecrets(text);
+  return safe.length > IO_MAX ? safe.slice(0, IO_MAX) + "…" : safe;
+}
+function ioArgs(args: unknown): string | undefined {
+  if (args === undefined) return undefined;
+  try { return clipIO(JSON.stringify(args, null, 2)); } catch { return undefined; }
+}
+function ioOutput(result: unknown): string | undefined {
+  if (result === undefined || result === null) return undefined;
+  const content = (result as { content?: Array<{ type?: string; text?: string }> }).content;
+  if (Array.isArray(content)) {
+    const text = content.filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text).join("\n");
+    if (text) {
+      try { return clipIO(JSON.stringify(JSON.parse(text), null, 2)); } catch { return clipIO(text); }
+    }
+  }
+  if (typeof result === "string") return clipIO(result);
+  try { return clipIO(JSON.stringify(result, null, 2)); } catch { return undefined; }
+}
 
 export type LiveItem =
   | { kind: "text"; text: string }
@@ -33,6 +55,10 @@ export type LiveItem =
       id: string;
       tool: string;
       detail: string | null;
+      /** Точные аргументы вызова и ответ инструмента — владелец разбирает
+       *  сбой по шагу роли сам (19.10.2026). Обрезаются до IO_MAX. */
+      args?: string;
+      output?: string;
       status: "running" | "done" | "error";
       started_at: string;
       ended_at?: string;
@@ -401,6 +427,7 @@ export class LiveTurn {
         id: e.toolCallId || `step-${this.items.length}`,
         tool: presented.tool,
         detail: stepDetail(presented.tool, presented.args),
+        args: ioArgs(presented.args),
         status: "running",
         started_at: new Date().toISOString(),
       });
@@ -415,6 +442,7 @@ export class LiveTurn {
         step.status=e.isError || result?.ok===false || state==="unknown_outcome" ? "error"
           : state==="running" || state==="pending" ? "running" : "done";
         if(step.status!=="running")step.ended_at=new Date().toISOString();
+        step.output=ioOutput(e.result);
         this.schedule(true);
       }
     }

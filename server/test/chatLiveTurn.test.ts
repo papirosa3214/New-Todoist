@@ -83,6 +83,17 @@ describe("живой ход", () => {
     expect(sent[2].event.turn.items[1].status).toBe("done");
   });
 
+  it("шаг несёт точные аргументы и ответ инструмента", () => {
+    const turn = newTurn();
+    turn.onEvent(toolStart("w1", "taskflow_work_plan", { items: [{ text: "a" }] }));
+    turn.onEvent({ type: "tool_execution_end", toolCallId: "w1", toolName: "x", isError: true,
+      result: { content: [{ type: "text", text: '{"ok":false,"error":{"message":"Нужен base_revision"}}' }] } });
+    const step = sent.at(-1)!.event.turn.items[0];
+    expect(step.status).toBe("error");
+    expect(JSON.parse(step.args)).toEqual({ items: [{ text: "a" }] });
+    expect(step.output).toContain("Нужен base_revision");
+  });
+
   it("обновляет черновик финальным проверенным текстом перед закрытием", () => {
     const turn = newTurn();
     turn.onEvent(text("черновик"));
