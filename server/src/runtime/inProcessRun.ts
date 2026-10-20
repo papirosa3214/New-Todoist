@@ -445,8 +445,16 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const own=subtaskId ? db.prepare("SELECT plan_node_key FROM subtasks WHERE id=?").get(subtaskId) as {plan_node_key:string}|undefined : undefined;
         if(target===taskId && (!own || !p.slot_key || own.plan_node_key===p.slot_key)) throw new ToolError("Не адресуй сообщение своему слоту");
       }
-      if(!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(topic.id,roleUserId(p.to))) throw new ToolError("Роль не участвует в теме");
       const targetSlots=db.prepare("SELECT n.slot_key FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id WHERE p.task_id=? AND p.status='approved' AND n.role_key=? AND n.skipped_at IS NULL").all(target,p.to) as {slot_key:string}[];
+      if(!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(topic.id,roleUserId(p.to))) {
+        // Участник утверждённого плана, которого не добавили в тему, — наш
+        // рассинхрон, а не ошибка роли: добавляем (6 отказов за 18–19.10.2026).
+        if(targetSlots.length) db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES (?, ?)").run(topic.id,roleUserId(p.to));
+        else {
+          const members=(db.prepare("SELECT u.role_key FROM chat_members m JOIN users u ON u.id=m.member_id WHERE m.chat_id=? AND u.role_key IS NOT NULL").all(topic.id) as {role_key:string}[]).map(m=>m.role_key);
+          throw new ToolError(`Роль ${p.to} не участвует в теме. Участники: ${members.join(", ")||"нет ролей"}.`);
+        }
+      }
       const pick=pickRecipientSlot(p.to,p.slot_key,targetSlots.map(t=>t.slot_key));
       if("refusal" in pick) throw new ToolError(pick.refusal);
       p.slot_key=pick.slot;
@@ -663,7 +671,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) touchTaskActivity(taskId);
         return result;
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. report_markdown — отчёт для владельца с разделами ## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы; правила отчёта — в системной инструкции. contract_v1 — необязательный конверт роли (ok, output, artifacts, error, next_hint, needs_human): сервер проверит его и возьмёт output как result, если result не передан; result, report_markdown и artifact работают как раньше. " + SUBMISSION_POLICY,
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения, не длиннее 400 символов: длиннее сервер отклонит, подробности — в комментарий). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. report_markdown — отчёт для владельца с разделами ## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы; правила отчёта — в системной инструкции. contract_v1 — необязательный конверт роли (ok, output, artifacts, error, next_hint, needs_human): сервер проверит его и возьмёт output как result, если result не передан; result, report_markdown и artifact работают как раньше. " + SUBMISSION_POLICY,
       Type.Object({
         id: Type.String(),
         result: Type.Optional(Type.String()),
