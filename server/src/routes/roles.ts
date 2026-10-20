@@ -19,6 +19,7 @@ import {
   type RoleName,
 } from "../roleRouting.js";
 import { inProcessToolNames, sweepPendingReviews, taskflowTools } from "../runtime/inProcessRun.js";
+import { roleIntegrations } from "../runtime/roleIntegrations.js";
 
 type ProfileConfig = {
   mcpServers?: {
@@ -593,7 +594,11 @@ export function registerRoleRoutes(app: FastifyInstance): void {
       if (!isRole(req.params.role)) {
         return reply.code(404).send({ error: "роль не найдена" });
       }
-      return roleDetails(req.params.role, await piAlive());
+      // Сведения об интеграциях роли — отдельным блоком: каталог Composio
+      // живёт во внешнем процессе, поэтому профиль роли не должен вставать
+      // из-за него (таймаут и честный фолбэк — в roleIntegrations).
+      const details = roleDetails(req.params.role, await piAlive());
+      return { ...details, integrations: await roleIntegrations(req.params.role) };
     },
   );
 

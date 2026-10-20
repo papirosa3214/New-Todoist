@@ -5,6 +5,7 @@ import { ROLE_NAMES } from "../roleRouting.js";
 import { composioCredentialConfigured, roleComposioPolicy, saveComposioPolicy } from "../runtime/composioPolicy.js";
 import { inspectComposio } from "../runtime/composioRuntime.js";
 import { composioAccountsCall } from "../runtime/composioAccounts.js";
+import { composioCatalog } from "../runtime/roleIntegrations.js";
 import db from "../db.js";
 
 export function registerComposioRoutes(app: FastifyInstance) {
@@ -73,6 +74,30 @@ export function registerComposioRoutes(app: FastifyInstance) {
     if (reply.sent) return;
     if (!isOwner(req.userId)) return reply.code(403).send({ error: "Белый список доступен владельцу" });
   };
+
+  // Сводка по Composio у владельца: какие сервисы есть в каталоге, какие
+  // подключены, и что каждой роли разрешено. Один экран «Интеграции» и
+  // один «Composio» читают её оба — источник один (тот же каталог, что в
+  // GET /api/roles/:role/composio).
+  app.get("/api/integrations/composio", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "Настройки Composio доступны владельцу" });
+    const configured = composioCredentialConfigured();
+    const roles = db
+      .prepare("SELECT role, enabled, toolkits FROM role_composio ORDER BY role")
+      .all() as Array<{ role: string; enabled: number; toolkits: string | null }>;
+    const catalog = configured ? await composioCatalog(req.userId, String(req.query?.search ?? "").slice(0, 100)) : { items: [], error: null };
+    return {
+      configured,
+      available: configured && !catalog.error,
+      catalog: catalog.items,
+      roles: roles.map((row) => ({
+        role: row.role,
+        enabled: !!row.enabled,
+        toolkits: row.toolkits == null ? null : (JSON.parse(row.toolkits) as string[]),
+      })),
+      error: configured ? catalog.error : "Ключ Composio ещё не настроен на сервере",
+    };
+  });
   const trusted = () => ({ items: db.prepare("SELECT address, added_at FROM mail_trusted_senders ORDER BY added_at").all() });
   app.get("/api/integrations/mail/trusted", { preHandler: ownerOnly }, async () => trusted());
   app.post("/api/integrations/mail/trusted", { preHandler: ownerOnly }, async (req: any, reply) => {
