@@ -2010,12 +2010,9 @@ async function deliverAgentReply(args: {
       .all(chatId, trigger.id, trigger.id, CHAT_AGENT_CONTEXT_MESSAGES) as HistoryRow[];
     history.reverse();
     // Состав команды (14.10.2026) — в первый ход сессии, дальше сессия помнит.
-    const roleInstruction = [
-      composeLayer(role, "role.prompt")?.effective
-        || rolePromptText(role)
-        || `Ты — ${roleTitle} в трекере TaskFlow.`,
-      teamStructureText(role),
-    ].join("\n\n");
+    // Инструкция роли (общий шаблон + AGENTS.md) уже в системном промпте чата
+    // (chatSystemPrompt) — второй раз её сюда не кладём (20.10.2026).
+    const roleInstruction = teamStructureText(role);
     prompt = renderInstruction(role, "chat.wrapper", {
       roleInstruction,
       localPolicy: composeLayer(role, "local_policy")!.effective,

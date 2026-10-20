@@ -1443,8 +1443,8 @@ async function runRoleInProcessUnserialized(input: {
   const manager=input.subtaskId ? openSlotSession(taskId,role,input.subtaskId,cwd,input.freshSession) : SessionManager.continueRecent(cwd,sessionDir(taskId,role));
   cwd=manager.getCwd();
   const systemPrompt = [
-    composeLayer(role, "role.prompt")?.effective
-      || rolePrompt(role)
+    // Общий шаблон + AGENTS.md роли — один источник (20.10.2026).
+    rolePrompt(role)
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
     teamStructureText(role),

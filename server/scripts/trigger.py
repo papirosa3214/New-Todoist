@@ -81,7 +81,8 @@ ROLE_NAMES = frozenset({
     "designer",
 })
 ROLE_ROUTING_FILE = Path(__file__).with_name("role-routing.yaml")
-ROLE_PROMPTS_DIR = Path(__file__).with_name("role-prompts")
+# Один источник инструкций (20.10.2026): AGENTS.md в папке роли.
+ROLE_PROMPTS_DIR = Path(os.environ.get("TASKFLOW_ROLES_DIR") or Path.home() / "taskflow" / "roles")
 PI_MCP_PROFILES_DIR = HOME / ".pi/agent/taskflow-profiles"
 # 18.09.2026, карточка f3108dcc (Pi = единый runtime, фасад):
 # LEGACY_EXTERNAL_AGENTS удалён. До 16.09.2026 в EXTERNAL_AGENTS жили
@@ -290,7 +291,7 @@ def role_prompt_for_task(task: dict) -> str:
     role = task_role(task)
     if not role:
         return ""
-    path = ROLE_PROMPTS_DIR / f"{role}.md"
+    path = ROLE_PROMPTS_DIR / role / "AGENTS.md"
     try:
         prompt = path.read_text(encoding="utf-8").strip()
     except OSError as exc:
@@ -305,7 +306,7 @@ def role_prompt_for_role(role: str) -> str:
     role_name = str(role or "").strip().lower()
     if not role_name:
         return ""
-    path = ROLE_PROMPTS_DIR / f"{role_name}.md"
+    path = ROLE_PROMPTS_DIR / role_name / "AGENTS.md"
     try:
         prompt = path.read_text(encoding="utf-8").strip()
     except OSError as exc:

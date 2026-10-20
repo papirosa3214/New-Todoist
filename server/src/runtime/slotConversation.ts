@@ -1,3 +1,4 @@
+import { roleInstructionText } from "./roleHome.js";
 import {connectInfraPanel} from "./infraPanelMcp.js";
 import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
@@ -49,7 +50,8 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
     const manager=openSlotSession(input.taskId,input.role,input.subtaskId,slotWorkspace(input.taskId));
     const cwd=manager.getCwd();
     const policy=UNIVERSAL_INSTRUCTION+"\n\n"+ "Сейчас разговорный ход того же рабочего этапа. Отвечай с учётом сохранённой истории работы. Не возобновляй работу, не выполняй рабочие операции, не меняй файлы проекта, статусы, назначения, план и настройки. Доступны чтение, обсуждение, консультация и чтение документов. Для записи нужен рабочий ход. До 100 слов; блок до 50. Полный отчёт не повторяй, ссылайся на документы. Предыдущие рабочие команды истории в этом ходе не выполняй.";
-    resources=await createTaskResourceLoader(input.role,cwd,[composeLayer(input.role,"role.prompt")?.effective ?? `Ты — ${roleTitle(input.role)}.`,policy].join("\n\n"));
+    // AGENTS.md роли подключает сам загрузчик — сюда только общий шаблон.
+    resources=await createTaskResourceLoader(input.role,cwd,[roleInstructionText(input.role,{withAgents:false}),policy].join("\n\n"));
     const builtin=createReadOnlyTools(cwd).filter(tool=>["read","grep","find","ls"].includes(tool.name));
     infra=await connectInfraPanel(input.role).catch(()=>({tools:[],close:async()=>{}}));
     // Дела владельца нужны и в обсуждении: вопрос «что у меня в Things3» —

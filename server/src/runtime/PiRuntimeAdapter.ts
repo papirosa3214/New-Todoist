@@ -7,7 +7,7 @@ import { chatInstructionArgs, chatSystemPrompt, createTaskResourceLoader } from 
 import { parseModelRef } from "../lib/attemptModel.js";
 import { providerAvailable } from "../lib/modelLadder.js";
 import { connectRoleComposio } from "./composioRuntime.js";
-import { ensureRoleHome, prepareChatSessionDirectory } from "./roleHome.js";
+import { ensureRoleHome, prepareChatSessionDirectory, roleHome } from "./roleHome.js";
 import { homedir } from "node:os";
 import { createCliAgentSession } from "./cliAgentSession.js";
 import { actionTurnHandler, externalAgentBoost, stripActions } from "./externalAgentActions.js";
@@ -67,8 +67,6 @@ import {
   RuntimeUnavailableError,
 } from "./errors.js";
 
-const ROLE_PROMPTS_DIR = process.env.TASKFLOW_ROLE_PROMPTS_DIR
-  ?? path.join(process.cwd(), "scripts", "role-prompts");
 
 const ROLE_PROFILES_DIR = process.env.TASKFLOW_ROLE_PROFILES_DIR
   ?? path.join(process.env.HOME ?? ".", ".pi", "agent", "taskflow-profiles");
@@ -192,7 +190,8 @@ interface ProfileConfig {
 }
 
 function readPromptSize(role: RoleName): { source: string; size: number } {
-  const file = path.join(ROLE_PROMPTS_DIR, `${role}.md`);
+  // Инструкция роли — AGENTS.md в папке роли (один источник, 20.10.2026).
+  const file = roleHome(role).agents;
   try {
     const stat = fs.statSync(file);
     return { source: file, size: stat.size };

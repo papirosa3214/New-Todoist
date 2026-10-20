@@ -1,7 +1,9 @@
+import { roleBlockLines } from "../lib/roleContractV1.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { roleTitle } from "../roleRouting.js";
 
@@ -110,7 +112,7 @@ export function renderSystemPrompt(role: string, home: ReturnType<typeof roleHom
       "Канон роли (scripts/role-system-prompt.md) в этом запуске недоступен.",
     ].join("\n");
   }
-  return template.split("{{IDENTITY}}").join(identity).split("{{FOLDER}}").join(folder);
+  return template.split("{{IDENTITY}}").join(identity).split("{{FOLDER}}").join(folder).split("{{BLOCKS}}").join(roleBlockLines());
 }
 
 /** Без перезаписи существующих файлов; подходит и для новых пользовательских ролей.
@@ -180,4 +182,36 @@ export async function prepareChatSessionDirectory(role: string, chatId: string, 
   const migrated = JSON.stringify({ ...header, cwd: home.workspace }) + (boundary === -1 ? "\n" : text.slice(boundary));
   writeOnce(path.join(directory, path.basename(legacy.path)), migrated);
   return directory;
+}
+
+/** Инструкция роли — один источник (владелец 20.10.2026): общий шаблон
+ *  scripts/role-system-prompt.md (SYSTEM.md, со списком блоков из схемы) и
+ *  AGENTS.md в папке роли. roles.prompt в БД и scripts/role-prompts больше не
+ *  читаются. withAgents=false — когда AGENTS.md подключает загрузчик ресурсов. */
+export function roleInstructionText(role: string, options: { withAgents?: boolean } = {}): string {
+  const home = ensureRoleHome(role, { refreshSystem: true });
+  const system = fs.readFileSync(home.system, "utf8").trim();
+  if (options.withAgents === false) return system;
+  const agents = fs.existsSync(home.agents) ? fs.readFileSync(home.agents, "utf8").trim() : "";
+  return [system, agents].filter(Boolean).join("\n\n");
+}
+
+/** Своё у роли — текст AGENTS.md (то, что показывает и правит редактор). */
+export function roleAgentsText(role: string): string {
+  const home = roleHome(role);
+  return fs.existsSync(home.agents) ? fs.readFileSync(home.agents, "utf8").replace(/\n$/, "") : "";
+}
+
+/** Правка из редактора инструкций пишет прямо в AGENTS.md роли и коммитит
+ *  её в git репозитория ролей (если он есть). Сбой git не отменяет запись. */
+export function writeRoleAgents(role: string, text: string, author: string): void {
+  const home = ensureRoleHome(role);
+  fs.writeFileSync(home.agents, text.endsWith("\n") ? text : text + "\n", { mode: 0o600 });
+  const root = path.dirname(home.dir);
+  if (!fs.existsSync(path.join(root, ".git"))) return;
+  const rel = path.relative(root, home.agents);
+  execFile("git", ["-C", root, "add", "--", rel], (error) => {
+    if (error) return;
+    execFile("git", ["-C", root, "commit", "-q", "-m", `${role}: правка инструкции из приложения (${author})`, "--", rel], () => {});
+  });
 }

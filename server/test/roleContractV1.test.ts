@@ -371,3 +371,15 @@ describe("блоки command, link, widget и таблица (20.10.2026)", () =
     expect(errors).toMatch(/output\[2\]\.widget/);
   });
 });
+
+describe("список блоков в инструкции — из схемы (20.10.2026)", () => {
+  it("описан каждый тип валидатора, и только они", async () => {
+    const { ROLE_BLOCK_GUIDE, roleBlockLines, validateStructuredRoleContractV1 } = await import("../src/lib/roleContractV1.js");
+    const lines = roleBlockLines().split("\n");
+    expect(lines.length).toBe(Object.keys(ROLE_BLOCK_GUIDE).length);
+    for (const type of Object.keys(ROLE_BLOCK_GUIDE)) {
+      const errors = validateStructuredRoleContractV1({ schema_version: 1, ok: true, output: [{ type }], artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: false }).errors.join(" ");
+      expect(errors).not.toMatch(/неизвестный тип блока/);
+    }
+  });
+});

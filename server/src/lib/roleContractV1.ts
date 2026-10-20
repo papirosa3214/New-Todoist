@@ -68,7 +68,30 @@ const STRUCTURED_BLOCK_FIELDS: Record<string, string[]> = {
   // Владелец 20.10.2026: команда с кнопкой запуска, кликабельная ссылка и
   // виджет — тоже блоки JSON, а не Markdown внутри text.
   command: ["type", "command", "title"], link: ["type", "title", "url"], widget: ["type", "widget"],
+  html: ["type", "title", "html"],
 };
+/** Описание блоков для инструкции ролей. Список собирается отсюда в общий
+ *  шаблон (scripts/role-system-prompt.md, {{BLOCKS}}) — один источник со схемой
+ *  выше; тест сверяет, что ключи совпадают (владелец 20.10.2026). */
+export const ROLE_BLOCK_GUIDE: Record<string, string> = {
+  text: "`text`",
+  heading: "`text`, `level` 1–3",
+  list: "`items`, необязательный `ordered`",
+  table: "`columns`, `rows`, необязательный `title`",
+  status: "`code` (`info|in_progress|passed|failed|blocked|skipped`), `title`, необязательный `text`",
+  progress: "`title`, `current`, `total`, необязательные `unit`, `label`",
+  chart: "`title`, `kind` (`bar`|`line`), `points` с `label` и числовым `value`, необязательный `unit`",
+  diagram: "`title`, `kind` (`chain`|`ladder`|`timeline`), `items` с `label` и `state` из `queued|in_progress|done|blocked|failed|skipped`",
+  report: "`report_kind` (`intermediate`|`final`), `sections`",
+  handoff: "`artifact_key`, `summary`",
+  command: "`command`, необязательный `title`: команда для запуска на .110; у владельца рядом кнопка «Запустить». Одна команда — один блок",
+  link: "`title`, `url` (только http/https): кликабельная ссылка",
+  html: "`title`, `html`: интерактив в окне чата — самодостаточная страница HTML/CSS/JS",
+  widget: "`widget`: объект виджета (`metrics`, `progress`, `checklist`, `card`, `chart` и др.); сервер проверяет его по каталогу виджетов",
+};
+export function roleBlockLines(): string {
+  return Object.keys(STRUCTURED_BLOCK_FIELDS).map((type) => "- `" + type + "` — " + (ROLE_BLOCK_GUIDE[type] ?? "")).join("\n");
+}
 const isObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const isText = (value: unknown, max = 4000): value is string =>
@@ -105,6 +128,7 @@ function structuredBlockErrors(value: unknown, path: string, report = false): st
     case "handoff": stringField("artifact_key", 128); stringField("summary"); break;
     case "command": stringField("command", 8000); if (value.title !== undefined) stringField("title", 300); if (isText(value.command) && (!value.command.trim() || value.command.includes("```"))) errors.push(path + ".command: пустая команда или ``` внутри"); break;
     case "link": stringField("title", 300); if (!isText(value.url, 2048) || !/^https?:\/\/\S+$/.test(value.url)) errors.push(path + ".url: ожидается адрес http(s) без пробелов"); break;
+    case "html": stringField("title", 300); stringField("html", 60000); if (isText(value.html) && value.html.includes("```")) errors.push(path + ".html: ``` внутри"); break;
     case "widget": for (const problem of validateWidgetBlock(value.widget, path + ".widget")) errors.push(problem.path + ": " + problem.message); break;
   }
   return errors;
@@ -303,6 +327,7 @@ export function structuredOutputText(blocks: Record<string, unknown>[]): string 
       case "handoff": return String(block.summary ?? "");
       case "command": return (block.title ? String(block.title) + "\n" : "") + "```bash\n" + String(block.command ?? "").trim() + "\n```";
       case "link": return "[" + String(block.title ?? block.url ?? "").replace(/[\[\]]/g, "") + "](" + String(block.url ?? "") + ")";
+      case "html": return "```html\n" + String(block.html ?? "").trim() + "\n```";
       case "widget": return "```widget\n" + JSON.stringify(block.widget ?? {}) + "\n```";
       default: return "";
     }

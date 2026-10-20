@@ -1091,9 +1091,9 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     await send(chatId, "@qa привет");
     await tick(120);
     const prompt = String(fakeClients[0].promptAndWait.mock.calls[0][0]);
-    expect(prompt).toContain("```widget");
+    expect(prompt).toContain("блок widget");
     expect(prompt).toContain("taskflow_weather");
-    expect(prompt).toContain("языком html");
+    expect(prompt).toContain("блок html");
   });
 
   it("виджет Помощника владельца (без type) сохраняется уже каноническим", async () => {
