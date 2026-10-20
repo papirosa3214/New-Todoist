@@ -137,9 +137,15 @@ function structuredBlockErrors(value: unknown, path: string, report = false): st
 export function validateStructuredRoleContractV1(value: unknown): StructuredRoleContractValidation {
   if (!isObject(value)) return { valid: false, errors: ["конверт должен быть объектом"], envelope: null };
   const errors: string[] = [];
-  const keys = ["schema_version", "ok", "output", "artifacts", "plan_artifact", "error", "next_hint", "needs_human"];
-  for (const key of keys) if (!(key in value)) errors.push(key + ": обязательное поле отсутствует");
-  for (const key of Object.keys(value)) if (!keys.includes(key)) errors.push(key + ": неизвестное поле");
+  // `needs_human` — необязательное поле (решение владельца 21.10.2026): без него
+  // «решение владельца не нужно», ровно как читает iOS-клиент
+  // (`decodeIfPresent(Bool.self, forKey: .needsHuman) ?? false`). Раньше поле было
+  // обязательным, и роль, его забывшая, отдавала владельцу сырой JSON вместо
+  // блоков (21.10.2026: ответ роли в чате). Значение, если есть, — только boolean.
+  const requiredKeys = ["schema_version", "ok", "output", "artifacts", "plan_artifact", "error", "next_hint"];
+  const allowedKeys = [...requiredKeys, "needs_human"];
+  for (const key of requiredKeys) if (!(key in value)) errors.push(key + ": обязательное поле отсутствует");
+  for (const key of Object.keys(value)) if (!allowedKeys.includes(key)) errors.push(key + ": неизвестное поле");
   if (value.schema_version !== 1) errors.push("schema_version: поддерживается только 1");
   if (typeof value.ok !== "boolean") errors.push("ok: ожидается boolean");
   if (!Array.isArray(value.output) || value.output.length < 1 || value.output.length > 200) errors.push("output: ожидается 1..200 блоков");
@@ -148,8 +154,14 @@ export function validateStructuredRoleContractV1(value: unknown): StructuredRole
   if (value.plan_artifact !== null && (!isObject(value.plan_artifact) || !isText(value.plan_artifact.key, 128) || !isText(value.plan_artifact.type, 128) || value.plan_artifact.format !== "json" || !isText(value.plan_artifact.summary) || !isObject(value.plan_artifact.payload) || !Array.isArray(value.plan_artifact.evidence) || value.plan_artifact.evidence.length > 8 || value.plan_artifact.evidence.some((item) => !isMaterial(item)))) errors.push("plan_artifact: некорректный машинный артефакт");
   if (value.error !== null && (!isObject(value.error) || !["validation_error", "tool_error", "blocked", "other"].includes(String(value.error.code)) || !isText(value.error.message) || typeof value.error.retryable !== "boolean")) errors.push("error: некорректная ошибка");
   if (value.next_hint !== null && !isText(value.next_hint)) errors.push("next_hint: ожидается строка или null");
-  if (typeof value.needs_human !== "boolean") errors.push("needs_human: ожидается boolean");
-  return errors.length ? { valid: false, errors, envelope: null } : { valid: true, errors: [], envelope: value as unknown as StructuredRoleEnvelopeV1 };
+  if (value.needs_human !== undefined && typeof value.needs_human !== "boolean") errors.push("needs_human: ожидается boolean");
+  if (errors.length) return { valid: false, errors, envelope: null };
+  // В нормализованном конверте поле всегда есть: отсутствие = «решение не нужно».
+  return {
+    valid: true,
+    errors: [],
+    envelope: { ...(value as unknown as StructuredRoleEnvelopeV1), needs_human: value.needs_human === true },
+  };
 }
 
 /** Откуда взят конверт в ответе роли. `plain` — конверта нет, текст обычный. */
