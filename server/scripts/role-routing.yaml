@@ -37,12 +37,12 @@ fallbacks:
   - opencode-go/deepseek-v4.1-flash
   - opencode/space-bunny-free
 models:
-  researcher: MiniMax-M3.1-Flash-Preview
-  analyst: MiniMax-M3.1-Flash-Preview
-  critic_verifier: MiniMax-M3.1-Flash-Preview
-  architect: MiniMax-M3.1-Flash-Preview
-  builder: MiniMax-M3.1-Flash-Preview
-  qa: MiniMax-M3.1-Flash-Preview
-  designer: MiniMax-M3.1-Flash-Preview
-  secretary: MiniMax-M3.1-Flash-Preview
-  code_orchestrator: MiniMax-M3.1-Flash-Preview
+  researcher: MiniMax-M3.1-Flash
+  analyst: MiniMax-M3.1-Flash
+  critic_verifier: MiniMax-M3.1-Flash
+  architect: MiniMax-M3.1-Flash
+  builder: MiniMax-M3.1-Flash
+  qa: MiniMax-M3.1-Flash
+  designer: MiniMax-M3.1-Flash
+  secretary: MiniMax-M3.1-Flash
+  code_orchestrator: MiniMax-M3.1-Flash
