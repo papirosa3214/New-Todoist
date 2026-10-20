@@ -20,9 +20,9 @@ import { ROLE_NAMES, rolesPromptBlock, type RoleName } from "../roleRouting.js";
 // сервере .110. Owner подтверждает/правит список ПЕРЕД сохранением —
 // сервер только предлагает, ничего не создаёт сам (см. TaskFormScreen).
 const OLLAMA_BASE_URL = (
-  process.env.OLLAMA_BASE_URL || "http://192.168.1.110:11434"
+  process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11500"
 ).replace(/\/+$/, "");
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "MiniMax-M3.1-Flash-Preview";
 
 // Модель «думающая» (reasoning:true) — рассуждения могут занимать десятки
 // секунд ДО того, как пойдёт сам ответ. 23с ушло на тривиальное «привет»
