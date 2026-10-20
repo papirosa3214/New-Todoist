@@ -121,6 +121,7 @@ import { startKbTriageWatcher } from "./lib/kbTriageWatcher.js";
 import { startOllamaHealthWatcher } from "./lib/ollamaHealthWatcher.js";
 import { startWorktreeMergeWatcher } from "./lib/worktreeMergeWatcher.js";
 import { startRoleFormatWatcher } from "./lib/roleFormatWatcher.js";
+import { startToolErrorAccountingWatcher } from "./runtime/toolErrorAccountingWatcher.js";
 import { startInboxResultsWriter } from "./lib/inboxResultsWriter.js";
 import { registerSeedRoutes } from "./seed.js";
 import { registerEnrichmentRoutes } from "./routes/enrichment.js";
@@ -585,6 +586,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     // свой сторож (карточка cea8d997, docs/watchers.md).
     const stopRoleFormatWatcher = startRoleFormatWatcher();
     app.addHook("onClose", async () => stopRoleFormatWatcher());
+    // Учёт ошибок вызовов инструментов: прибор ломается тихо — шлюз отсекает
+    // неверный вызов раньше журнала операций. Сторож проверяет пробным ходом
+    // через тот же шлюз (карточка 64af4c85, docs/watchers.md).
+    if (process.env.TOOL_ERROR_ACCOUNTING_WATCHER_DISABLED !== "1") {
+      const stopToolErrorAccountingWatcher = startToolErrorAccountingWatcher();
+      app.addHook("onClose", async () => stopToolErrorAccountingWatcher());
+    }
   }
   // Результаты: при закрытии карточки на диагностику/устранение дописывает
   // блок в файл уведомления (Phase 4, правило Maksim 27.09.2026 — внутри
