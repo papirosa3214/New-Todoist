@@ -62,3 +62,49 @@ describe("режим «Обсуждение» в чате и инструмен�
     expect(operationRestriction("taskflow_create_task", ctx)).toBeUndefined();
   });
 });
+
+describe("разбор отказов 20.10.2026: мелочи прощаются, остальное объясняется", () => {
+  const ctx = { actor: "a", role: "builder", mode: "work", runId: "r" };
+  const seen: any[] = [];
+  const op = (name: string, parameters: any) => ({ name, description: name, parameters, execute: async (_: string, a: any) => { seen.push(a); return { content: [{ type: "text", text: "ok" }] }; } });
+  const parse = (r: any) => JSON.parse(r.content[0].text);
+  const plan = op("taskflow_work_plan", Type.Object({ base_revision: Type.Optional(Type.Number()), items: Type.Optional(Type.Array(Type.Object({ id: Type.String(), title: Type.String(), state: Type.Union([Type.Literal("pending"), Type.Literal("done")]) }))) }));
+  const task = op("taskflow_task", Type.Object({ id: Type.String() }));
+  const host = op("taskflow_host_read", Type.Object({ machine: Type.Optional(Type.String()), arguments: Type.Object({ path: Type.String() }) }));
+
+  it("число вместо строки и строка вместо числа — принимаются", async () => {
+    const api = createUniversalTaskflow([plan as any], ctx);
+    const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "p1", arguments: { base_revision: "0", items: [{ id: 1, title: "t", state: "pending" }] } }));
+    expect(r.ok).toBe(true);
+    expect(seen.at(-1)).toEqual({ base_revision: 0, items: [{ id: "1", title: "t", state: "pending" }] });
+  });
+
+  it("пропущенная версия подставляется; task_id принимается за id", async () => {
+    const api = createUniversalTaskflow([task as any], ctx);
+    const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_task", arguments: { task_id: "T1" } }));
+    expect(r.ok).toBe(true);
+    expect(seen.at(-1)).toEqual({ id: "T1" });
+  });
+
+  it("ошибка называет точное место", async () => {
+    const api = createUniversalTaskflow([plan as any], ctx);
+    const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "p2", arguments: { items: [{ id: "1", title: "t", state: "started" }] } }));
+    expect(r.error.code).toBe("INVALID_ARGUMENTS");
+    expect(r.error.message).toMatch(/Ошибка в: .*items\/0\/state/);
+  });
+
+  it("команда на маке с параметрами не на месте — образец с теми же значениями", async () => {
+    const api = createUniversalTaskflow([host as any], ctx);
+    const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_host_read", version: 1, request_id: "h1", arguments: { path: "a.swift" } }));
+    expect(r.error.message).toContain('"arguments":{"arguments":{"path":"a.swift"}}');
+  });
+
+  it("нет ключа повтора или он занят — сказано, что делать", async () => {
+    const api = createUniversalTaskflow([plan as any], ctx);
+    const нет = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, arguments: {} }));
+    expect(нет.error.message).toMatch(/придумай новый/);
+    await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "k", arguments: {} });
+    const занят = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "k", arguments: { base_revision: 1 } }));
+    expect(занят.error.message).toMatch(/новый request_id/);
+  });
+});

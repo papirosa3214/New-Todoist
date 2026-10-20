@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Type } from "typebox";
-import { Check } from "typebox/value";
+import { Check, Convert, Errors } from "typebox/value";
 export type Tool = {name:string;description:string;parameters:any;
  /** Образец правильного вызова — дописывается к INVALID_ARGUMENTS, когда схема (anyOf) сама его не объясняет. */
  invalidArgsHint?:(args:Record<string,unknown>)=>string;
@@ -48,6 +48,43 @@ const ПОДСКАЗКИ:Record<string,string>={
 };
 const ответнаяПодсказка=(code:string)=>ПОДСКАЗКИ[code]??"Отказ нестандартный: 1) повтори discover/describe, чтобы сверить схему; 2) найди похожий случай в базе знаний (taskflow_kb_search); 3) не перебирай вручную — спроси архитектора или оркестратора, приложив код и текст ошибки.";
 
+/** Разбор ошибок ролей за сутки (20.10.2026): из 706 отказов ~85% — мелочи
+ *  оформления, которые сервер понимает и сам. Здесь они прощаются, а то, что
+ *  простить нельзя, объясняется с точным местом и образцом. */
+const СИНОНИМЫ:Record<string,string[]>={id:["task_id"],task_id:["id"],text:["body","content"]};
+export function прощённыеАргументы(schema:any,raw:Record<string,unknown>):Record<string,unknown>{
+ const args:Record<string,unknown>={...raw};
+ const свойства=schema?.properties as Record<string,unknown>|undefined;
+ if(свойства){
+  for(const [поле,варианты] of Object.entries(СИНОНИМЫ)){
+   if(!(поле in свойства) || args[поле]!==undefined)continue;
+   const синоним=варианты.find(v=>args[v]!==undefined && !(v in свойства));
+   if(синоним){args[поле]=args[синоним];delete args[синоним];}
+  }
+ }
+ // Число вместо строки и наоборот («id: 1» в чек-листе — 90 отказов за сутки).
+ try{return Convert(schema,structuredClone(args)) as Record<string,unknown>;}catch{return args;}
+}
+/** Где именно схема не сошлась — первые три места, человеческим текстом. */
+export function местаОшибок(schema:any,args:unknown):string{
+ try{
+  const out=[...Errors(schema,args)].slice(0,3).map((e:any)=>`${e.instancePath||e.path||"/"}: ${e.message}`);
+  return out.length?" Ошибка в: "+out.join("; ")+".":"";
+ }catch{return "";}
+}
+/** Параметры положены не внутрь вложенного arguments (команды на маке):
+ *  показываем, как должно быть, с теми же значениями. */
+function образецВложенных(tool:Tool,args:Record<string,unknown>,наружные:Record<string,unknown>):string{
+ const свойства=(tool.parameters as any)?.properties as Record<string,unknown>|undefined;
+ if(!свойства || !("arguments" in свойства))return "";
+ const лишние=Object.fromEntries(Object.entries({...наружные,...args}).filter(([k])=>!(k in свойства)));
+ if(!Object.keys(лишние).length)return "";
+ const свои=Object.fromEntries(Object.entries(args).filter(([k])=>k in свойства && k!=="arguments"));
+ const образец={action:"invoke",operation:tool.name,version:1,request_id:"…",arguments:{...свои,arguments:{...((args.arguments as object)??{}),...лишние}}};
+ return ` Правильный вызов: ${JSON.stringify(образец)}. Параметры самой операции (${Object.keys(лишние).join(", ")}) кладутся внутрь arguments.arguments.`;
+}
+const СЛУЖЕБНЫЕ=new Set(["action","operation","version","arguments","request_id","query","offset","limit"]);
+
 export const UNIVERSAL_INSTRUCTION="Серверные возможности доступны через один инструмент taskflow. Любая роль может работать с Mac через host: discover taskflow_hosts, затем taskflow_host_read/bash/edit/write/grep/find/ls. Назначение машины этапу и утверждение плана для доступа к host не нужны. При одном проекте машина и проект выбираются автоматически; для другого проекта на машине (например, iOS-репозитория из веб-карточки) передай project_id из taskflow_hosts. Рабочая копия создаётся в песочнице проекта. Сборка, тесты и симулятор — через host bash (долгим командам — timeout в секундах); прямой ssh не используется. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем invoke с operation, version и arguments. Для изменения передавай уникальный request_id; при повторе того же действия используй прежний request_id. Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующую без поиска. Каждый отказ несёт поле hint — что делать дальше: читай его и выполняй по шагам, а не перебирай вызовы вслепую.";
 export function createUniversalTaskflow(tools:Tool[],context:Context,store:RequestStore=memoryRequestStore()):Tool {
  const registry=new Map<string,Tool>();
@@ -90,6 +127,8 @@ export function createUniversalTaskflow(tools:Tool[],context:Context,store:Reque
    return response({ok:true,data:{operation:tool.name,version:1,description:tool.description,inputSchema:{...параметры,properties:свойства},effects:isReadOperation(tool.name)?"read":"write",available:!restriction,restriction}});
   }
   if(restriction)return fail(restriction.code,restriction.message);
+  // Версия одна — пропущенную подставляем (45 отказов за сутки).
+  if(p.version===undefined)p={...p,version:1};
   if(p.version!==1)return fail("VERSION_MISMATCH","Поддерживается version: 1; получи describe");
   const write=!isReadOperation(tool.name);
   // request_id приходит и внутри arguments. Рантайм агента вырезает поля, которых
@@ -97,15 +136,17 @@ export function createUniversalTaskflow(tools:Tool[],context:Context,store:Reque
   // из-за этого запись на удалённую машину падала с «нужен request_id» при любом
   // вызове (19.10.2026). Поле служебное: из аргументов операции убираем, чтобы
   // проверка схемы его не считала лишним.
-  const {request_id:изАргументов,...args}=({...(p.arguments??{})} as Record<string,unknown>);
+  const {request_id:изАргументов,...присланные}=({...(p.arguments??{})} as Record<string,unknown>);
+  const args=прощённыеАргументы(tool.parameters,присланные);
+  const наружные=Object.fromEntries(Object.entries(p).filter(([k])=>!СЛУЖЕБНЫЕ.has(k)));
   const requestId=(typeof p.request_id==="string"&&p.request_id?p.request_id:typeof изАргументов==="string"?изАргументов:undefined);
-  if(!Check(tool.parameters,args))return fail("INVALID_ARGUMENTS","Аргументы не соответствуют inputSchema: пришли ключи ["+Object.keys(args).join(", ")+"], ждём ["+((tool.parameters as any).properties?Object.keys((tool.parameters as any).properties).join(", "):"?")+"]"+((tool.parameters as any).required?"; обязательны: "+((tool.parameters as any).required as string[]).join(", "):"")+(tool.invalidArgsHint?". "+tool.invalidArgsHint(args):""));
-  if(write && (typeof requestId!=="string" || !requestId.trim() || requestId.length>200))return fail("INVALID_ARGUMENTS","Для изменения нужен request_id длиной 1..200");
+  if(!Check(tool.parameters,args))return fail("INVALID_ARGUMENTS","Аргументы не соответствуют inputSchema: пришли ключи ["+Object.keys(args).join(", ")+"], ждём ["+((tool.parameters as any).properties?Object.keys((tool.parameters as any).properties).join(", "):"?")+"]"+((tool.parameters as any).required?"; обязательны: "+((tool.parameters as any).required as string[]).join(", "):"")+"."+местаОшибок(tool.parameters,args)+(tool.invalidArgsHint?" "+tool.invalidArgsHint(args):образецВложенных(tool,args,наружные)));
+  if(write && (typeof requestId!=="string" || !requestId.trim() || requestId.length>200))return fail("INVALID_ARGUMENTS",`Для изменения нужен request_id длиной 1..200 — придумай новый уникальный для этого действия, например "${tool.name.replace(/^taskflow_/,"")}-${Date.now().toString(36)}", и повтори вызов с ним.`);
   const hash=crypto.createHash("sha256").update(stable({operation:tool.name,version:p.version,arguments:args})).digest("hex");
   if(write){
    const current=store.get(context.actor,requestId!);
    if(current){
-    if(current.scope!==scope || current.hash!==hash)return fail("CONFLICT","Этот request_id уже использован с другим контекстом или аргументами");
+    if(current.scope!==scope || current.hash!==hash)return fail("CONFLICT","Этот request_id уже использован с другим контекстом или аргументами. Для нового действия нужен новый request_id — повтори вызов с другим ключом; старый ключ годится только для повтора ровно того же действия.");
     return current.result??response({ok:true,operation:tool.name,request_id:requestId,data:{state:current.state}});
    }
    if(!store.begin({actor:context.actor,id:requestId!,scope,hash,operation:tool.name,state:"running"}))return fail("CONFLICT","Запрос уже принят; проверь requests.status");

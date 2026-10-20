@@ -272,11 +272,19 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
       }),
     T("taskflow_remember",
       "Запомнить устойчивое знание для себя и команды. kind: lesson | fact | preference. scope: role (по умолчанию) | team | project. Одна запись — одна мысль; похожая обновится, а не задвоится.",
-      Type.Object({ text: Type.String(), kind: S(), scope: S(), title: S(), project_id: S(), source_ref: S() }), async (p) => {
+      Type.Object({ text: Type.String(), kind: S(), scope: S(), title: S(), project_id: S(), source_ref: S(), task_id: S() }), async (p) => {
         const text = String(p.text ?? "").trim();
         if (!text) throw new ToolError("text — что запомнить, одной мыслью");
         const body: Record<string, unknown> = { text };
         for (const k of ["scope", "kind", "title", "project_id", "source_ref"]) if (p[k]) body[k] = p[k];
+        // Разбор отказов 20.10.2026: проект сервер знает и сам — по задаче
+        // (task_id или source_ref, если это id задачи).
+        if (body.scope === "project" && !body.project_id) {
+          for (const ref of [p.task_id, p.source_ref]) {
+            const row = ref ? (db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(String(ref)) as { project_id: string | null } | undefined) : undefined;
+            if (row?.project_id) { body.project_id = row.project_id; break; }
+          }
+        }
         const resp = await asRole(role, "POST", "/api/memories", body);
         return { итог: resp?.updated ? "обновил похожую запись" : "запомнил", id: resp?.memory?.id, область: resp?.memory?.scope };
       }),
