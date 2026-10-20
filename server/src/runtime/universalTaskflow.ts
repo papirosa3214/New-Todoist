@@ -549,16 +549,16 @@ const СЛУЖЕБНЫЕ = new Set([
 ]);
 
 export const UNIVERSAL_INSTRUCTION =
-  "Серверные возможности доступны через один инструмент taskflow. Любая роль может работать с Mac через host: discover taskflow_hosts, затем taskflow_host_read/bash/edit/write/grep/find/ls. Назначение машины этапу и утверждение плана для доступа к host не нужны. При одном проекте машина и проект выбираются автоматически; для другого проекта на машине (например, iOS-репозитория из веб-карточки) передай project_id из taskflow_hosts. Рабочая копия создаётся в песочнице проекта. Сборка, тесты и симулятор — через host bash (долгим командам — timeout в секундах); прямой ssh не используется. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем invoke с operation, version и arguments. Для изменения передавай уникальный request_id; при повторе того же действия используй прежний request_id. Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующую без поиска. Каждый отказ несёт поле hint — что делать дальше: читай его и выполняй по шагам, а не перебирай вызовы вслепую.";
+  "Серверные возможности доступны через один инструмент taskflow. Любая роль может работать с Mac через host: discover taskflow_hosts, затем taskflow_host_read/bash/edit/write/grep/find/ls. Назначение машины этапу и утверждение плана для доступа к host не нужны. При одном проекте машина и проект выбираются автоматически; для другого проекта на машине (например, iOS-репозитория из веб-карточки) передай project_id из taskflow_hosts. Рабочая копия создаётся в песочнице проекта. Сборка, тесты и симулятор — через host bash (долгим командам — timeout в секундах); прямой ssh не используется. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем вызови с operation и arguments (action, version и request_id сервер подставит сам; при осознанном повторе того же действия передай прежний request_id). Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующую без поиска. Каждый отказ несёт поле hint — что делать дальше: читай его и выполняй по шагам, а не перебирай вызовы вслепую.";
 const CALL_CHEATSHEET = `
-Шпаргалка: печатай вызов инструмента taskflow как JSON-объект.
-1. Поиск: {"action":"discover","query":"сводка по задачам"}.
+Шпаргалка: печатай вызов инструмента taskflow как JSON-объект. Пиши только operation и arguments — остальное сервер подставит сам.
+1. Поиск: {"query":"сводка по задачам"}.
 2. Схема: {"action":"describe","operation":"taskflow_task_summary"}.
-3. Выполнение: {"action":"invoke","operation":"taskflow_task_summary","version":1,"arguments":{"query":"Сводка по всем задачам"}}.
-В describe возьми invokeTemplate и замени значения по templateFields. Не отправляй строки <…> и примерные числа как реальные данные.
+3. Выполнение: {"operation":"taskflow_task_summary","arguments":{"query":"Сводка по всем задачам"}}.
+В describe смотри inputSchema и templateFields. Не отправляй строки <…> и примерные числа как реальные данные.
 Все параметры операции — в arguments. Для сводки нужен arguments.query, а не query снаружи и не arguments.arguments.query.
 Второй arguments допустим только когда он явно есть в inputSchema (например, host). Массив передавай как [...], без {"item":[...]}.
-Для изменения добавь верхний "request_id":"новый-уникальный-id". Ошибка означает, что нужно исправить указанный путь и повторить исправленный вызов, а не копировать прежний.
+request_id и version писать не нужно. Свой request_id передавай только при осознанном повторе того же действия. Ошибка означает, что нужно исправить указанный путь и повторить исправленный вызов, а не копировать прежний.
 `;
 export function createUniversalTaskflow(
   tools: Tool[],
@@ -580,11 +580,13 @@ export function createUniversalTaskflow(
     name: "taskflow",
     description: UNIVERSAL_INSTRUCTION + CALL_CHEATSHEET,
     parameters: Type.Object({
-      action: Type.Union([
-        Type.Literal("discover"),
-        Type.Literal("describe"),
-        Type.Literal("invoke"),
-      ]),
+      action: Type.Optional(
+        Type.Union([
+          Type.Literal("discover"),
+          Type.Literal("describe"),
+          Type.Literal("invoke"),
+        ]),
+      ),
       query: Type.Optional(Type.String()),
       operation: Type.Optional(Type.String()),
       version: Type.Optional(Type.Integer()),
@@ -593,7 +595,22 @@ export function createUniversalTaskflow(
       offset: Type.Optional(Type.Integer({ minimum: 0 })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
     }),
-    execute: async (id, p, signal, onUpdate) => {
+    execute: async (id, raw, signal, onUpdate) => {
+      // Владелец 20.10.2026: модель пишет только operation и arguments. Без action
+      // вызов с operation — invoke, без operation — discover; version по умолчанию 1;
+      // request_id для изменения — из номера хода и вызова (явный по-прежнему главнее).
+      const p = raw && typeof raw === "object" ? { ...raw } : raw;
+      if (p && p.action === undefined)
+        p.action = p.operation !== undefined ? "invoke" : "discover";
+      if (p && p.action === "invoke") {
+        if (p.version === undefined) p.version = 1;
+        if (p.arguments === undefined) p.arguments = {};
+        if (
+          p.request_id === undefined &&
+          (p.arguments as any)?.request_id === undefined
+        )
+          p.request_id = (context.runId || "run") + ":" + id;
+      }
       const fail = (
         code: string,
         message: string,

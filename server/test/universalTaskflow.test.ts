@@ -80,11 +80,13 @@ describe("разбор отказов 20.10.2026: мелочи прощаютс�
     expect(seen.length).toBe(count);
   });
 
-  it("не подставляет версию и не принимает task_id за id", async () => {
+  it("короткий вызов: только operation и arguments; task_id за id не принимает", async () => {
     const api = createUniversalTaskflow([task as any], ctx);
+    const short=parse(await api.execute("1",{operation:"taskflow_task",arguments:{id:"T1"}}));
+    expect(short.ok).toBe(true);
+    const wrong=parse(await api.execute("1",{action:"invoke",operation:"taskflow_task",version:2,arguments:{id:"T1"}}));
+    expect(wrong.ok).toBe(false);expect(wrong.error.code).toBe("VERSION_MISMATCH");
     const count=seen.length;
-    const noVersion=parse(await api.execute("1",{action:"invoke",operation:"taskflow_task",arguments:{id:"T1"}}));
-    expect(noVersion.ok).toBe(false);expect(noVersion.error.code).toBe("VERSION_MISMATCH");
     const alias=parse(await api.execute("2",{action:"invoke",operation:"taskflow_task",version:1,arguments:{task_id:"T1"}}));
     expect(alias.ok).toBe(false);expect(alias.error.code).toBe("INVALID_ARGUMENTS");
     expect(alias.error.hint).toContain("arguments.id");expect(seen.length).toBe(count);
@@ -103,10 +105,13 @@ describe("разбор отказов 20.10.2026: мелочи прощаютс�
     expect(r.error.message).toContain('"arguments":{"arguments":{"path":"a.swift"}}');
   });
 
-  it("нет ключа повтора или он занят — сказано, что делать", async () => {
+  it("ключ повтора подставляется сам; занятый — сказано, что делать", async () => {
     const api = createUniversalTaskflow([plan as any], ctx);
-    const нет = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, arguments: {} }));
-    expect(нет.error.message).toMatch(/придумай новый/);
+    const сам = parse(await api.execute("call-1", { operation: "taskflow_work_plan", arguments: {} }));
+    expect(сам.ok).toBe(true);
+    expect(сам.request_id).toMatch(/:call-1$/);
+    const пустой = parse(await api.execute("1", { operation: "taskflow_work_plan", request_id: "", arguments: {} }));
+    expect(пустой.error.message).toMatch(/придумай новый/);
     await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "k", arguments: {} });
     const занят = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "k", arguments: { base_revision: 1 } }));
     expect(занят.error.message).toMatch(/новый request_id/);
