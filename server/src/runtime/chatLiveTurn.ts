@@ -71,6 +71,11 @@ export interface TurnUsage {
   /** Время генерации (от первого токена до конца ответа) — для скорости. */
   generation_ms: number | null;
   model: string | null;
+  /** Размер беседы на последнем обращении к модели (вход + кэш) — сколько
+   *  модель перечитывает за шаг; сумма input за ход растёт с числом шагов. */
+  context: number;
+  /** Обращений к модели за ход. */
+  calls: number;
 }
 
 /** То, что ложится в chat_messages.steps вместе с ответом. */
@@ -429,6 +434,8 @@ export class LiveTurn {
         cost_usd: typeof u.costUsd === "number" ? u.costUsd : null,
         generation_ms: typeof u.generationMs === "number" ? u.generationMs : null,
         model: typeof u.model === "string" ? u.model : null,
+        context: num(u.contextTokens) || num(u.input) + num(u.cacheRead) + num(u.cacheWrite),
+        calls: num(u.calls) || 1,
       };
     } else if (e.message?.role === "assistant" && e.message.usage) {
       const u = e.message.usage;
@@ -439,6 +446,8 @@ export class LiveTurn {
         cost_usd: cost,
         generation_ms: this.genStartedAt === null ? null : Date.now() - this.genStartedAt,
         model: typeof e.message.model === "string" ? e.message.model : null,
+        context: num(u.input) + num(u.cacheRead) + num(u.cacheWrite),
+        calls: 1,
       };
     }
     this.genStartedAt = null;
@@ -453,6 +462,8 @@ export class LiveTurn {
           cost_usd: prev.cost_usd === null && add.cost_usd === null ? null : (prev.cost_usd ?? 0) + (add.cost_usd ?? 0),
           generation_ms: prev.generation_ms === null && add.generation_ms === null ? null : (prev.generation_ms ?? 0) + (add.generation_ms ?? 0),
           model: add.model ?? prev.model,
+          context: add.context,
+          calls: prev.calls + add.calls,
         }
       : add;
   }

@@ -327,7 +327,7 @@ describe("расход хода под ответом", () => {
     turn.onEvent({ type: "message_end", message: { role: "user", usage: { input: 999 } } });
     const saved = turn.finish();
     expect(saved?.items).toEqual([]);
-    expect(saved?.usage).toMatchObject({ input: 150, output: 50, cache_read: 1900, cache_write: 10, model: "m1" });
+    expect(saved?.usage).toMatchObject({ input: 150, output: 50, cache_read: 1900, cache_write: 10, model: "m1", context: 1060, calls: 2 });
     expect(saved?.usage?.cost_usd).toBeCloseTo(0.03);
     expect(saved?.usage?.generation_ms).not.toBeNull();
   });
@@ -335,7 +335,7 @@ describe("расход хода под ответом", () => {
   it("внешний агент: итог turn_usage", () => {
     const turn = start();
     turn.onEvent({ type: "turn_usage", usage: { input: 3, output: 40, cacheRead: 5000, cacheWrite: 200, costUsd: 0.05, generationMs: 2000, model: "opus" } });
-    expect(turn.finish()?.usage).toEqual({ input: 3, output: 40, cache_read: 5000, cache_write: 200, cost_usd: 0.05, generation_ms: 2000, model: "opus" });
+    expect(turn.finish()?.usage).toEqual({ input: 3, output: 40, cache_read: 5000, cache_write: 200, cost_usd: 0.05, generation_ms: 2000, model: "opus", context: 5203, calls: 1 });
   });
 
   it("без расхода и шагов — по-прежнему null", () => {

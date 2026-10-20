@@ -92,6 +92,9 @@ export class StreamJsonTranslator {
   result: { isError: boolean; text: string } | null = null;
   private partialText = false;
   private partialThinking = false;
+  /** Размер запроса последнего обращения к модели и число обращений. */
+  private lastContext = 0;
+  private callIds = new Set<string>();
 
   constructor(private readonly emit: (event: any) => void) {}
 
@@ -156,6 +159,11 @@ export class StreamJsonTranslator {
       return;
     }
     if (msg.type === "assistant" && Array.isArray(msg.message?.content)) {
+      const mu = msg.message.usage;
+      if (mu && typeof mu === "object") {
+        this.callIds.add(String(msg.message.id ?? this.callIds.size));
+        this.lastContext = (mu.input_tokens ?? 0) + (mu.cache_read_input_tokens ?? 0) + (mu.cache_creation_input_tokens ?? 0);
+      }
       const content: any[] = [];
       for (const block of msg.message.content) {
         if (block?.type === "text") {
@@ -232,6 +240,8 @@ export class StreamJsonTranslator {
                 ? msg.duration_api_ms
                 : null,
             model: this.model,
+            contextTokens: this.lastContext,
+            calls: this.callIds.size || 1,
           },
         });
       }
