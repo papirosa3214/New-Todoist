@@ -244,17 +244,17 @@ describe("describe: шпаргалка вызова",()=>{
   const execute=vi.fn();
   const api=createUniversalTaskflow([{name:"taskflow_task_summary",description:"summary",parameters:Type.Object({query:Type.String({description:"Вопрос владельца"})}),execute}],context);
   const r=decode(await api.execute("schema",{action:"describe",operation:"taskflow_task_summary"}));
-  expect(r.data.invokeTemplate).toMatchObject({action:"invoke",operation:"taskflow_task_summary",version:1,arguments:{query:expect.any(String)}});
+  expect(r.data.invokeTemplate).toEqual({operation:"taskflow_task_summary",arguments:{query:expect.any(String)}});
   expect(r.data.invokeTemplate.request_id).toBeUndefined();
   expect(r.data.templateFields).toContainEqual(expect.objectContaining({path:"arguments.query",type:"строка",required:true,description:"Вопрос владельца"}));
   expect(r.data.templateInstructions).toContain("замени");
   expect(api.description).toContain('"arguments":{"query":');
   expect(execute).not.toHaveBeenCalled();
  });
- it("для изменения показывает request_id и законную вложенность host",async()=>{
+ it("для изменения не требует request_id и показывает законную вложенность host",async()=>{
   const api=createUniversalTaskflow([{name:"taskflow_host_write",description:"host",parameters:Type.Object({arguments:Type.Object({path:Type.String(),content:Type.String()})}),execute:vi.fn()}],context);
   const r=decode(await api.execute("schema",{action:"describe",operation:"taskflow_host_write"}));
-  expect(r.data.invokeTemplate.request_id).toEqual(expect.any(String));
+  expect(r.data.invokeTemplate.request_id).toBeUndefined();
   expect(r.data.invokeTemplate.arguments.arguments).toMatchObject({path:expect.any(String),content:expect.any(String)});
   expect(r.data.templateFields.map((f:any)=>f.path)).toContain("arguments.arguments.path");
  });
@@ -270,6 +270,7 @@ describe("describe: шпаргалка вызова",()=>{
   const api=createUniversalTaskflow([],context);
   const r=decode(await api.execute("schema",{action:"describe",operation:"requests.status"}));
   expect(r.data.invokeTemplate.arguments.request_id).toEqual(expect.any(String));
-  expect(r.data.invokeTemplate.version).toBe(1);
+  expect(r.data.invokeTemplate.version).toBeUndefined();
+  expect(decode(await api.execute("st",{operation:"requests.status",arguments:{request_id:"нет"}})).error.code).toBe("UNKNOWN_REQUEST");
  });
 });

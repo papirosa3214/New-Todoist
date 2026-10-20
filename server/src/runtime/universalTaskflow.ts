@@ -522,19 +522,13 @@ function invocationTemplate(operation: string, schema: any, write: boolean) {
   const fields: TemplateField[] = [];
   const args = templateValue(schema, "arguments", true, fields);
   return {
-    invokeTemplate: {
-      action: "invoke",
-      operation,
-      version: 1,
-      ...(write ? { request_id: "<новый-уникальный-id>" } : {}),
-      arguments: args,
-    },
+    invokeTemplate: { operation, arguments: args },
     templateFields: fields.filter((f) => f.path !== "arguments"),
     templateInstructions:
       "Это шаблон формы, а не готовые данные: замени все строки <…> и примерные числа/значения своими данными. Числа оставляй числами, массивы — массивами [...], объекты — объектами {...}; не оборачивай массив в item. В invokeTemplate включены обязательные поля; необязательные перечислены в templateFields с required=false и example. Для anyOf/oneOf показан первый вариант: другие допустимые варианты смотри в inputSchema. Параметры операции находятся внутри arguments; второй arguments нужен только если он прямо объявлен в inputSchema этой операции. " +
       (write
-        ? "Перед записью придумай уникальный request_id; содержимое шаблона само по себе не разрешает действие."
-        : "Для этой операции чтения верхний request_id не нужен."),
+        ? "action, version и request_id сервер подставит сам; содержимое шаблона само по себе не разрешает действие."
+        : "action, version и request_id писать не нужно."),
   };
 }
 const СЛУЖЕБНЫЕ = new Set([
@@ -832,11 +826,9 @@ export function createUniversalTaskflow(
           образецВложенных(tool, args, наружные);
         if (Check(tool.parameters, diagnosis.candidate)) {
           const corrected = {
-            action: "invoke",
             operation: tool.name,
-            version: 1,
-            ...(write
-              ? { request_id: requestId ?? "новый-уникальный-id" }
+            ...(write && raw?.request_id !== undefined
+              ? { request_id: requestId }
               : {}),
             arguments: diagnosis.candidate,
           };

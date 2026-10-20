@@ -35,10 +35,7 @@ export function things3CallExample(tool: string): string {
   const required = schema ? schema.required ?? [] : ["id_or_title"];
   const inner = Object.fromEntries(required.map((key) => [key, key === "patch" ? { "…": "…" } : "…"]));
   const call = {
-    action: "invoke",
     operation: "taskflow_things3",
-    version: 1,
-    request_id: "…",
     arguments: { tool: name, arguments: inner },
   };
   return (
