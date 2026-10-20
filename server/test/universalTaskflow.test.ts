@@ -72,25 +72,29 @@ describe("разбор отказов 20.10.2026: мелочи прощаютс�
   const task = op("taskflow_task", Type.Object({ id: Type.String() }));
   const host = op("taskflow_host_read", Type.Object({ machine: Type.Optional(Type.String()), arguments: Type.Object({ path: Type.String() }) }));
 
-  it("число вместо строки и строка вместо числа — принимаются", async () => {
+  it("строго отклоняет неверные типы без выполнения", async () => {
     const api = createUniversalTaskflow([plan as any], ctx);
+    const count=seen.length;
     const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "p1", arguments: { base_revision: "0", items: [{ id: 1, title: "t", state: "pending" }] } }));
-    expect(r.ok).toBe(true);
-    expect(seen.at(-1)).toEqual({ base_revision: 0, items: [{ id: "1", title: "t", state: "pending" }] });
+    expect(r.ok).toBe(false);expect(r.error.code).toBe("INVALID_ARGUMENTS");
+    expect(seen.length).toBe(count);
   });
 
-  it("пропущенная версия подставляется; task_id принимается за id", async () => {
+  it("не подставляет версию и не принимает task_id за id", async () => {
     const api = createUniversalTaskflow([task as any], ctx);
-    const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_task", arguments: { task_id: "T1" } }));
-    expect(r.ok).toBe(true);
-    expect(seen.at(-1)).toEqual({ id: "T1" });
+    const count=seen.length;
+    const noVersion=parse(await api.execute("1",{action:"invoke",operation:"taskflow_task",arguments:{id:"T1"}}));
+    expect(noVersion.ok).toBe(false);expect(noVersion.error.code).toBe("VERSION_MISMATCH");
+    const alias=parse(await api.execute("2",{action:"invoke",operation:"taskflow_task",version:1,arguments:{task_id:"T1"}}));
+    expect(alias.ok).toBe(false);expect(alias.error.code).toBe("INVALID_ARGUMENTS");
+    expect(alias.error.hint).toContain("arguments.id");expect(seen.length).toBe(count);
   });
 
   it("ошибка называет точное место", async () => {
     const api = createUniversalTaskflow([plan as any], ctx);
     const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "p2", arguments: { items: [{ id: "1", title: "t", state: "started" }] } }));
     expect(r.error.code).toBe("INVALID_ARGUMENTS");
-    expect(r.error.message).toMatch(/Ошибка в: .*items\/0\/state/);
+    expect(r.error.message).toContain("arguments.items[0].state");
   });
 
   it("команда на маке с параметрами не на месте — образец с теми же значениями", async () => {
@@ -107,4 +111,160 @@ describe("разбор отказов 20.10.2026: мелочи прощаютс�
     const занят = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "k", arguments: { base_revision: 1 } }));
     expect(занят.error.message).toMatch(/новый request_id/);
   });
+});
+
+describe("discover: конфликт с вызовом операции",()=>{
+ it.each([
+  {operation:"taskflow_comment"},
+  {operation:"taskflow_comment",version:1,arguments:{id:"t",text:"hello"},request_id:"conflict"},
+  {arguments:{}},
+ ])("объясняет конфликт %j без каталога и выполнения",async(fields)=>{
+  const t=tool();const store=memoryRequestStore();const api=createUniversalTaskflow([t],context,store);
+  const r=decode(await api.execute("conflict",{action:"discover",...fields}));
+  expect(r.ok).toBe(false);
+  expect(r.error.code).toBe("ACTION_CONFLICT");
+  expect(r.error.message).toContain('action: "discover"');
+  expect(r.error.hint).toContain('"action":"describe"');
+  expect(r.error.hint).toContain('"action":"invoke"');
+  expect(r.error.hint).toContain("query");
+  expect(r.data).toBeUndefined();
+  expect(t.execute).not.toHaveBeenCalled();
+  expect(store.get(context.actor,"conflict")).toBeUndefined();
+ });
+ it("поиск и просмотр каталога без параметров операции остаются доступны",async()=>{
+  const t=tool();const api=createUniversalTaskflow([t],context);
+  for(const fields of [{},{query:"Комментарий",limit:1,offset:0}]){
+   const r=decode(await api.execute("search",{action:"discover",...fields}));
+   expect(r.ok).toBe(true);expect(r.data.operations[0].operation).toBe(t.name);
+  }
+  expect(t.execute).not.toHaveBeenCalled();
+ });
+ it("после подсказки describe и invoke выполняют выбранную операцию",async()=>{
+  const t=tool();const api=createUniversalTaskflow([t],context);
+  expect(decode(await api.execute("bad",{action:"discover",operation:t.name,arguments:{id:"t",text:"hello"}})).ok).toBe(false);
+  expect(decode(await api.execute("schema",{action:"describe",operation:t.name})).data.inputSchema.required).toEqual(["id","text"]);
+  expect(t.execute).not.toHaveBeenCalled();
+  const r=decode(await api.execute("run",{action:"invoke",operation:t.name,version:1,arguments:{id:"t",text:"hello"},request_id:"fixed"}));
+  expect(r.ok).toBe(true);expect(t.execute).toHaveBeenCalledTimes(1);
+ });
+});
+
+describe("говорящие ошибки размещения параметров invoke",()=>{
+ it.each(["query","limit","id"])("называет перенос %s внутрь arguments и даёт исправленный вызов",async(field)=>{
+  const execute=vi.fn(async()=>({content:[]}));
+  const t={name:"taskflow_task_summary",description:"summary",parameters:Type.Object({[field]:Type.String()}),execute};
+  const api=createUniversalTaskflow([t],context);
+  const r=decode(await api.execute("bad",{action:"invoke",operation:t.name,version:1,arguments:{},[field]:"example"}));
+  expect(r.ok).toBe(false);
+  expect(r.error.message).toContain(field+" → arguments."+field);
+  expect(r.error.hint).toContain('"arguments":{"'+field+'":"example"}');
+  expect(r.error.hint).not.toContain("discover");
+  expect(execute).not.toHaveBeenCalled();
+  const corrected=JSON.parse(r.error.hint.match(/Правильный вызов: (.*)\. Повтори/)[1]);
+  expect(decode(await api.execute("corrected",corrected)).ok).toBe(true);
+  expect(execute).toHaveBeenCalledTimes(1);
+ });
+ it("для отсутствующего поля явно называет arguments.query",async()=>{
+  const api=createUniversalTaskflow([{name:"taskflow_task_summary",description:"summary",parameters:Type.Object({query:Type.String()}),execute:vi.fn()}],context);
+  const r=decode(await api.execute("bad",{action:"invoke",operation:"taskflow_task_summary",version:1,arguments:{}}));
+  expect(r.error.hint).toContain("arguments.query");
+  expect(r.error.hint).not.toContain("discover");
+ });
+});
+
+describe("строгие имена и типы аргументов",()=>{
+ it.each([
+  {id:42,text:"hello"},
+  {id:"t",body:"hello"},
+  {id:"t",content:"hello"},
+  {task_id:"t",text:"hello"},
+ ])("не исправляет автоматически %j",async(arguments_)=>{
+  const t=tool();const api=createUniversalTaskflow([t],context);
+  const r=decode(await api.execute("strict",{action:"invoke",operation:t.name,version:1,request_id:"strict",arguments:arguments_}));
+  expect(r.ok).toBe(false);expect(r.error.code).toBe("INVALID_ARGUMENTS");
+  expect(t.execute).not.toHaveBeenCalled();
+ });
+});
+
+describe("диагностика структуры и типов",()=>{
+ const run=async(parameters:any,args:any)=>{
+  const execute=vi.fn(async()=>({content:[]}));
+  const api=createUniversalTaskflow([{name:"taskflow_task_summary",description:"test",parameters,execute}],context);
+  const response=decode(await api.execute("bad",{action:"invoke",operation:"taskflow_task_summary",version:1,arguments:args,request_id:"diag"}));
+  return {response,execute,api};
+ };
+ it("снимает лишний arguments в подсказке и даёт исполнимый пример",async()=>{
+  const {response:r,execute,api}=await run(Type.Object({query:Type.String()}),{arguments:{query:"сводка"}});
+  expect(r.error.hint).toContain("arguments.arguments.query → arguments.query");
+  expect(r.error.hint).toContain("Убери лишний уровень");
+  expect(execute).not.toHaveBeenCalled();
+  const example=JSON.parse(r.error.hint.match(/Правильный вызов: (.*)\. Повтори/)[1]);
+  expect(decode(await api.execute("fixed",example)).ok).toBe(true);
+ });
+ it("объясняет item-обёртку массива при совпадающих именах ключей",async()=>{
+  const schema=Type.Object({base_revision:Type.Number(),items:Type.Array(Type.Object({id:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("done")])}))});
+  const {response:r,execute}=await run(schema,{base_revision:0,items:{item:[{id:"1",state:"pending"}]}});
+  expect(r.error.message).toContain("arguments.items");
+  expect(r.error.message).toContain("ожидается массив");
+  expect(r.error.message).toContain("получен объект");
+  expect(r.error.hint).toContain("arguments.items.item → arguments.items");
+  expect(r.error.hint).toContain('"items":[{"id":"1","state":"pending"}]');
+  expect(execute).not.toHaveBeenCalled();
+ });
+ it("показывает вложенный путь, фактический тип/значение и допустимые значения",async()=>{
+  const schema=Type.Object({base_revision:Type.Number(),items:Type.Array(Type.Object({id:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("done")])}))});
+  const {response:r}=await run(schema,{base_revision:"0",items:[{id:1,state:"started"}]});
+  expect(r.error.message).toContain("arguments.base_revision");
+  expect(r.error.message).toContain('строка "0"');
+  expect(r.error.message).toContain("arguments.items[0].id");
+  expect(r.error.message).toContain("число 1");
+  expect(r.error.message).toContain('"pending"');
+  expect(r.error.message).toContain('"done"');
+  expect(r.error.message).not.toContain("пришли ключи");
+ });
+ it("не убирает обязательный вложенный arguments у host",async()=>{
+  const {response:r}=await run(Type.Object({arguments:Type.Object({path:Type.String()})}),{arguments:{path:42}});
+  expect(r.error.message).toContain("arguments.arguments.path");
+  expect(r.error.hint).not.toContain("Убери лишний уровень");
+ });
+ it("не раскрывает секретное значение при ошибке типа",async()=>{
+  const {response:r}=await run(Type.Object({token:Type.Number()}),{token:"private-secret-token"});
+  expect(JSON.stringify(r)).not.toContain("private-secret-token");
+  expect(r.error.message).toContain("arguments.token");
+ });
+});
+
+describe("describe: шпаргалка вызова",()=>{
+ it("возвращает форму вызова и пути обязательных значений для чтения",async()=>{
+  const execute=vi.fn();
+  const api=createUniversalTaskflow([{name:"taskflow_task_summary",description:"summary",parameters:Type.Object({query:Type.String({description:"Вопрос владельца"})}),execute}],context);
+  const r=decode(await api.execute("schema",{action:"describe",operation:"taskflow_task_summary"}));
+  expect(r.data.invokeTemplate).toMatchObject({action:"invoke",operation:"taskflow_task_summary",version:1,arguments:{query:expect.any(String)}});
+  expect(r.data.invokeTemplate.request_id).toBeUndefined();
+  expect(r.data.templateFields).toContainEqual(expect.objectContaining({path:"arguments.query",type:"строка",required:true,description:"Вопрос владельца"}));
+  expect(r.data.templateInstructions).toContain("замени");
+  expect(api.description).toContain('"arguments":{"query":');
+  expect(execute).not.toHaveBeenCalled();
+ });
+ it("для изменения показывает request_id и законную вложенность host",async()=>{
+  const api=createUniversalTaskflow([{name:"taskflow_host_write",description:"host",parameters:Type.Object({arguments:Type.Object({path:Type.String(),content:Type.String()})}),execute:vi.fn()}],context);
+  const r=decode(await api.execute("schema",{action:"describe",operation:"taskflow_host_write"}));
+  expect(r.data.invokeTemplate.request_id).toEqual(expect.any(String));
+  expect(r.data.invokeTemplate.arguments.arguments).toMatchObject({path:expect.any(String),content:expect.any(String)});
+  expect(r.data.templateFields.map((f:any)=>f.path)).toContain("arguments.arguments.path");
+ });
+ it("массив показывается массивом; перечисления и числа сохраняют тип",async()=>{
+  const api=createUniversalTaskflow([{name:"taskflow_work_plan",description:"plan",parameters:Type.Object({base_revision:Type.Number(),items:Type.Array(Type.Object({id:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("done")])}))}),execute:vi.fn()}],context);
+  const r=decode(await api.execute("schema",{action:"describe",operation:"taskflow_work_plan"}));
+  expect(typeof r.data.invokeTemplate.arguments.base_revision).toBe("number");
+  expect(Array.isArray(r.data.invokeTemplate.arguments.items)).toBe(true);
+  expect(r.data.invokeTemplate.arguments.items[0].state).toBe("pending");
+  expect(r.data.templateInstructions).toContain("числа");
+ });
+ it("служебный requests.status тоже показывает готовую форму",async()=>{
+  const api=createUniversalTaskflow([],context);
+  const r=decode(await api.execute("schema",{action:"describe",operation:"requests.status"}));
+  expect(r.data.invokeTemplate.arguments.request_id).toEqual(expect.any(String));
+  expect(r.data.invokeTemplate.version).toBe(1);
+ });
 });
