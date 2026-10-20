@@ -137,6 +137,7 @@ import { registerRuntimeContextRoutes } from "./routes/runtime-context.js";
 import { registerLinearRoutes } from "./routes/linear.js";
 import { registerComposioRoutes } from "./routes/composio.js";
 import { registerCoordinationRoutes } from "./routes/coordination.js";
+import { registerRoleToolAuditRoutes } from "./routes/role-tool-audit.js";
 import {
   logServerEvent,
   normalizeServerError,
@@ -514,6 +515,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   // `runtime/coordinationResolver.read.ts`. Наблюдательный, без
   // побочных эффектов; действия делают существующие маршруты.
   registerCoordinationRoutes(app);
+  // Учёт вызовов инструментов ролями: сводка ошибок и выгрузка JSON/CSV
+  // (карточка 64af4c85-93ed-4926-bd78-5cdfaf6a9ba5). Наблюдательный
+  // маршрут: ничего не меняет и не запускает.
+  registerRoleToolAuditRoutes(app);
   registerNotificationRoutes(app);
   registerEscalationRoutes(app);
   registerLiveActivityRoutes(app);

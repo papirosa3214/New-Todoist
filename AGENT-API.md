@@ -362,6 +362,56 @@ curl -sS "http://localhost:3001/api/coordination/_metrics?window=hour" \
 агрегата `/api/coordination/_metrics`; `unknown` — слабый сигнал, что
 словарь причин надо пополнить.
 
+### Учёт вызовов инструментов ролей
+
+Сервер считает вызовы ролей через единый инструмент `taskflow`: отказ (ошибка
+проверки аргументов, неверный `action`, неизвестная операция, отказ самой
+операции) попадает в учёт сразу, успешный вызов — в счётчики, чтобы по ним
+считать долю ошибок.
+
+| Метод | Путь                            | Описание                                                                                             |
+| ----- | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| GET   | `/api/role-tool-audit/summary`  | Сводка за период: число вызовов, число ошибок и доля ошибок в разрезах роли, модели, операции и кода. |
+| GET   | `/api/role-tool-audit/export`   | Сырые записи об отказах: `format=json` (по умолчанию) или `format=csv`.                               |
+
+Параметры (оба маршрута): `from` и `to` — ISO-время (по умолчанию последние
+сутки), `role`, `model`, `operation`. У выгрузки дополнительно `code`,
+`task_id`, `subtask_id`, `limit` (по умолчанию 1000, максимум 10000).
+
+```bash
+# сводка за сутки
+curl -sS "http://localhost:3001/api/role-tool-audit/summary" \
+  -H "Authorization: Bearer <token>"
+
+# выгрузка отказов в CSV
+curl -sS "http://localhost:3001/api/role-tool-audit/export?format=csv&from=2026-10-20T00:00:00Z" \
+  -H "Authorization: Bearer <token>" -o role-tool-audit.csv
+```
+
+Ответ сводки:
+
+```json
+{
+  "period": { "from": "2026-10-19T10:00:00.000Z", "to": "2026-10-20T10:00:00.000Z", "granularity": "hour" },
+  "totals": { "calls": 120, "errors": 7, "error_rate": 0.0583 },
+  "by_role": [{ "key": "builder", "calls": 40, "errors": 2, "error_rate": 0.05 }],
+  "by_model": [{ "key": "claude-sonnet-4-5", "calls": 40, "errors": 2, "error_rate": 0.05 }],
+  "by_operation": [{ "key": "taskflow_task_summary", "calls": 12, "errors": 1, "error_rate": 0.0833 }],
+  "by_code": [
+    { "code": "INVALID_ARGUMENTS", "errors": 5, "share_of_errors": 0.7143, "share_of_calls": 0.0417 }
+  ]
+}
+```
+
+Границы периода округляются до часа: счётчики лежат в часовых корзинах
+(`granularity: "hour"`), поэтому «с 10:17» читается как «с 10:00».
+
+**Что в записях, а что — нет.** В записи об отказе есть время, роль, модель и
+провайдер, инструмент и операция, код ошибки, короткое сообщение, карточка и
+шаг. Значений аргументов в записях нет: для ошибки проверки аргументов
+хранится только путь поля и ожидаемый тип (`error_field`, `error_expected`).
+Секреты и полные аргументы в выгрузку не попадают.
+
 ### Health
 
 ```bash

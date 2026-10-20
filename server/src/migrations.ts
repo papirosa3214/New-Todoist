@@ -1,4 +1,5 @@
 import { TOOL_REQUEST_SCHEMA } from "./runtime/toolRequestStore.js";
+import { TOOL_AUDIT_SCHEMA } from "./runtime/toolAuditStore.js";
 import { installReviewHistory } from "./lib/reviewHistory.js";
 // Версионные миграции — поверх базовой схемы из `db.ts:migrate()`.
 //
@@ -4841,6 +4842,10 @@ const migrations: Migration[] = [
     const roles = new Set((db.prepare("PRAGMA table_info(roles)").all() as Array<{ name: string }>).map((c) => c.name));
     if (!roles.has("last_model")) db.exec("ALTER TABLE roles ADD COLUMN last_model TEXT");
   } },
+  // Карточка 64af4c85-93ed-4926-bd78-5cdfaf6a9ba5: учёт ошибок вызовов
+  // инструментов ролями. Отказы — строкой в role_tool_audit (без значений
+  // аргументов), успешные вызовы — счётчиком в role_tool_audit_counters.
+  { id: "159_role_tool_audit", description: "Учёт вызовов инструментов ролями: отказы подробно, успешные — счётчиками", up: () => { db.exec(TOOL_AUDIT_SCHEMA); } },
 ];
 /**
  * Опции прогона миграций.
