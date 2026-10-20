@@ -79,7 +79,14 @@ if seen < min(before, after):   # настоящая обрезка
 
 ## Проверка правки
 
-`/tmp/test_kb_watch.py` — 8 сценариев разбора ответа пробы (покой, движение базы вниз и
-вверх, настоящая обрезка, пустое содержимое, один битый документ, падение пробы, мусор в
-выводе). `/tmp/test_probe_live.py` и `/tmp/test_today_e2e.py` — прогон самой пробы на
-подставной базе и итоговый вердикт на сегодняшних числах 1540/1539/1539.
+Тесты лежат рядом, в `infra-110-verify/kb-watch-tests/`, и не зависят от `/tmp`:
+
+```
+AR_FILE=/tmp/infra-ops-fix/committed_check.py python3 test_kb_watch.py    # 8 сценариев разбора
+AR_FILE=/tmp/infra-ops-fix/committed_check.py python3 test_probe_live.py  # проба на подставной базе
+AR_FILE=/tmp/infra-ops-fix/committed_check.py python3 test_today_e2e.py   # вердикт на числах 1540/1539/1539
+```
+
+Запускать из каталога репозитория infra-ops: модуль тянет соседние файлы (alert_send).
+`test_probe_live.py` показывает главное — при движении базы SEEN не меняется, а
+TOTAL_BEFORE и TOTAL_AFTER расходятся (1539 против 1538/1540).
