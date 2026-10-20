@@ -55,6 +55,10 @@ const BLOCK_GUIDE = [
  *  идёт в транзакции: пустой `creator_id` уронил бы всю отправку). */
 function openWakeChat(chatId: string, orchestratorId: string, creatorId: string | null): void {
   db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES (?,'Заминки команды','direct',?)").run(chatId, orchestratorId);
+  // Создатель чата — Оркестратор. Чат завёлся 14.10.2026 ещё прежним кодом,
+  // который брал автора карточки (Помощник владельца), а INSERT OR IGNORE
+  // существующую строку не правит (владелец 20.10.2026).
+  db.prepare("UPDATE chats SET created_by=? WHERE id=? AND created_by<>?").run(orchestratorId, chatId, orchestratorId);
   db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES (?,?)").run(chatId, orchestratorId);
   if (creatorId && creatorId !== orchestratorId) {
     db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES (?,?)").run(chatId, creatorId);

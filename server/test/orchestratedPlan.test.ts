@@ -86,8 +86,11 @@ describe("режим «Оркестратор»", () => {
                 SELECT plan_id, 'builder_1', 'builder', 1, 'Реализация' FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key='orchestrate'`).run(planId);
     const sid = "orch-test-" + Date.now();
     db.prepare("INSERT INTO subtasks (id, task_id, title, collaboration_plan_id, plan_node_key) VALUES (?,?,?,?,?)").run(sid, taskId, "Реализация", planId, "builder_1");
+    db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES (?,'Заминки команды','direct','u-secretary')").run("orchestrator-wake:" + roleUserId("code_orchestrator"));
+    db.prepare("UPDATE chats SET created_by='u-secretary' WHERE id=?").run("orchestrator-wake:" + roleUserId("code_orchestrator"));
     const wake = wakeOrchestrator(sid, roleUserId("builder")!, "blocked", "нет доступа к API");
     expect(wake).not.toBeNull();
+    expect((db.prepare("SELECT created_by FROM chats WHERE id=?").get(wake!.chatId) as { created_by: string }).created_by).toBe(roleUserId("code_orchestrator"));
     expect(wake!.roleId).toBe(roleUserId("code_orchestrator"));
     const q = db.prepare("SELECT status FROM chat_message_queue WHERE message_id=?").get(wake!.messageId) as { status: string };
     expect(q.status).toBe("pending");
