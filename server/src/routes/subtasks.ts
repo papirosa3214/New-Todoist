@@ -1,4 +1,5 @@
 import { wakeAndDeliver } from "../runtime/orchestratorWake.js";
+import { scheduleDraftRebuildFromSubtasks } from "./task-collaboration-plans.js";
 import { assigneeToBlockedSlot } from "../runtime/planSubtaskAdmission.js";
 import { readWorkPlan, saveWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
 import { sandboxSubmissionError } from "../lib/submissionReceipt.js";
@@ -294,6 +295,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         field: "subtask",
         toValue: req.body.title,
       });
+      scheduleDraftRebuildFromSubtasks(req.params.taskId);
 
       const fullTask = getFullTask(req.params.taskId);
       broadcastTaskEvent([task.creator_id, task.assignee_id], {

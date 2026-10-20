@@ -833,6 +833,52 @@ export async function autoProposeFromSubtasksOnCreate(taskId: string): Promise<{
   return { id: created.id, profile: "manual", revision: created.revision };
 }
 
+/**
+ * Подзадачи пришли ПОСЛЕ создания карточки (владелец 20.10.2026). Оркестратор
+ * заводит карточку пустой и добавляет подзадачи следом: черновик к этому
+ * моменту уже собран шаблоном, к подзадачам не привязан, и выбора «своя /
+ * по плану» нет. Если черновик целиком шаблонный и его никто не правил —
+ * пересобираем из подзадач. Подзадачи идут пачкой, поэтому ждём паузы.
+ */
+const draftRebuildTimers = new Map<string, NodeJS.Timeout>();
+export const DRAFT_REBUILD_DELAY_MS = 3000;
+
+export function scheduleDraftRebuildFromSubtasks(taskId: string, delayMs = DRAFT_REBUILD_DELAY_MS): void {
+  const pending = draftRebuildTimers.get(taskId);
+  if (pending) clearTimeout(pending);
+  const timer = setTimeout(() => {
+    draftRebuildTimers.delete(taskId);
+    void rebuildTemplateDraftFromSubtasks(taskId).catch(() => undefined);
+  }, delayMs);
+  timer.unref?.();
+  draftRebuildTimers.set(taskId, timer);
+}
+
+function untouchedTemplateDraft(planId: string): boolean {
+  const nodes = db.prepare(`SELECT COUNT(*) AS total, SUM(origin='auto_template') AS template,
+      SUM(source_subtask_id IS NOT NULL) AS linked FROM task_collaboration_plan_nodes WHERE plan_id=?`)
+    .get(planId) as { total: number; template: number | null; linked: number | null };
+  if (!nodes.total || nodes.template !== nodes.total || nodes.linked) return false;
+  const plan = db.prepare("SELECT status FROM task_collaboration_plans WHERE id=?").get(planId) as { status: string } | undefined;
+  if (plan?.status !== "draft") return false;
+  return !db.prepare("SELECT 1 FROM task_collaboration_plan_ops WHERE plan_id=? LIMIT 1").get(planId);
+}
+
+export async function rebuildTemplateDraftFromSubtasks(taskId: string): Promise<{ id: string; revision: number } | null> {
+  const draft = db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=? AND status='draft' ORDER BY revision DESC LIMIT 1").get(taskId) as { id: string } | undefined;
+  if (!draft || !untouchedTemplateDraft(draft.id)) return null;
+  const actorId = resolveAutoProposalActorId();
+  if (!actorId) return null;
+  const suggestion = await suggestFanoutFromSubtasks(taskId);
+  // Не собралось — шаблонный черновик остаётся как был. Пока считали роли,
+  // черновик могли тронуть — тогда тоже не перетираем.
+  if (!suggestion.suggested || !untouchedTemplateDraft(draft.id)) return null;
+  const graph = { nodes: suggestion.nodes.map((n) => ({ ...n, required: true, output_artifact: null })), edges: suggestion.edges.map((e) => ({ ...e, artifact_key: null })) };
+  const created = createDraftPlan(taskId, actorId, "manual", suggestion.rationale, null, graph);
+  logEvent({ taskId, actorId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: "manual: subtask fanout (subtasks added after create)" });
+  return { id: created.id, revision: created.revision };
+}
+
 export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void {
   // PUT …/nodes/:slot/phase — отнести шаг родителя к подготовке («до
   // дочерних») или к итогу («после дочерних»). Владелец или оркестратор.

@@ -106,6 +106,45 @@ describe("умная параллелизация подзадач (subtaskRoleF
     expect(nodes.map((n) => n.source_subtask_id).sort()).toEqual([...subtaskIds].sort());
   });
 
+  it("подзадачи пришли после создания: нетронутый шаблонный черновик пересобирается из них (20.10.2026)", async () => {
+    const { createDraftPlan, rebuildTemplateDraftFromSubtasks } = await import("../src/routes/task-collaboration-plans.js");
+    const created = await app.inject({ method: "POST", url: "/api/tasks", headers: ownerAuth, payload: { title: "Пустая карточка оркестратора" } });
+    const taskId = created.json().task.id as string;
+    db.prepare("UPDATE task_collaboration_plans SET status='superseded' WHERE task_id=?").run(taskId);
+    const ownerId = (db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as { id: string }).id;
+    const template = createDraftPlan(taskId, ownerId, "product_feature", "шаблон", null, { nodes: [
+      { slot_key: "analysis", role_key: "analyst", required: true, expected_result: "анализ", output_artifact: null, source_subtask_id: null },
+      { slot_key: "delivery", role_key: "builder", required: true, expected_result: "код", output_artifact: null, source_subtask_id: null },
+    ], edges: [] });
+    db.prepare("UPDATE task_collaboration_plan_nodes SET origin='auto_template' WHERE plan_id=?").run(template.id);
+    for (const t of ["[builder] сверстать экран Сегодня", "[qa] проверить экран Сегодня"]) {
+      await app.inject({ method: "POST", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth, payload: { title: t } });
+    }
+    const rebuilt = await rebuildTemplateDraftFromSubtasks(taskId);
+    expect(rebuilt).not.toBeNull();
+    expect((db.prepare("SELECT status FROM task_collaboration_plans WHERE id=?").get(template.id) as { status: string }).status).toBe("superseded");
+    const subtaskIds = (db.prepare("SELECT id FROM subtasks WHERE task_id=? AND collaboration_plan_id IS NULL").all(taskId) as { id: string }[]).map((r) => r.id);
+    const nodes = db.prepare("SELECT source_subtask_id FROM task_collaboration_plan_nodes WHERE plan_id=?").all(rebuilt!.id) as { source_subtask_id: string | null }[];
+    expect(nodes.map((n) => n.source_subtask_id).sort()).toEqual([...subtaskIds].sort());
+  });
+
+  it("черновик, который правили, при новых подзадачах не перетирается (20.10.2026)", async () => {
+    const { createDraftPlan, rebuildTemplateDraftFromSubtasks } = await import("../src/routes/task-collaboration-plans.js");
+    const created = await app.inject({ method: "POST", url: "/api/tasks", headers: ownerAuth, payload: { title: "Карточка с правленым планом" } });
+    const taskId = created.json().task.id as string;
+    db.prepare("UPDATE task_collaboration_plans SET status='superseded' WHERE task_id=?").run(taskId);
+    const ownerId = (db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as { id: string }).id;
+    const template = createDraftPlan(taskId, ownerId, "product_feature", "шаблон", null, { nodes: [
+      { slot_key: "delivery", role_key: "builder", required: true, expected_result: "код", output_artifact: null, source_subtask_id: null },
+    ], edges: [] });
+    db.prepare("UPDATE task_collaboration_plan_nodes SET origin='owner' WHERE plan_id=?").run(template.id);
+    for (const t of ["[builder] сверстать экран Обзор", "[qa] проверить экран Обзор"]) {
+      await app.inject({ method: "POST", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth, payload: { title: t } });
+    }
+    expect(await rebuildTemplateDraftFromSubtasks(taskId)).toBeNull();
+    expect((db.prepare("SELECT status FROM task_collaboration_plans WHERE id=?").get(template.id) as { status: string }).status).toBe("draft");
+  });
+
   it("меньше двух открытых подзадач — не предлагает план", async () => {
     const taskId = await makeTaskWithSubtasks("Мелкая правка", "builder", ["[builder] один маленький шаг"]);
     const res = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/suggest-from-subtasks`, headers: ownerAuth });
