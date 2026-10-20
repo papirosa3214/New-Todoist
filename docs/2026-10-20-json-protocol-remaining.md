@@ -33,3 +33,15 @@
 **Виджеты** — два пути: (1) типизированные блоки JSON v1 в `output` (`table`, `progress`, `chart`, `diagram`, `status`, `list`, `report`; `roleContractV1.ts:62`); (2) старые ```widget-блоки с JSON внутри markdown-текста (чат и описание карточки, `widgetNormalize.ts`). Второй путь — markdown, по решению владельца уходит.
 
 **Команда с Play** — есть только в iOS: `BashCommandBlock.swift` рисуется из ```bash в markdown-ответе (`RoleReplyMarkdown.swift:177`), кнопка «Запустить на .110». В вебе такого нет. В JSON v1 типа блока «команда» нет — значит в JSON-ответе кнопка держится только на markdown внутри text-блока. Нужен тип блока `command` в v1 + рендер в iOS и вебе.
+
+## Один источник инструкций роли (20.10.2026, решение владельца: «один источник и только JSON»)
+
+Сейчас промпт роли в заходе = первое непустое из: (1) `role_context_overrides` слой `role.prompt` (редактор в приложении, RoleContextSheet), (2) `roles.prompt` в БД, (3) `server/scripts/role-prompts/<роль>.md`; плюс (4) `~/taskflow/roles/<роль>/AGENTS.md` подмешивается загрузчиком ресурсов. Находки: у analyst и secretary действует override (правка `roles.prompt` не доходит); у code_orchestrator в override нет JSON-контракта; контракт дублируется промптом и AGENTS.md.
+
+План:
+1. Каждой роли — её `AGENTS.md` (текст из действующего override → иначе БД → иначе role-prompts), только своё: задачи, стиль, границы.
+2. Общее (JSON v1, список блоков, вызов taskflow) сервер генерирует из схемы валидатора и вставляет сам.
+3. Сервер в заходе и чате читает только `AGENTS.md` + общий блок.
+4. Редактор инструкций пишет в `AGENTS.md` (git-коммит), не в БД.
+5. `roles.prompt`, override `role.prompt`, `scripts/role-prompts/` — убрать после переноса. Копии: `~/.local/state/taskflow-role-prompts-backup-20261020`.
+Отдельно: `role.json` (модель, инструменты, интеграции) — следующим шагом.
