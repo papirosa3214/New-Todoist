@@ -570,7 +570,7 @@ export function createUniversalTaskflow(
     subtaskId: context.subtaskId ?? null,
     chatId: context.chatId ?? null,
   });
-  return {
+  const api: Tool = {
     name: "taskflow",
     description: UNIVERSAL_INSTRUCTION + CALL_CHEATSHEET,
     parameters: Type.Object({
@@ -946,6 +946,54 @@ export function createUniversalTaskflow(
           );
         return out;
       }
+    },
+  };
+  return withMistakeCoach(api, registry);
+}
+
+/** Сколько неверных вызовов одной операции подряд терпим до остановки роли. */
+export const MISTAKE_LIMIT = 3;
+const ОШИБКИ_ВЫЗОВА = new Set(["INVALID_ARGUMENTS", "VERSION_MISMATCH", "ACTION_CONFLICT", "UNKNOWN_OPERATION"]);
+/** Владелец 20.10.2026: «если три раза неправильно вызвал инструмент — прилетает
+ *  и говорит: дурью маешься, вот так надо». Счёт ведётся на операцию внутри
+ *  одного инструмента (один заход роли); успешный вызов обнуляет счёт. На третьей
+ *  ошибке подряд к отказу добавляется поле coach: остановка и готовый вызов. */
+function withMistakeCoach(api: Tool, registry: Map<string, Tool>): Tool {
+  const подряд = new Map<string, number>();
+  return {
+    ...api,
+    execute: async (id, p, signal, onUpdate) => {
+      const out = await api.execute(id, p, signal, onUpdate);
+      let env: any;
+      try {
+        env = JSON.parse(out?.content?.[0]?.text ?? "");
+      } catch {
+        return out;
+      }
+      const key = String(p?.operation ?? "(без operation)");
+      if (env?.ok) {
+        подряд.delete(key);
+        return out;
+      }
+      if (!ОШИБКИ_ВЫЗОВА.has(env?.error?.code)) return out;
+      const n = (подряд.get(key) ?? 0) + 1;
+      подряд.set(key, n);
+      if (n < MISTAKE_LIMIT) return out;
+      const tool = registry.get(key);
+      const form = tool
+        ? invocationTemplate(tool.name, tool.parameters, !isReadOperation(tool.name))
+        : null;
+      env.error.coach = {
+        attempts: n,
+        message:
+          `СТОП. Это ${n}-й неверный вызов ${key} подряд — ты повторяешь одну и ту же ошибку. ` +
+          "Не отправляй тот же вызов снова. " +
+          (form
+            ? "Возьми форму ниже, подставь свои значения в каждое поле и пришли ровно её: только operation и arguments."
+            : "Такой операции нет: сначала найди нужную через {\"query\":\"что ищешь\"}, затем describe."),
+        ...(form ? { call: form.invokeTemplate, fields: form.templateFields } : {}),
+      };
+      return { ...out, content: [{ type: "text", text: JSON.stringify(env) }, ...out.content.slice(1)] };
     },
   };
 }

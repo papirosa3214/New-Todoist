@@ -274,3 +274,17 @@ describe("describe: шпаргалка вызова",()=>{
   expect(decode(await api.execute("st",{operation:"requests.status",arguments:{request_id:"нет"}})).error.code).toBe("UNKNOWN_REQUEST");
  });
 });
+describe("три неверных вызова подряд — остановка с готовым вызовом (20.10.2026)",()=>{
+ it("на третьей ошибке даёт coach с формой; успех обнуляет счёт",async()=>{
+  const t=tool();const api=createUniversalTaskflow([t],context);
+  const bad=()=>api.execute("x",{operation:t.name,arguments:{id:5}}).then(decode);
+  expect((await bad()).error.coach).toBeUndefined();
+  expect((await bad()).error.coach).toBeUndefined();
+  const third=await bad();
+  expect(third.error.code).toBe("INVALID_ARGUMENTS");
+  expect(third.error.coach.message).toMatch(/СТОП/);
+  expect(third.error.coach.call).toEqual({operation:t.name,arguments:{id:expect.any(String),text:expect.any(String)}});
+  expect(decode(await api.execute("ok",{operation:t.name,arguments:{id:"t",text:"x"}})).ok).toBe(true);
+  expect((await bad()).error.coach).toBeUndefined();
+ });
+});
