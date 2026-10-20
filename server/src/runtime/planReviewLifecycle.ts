@@ -7,7 +7,6 @@ import { logEvent } from "../agentState.js";
 import { roleUserId } from "../roleRouting.js";
 import { createResultVersion, currentResultVersion, resultFromSubtasks } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
-import { announceStepState } from "./stepTopicProgress.js";
 export const FINAL_REVIEW_MARKER = "[taskflow:final-review]";
 type Node = {
     slot_key: string;
@@ -115,16 +114,9 @@ export function queuePlanFinalReview(subtaskId: string, actorId: string) {
     })();
 }
 export function markPlanFinalReviewerStarted(taskId: string): void {
-    // Карточка 7efcc173: строка прогресса в теме задачи. Шаги собираем
-    // ДО UPDATE: после него фильтр agent_state='todo' уже ничего не найдёт.
-    const started = db.prepare(`SELECT subtasks.id AS id FROM subtasks
- WHERE subtasks.task_id=? AND subtasks.done=0 AND subtasks.agent_state='todo'
-   AND EXISTS(SELECT 1 FROM task_collaboration_plan_nodes n WHERE n.plan_id=subtasks.collaboration_plan_id AND n.slot_key=subtasks.plan_node_key AND n.instructions LIKE ?)`)
-        .all(taskId, `${FINAL_REVIEW_MARKER}%`) as Array<{ id: string }>;
     db.prepare(`UPDATE subtasks SET agent_state='in_progress',agent_id=?,agent_heartbeat_at=datetime('now')
  WHERE task_id=? AND done=0 AND agent_state='todo' AND EXISTS(SELECT 1 FROM task_collaboration_plan_nodes n WHERE n.plan_id=subtasks.collaboration_plan_id AND n.slot_key=subtasks.plan_node_key AND n.instructions LIKE ?)`)
         .run(roleUserId("critic_verifier"), taskId, `${FINAL_REVIEW_MARKER}%`);
-    for (const row of started) announceStepState(row.id, "started");
 }
 /** Validate that requested starting points are an antichain, then replay their downstream work. */
 export function planReworkGraph(planId: string, reviewSlot: string, targets: string[]) {
@@ -193,10 +185,6 @@ function completePlanFinalReviewAtomic(taskId: string, actor: string, verdict: s
     }
     return db.transaction(() => {
         db.prepare("UPDATE subtasks SET done=1,agent_state=NULL,result=?,agent_heartbeat_at=NULL WHERE id=?").run(`${verdict}: ${findings}`, step.id);
-        // Карточка 7efcc173: вердикт закрыл узел — строка прогресса в теме
-        // задачи. Дедупликатор спасёт, если вердикт проходит и другие пути
-        // закрытия узла: subtask_id и admission_cycle у них общие.
-        announceStepState(step.id,"submitted");
         if (verdict === "changes_requested" && route && iteration < MAX_REWORK_ROUNDS && nodes(plan.id).length + route.work.length + 1 <= MAX_PLAN_NODES) {
             if(branchRequest) for(const card of branchRequest.cards){
                 const binding=db.prepare("SELECT plan_id FROM branch_plan_members WHERE task_id=? AND root_plan_id=?").get(card.taskId,plan.id) as {plan_id:string};

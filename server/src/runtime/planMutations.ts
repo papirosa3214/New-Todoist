@@ -28,7 +28,6 @@ import { ROLE_NAMES, roleTitle, roleUserId } from "../roleRouting.js";
 import { broadcastToUsers } from "../ws.js";
 import { bumpContextVersion } from "./taskContextVersion.js";
 import { FINAL_REVIEW_MARKER } from "./planReviewLifecycle.js";
-import { announceStepState } from "./stepTopicProgress.js";
 
 /** Жёсткий потолок узлов (тот же, что у parseGraph). */
 export const MAX_PLAN_NODES = 16;
@@ -408,9 +407,6 @@ function persist(plan: PlanRow, w: Working): void {
     technicalSlotSnapshot(step.id,"blocked",{blocker:reason,attemptId:step.current_attempt_id});
     if(step.current_attempt_id) db.prepare("UPDATE attempts SET ended_at=datetime('now'),outcome='blocked',reason=? WHERE id=? AND ended_at IS NULL").run(reason,step.current_attempt_id);
     db.prepare("UPDATE subtasks SET agent_state='blocked',block_type='dependency',blocked_at=datetime('now'),current_attempt_id=NULL WHERE id=?").run(step.id);
-    // Карточка 7efcc173: шаг встал в blocked — строка прогресса в теме
-    // задачи с причиной (одна на блок, дедупликатор по blocked_at).
-    announceStepState(step.id,"blocked",reason);
     logEvent({taskId:plan.task_id,actorId:step.agent_id,kind:"plan_help_requested",field:slot,toValue:reason});
   }
   for (const slot of w.changed) {
