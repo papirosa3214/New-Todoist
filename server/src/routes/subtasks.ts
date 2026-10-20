@@ -14,7 +14,7 @@ import { logStepOutcome } from "../runtime/stepOutcome.js";
 import { announceStepState } from "../runtime/stepTopicProgress.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
-import { getTaskForRead, getTaskForWrite, getTaskForComment, commentRefusal, aiNotFound, isRoleAuthor } from "../access.js";
+import { getTaskForRead, getTaskForWrite, getTaskForComment, commentRefusal, aiNotFound, isRoleAuthor, isOwner } from "../access.js";
 import { isServiceUser } from "../serviceUser.js";
 import {
   blockedHelpError,
@@ -1251,9 +1251,14 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         db.prepare(
           "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
         ).run(id, req.params.taskId, req.userId, commentText);
+        // Роль реагирует на комментарий только владельца (владелец
+        // 20.10.2026): служебные записи ролей («Материал собран», «Начинаю
+        // проверку») будили исполнителя карточки и вставали в очередь перед
+        // шагом Критика. Ролям между собой — чат, не комментарии.
         if (
           String(task.assignee_id ?? "").startsWith("role_") &&
-          task.assignee_id !== req.userId
+          task.assignee_id !== req.userId &&
+          isOwner(req.userId)
         ) {
           enqueueRoleRunJob({
             taskId: req.params.taskId,
