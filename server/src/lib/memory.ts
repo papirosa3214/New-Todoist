@@ -17,7 +17,11 @@
 // задание закреплённые записи и самые близкие к теме (memoryBlock).
 import crypto from "node:crypto";
 import db from "../db.js";
-import { filterMemoryByJev, reviewMemoryWriteByJev, MemoryWriteRejected } from "./memorySkillsJev.js";
+import {
+  filterMemoryByJev,
+  reviewMemoryWriteByJev,
+  MemoryWriteRejected,
+} from "./memorySkillsJev.js";
 
 export type MemoryScope = "team" | "role" | "project";
 export type MemoryKind = "fact" | "lesson" | "preference" | "file";
@@ -43,7 +47,10 @@ export interface MemoryRow {
 }
 
 export class MemoryError extends Error {
-  constructor(message: string, readonly status = 400) {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
     super(message);
   }
 }
@@ -65,7 +72,9 @@ const uid = () => crypto.randomUUID();
 async function embed(text: string): Promise<Float32Array | null> {
   try {
     const { getEmbeddings } = await import("./embeddingClient.js");
-    const result = await getEmbeddings(text.slice(0, 4_000), { timeoutMs: 8_000 });
+    const result = await getEmbeddings(text.slice(0, 4_000), {
+      timeoutMs: 8_000,
+    });
     const vec = result.embeddings as number[];
     return Array.isArray(vec) && vec.length ? new Float32Array(vec) : null;
   } catch {
@@ -99,10 +108,15 @@ function cosine(a: Float32Array, b: Float32Array): number {
 
 /** Запасной поиск без эмбеддингов: доля слов запроса, найденных в тексте. */
 function wordScore(query: string, text: string): number {
-  const words = query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2);
+  const words = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w.length > 2);
   if (!words.length) return 0;
   const hay = text.toLowerCase();
-  const hits = words.filter((w) => hay.includes(w.slice(0, Math.max(4, w.length - 2)))).length;
+  const hits = words.filter((w) =>
+    hay.includes(w.slice(0, Math.max(4, w.length - 2))),
+  ).length;
   return hits / words.length;
 }
 
@@ -115,24 +129,45 @@ function clean(text: unknown, max: number): string {
 
 /** Роли часто передают в project_id id задачи — подскажем, какой проект верный. */
 function projectHint(p: string): string {
-  const base = p ? `нет проекта с project_id «${p}».` : "для памяти проекта нужен project_id.";
-  const task = p ? (db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(p) as { project_id: string | null } | undefined) : undefined;
-  if (task?.project_id) return `${base} Это id задачи, а не проекта: её проект — project_id «${task.project_id}». Повтори с ним.`;
-  if (task) return `${base} Это id задачи без проекта — запиши в scope role (своё) или team (общее) без project_id.`;
+  const base = p
+    ? `нет проекта с project_id «${p}».`
+    : "для памяти проекта нужен project_id.";
+  const task = p
+    ? (db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(p) as
+        { project_id: string | null } | undefined)
+    : undefined;
+  if (task?.project_id)
+    return `${base} Это id задачи, а не проекта: её проект — project_id «${task.project_id}». Повтори с ним.`;
+  if (task)
+    return `${base} Это id задачи без проекта — запиши в scope role (своё) или team (общее) без project_id.`;
   return `${base} Список проектов и их id — taskflow_projects. Если знание не про конкретный проект — scope role или team без project_id.`;
 }
 
-function checkScope(scope: unknown, roleKey: unknown, projectId: unknown): { scope: MemoryScope; role_key: string | null; project_id: string | null } {
+function checkScope(
+  scope: unknown,
+  roleKey: unknown,
+  projectId: unknown,
+): { scope: MemoryScope; role_key: string | null; project_id: string | null } {
   const s = String(scope ?? "team") as MemoryScope;
-  if (!SCOPES.includes(s)) throw new MemoryError("scope: team | role | project");
+  if (!SCOPES.includes(s))
+    throw new MemoryError("scope: team | role | project");
   if (s === "role") {
     const r = clean(roleKey, 64);
     if (!r) throw new MemoryError("для памяти роли нужен role_key");
     return { scope: s, role_key: r, project_id: null };
   }
   if (s === "project") {
-    const p = clean(projectId, 64);
-    if (!p || !db.prepare("SELECT 1 FROM projects WHERE id = ?").get(p)) throw new MemoryError(projectHint(p));
+    let p = clean(projectId, 64);
+    // Роли чаще всего передают id своей задачи: проект берём из неё, а не
+    // отказываем с подсказкой (23 отказа за 16–19.10.2026).
+    if (p && !db.prepare("SELECT 1 FROM projects WHERE id = ?").get(p)) {
+      const task = db
+        .prepare("SELECT project_id FROM tasks WHERE id = ?")
+        .get(p) as { project_id: string | null } | undefined;
+      if (task?.project_id) p = task.project_id;
+    }
+    if (!p || !db.prepare("SELECT 1 FROM projects WHERE id = ?").get(p))
+      throw new MemoryError(projectHint(p));
     return { scope: s, role_key: null, project_id: p };
   }
   return { scope: "team", role_key: null, project_id: null };
@@ -144,14 +179,24 @@ const COLUMNS = `id, scope, role_key, project_id, kind, title, text, source_kind
   pinned, attachment_id, use_count, last_used_at, created_at, updated_at`;
 
 export function getMemory(id: string): (MemoryRow & { chunks: number }) | null {
-  const row = db.prepare(`SELECT ${COLUMNS} FROM memories WHERE id = ?`).get(id) as MemoryRow | undefined;
+  const row = db
+    .prepare(`SELECT ${COLUMNS} FROM memories WHERE id = ?`)
+    .get(id) as MemoryRow | undefined;
   if (!row) return null;
-  const { n } = db.prepare("SELECT COUNT(*) AS n FROM memory_chunks WHERE memory_id = ?").get(id) as { n: number };
+  const { n } = db
+    .prepare("SELECT COUNT(*) AS n FROM memory_chunks WHERE memory_id = ?")
+    .get(id) as { n: number };
   return { ...row, chunks: n };
 }
 
 /** Список для экрана «Память»: фильтр по области/роли/проекту и словам. */
-export function listMemories(filter: { scope?: string; role_key?: string; project_id?: string; q?: string; limit?: number }): MemoryRow[] {
+export function listMemories(filter: {
+  scope?: string;
+  role_key?: string;
+  project_id?: string;
+  q?: string;
+  limit?: number;
+}): MemoryRow[] {
   const where: string[] = [];
   const args: unknown[] = [];
   if (filter.scope) {
@@ -201,11 +246,15 @@ export interface Author {
  * Записать факт/урок/предпочтение. Похожая запись в той же области уже
  * есть — она обновляется (возвращается с updated: true), дубль не плодится.
  */
-export async function remember(input: WriteInput, author: Author): Promise<{ memory: MemoryRow; updated: boolean }> {
+export async function remember(
+  input: WriteInput,
+  author: Author,
+): Promise<{ memory: MemoryRow; updated: boolean }> {
   const text = clean(input.text, MEMORY_TEXT_MAX);
   if (!text) throw new MemoryError("пустая запись: что запомнить?");
   const kind = String(input.kind ?? "fact") as MemoryKind;
-  if (!KINDS.includes(kind) || kind === "file") throw new MemoryError("kind: fact | lesson | preference");
+  if (!KINDS.includes(kind) || kind === "file")
+    throw new MemoryError("kind: fact | lesson | preference");
   const where = checkScope(input.scope, input.role_key, input.project_id);
   const title = clean(input.title, 200) || null;
   // Галочка «Проверка записи в память» (раздел JEV): только записи ролей,
@@ -215,7 +264,8 @@ export async function remember(input: WriteInput, author: Author): Promise<{ mem
     try {
       await reviewMemoryWriteByJev({ kind, title, text });
     } catch (err) {
-      if (err instanceof MemoryWriteRejected) throw new MemoryError(err.message);
+      if (err instanceof MemoryWriteRejected)
+        throw new MemoryError(err.message);
       throw err;
     }
   }
@@ -227,12 +277,17 @@ export async function remember(input: WriteInput, author: Author): Promise<{ mem
         `SELECT id, embedding, source_kind FROM memories
           WHERE scope = ? AND COALESCE(role_key,'') = ? AND COALESCE(project_id,'') = ? AND kind <> 'file' AND embedding IS NOT NULL`,
       )
-      .all(where.scope, where.role_key ?? "", where.project_id ?? "") as Array<{ id: string; embedding: Buffer; source_kind: string }>;
+      .all(where.scope, where.role_key ?? "", where.project_id ?? "") as Array<{
+      id: string;
+      embedding: Buffer;
+      source_kind: string;
+    }>;
     let best: { id: string; score: number; source_kind: string } | null = null;
     for (const row of near) {
       const other = fromBlob(row.embedding);
       const score = other ? cosine(vec, other) : 0;
-      if (score >= DUPLICATE_SIMILARITY && (!best || score > best.score)) best = { id: row.id, score, source_kind: row.source_kind };
+      if (score >= DUPLICATE_SIMILARITY && (!best || score > best.score))
+        best = { id: row.id, score, source_kind: row.source_kind };
     }
     // Запись владельца роль не перетирает — рядом ляжет своя.
     if (best && !(best.source_kind === "owner" && author.kind === "role")) {
@@ -249,25 +304,47 @@ export async function remember(input: WriteInput, author: Author): Promise<{ mem
     `INSERT INTO memories (id, scope, role_key, project_id, kind, title, text, source_kind, source_ref, created_by, updated_by, pinned, embedding)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    id, where.scope, where.role_key, where.project_id, kind, title, text, author.kind,
-    clean(input.source_ref, 100) || null, author.id, author.id, input.pinned === true ? 1 : 0, toBlob(vec),
+    id,
+    where.scope,
+    where.role_key,
+    where.project_id,
+    kind,
+    title,
+    text,
+    author.kind,
+    clean(input.source_ref, 100) || null,
+    author.id,
+    author.id,
+    input.pinned === true ? 1 : 0,
+    toBlob(vec),
   );
   return { memory: getMemory(id)!, updated: false };
 }
 
 /** Правка записи (владельцем или ролью-автором). */
-export async function updateMemory(id: string, input: WriteInput, author: Author): Promise<MemoryRow> {
+export async function updateMemory(
+  id: string,
+  input: WriteInput,
+  author: Author,
+): Promise<MemoryRow> {
   const current = getMemory(id);
   if (!current) throw new MemoryError("запись не найдена", 404);
   if (author.kind === "role" && current.created_by !== author.id) {
-    throw new MemoryError("роль правит только свои записи; чужие — владелец", 403);
+    throw new MemoryError(
+      "роль правит только свои записи; чужие — владелец",
+      403,
+    );
   }
   const sets: string[] = [];
   const args: unknown[] = [];
   let reembed = false;
   if (input.text !== undefined) {
-    const text = clean(input.text, current.kind === "file" ? 24_000 : MEMORY_TEXT_MAX);
-    if (!text) throw new MemoryError("пустая запись — удалите её, а не стирайте текст");
+    const text = clean(
+      input.text,
+      current.kind === "file" ? 24_000 : MEMORY_TEXT_MAX,
+    );
+    if (!text)
+      throw new MemoryError("пустая запись — удалите её, а не стирайте текст");
     sets.push("text = ?");
     args.push(text);
     reembed = true;
@@ -279,31 +356,54 @@ export async function updateMemory(id: string, input: WriteInput, author: Author
   }
   if (input.kind !== undefined) {
     const kind = String(input.kind) as MemoryKind;
-    if (!KINDS.includes(kind) || (kind === "file") !== (current.kind === "file")) throw new MemoryError("kind: fact | lesson | preference");
+    if (
+      !KINDS.includes(kind) ||
+      (kind === "file") !== (current.kind === "file")
+    )
+      throw new MemoryError("kind: fact | lesson | preference");
     sets.push("kind = ?");
     args.push(kind);
   }
   if (input.pinned !== undefined) {
-    if (author.kind !== "owner") throw new MemoryError("закрепляет владелец", 403);
+    if (author.kind !== "owner")
+      throw new MemoryError("закрепляет владелец", 403);
     sets.push("pinned = ?");
     args.push(input.pinned === true ? 1 : 0);
   }
-  if (input.scope !== undefined || input.role_key !== undefined || input.project_id !== undefined) {
-    if (author.kind !== "owner") throw new MemoryError("область памяти меняет владелец", 403);
-    const where = checkScope(input.scope ?? current.scope, input.role_key ?? current.role_key, input.project_id ?? current.project_id);
+  if (
+    input.scope !== undefined ||
+    input.role_key !== undefined ||
+    input.project_id !== undefined
+  ) {
+    if (author.kind !== "owner")
+      throw new MemoryError("область памяти меняет владелец", 403);
+    const where = checkScope(
+      input.scope ?? current.scope,
+      input.role_key ?? current.role_key,
+      input.project_id ?? current.project_id,
+    );
     sets.push("scope = ?", "role_key = ?", "project_id = ?");
     args.push(where.scope, where.role_key, where.project_id);
   }
   if (!sets.length) throw new MemoryError("нечего менять");
   if (reembed && current.kind !== "file") {
-    const text = input.text !== undefined ? clean(input.text, MEMORY_TEXT_MAX) : current.text;
-    const title = input.title !== undefined ? clean(input.title, 200) : current.title ?? "";
+    const text =
+      input.text !== undefined
+        ? clean(input.text, MEMORY_TEXT_MAX)
+        : current.text;
+    const title =
+      input.title !== undefined
+        ? clean(input.title, 200)
+        : (current.title ?? "");
     sets.push("embedding = ?");
     args.push(toBlob(await embed(title ? `${title}\n${text}` : text)));
   }
   sets.push("updated_by = ?", "updated_at = datetime('now')");
   args.push(author.id);
-  db.prepare(`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`).run(...args, id);
+  db.prepare(`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`).run(
+    ...args,
+    id,
+  );
   return getMemory(id)!;
 }
 
@@ -318,7 +418,11 @@ export function deleteMemory(id: string, author: Author): void {
 
 /** Нарезать текст файла на куски по абзацам, около CHUNK_TARGET символов. */
 export function chunkText(text: string): string[] {
-  const paragraphs = text.replace(/\r\n/g, "\n").split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  const paragraphs = text
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
   const chunks: string[] = [];
   let current = "";
   for (const p of paragraphs) {
@@ -327,7 +431,8 @@ export function chunkText(text: string): string[] {
         chunks.push(current);
         current = "";
       }
-      for (let i = 0; i < p.length; i += CHUNK_TARGET) chunks.push(p.slice(i, i + CHUNK_TARGET));
+      for (let i = 0; i < p.length; i += CHUNK_TARGET)
+        chunks.push(p.slice(i, i + CHUNK_TARGET));
       continue;
     }
     if (current && current.length + p.length + 2 > CHUNK_TARGET) {
@@ -343,7 +448,14 @@ export function chunkText(text: string): string[] {
 
 /** Файл в память: текст уже извлечён, режем на куски и считаем эмбеддинги. */
 export async function rememberFile(
-  input: { scope?: unknown; role_key?: unknown; project_id?: unknown; title: string; text: string; attachment_id: string },
+  input: {
+    scope?: unknown;
+    role_key?: unknown;
+    project_id?: unknown;
+    title: string;
+    text: string;
+    attachment_id: string;
+  },
   author: Author,
 ): Promise<MemoryRow> {
   const where = checkScope(input.scope, input.role_key, input.project_id);
@@ -357,9 +469,24 @@ export async function rememberFile(
     db.prepare(
       `INSERT INTO memories (id, scope, role_key, project_id, kind, title, text, source_kind, created_by, updated_by, attachment_id)
        VALUES (?, ?, ?, ?, 'file', ?, ?, ?, ?, ?, ?)`,
-    ).run(id, where.scope, where.role_key, where.project_id, clean(input.title, 200), text, author.kind, author.id, author.id, input.attachment_id);
-    const insert = db.prepare("INSERT INTO memory_chunks (id, memory_id, idx, text, embedding) VALUES (?, ?, ?, ?, ?)");
-    chunks.forEach((chunk, i) => insert.run(uid(), id, i, chunk, toBlob(vectors[i])));
+    ).run(
+      id,
+      where.scope,
+      where.role_key,
+      where.project_id,
+      clean(input.title, 200),
+      text,
+      author.kind,
+      author.id,
+      author.id,
+      input.attachment_id,
+    );
+    const insert = db.prepare(
+      "INSERT INTO memory_chunks (id, memory_id, idx, text, embedding) VALUES (?, ?, ?, ?, ?)",
+    );
+    chunks.forEach((chunk, i) =>
+      insert.run(uid(), id, i, chunk, toBlob(vectors[i])),
+    );
   })();
   return getMemory(id)!;
 }
@@ -377,7 +504,10 @@ export interface RecallItem {
   source: "owner" | "role";
 }
 
-function visibleWhere(roleKey: string | null, projectId: string | null): { sql: string; args: unknown[] } {
+function visibleWhere(
+  roleKey: string | null,
+  projectId: string | null,
+): { sql: string; args: unknown[] } {
   const parts = ["m.scope = 'team'"];
   const args: unknown[] = [];
   if (roleKey) {
@@ -395,24 +525,49 @@ function visibleWhere(roleKey: string | null, projectId: string | null): { sql: 
  * Что роль помнит по теме: записи и куски файлов, видимые ей, по близости к
  * запросу. Закреплённые владельцем — всегда, первыми.
  */
-export async function recall(args: { roleKey: string | null; projectId?: string | null; query: string; limit?: number }): Promise<RecallItem[]> {
+export async function recall(args: {
+  roleKey: string | null;
+  projectId?: string | null;
+  query: string;
+  limit?: number;
+}): Promise<RecallItem[]> {
   const limit = Math.min(Math.max(args.limit ?? 6, 1), 20);
   const vis = visibleWhere(args.roleKey, args.projectId ?? null);
   const query = args.query.trim();
 
   const notes = db
-    .prepare(`SELECT m.id, m.kind, m.scope, m.title, m.text, m.pinned, m.source_kind, m.embedding FROM memories m WHERE ${vis.sql} AND m.kind <> 'file'`)
-    .all(...vis.args) as Array<{ id: string; kind: MemoryKind; scope: MemoryScope; title: string | null; text: string; pinned: number; source_kind: "owner" | "role"; embedding: Buffer | null }>;
+    .prepare(
+      `SELECT m.id, m.kind, m.scope, m.title, m.text, m.pinned, m.source_kind, m.embedding FROM memories m WHERE ${vis.sql} AND m.kind <> 'file'`,
+    )
+    .all(...vis.args) as Array<{
+    id: string;
+    kind: MemoryKind;
+    scope: MemoryScope;
+    title: string | null;
+    text: string;
+    pinned: number;
+    source_kind: "owner" | "role";
+    embedding: Buffer | null;
+  }>;
   const chunks = db
     .prepare(
       `SELECT m.id, m.scope, m.title, m.pinned, m.source_kind, c.text, c.embedding FROM memory_chunks c
          JOIN memories m ON m.id = c.memory_id WHERE ${vis.sql}`,
     )
-    .all(...vis.args) as Array<{ id: string; scope: MemoryScope; title: string | null; pinned: number; source_kind: "owner" | "role"; text: string; embedding: Buffer | null }>;
+    .all(...vis.args) as Array<{
+    id: string;
+    scope: MemoryScope;
+    title: string | null;
+    pinned: number;
+    source_kind: "owner" | "role";
+    text: string;
+    embedding: Buffer | null;
+  }>;
 
   // Помнить нечего — и к модели эмбеддингов не ходим (каждый ход роли).
   if (!notes.length && !chunks.length) return [];
-  const hasVectors = notes.some((n) => n.embedding) || chunks.some((c) => c.embedding);
+  const hasVectors =
+    notes.some((n) => n.embedding) || chunks.some((c) => c.embedding);
   const qvec = query && hasVectors ? await embed(query) : null;
 
   const score = (text: string, blob: Buffer | null): number => {
@@ -425,17 +580,41 @@ export async function recall(args: { roleKey: string | null; projectId?: string 
   for (const n of notes) {
     const s = score(`${n.title ?? ""} ${n.text}`, n.embedding);
     if (n.pinned || s >= RECALL_MIN_SIMILARITY) {
-      items.push({ id: n.id, kind: n.kind, scope: n.scope, title: n.title, text: n.text, score: s, pinned: Boolean(n.pinned), source: n.source_kind });
+      items.push({
+        id: n.id,
+        kind: n.kind,
+        scope: n.scope,
+        title: n.title,
+        text: n.text,
+        score: s,
+        pinned: Boolean(n.pinned),
+        source: n.source_kind,
+      });
     }
   }
   for (const c of chunks) {
     const s = score(c.text, c.embedding);
     if (s >= RECALL_MIN_SIMILARITY) {
-      items.push({ id: c.id, kind: "file", scope: c.scope, title: c.title, text: c.text, score: s, pinned: false, source: c.source_kind });
+      items.push({
+        id: c.id,
+        kind: "file",
+        scope: c.scope,
+        title: c.title,
+        text: c.text,
+        score: s,
+        pinned: false,
+        source: c.source_kind,
+      });
     }
   }
   // Владелец весомее роли; закреплённое — вперёд.
-  items.sort((a, b) => Number(b.pinned) - Number(a.pinned) || (b.score + (b.source === "owner" ? 0.05 : 0)) - (a.score + (a.source === "owner" ? 0.05 : 0)));
+  items.sort(
+    (a, b) =>
+      Number(b.pinned) - Number(a.pinned) ||
+      b.score +
+        (b.source === "owner" ? 0.05 : 0) -
+        (a.score + (a.source === "owner" ? 0.05 : 0)),
+  );
   // Галочка «Отбор памяти для роли» (раздел JEV): из найденного по сходству
   // JEV убирает уверенно ненужное и ставит полезное вперёд. Не ответил —
   // исходный порядок.
@@ -462,7 +641,11 @@ export async function recall(args: { roleKey: string | null; projectId?: string 
 }
 
 /** Блок «что ты помнишь» для задания роли. Пусто — пустая строка. */
-export async function memoryBlock(args: { roleKey: string | null; projectId?: string | null; query: string }): Promise<string> {
+export async function memoryBlock(args: {
+  roleKey: string | null;
+  projectId?: string | null;
+  query: string;
+}): Promise<string> {
   let items: RecallItem[];
   try {
     items = await recall({ ...args, limit: 8 });
@@ -471,8 +654,14 @@ export async function memoryBlock(args: { roleKey: string | null; projectId?: st
   }
   if (!items.length) return "";
   const lines = items.map((m) => {
-    const where = m.scope === "team" ? "общее" : m.scope === "role" ? "твоё" : "проект";
-    const head = m.kind === "file" ? `файл «${m.title ?? "без названия"}»` : m.title ? `«${m.title}»` : "";
+    const where =
+      m.scope === "team" ? "общее" : m.scope === "role" ? "твоё" : "проект";
+    const head =
+      m.kind === "file"
+        ? `файл «${m.title ?? "без названия"}»`
+        : m.title
+          ? `«${m.title}»`
+          : "";
     const text = m.text.replace(/\s+/g, " ").trim();
     const clipped = text.length > 600 ? `${text.slice(0, 599)}…` : text;
     return `- [${where}${m.pinned ? ", закреплено" : ""}] ${head}${head ? ": " : ""}${clipped}`;
