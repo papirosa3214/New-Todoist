@@ -21,6 +21,7 @@ import { enqueueLinearLifecycle } from "./linearLifecycle.js";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { logEvent, releaseSubtaskWork } from "../agentState.js";
+import { INCIDENT_NOTIFICATION_TYPE } from "./incidents.js";
 import { cancelPendingRoleRunJob } from "../runtime/roleRunQueue.js";
 import { purgeTasks } from "./taskPurge.js";
 
@@ -96,6 +97,13 @@ function dropSubtree(): void {
  *      автоматику).
  *   6. В `task_events` пишется `task:archived` для каждого узла
  *      поддерева с указанием актора и `parent_id` (для связи в ленте).
+ *   7. Для карточек починки (`incident_key IS NOT NULL`) удаляется
+ *      уведомление о поломке (`notifications.type = 'incident'`).
+ *      Архивная карточка починки — это «починка не нужна» (владелец
+ *      20.10.2026): поломка закрыта, и её запись не должна висеть в ленте
+ *      уведомлений навсегда. Раньше уведомление оставалось в базе до
+ *      скончания времён, и клиенты с кэшем (iOS `NotificationStore`)
+ *      показывали его до перезагрузки.
  *
  * `parent_id` у потомков сохраняется, чтобы `restoreTask` вернул ровно
  * ту же структуру, что была до архивирования.
@@ -164,6 +172,24 @@ export function archiveTask(taskId: string, actorId: string): {
         already_archived: true,
         archived_subtree_count: 0,
       };
+    }
+
+    // Уведомление о поломке уходит вместе с карточкой починки: поломка
+    // закрыта — записи в ленте быть не должно. Трогаем ТОЛЬКО уведомления
+    // типа `incident` по карточкам с `incident_key`; остальные уведомления
+    // по карточке (наблюдения, комментарии) остаются как есть.
+    const incidentCards = db
+      .prepare(
+        `SELECT id FROM tasks
+          WHERE incident_key IS NOT NULL
+            AND id IN (SELECT id FROM _arch_subtree)`,
+      )
+      .all() as Array<{ id: string }>;
+    const dropIncidentNotification = db.prepare(
+      "DELETE FROM notifications WHERE type = ? AND task_id = ?",
+    );
+    for (const card of incidentCards) {
+      dropIncidentNotification.run(INCIDENT_NOTIFICATION_TYPE, card.id);
     }
 
     // Аренды подзадач (in_progress/blocked) снимаются — это «работа

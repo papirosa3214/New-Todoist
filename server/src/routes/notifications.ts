@@ -72,6 +72,26 @@ export function registerNotificationRoutes(app: FastifyInstance) {
       };
     });
     const open = incidents.filter((i) => !i.fixed).length;
+
+    // Закрытые (архивные) поломки — владелец 20.10.2026: карточка починки
+    // ушла в архив, значит поломка закрыта и её запись обязана исчезнуть из
+    // «Состояния системы». Сами архивные поломки в `incidents` не попадают
+    // (`t.archived_at IS NULL`), но клиенту нужно знать, КАКИЕ ключи и
+    // карточки закрыты: строка проверки из суточной сводки сторожей
+    // привязывается к поломке по `incident_key` или по id карточки, и без
+    // этого списка клиент не может убрать такую строку.
+    //
+    // Ограничение 200 — защита от бесконечного роста ответа: поломки
+    // случаются редко, а свежие закрытые нужны в первую очередь.
+    const closed = db
+      .prepare(
+        `SELECT id, incident_key AS key FROM tasks
+          WHERE incident_key IS NOT NULL AND archived_at IS NOT NULL
+          ORDER BY archived_at DESC
+          LIMIT 200`,
+      )
+      .all() as Array<{ id: string; key: string }>;
+
     return {
       from,
       counts: {
@@ -81,6 +101,7 @@ export function registerNotificationRoutes(app: FastifyInstance) {
         in_work: incidents.filter((i) => !i.fixed && (i.assignee_name || i.work_seconds > 0)).length,
       },
       incidents,
+      closed,
       workers: [...totals.values()].sort((a, b) => b.seconds - a.seconds),
     };
   });
