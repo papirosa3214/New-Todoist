@@ -203,6 +203,38 @@ describe("JSON-контракт роли v1: разбор ответа роли"
     expect(unwrapRoleEnvelopeText('{"schema_version":1,"ok":true,"output":[{"type":"text","text":"Печатается \\u043e')).toBe("Печатается о");
   });
 
+  // Владелец 21.10.2026: `needs_human` на сервере не обязателен — без него
+  // «решение владельца не нужно». Раньше поле было обязательным, и роль, его
+  // забывшая, отдавала владельцу сырой JSON вместо блоков.
+  it("конверт без needs_human принимается и считается needs_human = false", () => {
+    const withoutField = {
+      schema_version: 1, ok: true, output: [{ type: "text", text: "Готово." }],
+      artifacts: [], plan_artifact: null, error: null, next_hint: null,
+    };
+    const checked = validateStructuredRoleContractV1(withoutField);
+    expect(checked.errors).toEqual([]);
+    expect(checked.envelope?.needs_human).toBe(false);
+
+    const parsed = parseRoleContractV1(JSON.stringify(withoutField));
+    expect(parsed.format).toBe("v1");
+    expect(parsed.structuredEnvelope?.needs_human).toBe(false);
+    expect(parsed.text).toBe("Готово.");
+
+    const normalized = normalizeRoleReplyV1(JSON.stringify(withoutField));
+    expect(normalized.normalizedByServer).toBe(false);
+    expect(normalized.envelope.needs_human).toBe(false);
+    expect(normalized.displayText).toBe("Готово.");
+  });
+
+  it("needs_human = true сохраняется, а значение не boolean — ошибка", () => {
+    const withFlag = {
+      schema_version: 1, ok: true, output: [{ type: "text", text: "Нужно решение." }],
+      artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: true,
+    };
+    expect(validateStructuredRoleContractV1(withFlag).envelope?.needs_human).toBe(true);
+    expect(validateStructuredRoleContractV1({ ...withFlag, needs_human: "да" }).errors.join(" ")).toMatch(/needs_human/);
+  });
+
   it.each([
     ["Пример:\n```json\n{\"ok\": true}\n```", "JSON без output — не конверт"],
     ["Вот:\n```ts\nconst ok = true;\n```", "код не конверт"],
