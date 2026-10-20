@@ -27,6 +27,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { runOperation } from "../host/gateway.js";
 
+/** Предел одной команды bash на хосте, если роль не указала свой. */
+export const BASH_DEFAULT_TIMEOUT_MS = 40 * 60_000;
+
 type Resultado = {
   ok?: boolean;
   exitCode?: number | null;
@@ -57,11 +60,17 @@ export function hostBashOperations(machineId: string, defaultCwd: string): BashO
   return {
     exec: async (command, cwd, options) => {
       let былВывод = false;
+      // Сборка и UI-тесты iOS идут дольше 10 минут — прежнего предела хоста
+      // (владелец 20.10.2026: роли обрывались на полпути и жгли круги). Время
+      // берётся из запроса роли, без него — BASH_DEFAULT_TIMEOUT_MS; хост
+      // принимает предел из сообщения и из аргументов, берёт меньший.
+      const timeoutMs = options.timeout ? Math.ceil(options.timeout * 1000) : BASH_DEFAULT_TIMEOUT_MS;
       const результат = (await runOperation(
         machineId,
         "bash",
-        { command, cwd: cwd || defaultCwd },
+        { command, cwd: cwd || defaultCwd, timeoutMs },
         {
+          timeoutMs: timeoutMs + 30_000,
           onChunk: (chunk: { data: string }) => {
             былВывод = true;
             options.onData(Buffer.from(chunk.data));
