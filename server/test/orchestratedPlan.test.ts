@@ -98,6 +98,19 @@ describe("режим «Оркестратор»", () => {
     const ask = wakeOrchestrator(sid, roleUserId("builder")!, "approval", "op_id=x");
     expect((db.prepare("SELECT text FROM chat_messages WHERE id=?").get(ask!.messageId) as { text: string }).text).toContain("taskflow_plan_proposal_decide");
   });
+
+  it("в плане другого профиля блок будит Оркестратора, а возврат — нет (20.10.2026)", () => {
+    // Шаг builder_1 заведён предыдущим тестом.
+    const sid = (db.prepare("SELECT id FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key='builder_1'").get(planId) as { id: string }).id;
+    db.prepare("UPDATE task_collaboration_plans SET profile='single_executor' WHERE id=?").run(planId);
+    try {
+      expect(wakeOrchestrator(sid, roleUserId("builder")!, "blocked", "жду ответа владельца")).not.toBeNull();
+      expect(wakeOrchestrator(sid, roleUserId("qa")!, "returned", "дефект")).toBeNull();
+      expect(wakeOrchestrator(sid, roleUserId("builder")!, "retry", null)).toBeNull();
+    } finally {
+      db.prepare("UPDATE task_collaboration_plans SET profile='orchestrated' WHERE id=?").run(planId);
+    }
+  });
 });
 
 describe("перенос карточки в другой проект", () => {

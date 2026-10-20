@@ -49,7 +49,10 @@ export function wakeOrchestrator(subtaskId: string, actorId: string | null, kind
   return db.transaction(() => {
     const row = db.prepare(`SELECT s.title, s.task_id, s.plan_node_key AS slot, s.admission_cycle AS cycle, p.id AS plan_id, t.title AS task_title, t.creator_id
         FROM subtasks s JOIN task_collaboration_plans p ON p.id = s.collaboration_plan_id JOIN tasks t ON t.id = s.task_id
-       WHERE s.id = ? AND p.profile = 'orchestrated' AND p.status = 'approved'`).get(subtaskId) as any;
+       WHERE s.id = ? AND (p.profile = 'orchestrated' OR ? = 'blocked') AND p.status = 'approved'`).get(subtaskId, kind) as any;
+    // Блок будит Оркестратора в любом плане (владелец 20.10.2026): планы из
+    // автоприёма («один исполнитель») стояли в блоке, а будить было некого.
+    // Возврат, повтор и согласование — по-прежнему только в режиме «Оркестратор».
     if (!row || row.slot === ORCHESTRATE_SLOT || row.slot === ORCHESTRATE_ASSEMBLE_SLOT) return null;
     const orch = db.prepare("SELECT id FROM users WHERE id = ? AND type = 'ai' AND COALESCE(archived,0) = 0").get(roleUserId("code_orchestrator")) as { id: string } | undefined;
     if (!orch) return null;
