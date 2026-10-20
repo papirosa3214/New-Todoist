@@ -216,13 +216,54 @@ describe("HTTP: сводка и выгрузка", () => {
     expect(bad.statusCode).toBe(400);
   });
 
+  it("сводка не отдаёт полуфильтр по коду: его разрез считается только выгрузкой", async () => {
+    const plain = await app.inject({
+      method: "GET",
+      url: "/api/role-tool-audit/summary",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const narrowed = await app.inject({
+      method: "GET",
+      url: "/api/role-tool-audit/summary?code=ACTION_CONFLICT",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(narrowed.statusCode).toBe(200);
+    // Счётчики не знают про код ошибки, поэтому сводка этот параметр не берёт:
+    // иначе итоги остались бы общими, а разбивка по кодам сузилась бы —
+    // ответ выглядел бы отфильтрованным, не будучи им.
+    expect(narrowed.json().totals).toEqual(plain.json().totals);
+    expect(narrowed.json().by_code).toEqual(plain.json().by_code);
+    // А выгрузка код понимает и действительно сужает записи.
+    const exported = await app.inject({
+      method: "GET",
+      url: "/api/role-tool-audit/export?format=json&code=ACTION_CONFLICT",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(exported.statusCode).toBe(200);
+    const codes = exported.json().records.map((row: any) => row.error_code);
+    expect(codes.length).toBeGreaterThan(0);
+    expect(codes.every((code: string) => code === "ACTION_CONFLICT")).toBe(true);
+  });
+
   it("выгрузка не содержит значений аргументов", async () => {
     const res = await app.inject({
       method: "GET",
       url: "/api/role-tool-audit/export?format=json",
       headers: { authorization: `Bearer ${token}` },
     });
+    expect(res.statusCode).toBe(200);
     expect(res.body).not.toContain("sk-live-");
-    expect(res.body).not.toContain("42");
+    // Проверяем сами записи, а не весь ответ: в метках времени `created_at`
+    // и в границах периода случайно встречаются те же цифры, и проверка по
+    // всему телу падала не из-за утечки аргументов.
+    const records = res.json().records as Array<Record<string, unknown>>;
+    const leaked = records.map((row) => ({
+      error_message: row.error_message,
+      error_field: row.error_field,
+      error_expected: row.error_expected,
+    }));
+    expect(JSON.stringify(leaked)).not.toContain("42");
+    for (const row of leaked)
+      expect(Object.values(row).join(" ")).not.toContain("sk-live-");
   });
 });

@@ -52,6 +52,25 @@ function filtersOf(query: Query): ToolAuditFilters {
   };
 }
 
+/**
+ * Сводка считается по счётчикам вызовов, а у них нет разрезов по коду ошибки,
+ * карточке и шагу. Если пропустить туда `code`/`task_id`/`subtask_id`, они
+ * сузили бы только разбивку по кодам, а итоги и разрезы по роли/модели
+ * остались бы общими — получился бы полуфильтр, отвечающий неправдой.
+ * Поэтому сводка берёт только те параметры, которые она действительно
+ * применяет; остальные расписаны для выгрузки (см. AGENT-API.md).
+ */
+function summaryFiltersOf(query: Query): ToolAuditFilters {
+  const all = filtersOf(query);
+  return {
+    from: all.from,
+    to: all.to,
+    role: all.role,
+    model: all.model,
+    operation: all.operation,
+  };
+}
+
 export function registerRoleToolAuditRoutes(app: FastifyInstance): void {
   const authPre = authOrApiToken;
 
@@ -60,7 +79,7 @@ export function registerRoleToolAuditRoutes(app: FastifyInstance): void {
     "/api/role-tool-audit/summary",
     { preHandler: authPre },
     async (req) => {
-      const filters = filtersOf(req.query ?? {});
+      const filters = summaryFiltersOf(req.query ?? {});
       return toolAuditSummary(filters);
     },
   );

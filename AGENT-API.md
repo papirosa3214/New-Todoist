@@ -378,6 +378,10 @@ curl -sS "http://localhost:3001/api/coordination/_metrics?window=hour" \
 сутки), `role`, `model`, `operation`. У выгрузки дополнительно `code`,
 `task_id`, `subtask_id`, `limit` (по умолчанию 1000, максимум 10000).
 
+`code`, `task_id` и `subtask_id` понимает только выгрузка: сводка считается по
+счётчикам вызовов, а у них таких разрезов нет — ответ, сузивший разбивку по
+кодам без сужения итогов, выглядел бы отфильтрованным, не будучи им.
+
 ```bash
 # сводка за сутки
 curl -sS "http://localhost:3001/api/role-tool-audit/summary" \
