@@ -1,0 +1,8 @@
+{
+  "expectedSignal": true,
+  "forwarded": false,
+  "forwardedKeys": [
+    "timeoutMs",
+    "onChunk"
+  ]
+}

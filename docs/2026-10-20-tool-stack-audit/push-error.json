@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "operation": "taskflow_host_push",
+  "version": 1,
+  "request_id": "audit-push",
+  "data": {
+    "state": "succeeded",
+    "content": [
+      {
+        "type": "text",
+        "text": "roles/audit-task\ngitea: ошибка — audit remote unavailable\norigin: ошибка — audit remote unavailable"
+      }
+    ]
+  }
+}
