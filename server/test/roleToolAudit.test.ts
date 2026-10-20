@@ -405,6 +405,10 @@ describe("провайдер в учёте вызовов", () => {
     const record = await probe(model, "run-provider-1");
     expect(record, "отказ должен попасть в учёт").toBeTruthy();
     expect(record?.provider).toBe("opencode-go");
+    // Владелец читает именно выгрузку — провайдер обязан доехать до неё,
+    // и в JSON, и в CSV.
+    expect(JSON.stringify(record)).toContain("opencode-go");
+    expect(toolAuditCsv([record!])).toContain("opencode-go");
   });
 
   it("известный провайдер из префикса не путается с minimax", async () => {
