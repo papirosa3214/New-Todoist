@@ -25,6 +25,30 @@ const TAIL = [
   "Работу роли сам не делай.",
 ];
 
+/** Разбор блока — отдельная инструкция (владелец 20.10.2026): побудка на
+ *  блок приходит из любого плана, и Оркестратору нужно понимать, что именно
+ *  проверить и какими инструментами чинить, а не только «разберись». */
+const BLOCK_KIND_HINT: Record<string, string> = {
+  needs_input: "роль ждёт решения или сведений — проверь, не ответ ли это, который есть в карточке, базе знаний или у другой роли",
+  capability: "роли не хватает инструмента, доступа или компетенции — часто это не та роль или не тот проект/машина у карточки",
+  dependency: "роль ждёт чужой результат — проверь, не стоит ли шаг раньше нужного предшественника",
+  transient: "временный сбой (сеть, лимит, сервис) — чаще всего хватает перезапуска шага",
+};
+
+const BLOCK_GUIDE = [
+  "Тебя разбудили, потому что шаг встал в блок. Разберись, почему, и сними препятствие сам, если можешь.",
+  "1. Пойми ситуацию: taskflow_task (карточка, лента, комментарии), taskflow_plan_read (граф плана), taskflow_slot_snapshot (что успел шаг), taskflow_topic_read (переписка ролей по карточке).",
+  "2. Найди причину. Типичные: план построен неправильно (шаг раньше нужного предшественника, не хватает шага, лишний шаг); роли не хватило инструмента, доступа или знаний; не та роль на шаге; карточка лежит не в том проекте, и у роли нет нужной машины или репозитория; вопрос, на который ответ уже есть.",
+  "3. Почини доступными средствами:",
+  "   — ответь роли или подскажи, где взять сведения: taskflow_topic_send; поищи ответ: taskflow_kb_search;",
+  "   — перестрой план: taskflow_plan_ops — add_step (добавить шаг другой роли), update_step (поменять роль, задание или порядок шага), skip_step / remove_step (убрать лишнее);",
+  "   — подбери роль: taskflow_team_read (кто есть, какие у ролей инструменты и модели);",
+  "   — порядок и зависимости карточек: taskflow_dependencies, taskflow_children;",
+  "   — шаг мёртв или застрял: taskflow_slot_status → taskflow_slot_reset → taskflow_slot_restart (в reason — что изменилось и что делать дальше);",
+  "4. Если без владельца никак (решение по смыслу, деньги, доступ, который выдаёт только он) — напиши ему один конкретный вопрос в карточку: taskflow_comment.",
+  "Работу роли сам не делай. Если всё уже идёт штатно — ничего не делай.",
+];
+
 /** Открыть личный чат «Заминки команды» и положить в него сообщение.
  *  Оркестратор — всегда участник; автор карточки добавляется, только если
  *  он есть и это не он сам (`chat_members.member_id` NOT NULL, а вставка
@@ -47,7 +71,7 @@ function openWakeChat(chatId: string, orchestratorId: string, creatorId: string 
  */
 export function wakeOrchestrator(subtaskId: string, actorId: string | null, kind: WakeKind, detail: string | null): Wake | null {
   return db.transaction(() => {
-    const row = db.prepare(`SELECT s.title, s.task_id, s.plan_node_key AS slot, s.admission_cycle AS cycle, p.id AS plan_id, t.title AS task_title, t.creator_id
+    const row = db.prepare(`SELECT s.title, s.task_id, s.plan_node_key AS slot, s.admission_cycle AS cycle, s.block_type, p.id AS plan_id, t.title AS task_title, t.creator_id
         FROM subtasks s JOIN task_collaboration_plans p ON p.id = s.collaboration_plan_id JOIN tasks t ON t.id = s.task_id
        WHERE s.id = ? AND (p.profile = 'orchestrated' OR ? = 'blocked') AND p.status = 'approved'`).get(subtaskId, kind) as any;
     // Блок будит Оркестратора в любом плане (владелец 20.10.2026): планы из
@@ -64,8 +88,9 @@ export function wakeOrchestrator(subtaskId: string, actorId: string | null, kind
       `Заминка в команде по карточке «${row.task_title}» (${row.task_id}), план ${row.plan_id}.`,
       `Шаг «${row.title}» (${row.slot}, id ${subtaskId}) ${HEADLINE[kind]}.${attempt}`,
       detail ? `Подробности: ${detail.slice(0, 600)}` : "",
+      kind === "blocked" && row.block_type ? `Вид блока: ${row.block_type}${BLOCK_KIND_HINT[row.block_type] ? ` — ${BLOCK_KIND_HINT[row.block_type]}` : ""}.` : "",
       kind === "approval" ? "Реши сам: taskflow_plan_proposal_decide (task_id, plan_id, op_id из подробностей, decision approve|reject). Одобряй, только если шаг нужен для результата карточки и не выходит за её границы." : "",
-      ...TAIL,
+      ...(kind === "blocked" ? BLOCK_GUIDE : TAIL),
     ].filter(Boolean).join("\n");
     db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,work_mode) VALUES (?,?,?,'chat',?,?,'work')").run(messageId, actorId ?? row.creator_id, text, chatId, row.task_id);
     db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(chatId);
@@ -144,7 +169,7 @@ export function wakeOrchestratorStalled(subtaskId: string, kind: StalledWakeKind
       `Шаг «${row.title}» (${row.slot}, id ${subtaskId}) ${STALLED_HEADLINE[kind]}.`,
       `Событие сторожа зависших шагов, ${eventLabel(attemptKey)}.`,
       detail ? `Подробности: ${detail.slice(0, 600)}` : "",
-      ...TAIL,
+      ...(kind === "stalled_blocked" ? BLOCK_GUIDE : TAIL),
     ].filter(Boolean).join("\n");
     db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,work_mode) VALUES (?,?,?,'chat',?,?,'work')").run(messageId, orch.id, text, chatId, row.task_id);
     db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(chatId);

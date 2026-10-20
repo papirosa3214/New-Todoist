@@ -104,7 +104,13 @@ describe("режим «Оркестратор»", () => {
     const sid = (db.prepare("SELECT id FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key='builder_1'").get(planId) as { id: string }).id;
     db.prepare("UPDATE task_collaboration_plans SET profile='single_executor' WHERE id=?").run(planId);
     try {
-      expect(wakeOrchestrator(sid, roleUserId("builder")!, "blocked", "жду ответа владельца")).not.toBeNull();
+      db.prepare("UPDATE subtasks SET block_type='capability' WHERE id=?").run(sid);
+      const wake = wakeOrchestrator(sid, roleUserId("builder")!, "blocked", "жду ответа владельца");
+      expect(wake).not.toBeNull();
+      const text = (db.prepare("SELECT text FROM chat_messages WHERE id=?").get(wake!.messageId) as { text: string }).text;
+      expect(text).toContain("Тебя разбудили, потому что шаг встал в блок");
+      expect(text).toContain("Вид блока: capability");
+      for (const tool of ["taskflow_plan_read", "taskflow_plan_ops", "taskflow_team_read", "taskflow_slot_restart", "taskflow_topic_send", "taskflow_comment"]) expect(text).toContain(tool);
       expect(wakeOrchestrator(sid, roleUserId("qa")!, "returned", "дефект")).toBeNull();
       expect(wakeOrchestrator(sid, roleUserId("builder")!, "retry", null)).toBeNull();
     } finally {
