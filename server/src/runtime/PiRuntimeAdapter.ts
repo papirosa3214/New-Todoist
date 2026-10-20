@@ -1,7 +1,7 @@
 import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import { connectInfraPanel } from "./infraPanelMcp.js";
-import { chatModeInstruction, PLANNING_TOOLS, DISCUSSION_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
+import { chatModeInstruction, PLANNING_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
 import { chatInstructionArgs, chatSystemPrompt, createTaskResourceLoader } from "./instructionResources.js";
 import { parseModelRef } from "../lib/attemptModel.js";
 import { providerAvailable } from "../lib/modelLadder.js";
@@ -1303,11 +1303,12 @@ export async function startChatRun(
 
     const systemPrompt = (await chatSystemPrompt(role, mode, cwd))+"\n\n"+UNIVERSAL_INSTRUCTION;
     const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
-    const composio = mode === "discussion" ? {tools:[] as any[],close:async()=>{}} : await connectRoleComposio(role, mode, input.chatId).catch((error) => {
+    const composio = await connectRoleComposio(role, mode, input.chatId).catch((error) => {
       console.warn(`[chats] Composio для ${role} не подключился:`, error);
       return { tools: [] as any[], close: async () => {} };
     });
-    const allowed = (name: string) => mode === "discussion" ? DISCUSSION_TOOLS.includes(name) :
+    // «Обсуждение» — как «Работа» (владелец 20.10.2026); ограничен только «План».
+    const allowed = (name: string) =>
       mode !== "plan" ||
       PLANNING_TOOLS.includes(name) ||
       ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_GET_TOOL_SCHEMAS"].some((n) => name.endsWith(n));
@@ -1490,7 +1491,7 @@ async function runExternalChat(input: StartChatRunInput, runId: string): Promise
   const mode: ChatWorkMode = input.mode ?? "work";
   // Домашняя папка, как при обычном запуске агента, а не песочница роли.
   const cwd = homedir();
-  const allowed = (name: string) => mode === "discussion" ? DISCUSSION_TOOLS.includes(name) : mode !== "plan" || PLANNING_TOOLS.includes(name);
+  const allowed = (name: string) => mode !== "plan" || PLANNING_TOOLS.includes(name);
   const catalog = buildRoleToolCatalog({ role, model: null, mode, runId, chatId: input.chatId, messageId: input.messageId });
   const operations = catalog.customTools.filter((t: any) => t.name !== "taskflow" && allowed(t.name));
   const token = roleRunToken(role);

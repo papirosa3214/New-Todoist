@@ -53,11 +53,12 @@ describe("universal TaskFlow",()=>{
 });
 
 describe("режим «Обсуждение» в чате и инструменты Mac (20.10.2026)", () => {
-  it("инструменты Mac в обсуждении не ограничены, прочая запись — ограничена", async () => {
+  it("обсуждение в чате не ограничено — как работа по задаче", async () => {
     const { operationRestriction } = await import("../src/runtime/universalTaskflow.js");
     const ctx = { role: "builder", mode: "discussion" } as any;
     expect(operationRestriction("taskflow_host_bash", ctx)).toBeUndefined();
     expect(operationRestriction("taskflow_host_write", ctx)).toBeUndefined();
-    expect(operationRestriction("taskflow_subtask_done", ctx)?.code).toBe("MODE_RESTRICTED");
+    expect(operationRestriction("taskflow_subtask_done", ctx)).toBeUndefined();
+    expect(operationRestriction("taskflow_create_task", ctx)).toBeUndefined();
   });
 });
