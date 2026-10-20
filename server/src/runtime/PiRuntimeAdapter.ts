@@ -1378,9 +1378,9 @@ export async function startChatRun(
     const match = chain
       .map(findInCatalog)
       .find((m): m is NonNullable<typeof m> => {
-        if (!m) return false;
-        const ref = parseModelRef(m.id);
-        return providerAvailable(ref.provider || m.provider);
+        // Провайдер — из каталога: по голому id «deepseek-…» угадывался
+        // minimax, и его лимит отбрасывал модели чужих провайдеров.
+        return !!m && providerAvailable(m.provider);
       });
     if (!match) {
       throw new ModelNotAvailableError(model, provider);
