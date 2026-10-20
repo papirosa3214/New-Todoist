@@ -14,8 +14,19 @@ export function isSlotSessionHeld(subtaskId:string):boolean{return tails.has(sub
  *  Прецедент 15.10.2026, карточка caecdeee: /restart отвечал «Сессия слота
  *  занята», пока процесс сервера не перезапустили. */
 export function forceReleaseSlotSession(subtaskId:string):boolean{return tails.delete(subtaskId);}
-/** Work and discussion share one writer, including preparation before activeRuns registration. */
-export async function acquireSlotSession(subtaskId:string,signal?:AbortSignal):Promise<()=>void> {
+/** Work and discussion share one writer, including preparation before activeRuns registration.
+ *  Короткая аренда (владелец 21.10.2026, карточка c8083c2a, раздел И4): 
+ *  ожидание прежнего держателя не бесконечно. Держатель без живого запуска
+ *  слот сам не отпустит — это потерянная аренда, из-за которой слот висит
+ *  пустым, а новый ход ждёт вечно (прецедент 15.10.2026, карточка caecdeee:
+ *  /restart отвечал «Сессия слота занята», пока не перезапустили сервер).
+ *  Поэтому: ждём до `leaseWaitMs`, затем спрашиваем `holderAlive` — если
+ *  живого хода по слоту нет, берём слот себе. */
+function leaseWaitMs():number{
+  const raw=Number(process.env.TASKFLOW_SLOT_LEASE_WAIT_MS);
+  return Number.isFinite(raw)&&raw>0?raw:3_000;
+}
+export async function acquireSlotSession(subtaskId:string,signal?:AbortSignal,holderAlive?:()=>boolean):Promise<()=>void> {
   const previous=tails.get(subtaskId) ?? Promise.resolve();
   let releaseGate!:()=>void;
   const next=new Promise<void>(resolve=>{releaseGate=resolve;});
@@ -28,7 +39,18 @@ export async function acquireSlotSession(subtaskId:string,signal?:AbortSignal):P
       abort=()=>reject(signal?.reason ?? new Error("Сессия отменена"));
       if(signal?.aborted){abort();return;}
       signal?.addEventListener("abort",abort,{once:true});
-      void previous.then(resolve);
+      const done=()=>{signal?.removeEventListener("abort",abort);resolve();};
+      void previous.then(done);
+      if(!holderAlive)return;
+      // Короткая аренда: если прежнего держателя нет среди живых ходов —
+      // это не ожидание, а потерянная запись о занятости.
+      const timer=setTimeout(()=>{
+        if(!holderAlive()){done();return;}
+        void previous.then(done);
+      },leaseWaitMs());
+      const stop=()=>clearTimeout(timer);
+      void previous.then(stop,stop);
+      signal?.addEventListener("abort",stop,{once:true});
     });
   } catch(error){void previous.then(release);throw error;}
   finally{signal?.removeEventListener("abort",abort);}

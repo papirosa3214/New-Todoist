@@ -72,24 +72,28 @@ describe("разбор отказов 20.10.2026: мелочи прощаютс�
   const task = op("taskflow_task", Type.Object({ id: Type.String() }));
   const host = op("taskflow_host_read", Type.Object({ machine: Type.Optional(Type.String()), arguments: Type.Object({ path: Type.String() }) }));
 
-  it("строго отклоняет неверные типы без выполнения", async () => {
+  it("форма вызова приводится к схеме до проверки (карточка c8083c2a, И1)", async () => {
     const api = createUniversalTaskflow([plan as any], ctx);
+    // base_revision строкой "0" — та же ревизия, другая запись.
+    const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "p1", arguments: { base_revision: "0" } }));
+    expect(r.ok).toBe(true);
+    expect(seen.at(-1).base_revision).toBe(0);
+    // А неверное значение внутри элемента массива по-прежнему названо точно.
     const count=seen.length;
-    const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "p1", arguments: { base_revision: "0", items: [{ id: 1, title: "t", state: "pending" }] } }));
-    expect(r.ok).toBe(false);expect(r.error.code).toBe("INVALID_ARGUMENTS");
+    const bad = parse(await api.execute("2", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "p2", arguments: { items: [{ id: 1, title: "t", state: "pending" }] } }));
+    expect(bad.ok).toBe(false);expect(bad.error.code).toBe("INVALID_ARGUMENTS");
     expect(seen.length).toBe(count);
   });
 
-  it("короткий вызов: только operation и arguments; task_id за id не принимает", async () => {
+  it("любая версия операции — та же операция; task_id становится id", async () => {
     const api = createUniversalTaskflow([task as any], ctx);
     const short=parse(await api.execute("1",{operation:"taskflow_task",arguments:{id:"T1"}}));
     expect(short.ok).toBe(true);
-    const wrong=parse(await api.execute("1",{action:"invoke",operation:"taskflow_task",version:2,arguments:{id:"T1"}}));
-    expect(wrong.ok).toBe(false);expect(wrong.error.code).toBe("VERSION_MISMATCH");
-    const count=seen.length;
+    const version=parse(await api.execute("3",{action:"invoke",operation:"taskflow_task",version:2,arguments:{id:"T1"}}));
+    expect(version.ok).toBe(true);
     const alias=parse(await api.execute("2",{action:"invoke",operation:"taskflow_task",version:1,arguments:{task_id:"T1"}}));
-    expect(alias.ok).toBe(false);expect(alias.error.code).toBe("INVALID_ARGUMENTS");
-    expect(alias.error.hint).toContain("arguments.id");expect(seen.length).toBe(count);
+    expect(alias.ok).toBe(true);
+    expect(seen.at(-1).id).toBe("T1");
   });
 
   it("ошибка называет точное место", async () => {
@@ -99,10 +103,11 @@ describe("разбор отказов 20.10.2026: мелочи прощаютс�
     expect(r.error.message).toContain("arguments.items[0].state");
   });
 
-  it("команда на маке с параметрами не на месте — образец с теми же значениями", async () => {
+  it("плоский вызов host-операции кладёт параметры в arguments сам", async () => {
     const api = createUniversalTaskflow([host as any], ctx);
     const r = parse(await api.execute("1", { action: "invoke", operation: "taskflow_host_read", version: 1, request_id: "h1", arguments: { path: "a.swift" } }));
-    expect(r.error.message).toContain('"arguments":{"arguments":{"path":"a.swift"}}');
+    expect(r.ok).toBe(true);
+    expect(seen.at(-1).arguments).toEqual({ path: "a.swift" });
   });
 
   it("ключ повтора подставляется сам; занятый — сказано, что делать", async () => {
@@ -177,13 +182,20 @@ describe("говорящие ошибки размещения параметр�
  });
 });
 
-describe("строгие имена и типы аргументов",()=>{
+describe("форма вызова: синонимы искомых имён и типы (И1, 21.10.2026)",()=>{
+ it.each([
+  {id:"t",content:"hello"},
+  {task_id:"t",text:"hello"},
+ ])("принимает ту же пару аргументов в другом имени %j",async(arguments_)=>{
+  const t=tool();const api=createUniversalTaskflow([t],context);
+  const r=decode(await api.execute("alias",{action:"invoke",operation:t.name,version:1,request_id:"alias",arguments:arguments_}));
+  expect(r.ok).toBe(true);
+  expect(t.execute).toHaveBeenCalledTimes(1);
+ });
  it.each([
   {id:42,text:"hello"},
   {id:"t",body:"hello"},
-  {id:"t",content:"hello"},
-  {task_id:"t",text:"hello"},
- ])("не исправляет автоматически %j",async(arguments_)=>{
+ ])("чужое имя или чужой тип не выдумывает %j",async(arguments_)=>{
   const t=tool();const api=createUniversalTaskflow([t],context);
   const r=decode(await api.execute("strict",{action:"invoke",operation:t.name,version:1,request_id:"strict",arguments:arguments_}));
   expect(r.ok).toBe(false);expect(r.error.code).toBe("INVALID_ARGUMENTS");
@@ -206,21 +218,19 @@ describe("диагностика структуры и типов",()=>{
   const example=JSON.parse(r.error.hint.match(/Правильный вызов: (.*)\. Повтори/)[1]);
   expect(decode(await api.execute("fixed",example)).ok).toBe(true);
  });
- it("объясняет item-обёртку массива при совпадающих именах ключей",async()=>{
+ it("item-обёртка массива разворачивается и вызов идёт, а не отказывает",async()=>{
   const schema=Type.Object({base_revision:Type.Number(),items:Type.Array(Type.Object({id:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("done")])}))});
   const {response:r,execute}=await run(schema,{base_revision:0,items:{item:[{id:"1",state:"pending"}]}});
-  expect(r.error.message).toContain("arguments.items");
-  expect(r.error.message).toContain("ожидается массив");
-  expect(r.error.message).toContain("получен объект");
-  expect(r.error.hint).toContain("arguments.items.item → arguments.items");
-  expect(r.error.hint).toContain('"items":[{"id":"1","state":"pending"}]');
-  expect(execute).not.toHaveBeenCalled();
+  expect(r.ok).toBe(true);
+  expect(execute).toHaveBeenCalledTimes(1);
+  expect(execute.mock.calls[0][1]).toEqual({base_revision:0,items:[{id:"1",state:"pending"}]});
  });
  it("показывает вложенный путь, фактический тип/значение и допустимые значения",async()=>{
   const schema=Type.Object({base_revision:Type.Number(),items:Type.Array(Type.Object({id:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("done")])}))});
+  // base_revision строкой приведён к числу, а ошибка внутри элемента массива
+  // по-прежнему называет точное место и допустимые значения.
   const {response:r}=await run(schema,{base_revision:"0",items:[{id:1,state:"started"}]});
-  expect(r.error.message).toContain("arguments.base_revision");
-  expect(r.error.message).toContain('строка "0"');
+  expect(r.error.message).not.toContain("arguments.base_revision");
   expect(r.error.message).toContain("arguments.items[0].id");
   expect(r.error.message).toContain("число 1");
   expect(r.error.message).toContain('"pending"');
