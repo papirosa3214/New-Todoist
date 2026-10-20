@@ -25,7 +25,7 @@ import os
 import re
 import statistics
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 DEFAULT_SESSIONS = "/home/maksim/.local/state/taskflow-runs/sessions"
@@ -120,12 +120,12 @@ def error_message(text: str) -> str:
         if isinstance(obj, dict):
             err = obj.get("error")
             if isinstance(err, dict):
-                return str(err.get("message") or "")[:160]
-            return str(obj.get("message") or "")[:160]
+                return str(err.get("message") or "")[:320]
+            return str(obj.get("message") or "")[:320]
     except Exception:
         pass
-    match = re.search(r'"message"\s*:\s*"(.{0,160}?)"(?:,\s*"hint"|"\s*$)', text, re.S)
-    return re.sub(r"\s+", " ", match.group(1) if match else text[:120])
+    match = re.search(r'"message"\s*:\s*"(.{0,320}?)"(?:,\s*"hint"|"\s*$)', text, re.S)
+    return re.sub(r"\s+", " ", match.group(1) if match else text[:300])
 
 
 def cause_of(message: str) -> str:
@@ -182,6 +182,114 @@ def cause_of(message: str) -> str:
     return "прочее"
 
 
+# ─────────── семейства отказов (группы по существу) ───────────
+# «прочее» из cause_of — это 50 % отказов без разбора. Здесь они и все
+# остальные отказы раскладываются по существу: что именно было не так.
+FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("вызов: массив пришёл объектом", (
+        "ожидается массив; получен объект",
+        '{"item"',
+    )),
+    ("вызов: имя аргумента не то", (
+        "task_id вместо id",
+        "content вместо text",
+        "ожидается число",
+        "ожидается boolean",
+        "ожидается строка",
+    )),
+    ("вызов: аргументы не совпали со схемой", (
+        "Аргументы не соответствуют inputSchema",
+        "пришли ключи",
+        "поле отсутствует",
+        "Поддерживается version",
+        "нужен request_id",
+        "уже использован",
+        "Операция не найдена",
+        "Validation failed for tool",
+        "must have required properties",
+    )),
+    ("вызов: инструмент не найден", (
+        "Tool bash not found",
+    )),
+    ("слот: шаг не мой или ждёт предшественников", (
+        "закреплён не за тобой",
+        "ждёт предшественников",
+        "только в назначенном текущем слоте",
+        "Работай только в назначенном",
+        "не взяв его в работу",
+        "не текущему слоту",
+        "текущего цикла",
+        "Рабочий план относится к текущему слоту",
+        "План обновляет только текущий исполнитель",
+        "Роль выполняет только назначенный сервером слот",
+    )),
+    ("план: недопустимая правка графа", (
+        "замыкает план в цикл",
+        "неизвестная роль",
+        "invalid transition",
+    )),
+    ("сдача и ревью: отчёт не в том виде", (
+        "result слишком длинный",
+        "нужен раздел",
+        "required_fields",
+        "обязательные поля",
+        "нет artifact contract",
+        "должен быть коммит",
+    )),
+    ("переписка: чат, тема, адресат", (
+        "Чат задачи закрыт",
+        "не закреплён за тобой или относится к другой ветке",
+        "У задачи пока нет темы",
+        "Адресат не найден",
+        "Не отвечай сам себе",
+        "Нужно исходное сообщение",
+        "Лимит 4 сообщений",
+        "не участвует в теме",
+        "Тема вне согласованной ветки",
+        "Отправитель не назначен на этап",
+        "slot_key задаётся в теме",
+        "не относится к согласованной ветке",
+    )),
+    ("работа на маке: host-операция", (
+        "Проект не совпадает с задачей",
+        "не настроен удалённый host",
+        "ждём [machine, project_id, task_id, arguments]",
+        "не папка",
+        "хост не ответил",
+    )),
+    ("память и запись данных", (
+        "для памяти проекта нужен project_id",
+        "Не удалось сохранить результат запроса",
+        "resultPath.endsWith is not a function",
+        "ждём [text, kind, scope, title, project_id, source_ref]",
+    )),
+    ("доступ к файлам и папкам роли", (
+        "нет доступа к файлу",
+        "чтение вне рабочей копии роли запрещено",
+        "запись вне рабочей копии роли запрещено",
+        "Path outside developer checkout",
+        "вне разрешённых корней",
+        "path_denied",
+        "EACCES",
+        "permission denied",
+        "ENOENT",
+    )),
+    ("права на карточку и её шаги", (
+        "может только её исполнитель",
+        "шаг адресата уже закрыт",
+        "нужен комментарий",
+    )),
+)
+
+
+def family_of(message: str) -> str:
+    for name, needles in FAMILIES:
+        for needle in needles:
+            if needle in message:
+                return name
+    return "прочее: не разобрано"
+
+
 def read_sessions(sessions_dir: str) -> tuple[list[dict], list[dict]]:
     import glob
 
@@ -214,6 +322,7 @@ def read_sessions(sessions_dir: str) -> tuple[list[dict], list[dict]]:
         if not events:
             continue
         pending: dict[str, tuple[str, datetime]] = {}
+        pending_fail_rows: list[dict] = []
         prev = None
         model_s = tool_s = 0.0
         calls = fails = rounds = 0
@@ -225,6 +334,15 @@ def read_sessions(sessions_dir: str) -> tuple[list[dict], list[dict]]:
             if role == "assistant":
                 if prev is not None:
                     model_s += (stamp - prev).total_seconds()
+                if pending_fail_rows:
+                    # Ход модели после цепочки отказов — это и есть цена отказа.
+                    # Цепочка из нескольких отказов даёт один ответ модели, поэтому
+                    # её время относим к последнему отказу: модель реагировала
+                    # именно на него.
+                    last = pending_fail_rows[-1]
+                    last["recover_s"] = (stamp - prev).total_seconds() if prev else 0.0
+                    last["recover"] = True
+                    pending_fail_rows.clear()
                 rounds += 1
                 for part in message.get("content") or []:
                     if part.get("type") == "toolCall":
@@ -250,8 +368,15 @@ def read_sessions(sessions_dir: str) -> tuple[list[dict], list[dict]]:
                     bucket[0] += 1
                     bucket[1] += dur
                     bucket[2] += 1 if bad else 0
-                    rows.append({"op": op, "dur": dur, "err": bad, "ts": stamp,
-                                 "cause": cause_of(error_message(text)) if bad else ""})
+                    msg = error_message(text) if bad else ""
+                    row = {"op": op, "dur": dur, "err": bad, "ts": stamp,
+                           "cause": cause_of(msg) if bad else "",
+                           "msg": msg[:400],
+                           "fam": family_of(msg) if bad else "",
+                           "recover_s": 0.0, "recover": False}
+                    rows.append(row)
+                    if bad:
+                        pending_fail_rows.append(row)
             prev = stamp
         wall = (events[-1][0] - events[0][0]).total_seconds()
         sessions.append({
@@ -268,10 +393,11 @@ def median(values: list[float]) -> float:
     return statistics.median(values) if values else 0.0
 
 
-def report(sessions: list[dict], rows: list[dict], days: int) -> None:
-    cut = datetime.now(timezone.utc) - timedelta(days=days)
-    s = [x for x in sessions if x["start"] >= cut]
-    r = [x for x in rows if x["ts"] >= cut]
+def report(sessions: list[dict], rows: list[dict], days: int, until: datetime | None = None) -> None:
+    end = until or datetime.now(timezone.utc)
+    cut = end - timedelta(days=days)
+    s = [x for x in sessions if cut <= x["start"] <= end]
+    r = [x for x in rows if cut <= x["ts"] <= end]
     steps = [x for x in s if x["kind"] == "step"]
     done = [x for x in steps if x["delivered"]]
     lost = [x for x in steps if not x["delivered"]]
@@ -313,6 +439,37 @@ def report(sessions: list[dict], rows: list[dict], days: int) -> None:
         print("отказы по причинам:")
         for name, (n, sec) in sorted(causes.items(), key=lambda kv: -kv[1][0])[:12]:
             print(f"   {n:5}  {name:44} {sec/60:7.1f} мин")
+
+    # ── семейства: «прочее» разложено по существу ──
+    def family_table(rows_in: list[dict], title: str) -> None:
+        fam: dict[str, list[float]] = defaultdict(lambda: [0, 0.0, 0.0, 0])
+        for x in rows_in:
+            if not x["err"]:
+                continue
+            b = fam[x["fam"]]
+            b[0] += 1
+            b[1] += x["dur"]
+            b[2] += x["recover_s"]
+            b[3] += 1 if x["recover"] else 0
+        total_f = sum(v[0] for v in fam.values())
+        total_m = sum(v[2] for v in fam.values())
+        if not total_f:
+            return
+        steps_n = len(done) or 1
+        print(f"\n{title} (отказов {total_f}, мин модели на восстановление {total_m/60:.1f}):")
+        for name, (n, sec, msec, turns) in sorted(fam.items(), key=lambda kv: -kv[1][2]):
+            print(f"   {n:5} ({100*n/total_f:4.1f} %)  {name:48} "
+                  f"инстр {sec/60:6.1f} мин  модель {msec/60:6.1f} мин  "
+                  f"на шаг: {n/steps_n:4.1f} отказов, {msec/60/steps_n:4.2f} мин модели")
+
+    family_table([x for x in r if x["err"]], "отказы по семействам (все отказы окна)")
+    other_rows = [x for x in r if x["err"] and x["cause"] == "прочее"]
+    family_table(other_rows, "прежнее «прочее», разложенное по существу")
+    unparsed = [x for x in other_rows if x["fam"] == "прочее: не разобрано"]
+    if unparsed:
+        print(f"\n   из прежнего «прочее» осталось неразобранными: {len(unparsed)}")
+        for msg, n in Counter(x["msg"][:150] for x in unparsed).most_common(40):
+            print(f"      {n:4}  {msg}")
     hung = [x for x in s if x["wall"] - x["model_s"] - x["tool_s"] > 600]
     print(f"висящие слоты: сессий с простоем > 10 мин — {len(hung)}, простой всего {idle_h:.1f} ч")
 
@@ -321,14 +478,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Бюджет времени ролей TaskFlow")
     parser.add_argument("--sessions-dir", default=DEFAULT_SESSIONS)
     parser.add_argument("--days", type=int, nargs="*", default=[30, 7, 3])
+    parser.add_argument("--until", default="",
+                        help="конец окна (ISO, например 2026-10-20T22:20:00Z); "
+                             "нужен, чтобы пересчитать тот же срез, что и в отчёте")
     args = parser.parse_args()
+    until = None
+    if args.until:
+        until = datetime.strptime(args.until, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     if not os.path.isdir(args.sessions_dir):
         print(f"каталог сессий не найден: {args.sessions_dir}", file=sys.stderr)
         return 2
     sessions, rows = read_sessions(args.sessions_dir)
     print(f"разобрано сессий: {len(sessions)}, вызовов: {len(rows)}")
     for days in args.days:
-        report(sessions, rows, days)
+        report(sessions, rows, days, until)
     return 0
 
 
