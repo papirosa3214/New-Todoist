@@ -1705,7 +1705,7 @@ TOOLS = [
                 "artifact": {"type": "object", "properties": {"summary": {"type": "string"}, "payload": {"type": "object"}, "evidence": {"type": "array"}, "report_markdown": {"type": "string"}}, "required": ["summary", "payload", "report_markdown"]},
                 "result": {
                     "type": "string",
-                    "description": "Что сделано, одно-два предложения. Обязателен при done=true, если у шага ещё нет result.",
+                    "description": "Что сделано, одно-два предложения, не длиннее 400 символов (длиннее сервер отклонит). Обязателен при done=true, если у шага ещё нет result.",
                 },
             },
             "required": ["id"],
