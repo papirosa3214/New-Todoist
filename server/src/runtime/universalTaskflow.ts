@@ -105,6 +105,7 @@ export function isReadOperation(name: string) {
       "taskflow_host_find",
     ].includes(name) ||
     READ.has(name) ||
+    /^things_(today|inbox|upcoming|anytime|someday|list|search|get|projects|areas)$/.test(name) ||
     name.startsWith("mcp__infra__")
   );
 }

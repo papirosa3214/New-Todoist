@@ -14,8 +14,8 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  // Things 3 is also a normal TaskFlow operation for work runs. Chat entrypoints
  // pass its chat-aware adapter; prefer that adapter and keep every other
  // duplicate operation visible as an error.
- const hasChatThings3Adapter=input.role==="secretary" && adapters.some(tool=>tool.name==="taskflow_things3");
- const operations=[...taskflowOperations.filter(tool=>!(hasChatThings3Adapter && tool.name==="taskflow_things3")),...roleHostAccessTools(input),...adapters];
+ const adapterNames=new Set(adapters.map(tool=>tool.name));
+ const operations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...adapters];
  const universal=createUniversalTaskflow(operations,context,toolRequestStore);
  // Aliases remain registered for SDK/history compatibility, but only taskflow is active.
  const aliases=operations.filter(t=>!operationRestriction(t.name,context)).map(tool=>({...tool,execute:async(id:string,args:any,signal?:AbortSignal,onUpdate?:any)=>{

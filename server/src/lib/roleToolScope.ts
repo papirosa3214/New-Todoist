@@ -24,7 +24,8 @@ const DENY: Record<string, string[]> = {
 export function roleToolAllowed(role: string, tool: string): boolean {
   // Помощник владельца имеет общий набор TaskFlow-инструментов, кроме
   // операций удаления/физической очистки. Архивирование остаётся доступно.
-  if (role === "secretary" && /delete|purge|remove/i.test(tool)) return false;
+  // things_delete лишь переносит дело в Корзину Things — как и до разделения операций.
+  if (role === "secretary" && tool !== "things_delete" && /delete|purge|remove/i.test(tool)) return false;
   const only = ONLY[tool];
   if (only && !only.includes(role)) return false;
   return !(DENY[role] ?? []).some((name) => tool === "taskflow_" + name);
