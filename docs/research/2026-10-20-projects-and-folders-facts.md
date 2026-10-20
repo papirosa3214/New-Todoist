@@ -175,3 +175,42 @@ docker ps --format '{{.Names}}\t{{.Ports}}'                  # контейне�
 - Часть сведений о сервисах взята из реестра панели: он обновлён 14.10.2026 и местами устарел (п. 7).
 - Локальная модель (Ollama, `qwen3.6-27b-iq4-16k`) использована для черновика сводки; её утверждения о «пустых дублях
   проектов» в базе и о «домашнем каталоге» не подтвердились первоисточником и в текст не попали.
+
+## 12. Дополнения (снято после первой выдачи, 20.10.2026)
+
+**Адреса репозиториев** (`git remote -v` в рабочих копиях):
+
+| Проект | Адрес | Ветка |
+|---|---|---|
+| `New-Todoist` (TaskFlow) | `github.com/papirosa3214/New-Todoist` | `main` |
+| `infra-panel` | `github.com/papirosa3214/infra-panel` | `main` |
+| `CRM/CRM-Castom` | `github.com/papirosa3214/CRM-Castom` | `feat/task-calendar-event-ui` (не `main`) |
+| `BG-Landing-BO` | `github.com/papirosa3214/BG-Landing-BO` | `master` |
+| `clawd-pets`, `GeoPhotoMarks`, `AI-Control-Center` | свой Gitea на сервере: `192.168.1.110:2222/maksim/<имя>` | `master`, `master`, `feat/cordis-core` |
+| `boardui`, `theatre`, `Graft`, `monica`, `magicui`, `DeepTutor`, `penpot` | внешние проекты: `BoardUI/boardui`, `theatre-js/theatre`, `trailhq/Graft`, `monicahq/monica`, `magicuidesign/magicui`, `HKUDS/DeepTutor`, `penpot/penpot` | `main`×5, `main`, `develop` (penpot) |
+| `Notebook-LM-clon` | свой Git-сервер `git.mizernyukmy.netcraze.pro/maksim/Notebook-LM-clon` | `main` |
+| `TaskFlow-Web-Desktop`, `open-notebook` | удалённого репозитория нет | `main` / нет |
+
+**Уточнения к разделу 2:**
+
+- `codex-subscription-bridge` — живой сервис на **8096** (юнит `codex-bridge.service`), а не пустая папка.
+- `monica` и `open-notebook` — compose-файлы есть, контейнеров в `docker ps` нет: стек не запущен.
+- `Notebook-LM-clon` — на **8085** отвечает процесс хоста и отдаёт 500.
+- Живые compose-проекты: `penpot-deploy` (7), `monitoring` (6), RAGFlow-стек `docker` (5), `n8n-stack` (4),
+  `deeptutor` (3), `valhalla`, `selfhost`, `rag-business-os`, `gitea`, `gitea-runner`, CRM (`bgcrm-postgres`).
+
+**TaskFlow-сервисы на .110 — юниты пользовательские:** `~/.config/systemd/user/taskflow-web.service`
+(vite, 5180, лог `~/Проекты/New-Todoist/dev-vite.log`) и `taskflow-server.service`
+(`tsx watch src/index.ts` в папке `server/`, API 3001, лог `server/dev-server.log` — **1,4 ГБ**).
+Системных юнитов TaskFlow в `/etc/systemd/system/` нет.
+
+**Сверка с прежним решением** — заметка «TaskFlow — единая картина на 09.09.2026» (`e7f92743-c04b-4f2c-bd82-0051dceb7244`):
+порты совпали (5180, 3001), но адрес репозитория там указан `maksim/taskflow-server`, а на живой машине remote —
+`github.com/papirosa3214/New-Todoist`; там же юнит на `.110` назван системным, фактически он пользовательский.
+Действующее правило по iOS — заметка владельца от 14.10.2026 (`7fec00c4-f739-4ce1-9635-7a38910cbd52`).
+
+**Опубликованная карта:** заметка «Карта проектов и папок», `f1dd193f-9ebf-4ecc-926c-04988bcc58c6`,
+раздел `Knowledge Base` (папка 186). Помещена туда переносом `folder_id` прямо в БД с горячим бэкапом
+(`/tmp/taskflow-backup-before-map-note-20261020.db`): инструмент `taskflow_doc_write` внутри задачи всегда кладёт
+заметку в папку карточки (в коде: `if (taskId) folderId = ensureTaskArtifactFolder(taskId)`), параметр
+`library_subfolder` при этом игнорируется.
