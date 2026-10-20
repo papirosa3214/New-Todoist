@@ -23,3 +23,13 @@
 - Показ владельцу — только нашим рендером JSON → читаемый вид: телефон (iOS-клиент) обязательно, веб-десктоп и будущее десктоп-приложение тоже.
 - Markdown остаётся только в заметках/дневнике владельца.
 - Документы проекта роли тоже пишут в JSON; владелец видит их нашим рендером и при необходимости **экспортирует в Markdown** (кнопка экспорта — часть работы). Markdown — только формат выгрузки для владельца, не формат хранения.
+
+## Разбор 20.10.2026: Todoist, виджеты, команда с Play
+
+**Сделано:** короткий вызов `{operation, arguments}` (`1a6069d5`, `5b0d0541`), остановка после 3 ошибок подряд (`15b837c8`), 20 действий Things — отдельные операции (`f5203b4e`). Выложено в 18:03 до Things; Things ещё не выложен.
+
+**Todoist** — через Composio: три мета-инструмента `COMPOSIO_SEARCH_TOOLS` → `COMPOSIO_GET_TOOL_SCHEMAS` → `COMPOSIO_MULTI_EXECUTE_TOOL` (`PiRuntimeAdapter.ts:1319`). Вызов в четыре уровня: `{operation:"mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL", arguments:{tools:[{tool_slug:"TODOIST_CREATE_TASK", arguments:{…}}]}}` — та же болезнь, что была у Things. Лечение то же: развернуть разрешённые действия Todoist в отдельные операции `todoist_*`.
+
+**Виджеты** — два пути: (1) типизированные блоки JSON v1 в `output` (`table`, `progress`, `chart`, `diagram`, `status`, `list`, `report`; `roleContractV1.ts:62`); (2) старые ```widget-блоки с JSON внутри markdown-текста (чат и описание карточки, `widgetNormalize.ts`). Второй путь — markdown, по решению владельца уходит.
+
+**Команда с Play** — есть только в iOS: `BashCommandBlock.swift` рисуется из ```bash в markdown-ответе (`RoleReplyMarkdown.swift:177`), кнопка «Запустить на .110». В вебе такого нет. В JSON v1 типа блока «команда» нет — значит в JSON-ответе кнопка держится только на markdown внутри text-блока. Нужен тип блока `command` в v1 + рендер в iOS и вебе.
