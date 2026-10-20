@@ -669,10 +669,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Проверка доступности локальной LLM (Ollama)
     let ollamaOnline = false;
     const ollamaBaseUrl = (
-      process.env.OLLAMA_BASE_URL || "http://192.168.1.110:11434"
+      process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11500"
     ).replace(/\/+$/, "");
     const ollamaModel =
-      process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
+      process.env.OLLAMA_MODEL || "MiniMax-M3.1-Flash-Preview";
     try {
       const ollamaRes = await fetch(`${ollamaBaseUrl}/api/tags`, {
         signal: AbortSignal.timeout(1500),

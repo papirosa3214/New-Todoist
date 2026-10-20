@@ -390,7 +390,7 @@ onChange("activity_observer_enabled", (v) => {
 // или переключить на другую модель одной строкой конфига, не трогая тот
 // путь. База совпадает по умолчанию — тот же домашний Ollama на .110.
 const OBSERVER_BASE_URL = (
-  process.env.OLLAMA_BASE_URL || "http://192.168.1.110:11434"
+  process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11500"
 ).replace(/\/+$/, "");
 // 25.08.2026: дефолт был coder30b-abl:latest — роняет llama-server на любом
 // не-тривиальном промпте (CUDA illegal memory access, похоже битый GGUF —
@@ -398,7 +398,7 @@ const OBSERVER_BASE_URL = (
 // принятая в проекте замена; think:false обязателен, иначе «думающая»
 // модель тратит 60-70с на один ответ вместо ~10с (тот же комментарий).
 const OBSERVER_MODEL =
-  process.env.ACTIVITY_OBSERVER_MODEL || "qwen3.6-27b-iq4-16k:latest";
+  process.env.ACTIVITY_OBSERVER_MODEL || "MiniMax-M3.1-Flash-Preview";
 const OBSERVER_INTERVAL_MS = 5_000;
 const OBSERVER_TIMEOUT_MS = 25_000;
 /** Сколько живёт метка «на задачу смотрят» после последнего GET. Клиент

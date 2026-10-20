@@ -1,5 +1,5 @@
 // Общий AI-транспорт; маршруты и подготовка задач используют один клиент.
-const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || "http://192.168.1.110:11434").replace(/\/+$/, "");
+const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11500").replace(/\/+$/, "");
 const OLLAMA_TIMEOUT_MS = 120_000;
 const stripCodeFences=(s:string):string=>s.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1] ?? s;
 const stripThinkTags=(s:string):string=>s.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
@@ -113,7 +113,7 @@ export async function callUnifiedAi(opts: {
   // reasoning-класса и по умолчанию отвечает без «думания» (см. think
   // ниже), для Дневника думание включается точечно.
   const targetModel =
-    opts.localModel || process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
+    opts.localModel || process.env.OLLAMA_MODEL || "MiniMax-M3.1-Flash-Preview";
   let res: Response;
   try {
   try {

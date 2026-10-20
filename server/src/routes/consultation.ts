@@ -41,7 +41,7 @@ const CONSULTANT_MODEL_MAP: Record<
 > = {
   opus: { provider: "claude", aiModel: "claude-opus-4-6-thinking" },
   sonnet: { provider: "claude", aiModel: "claude-sonnet-4-6" },
-  haiku: { provider: "local", localModel: "qwen3.6-27b-iq4-16k:latest" },
+  haiku: { provider: "local", localModel: "MiniMax-M3.1-Flash-Preview" },
 };
 
 function resolveConsultant(
