@@ -21,7 +21,6 @@ fallbacks:
     - opencode-go/deepseek-v4.1-flash
     - opencode/space-bunny-free
   critic_verifier:
-    - opencode-go/minimax-m3
     - opencode/space-bunny-free
   architect:
     - opencode-go/deepseek-v4.1-flash
@@ -44,14 +43,14 @@ fallbacks:
   infra_engineer: []
   claude_code: []
 models:
-  researcher: MiniMax-M3.1-Flash
-  analyst: MiniMax-M3.1-Flash
-  critic_verifier: MiniMax-M3.1-Flash
-  architect: MiniMax-M3.1-Flash
-  builder: MiniMax-M3.1-Flash
-  qa: MiniMax-M3.1-Flash
-  designer: MiniMax-M3.1-Flash
-  secretary: opencode/nemotron-3-ultra-free
-  code_orchestrator: MiniMax-M3.1-Flash
-  infra_engineer: MiniMax-M3.1-Flash
-  claude_code: MiniMax-M3.1-Flash
+  researcher: opencode/deepseek-v4.1-flash
+  analyst: opencode/deepseek-v4.1-flash
+  critic_verifier: opencode/deepseek-v4.1-flash
+  architect: opencode/deepseek-v4.1-flash
+  builder: opencode/deepseek-v4.1-flash
+  qa: opencode/deepseek-v4.1-flash
+  designer: opencode/deepseek-v4.1-flash
+  secretary: opencode/deepseek-v4.1-flash
+  code_orchestrator: opencode/deepseek-v4.1-flash
+  infra_engineer: opencode/deepseek-v4.1-flash
+  claude_code: opencode/deepseek-v4.1-flash
