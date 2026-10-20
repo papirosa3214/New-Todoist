@@ -130,7 +130,11 @@ export function wakeOrchestratorStalled(subtaskId: string, kind: StalledWakeKind
     const orch = db.prepare("SELECT id FROM users WHERE id = ? AND type = 'ai' AND COALESCE(archived,0) = 0").get(roleUserId("code_orchestrator")) as { id: string } | undefined;
     if (!orch) return null;
     const chatId = "orchestrator-wake:" + orch.id;
-    const messageId = `orch-${kind}:${attemptKey}`;
+    // id шага в ключе обязателен: у шага без попытки attemptKey — `cycle:N`,
+    // одинаковый у всех карточек, и INSERT OR IGNORE молча глотал побудку,
+    // если такое сообщение уже было по другой карточке (20.10.2026: Критик
+    // веб-карточки завис, сторож «разбудил», а сообщение не создалось).
+    const messageId = `orch-${kind}:${subtaskId}:${attemptKey}`;
     openWakeChat(chatId, orch.id, row.creator_id);
     const text = [
       `Заминка в команде по карточке «${row.task_title}» (${row.task_id}), план ${row.plan_id}.`,

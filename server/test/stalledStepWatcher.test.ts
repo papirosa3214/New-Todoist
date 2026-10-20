@@ -410,7 +410,7 @@ describe("stalledStepWatcher", () => {
     await runStalledStepWatch();
     const first = orchMessages();
     expect(first).toHaveLength(1);
-    const attemptId = first[0].id.replace("orch-stalled_restarted:", "");
+    const attemptId = first[0].id.replace(`orch-stalled_restarted:${fixture.subtaskId}:`, "");
     // Тот же узел снова «завис» на той же закрытой попытке: закрыть её
     // повторно нельзя (`ended_at IS NULL`), значит и сообщения быть не должно.
     db.prepare("UPDATE subtasks SET agent_state='in_progress', current_attempt_id=? WHERE id=?").run(attemptId, fixture.subtaskId);
@@ -420,13 +420,23 @@ describe("stalledStepWatcher", () => {
     expect(orchQueue()).toHaveLength(1);
   });
 
+  it("побудка без попытки не глотается чужим сообщением с тем же циклом (20.10.2026)", () => {
+    // Сообщение другой карточки по старому ключу `orch-<вид>:cycle:0`.
+    db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES ('chat-foreign','x','direct',?)").run(fixture.task.creator_id);
+    db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id,work_mode) VALUES ('orch-stalled_restarted:cycle:0',?,'чужая карточка','chat','chat-foreign','work')").run(fixture.task.creator_id);
+    const wake = wakeOrchestratorStalled(fixture.subtaskId, "stalled_restarted", "cycle:0", "своя карточка");
+    expect(wake).not.toBeNull();
+    expect(wake!.messageId).toBe(`orch-stalled_restarted:${fixture.subtaskId}:cycle:0`);
+    expect(orchMessages().some((m) => m.text.includes("своя карточка"))).toBe(true);
+  });
+
   it("детерминированный messageId: тот же ключ события после пересборки не плодит сообщения", async () => {
     seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
     await runStalledStepWatch();
-    const key = orchMessages()[0].id.replace("orch-stalled_restarted:", "");
+    const key = orchMessages()[0].id.replace(`orch-stalled_restarted:${fixture.subtaskId}:`, "");
     const again = wakeOrchestratorStalled(fixture.subtaskId, "stalled_restarted", key, "повтор того же события");
     expect(again).not.toBeNull();
-    expect(again!.messageId).toBe(`orch-stalled_restarted:${key}`);
+    expect(again!.messageId).toBe(`orch-stalled_restarted:${fixture.subtaskId}:${key}`);
     const messages = orchMessages();
     expect(messages).toHaveLength(1);
     expect(messages[0].text).not.toContain("повтор того же события");
@@ -442,9 +452,9 @@ describe("stalledStepWatcher", () => {
     // Первым уходит сообщение о самом зависании — его результат от
     // старта не зависит, второй несёт уже отказ перезапуска.
     expect(messages).toHaveLength(2);
-    const key = messages[0].id.replace("orch-stalled_restarted:", "");
-    expect(messages[0].id).toBe(`orch-stalled_restarted:${key}`);
-    expect(messages[1].id).toBe(`orch-stalled_restart_failed:${key}`);
+    const key = messages[0].id.replace(`orch-stalled_restarted:${fixture.subtaskId}:`, "");
+    expect(messages[0].id).toBe(`orch-stalled_restarted:${fixture.subtaskId}:${key}`);
+    expect(messages[1].id).toBe(`orch-stalled_restart_failed:${fixture.subtaskId}:${key}`);
     expect(messages[1].text).toContain("Запуск не удался");
     expect(messages[1].text).toContain("слот держит мёртвый запуск");
     expect(orchQueue()).toHaveLength(2);
@@ -510,7 +520,7 @@ describe("stalledStepWatcher", () => {
     expect(report.restarted).toBe(1);
     const messages = orchMessages();
     expect(messages).toHaveLength(1);
-    expect(messages[0].id).toBe(`orch-stalled_restarted:cycle:${cycle}`);
+    expect(messages[0].id).toBe(`orch-stalled_restarted:${fixture.subtaskId}:cycle:${cycle}`);
     expect(messages[0].text).toContain("не было текущей попытки");
     expect(messages[0].text).toMatch(/Перезапуск запущен/);
     expect(orchQueue()).toHaveLength(1);
@@ -531,7 +541,7 @@ describe("stalledStepWatcher", () => {
     expect(subtask(fixture.subtaskId).agent_state).toBe("blocked");
     const messages = orchMessages();
     expect(messages).toHaveLength(1);
-    expect(messages[0].id).toBe(`orch-stalled_blocked:cycle:${cycle}`);
+    expect(messages[0].id).toBe(`orch-stalled_blocked:${fixture.subtaskId}:cycle:${cycle}`);
     expect(messages[0].text).toContain(`цикл допуска ${cycle}`);
     expect(messages[0].text).toMatch(/Разработчик/);
     expect(messages[0].text).toMatch(/лимит автоперезапуска/);
