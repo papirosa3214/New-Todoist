@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
-export type Tool = {name:string;description:string;parameters:any;execute:(id:string,args:any,signal?:AbortSignal,onUpdate?:any)=>Promise<any>};
+export type Tool = {name:string;description:string;parameters:any;
+ /** Образец правильного вызова — дописывается к INVALID_ARGUMENTS, когда схема (anyOf) сама его не объясняет. */
+ invalidArgsHint?:(args:Record<string,unknown>)=>string;
+ execute:(id:string,args:any,signal?:AbortSignal,onUpdate?:any)=>Promise<any>};
 export type Context = {actor:string;role:string;mode:string;runId:string;taskId?:string;subtaskId?:string;chatId?:string;messageId?:string;authorize?:(name:string)=>boolean};
 export type RequestRecord = {actor:string;id:string;scope:string;hash:string;operation:string;state:string;result?:any};
 export interface RequestStore {get(actor:string,id:string):RequestRecord|undefined;begin(r:RequestRecord):boolean;finish(actor:string,id:string,state:string,result:any):void}
@@ -96,7 +99,7 @@ export function createUniversalTaskflow(tools:Tool[],context:Context,store:Reque
   // проверка схемы его не считала лишним.
   const {request_id:изАргументов,...args}=({...(p.arguments??{})} as Record<string,unknown>);
   const requestId=(typeof p.request_id==="string"&&p.request_id?p.request_id:typeof изАргументов==="string"?изАргументов:undefined);
-  if(!Check(tool.parameters,args))return fail("INVALID_ARGUMENTS","Аргументы не соответствуют inputSchema: пришли ключи ["+Object.keys(args).join(", ")+"], ждём ["+((tool.parameters as any).properties?Object.keys((tool.parameters as any).properties).join(", "):"?")+"]"+((tool.parameters as any).required?"; обязательны: "+((tool.parameters as any).required as string[]).join(", "):""));
+  if(!Check(tool.parameters,args))return fail("INVALID_ARGUMENTS","Аргументы не соответствуют inputSchema: пришли ключи ["+Object.keys(args).join(", ")+"], ждём ["+((tool.parameters as any).properties?Object.keys((tool.parameters as any).properties).join(", "):"?")+"]"+((tool.parameters as any).required?"; обязательны: "+((tool.parameters as any).required as string[]).join(", "):"")+(tool.invalidArgsHint?". "+tool.invalidArgsHint(args):""));
   if(write && (typeof requestId!=="string" || !requestId.trim() || requestId.length>200))return fail("INVALID_ARGUMENTS","Для изменения нужен request_id длиной 1..200");
   const hash=crypto.createHash("sha256").update(stable({operation:tool.name,version:p.version,arguments:args})).digest("hex");
   if(write){

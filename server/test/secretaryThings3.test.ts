@@ -136,4 +136,25 @@ describe("secretaryThings3Tools", () => {
     const { validateRoleReport } = await import("../src/lib/roleReportPolicy.js");
     expect(() => validateRoleReport("")).toThrow("## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы");
   });
+
+  it("пропущенный параметр дела — образец вызова вместо «повтори»", async () => {
+    (listMachines as any).mockReturnValue([{ id: "mac", name: "macbook", platform: "darwin", revoked_at: null }]);
+    (isMachineOnline as any).mockReturnValue(true);
+    (runOperation as any).mockResolvedValue({ ok: false, error: "arguments.id_or_title: обязательное поле" });
+    const { secretaryThings3Tools } = await import("../src/runtime/secretaryThings3Tools.js");
+    const [инструмент] = secretaryThings3Tools({ role: "secretary" });
+    const ошибка = await инструмент.execute("1", { tool: "things_complete" }, undefined as any).catch((e: Error) => e.message);
+    expect(ошибка).toContain('"arguments":{"tool":"things_complete","arguments":{"id_or_title":"…"}}');
+    expect(ошибка).not.toMatch(/повтори этот же вызов/);
+  });
+
+  it("неверная форма вызова через шлюз — тоже образец", async () => {
+    const { secretaryThings3Tools } = await import("../src/runtime/secretaryThings3Tools.js");
+    const { createUniversalTaskflow } = await import("../src/runtime/universalTaskflow.js");
+    const шлюз = createUniversalTaskflow(secretaryThings3Tools({ role: "secretary" }) as any, { actor: "u-secretary", role: "secretary", mode: "work", runId: "r" });
+    const ответ = await шлюз.execute("1", { action: "invoke", operation: "taskflow_things3", version: 1, request_id: "x", arguments: { id: "4Lx", yes: "true" } });
+    const текст = JSON.stringify(ответ);
+    expect(текст).toContain("INVALID_ARGUMENTS");
+    expect(текст).toContain("Правильный вызов");
+  });
 });
