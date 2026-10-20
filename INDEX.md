@@ -60,6 +60,18 @@
 коммит, установка на iPhone. Читать до первой правки:
 `ssh max@MacBook-Pro-Maksim.local 'cat ~/Проекты/TaskFlowNativeBuild/AGENT-CYCLE.md'`
 
+## Работа на маке — одна точка (владелец, 20.10.2026)
+
+- **Роли TaskFlow** работают на маке только инструментами хоста: `taskflow_hosts`,
+  затем `taskflow_host_bash/read/edit/write/grep/find/ls`, `taskflow_host_attach`,
+  `taskflow_host_push`. Прямой ssh ролям закрыт (16.10.2026). Карточка в чужом
+  проекте — `project_id` нужного проекта из `taskflow_hosts`; долгая сборка или
+  UI-тест — `timeout` в секундах (без него 40 минут).
+- **Сессии Claude Code на .110** (не роли) ходят на мак по ssh:
+  `ssh max@MacBook-Pro-Maksim.local` — другого пути с .110 у них нет.
+- Скиллы ролей (`/home/maksim/taskflow/roles/*/skills/ios-*`) говорят то же самое.
+  Меняешь путь на мак — меняй здесь и там, иначе роли снова поедут по ssh.
+
 ## Как заполнять задачи в Linear (единый порядок, 06.10.2026)
 
 Все, кто заводит задачи в Linear, заполняют их одинаково: владелец потом переносит их в TaskFlow одним импортом. Полная таблица «что импорт читает» — `docs/linear-issue-standard.md`. Коротко:
