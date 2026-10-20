@@ -15,6 +15,35 @@ export function planningToolAllowed(tool) {
   return ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_GET_TOOL_SCHEMAS"].includes(tool.name);
 }
 
+/** Владелец 20.10.2026: действия этих сервисов — отдельные операции роли
+ *  (todoist_create_task {...}) вместо COMPOSIO_MULTI_EXECUTE_TOOL → tools[] →
+ *  tool_slug → arguments. Берём основные (important) и не устаревшие; в режиме
+ *  плана — только чтение. Сбой каталога не роняет мост: остаются мета-инструменты. */
+export const FLAT_TOOLKITS = ["todoist"];
+export function flatToolAllowed(tool, plan) {
+  const tags = tool.tags ?? [];
+  return tags.includes("important") && !tags.includes("deprecated") && (!plan || tags.includes("readOnlyHint"));
+}
+export async function flatToolkitTools(composio, options, plan) {
+  const enabled = options?.toolkits?.enable ?? [];
+  const out = [];
+  for (const toolkit of FLAT_TOOLKITS.filter(t => enabled.includes(t))) {
+    try {
+      const raw = await composio.tools.getRawComposioTools({ toolkits: [toolkit], limit: 200 });
+      for (const t of raw) {
+        if (!flatToolAllowed(t, plan)) continue;
+        out.push({
+          name: String(t.slug).toLowerCase(), slug: t.slug, version: t.version,
+          description: String(t.description ?? t.slug).slice(0, 1500),
+          inputSchema: t.inputParameters && typeof t.inputParameters === "object" ? t.inputParameters : { type: "object", properties: {} },
+          annotations: { readOnlyHint: (t.tags ?? []).includes("readOnlyHint") },
+        });
+      }
+    } catch { /* остаются мета-инструменты Composio */ }
+  }
+  return out;
+}
+
 export async function openComposioSession(composio, options, userId, cacheFile) {
   let session;
   if (cacheFile) {
@@ -206,10 +235,18 @@ export async function main() {
   await remote.connect(new StreamableHTTPClientTransport(endpoint, { requestInit: { headers: session.mcp.headers }, fetch: guardedFetch }));
   phase = "tool_catalog";
   const listed = await remote.listTools();
-  const tools = process.env.TASKFLOW_COMPOSIO_MODE === "plan" ? listed.tools.filter(planningToolAllowed) : listed.tools;
+  const plan = process.env.TASKFLOW_COMPOSIO_MODE === "plan";
+  const flat = await flatToolkitTools(composio, options, plan);
+  const tools = [...(plan ? listed.tools.filter(planningToolAllowed) : listed.tools), ...flat.map(({ slug, version, ...tool }) => tool)];
   const server = new Server({ name: "taskflow-composio", version: "1.0.0" }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    const direct = flat.find(t => t.name === request.params.name);
+    if (direct) {
+      const result = await composio.tools.execute(direct.slug, { userId, version: direct.version, arguments: request.params.arguments ?? {} });
+      const ok = result.successful && !result.error;
+      return { content: [{ type: "text", text: JSON.stringify(ok ? result.data ?? {} : { error: String(result.error ?? "operation_failed").slice(0, 2000) }) }], isError: !ok };
+    }
     if (!tools.some(t => t.name === request.params.name)) throw new Error("Tool not allowed in this mode");
     return remote.callTool(request.params, undefined, { signal: extra.signal, timeout: 120_000 });
   });

@@ -106,6 +106,7 @@ export function isReadOperation(name: string) {
     ].includes(name) ||
     READ.has(name) ||
     /^things_(today|inbox|upcoming|anytime|someday|list|search|get|projects|areas)$/.test(name) ||
+    /^todoist_(get|list|filter|export)_/.test(name) ||
     name.startsWith("mcp__infra__")
   );
 }
