@@ -3,7 +3,7 @@ import {
   UNIVERSAL_INSTRUCTION,
 } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
-import { connectInfraPanel } from "./infraPanelMcp.js";
+import { connectRoleMcp } from "./graftMcp.js";
 import {
   chatModeInstruction,
   GOAL_MARK,
@@ -1463,7 +1463,7 @@ export async function startChatRun(
           composeLayer(role, "tool.builtin." + t.name)?.effective ??
           t.description,
       }));
-    const infra = await connectInfraPanel(role).catch(() => ({
+    const infra = await connectRoleMcp(role, cwd).catch(() => ({
       tools: [] as any[],
       close: async () => {},
     }));
