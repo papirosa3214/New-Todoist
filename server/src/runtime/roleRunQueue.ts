@@ -84,7 +84,9 @@ export function enqueueRoleRunJob(input: {
       taskId: input.taskId,
       actorId: input.actorId ?? null,
       subtype: input.reason,
-      message: cancelled ? "запуск отменён: задача архивирована" : `роль встала в очередь: ${input.reason}`,
+      message: cancelled
+        ? "запуск отменён: задача архивирована"
+        : `роль встала в очередь: ${input.reason}`,
       data: {
         job_id: id,
         reason: input.reason,
@@ -115,7 +117,12 @@ export function recoverExpiredRoleRunJobs(): number {
         WHERE status = 'running'
           AND lease_expires_at <= datetime('now')`,
     )
-    .all() as Array<{ id: string; task_id: string; attempts: number; max_attempts: number }>;
+    .all() as Array<{
+    id: string;
+    task_id: string;
+    attempts: number;
+    max_attempts: number;
+  }>;
   if (expired.length === 0) return 0;
   const changed = db
     .prepare(
@@ -141,7 +148,9 @@ export function recoverExpiredRoleRunJobs(): number {
       taskId: row.task_id,
       subtype: row.attempts >= row.max_attempts ? "dead" : "requeued",
       message: `job ${row.id} просрочен (${
-        row.attempts >= row.max_attempts ? "лимит исчерпан — dead" : "возврат в очередь"
+        row.attempts >= row.max_attempts
+          ? "лимит исчерпан — dead"
+          : "возврат в очередь"
       })`,
       data: {
         job_id: row.id,
@@ -172,11 +181,13 @@ export function claimNextRoleRunJob(input: {
     recoverExpiredRoleRunJobs();
     // Archive can precede enqueue or recovery. Keep the audit rows, but
     // terminate pending work that can never be claimed.
-    db.prepare(`UPDATE role_run_jobs SET status='cancelled',
+    db.prepare(
+      `UPDATE role_run_jobs SET status='cancelled',
       lease_owner=NULL, lease_expires_at=NULL, finished_at=datetime('now'),
       updated_at=datetime('now'), last_error='task archived'
       WHERE status IN ('queued','retry_wait') AND task_id IN
-        (SELECT id FROM tasks WHERE archived_at IS NOT NULL)`).run();
+        (SELECT id FROM tasks WHERE archived_at IS NOT NULL)`,
+    ).run();
     const candidate = db
       .prepare(
         `SELECT candidate.id
@@ -191,7 +202,11 @@ export function claimNextRoleRunJob(input: {
                WHERE active.task_id = candidate.task_id
                  AND active.status = 'running'
             )
-          ORDER BY candidate.available_at, candidate.created_at, candidate.rowid
+          -- Ответ на комментарий не задерживает движение по плану
+          -- (сдача на проверку, передача шага): 20.10.2026 запуск критика
+          -- ждал 9,5 минуты за пятью ответами на проверочные комментарии.
+          ORDER BY CASE candidate.reason WHEN 'commented' THEN 1 ELSE 0 END,
+                   candidate.available_at, candidate.created_at, candidate.rowid
           LIMIT 1`,
       )
       .get() as { id: string } | undefined;
@@ -235,7 +250,8 @@ export function renewRoleRunJob(input: {
                 updated_at = datetime('now')
           WHERE id = ? AND status = 'running' AND lease_owner = ?`,
       )
-      .run(`+${leaseSeconds} seconds`, input.jobId, input.workerId).changes === 1
+      .run(`+${leaseSeconds} seconds`, input.jobId, input.workerId).changes ===
+    1
   );
 }
 
@@ -307,16 +323,17 @@ export function failRoleRunJob(input: {
         WHERE id = ? AND status = 'running' AND lease_owner = ?`,
     )
     .get(input.jobId, input.workerId) as
-    | { attempts: number; max_attempts: number }
-    | undefined;
+    { attempts: number; max_attempts: number } | undefined;
   if (!row) return null;
 
   const nextStatus = row.attempts >= row.max_attempts ? "dead" : "retry_wait";
   const defaultDelay = Math.min(300, 5 * 2 ** Math.max(0, row.attempts - 1));
-  const delay = Math.max(0, Math.floor(input.retryDelaySeconds ?? defaultDelay));
-  const message = (input.error instanceof Error
-    ? input.error.message
-    : String(input.error)
+  const delay = Math.max(
+    0,
+    Math.floor(input.retryDelaySeconds ?? defaultDelay),
+  );
+  const message = (
+    input.error instanceof Error ? input.error.message : String(input.error)
   ).slice(0, 1000);
 
   db.prepare(
@@ -343,8 +360,7 @@ export function failRoleRunJob(input: {
 
 export function getRoleRunJob(id: string): RoleRunJob | undefined {
   return db.prepare("SELECT * FROM role_run_jobs WHERE id = ?").get(id) as
-    | RoleRunJob
-    | undefined;
+    RoleRunJob | undefined;
 }
 
 export function listRoleRunJobs(input?: {

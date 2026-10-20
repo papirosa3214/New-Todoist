@@ -55,11 +55,21 @@ describe("durable role-run queue", () => {
 
   it("архивный enqueue сразу terminal; старые pending отменяются при claim", () => {
     const taskId = makeTask("archived");
-    const old = enqueueRoleRunJob({taskId, reason: "after_run", dedupeKey: dedupe(taskId, "old")});
-    db.prepare("UPDATE tasks SET archived_at=datetime('now') WHERE id=?").run(taskId);
-    const fresh = enqueueRoleRunJob({taskId, reason: "review", dedupeKey: dedupe(taskId, "fresh")});
+    const old = enqueueRoleRunJob({
+      taskId,
+      reason: "after_run",
+      dedupeKey: dedupe(taskId, "old"),
+    });
+    db.prepare("UPDATE tasks SET archived_at=datetime('now') WHERE id=?").run(
+      taskId,
+    );
+    const fresh = enqueueRoleRunJob({
+      taskId,
+      reason: "review",
+      dedupeKey: dedupe(taskId, "fresh"),
+    });
     expect(getRoleRunJob(fresh.id)?.status).toBe("cancelled");
-    expect(claimNextRoleRunJob({workerId: "archive-test"})).toBeNull();
+    expect(claimNextRoleRunJob({ workerId: "archive-test" })).toBeNull();
     expect(getRoleRunJob(old.id)?.status).toBe("cancelled");
     expect(getRoleRunJob(old.id)?.attempts).toBe(0);
   });
@@ -96,7 +106,9 @@ describe("durable role-run queue", () => {
       })(),
     ).toThrow("rollback probe");
     expect(
-      db.prepare("SELECT 1 FROM role_run_jobs WHERE dedupe_key = ?").get(rolledBackKey),
+      db
+        .prepare("SELECT 1 FROM role_run_jobs WHERE dedupe_key = ?")
+        .get(rolledBackKey),
     ).toBeUndefined();
 
     const claimed = claimNextRoleRunJob({ workerId: "atomic-worker" });
@@ -164,6 +176,49 @@ describe("durable role-run queue", () => {
     });
   });
 
+  it("движение по плану идёт раньше ответов на комментарии той же карточки", () => {
+    // 20.10.2026, карточка 1e8c05e2: запуск критика ждал 9,5 минуты за
+    // пятью ответами на проверочные комментарии, вставшими раньше него.
+    const taskId = makeTask("priority");
+    enqueueRoleRunJob({
+      taskId,
+      reason: "commented",
+      dedupeKey: dedupe(taskId, "c1"),
+    });
+    enqueueRoleRunJob({
+      taskId,
+      reason: "commented",
+      dedupeKey: dedupe(taskId, "c2"),
+    });
+    const review = enqueueRoleRunJob({
+      taskId,
+      reason: "review",
+      dedupeKey: dedupe(taskId, "review"),
+    });
+
+    const first = claimNextRoleRunJob({ workerId: "priority-worker" });
+    expect(first?.id).toBe(review.id);
+    completeRoleRunJob({
+      jobId: first!.id,
+      workerId: "priority-worker",
+      status: "succeeded",
+    });
+
+    const next = claimNextRoleRunJob({ workerId: "priority-worker" });
+    expect(next?.reason).toBe("commented");
+    completeRoleRunJob({
+      jobId: next!.id,
+      workerId: "priority-worker",
+      status: "succeeded",
+    });
+    const last = claimNextRoleRunJob({ workerId: "priority-worker" });
+    completeRoleRunJob({
+      jobId: last!.id,
+      workerId: "priority-worker",
+      status: "succeeded",
+    });
+  });
+
   it("просроченный lease восстанавливается и сохраняет число попыток", () => {
     const taskId = makeTask("recovery");
     const job = enqueueRoleRunJob({
@@ -180,7 +235,11 @@ describe("durable role-run queue", () => {
     expect(getRoleRunJob(job.id)?.status).toBe("queued");
 
     const recovered = claimNextRoleRunJob({ workerId: "replacement-worker" });
-    expect(recovered).toMatchObject({ id: job.id, attempts: 2, status: "running" });
+    expect(recovered).toMatchObject({
+      id: job.id,
+      attempts: 2,
+      status: "running",
+    });
     completeRoleRunJob({
       jobId: job.id,
       workerId: "replacement-worker",
