@@ -207,6 +207,19 @@ export function planNodeAgentRefusal(subtaskId: string, userId: string, starting
  * `/approve` и для узлов, открывшихся по графу через
  * `unlockReadyPlanSubtasks`.
  */
+/** Исполнитель карточки следует за работой (владелец 20.10.2026): когда
+ *  стартует слот плана, исполнителем становится роль этого слота. Раньше
+ *  исполнителем навсегда оставалась роль первого шага, и на комментарии и
+ *  побудки реагировала она, а не тот, кто сейчас работает. Человека на
+ *  месте исполнителя не трогаем — его поставил владелец. */
+export function followSlotAssignee(taskId: string, roleKey: string, actorId: string): void {
+  const next = roleUserId(roleKey);
+  const changed = db.prepare(
+    "UPDATE tasks SET assignee_id=?, updated_at=datetime('now') WHERE id=? AND (assignee_id IS NULL OR assignee_id LIKE 'role\\_%' ESCAPE '\\') AND COALESCE(assignee_id,'')<>?",
+  ).run(next, taskId, next);
+  if (changed.changes === 1) logEvent({ taskId, actorId, kind: "assignee_follows_slot", field: "assignee_id", toValue: next });
+}
+
 export async function startPlanSubtaskRun(subtaskId: string, actorId: string, options: { freshSession?: boolean } = {}): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
   const current = subtask(subtaskId);
   if (!current || !current.collaboration_plan_id || !current.plan_node_key) return { ok: false, error: "подзадача не узел плана" };
@@ -223,6 +236,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
   const terminalCritic = node.role_key === "critic_verifier" && !db.prepare("SELECT 1 FROM task_collaboration_plan_edges WHERE plan_id=? AND from_slot_key=?").get(current.collaboration_plan_id,current.plan_node_key);
   if ((terminalCritic || isPlanFinalReviewStep(current.id)) && !options.freshSession) {
     db.prepare("UPDATE task_collaboration_plan_nodes SET instructions=? || char(10) || COALESCE(instructions,'') WHERE plan_id=? AND slot_key=?").run(FINAL_REVIEW_MARKER,current.collaboration_plan_id,current.plan_node_key);
+    followSlotAssignee(current.task_id, node.role_key, actorId);
     return queuePlanFinalReview(current.id,actorId);
   }
 
@@ -256,6 +270,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
     // шага. Транзакция ещё открыта, но announceStepState пишет в ту же БД,
     // поэтому откат уносит и строку, и её дедупликатор.
     announceStepState(current.id,"started");
+    followSlotAssignee(current.task_id, node.role_key, actorId);
     return true;
   })();
   if(!acquired)return {ok:false,error:"Слот уже запущен или его входные данные изменились"};

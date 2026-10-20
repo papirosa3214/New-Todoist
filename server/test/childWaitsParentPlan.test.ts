@@ -170,3 +170,22 @@ describe("дочерняя карточка ждёт план родителя",
     expect(actors.map((a) => a.actor_id)).toEqual([SCHEDULER_USER_ID]);
   });
 });
+
+describe("исполнитель карточки следует за идущим слотом", () => {
+  it("старт слота ставит его роль исполнителем, человека не трогает", async () => {
+    const { followSlotAssignee } = await import("../src/runtime/planSubtaskAdmission.js");
+    const id = `follow-slot-${Date.now()}`;
+    const owner = (db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as { id: string }).id;
+    db.prepare("INSERT INTO tasks(id,title,creator_id,assignee_id) VALUES(?,?,?,?)").run(id, "Слоты", owner, "role_builder");
+    const assignee = () => (db.prepare("SELECT assignee_id FROM tasks WHERE id=?").get(id) as { assignee_id: string | null }).assignee_id;
+
+    followSlotAssignee(id, "qa", SCHEDULER_USER_ID);
+    expect(assignee()).toBe("role_qa");
+    followSlotAssignee(id, "critic_verifier", SCHEDULER_USER_ID);
+    expect(assignee()).toBe("role_critic_verifier");
+
+    db.prepare("UPDATE tasks SET assignee_id=? WHERE id=?").run(owner, id);
+    followSlotAssignee(id, "builder", SCHEDULER_USER_ID);
+    expect(assignee()).toBe(owner);
+  });
+});
