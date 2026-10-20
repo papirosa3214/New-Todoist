@@ -3,6 +3,7 @@ import { taskExecutionState } from "../runtime/taskExecutionState.js";
 import { ROLE_NAMES as PREPARATION_ROLES } from "../roleRouting.js";
 import { hierarchyRefusal } from "../lib/taskHierarchy.js";
 import { validatePreparation, type TaskPreparation } from "../lib/taskPreparation.js";
+import { applyRoleFormat, roleFormatRefusal } from "../lib/roleFormat.js";
 import { persistPreparedPlan } from "../lib/taskPreparationPersistence.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
@@ -23,6 +24,7 @@ import {
   getProjectForFiling,
   isOwner,
   isOrchestrator,
+  isRoleAuthor,
   seesEveryTask,
 } from "../access.js";
 import {
@@ -1893,6 +1895,19 @@ export function registerTaskRoutes(app: FastifyInstance) {
               "сменить исполнителя задачи может только владелец или оркестратор трекера",
           });
         }
+      }
+
+      // ФОРМАТ ОПИСАНИЯ РОЛИ (карточка cea8d997). Описание пишут в основном
+      // роли; тот же гейт, что на результате шага: очевидное сервер заменяет
+      // сам (таблица Markdown → блок table), неверный блок возвращает роль
+      // с образцом. Текст человека гейт не трогает: у владельца своя
+      // таблица — это его слова, молча переписывать их нельзя.
+      if (isRoleAuthor(req.userId) && typeof body.description === "string" && body.description.trim()) {
+        const formatted = applyRoleFormat(body.description);
+        if (formatted.problems.length) {
+          return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });
+        }
+        body.description = formatted.text;
       }
 
       // Whitelisted columns only — request body keys never reach raw SQL.

@@ -15,10 +15,15 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ALL_WIDGET_TYPE_SPECS,
+  BASE_WIDGET_TYPE_SPECS,
   NEW_WIDGET_STATES,
   NEW_WIDGET_TONES,
   NEW_WIDGET_TYPE_SPECS,
   NEW_WIDGET_TYPES,
+  newWidgetTypeLine,
+  validateWidgetBlock,
+  widgetExample,
   type NewWidgetTypeSpec,
 } from "../src/lib/widgetContract.js";
 import { NEW_WIDGET_TYPES as FLAG_TYPES, newWidgetTypesEnabled } from "../src/lib/widgetFeatureFlag.js";
@@ -163,6 +168,26 @@ describe("контракт восьми новых типов виджетов",
     const { INSTRUCTION_DEFAULTS: off } = await import("../src/runtime/instructionDefaults.js");
     const wrapper = String(off["chat.wrapper"]);
     for (const type of NEW_WIDGET_TYPES) expect(wrapper).not.toContain(`${type} (`);
+  });
+
+  // Карточка cea8d997: проверка и инструкция ролям собираются из одного
+  // каталога. Шесть базовых типов раньше были прозой в инструкции, а словарь
+  // валидатора лежал вне git — это и есть источник расхождения D1.
+  it("строки базовых типов в инструкции собираются из каталога", async () => {
+    const { INSTRUCTION_DEFAULTS } = await import("../src/runtime/instructionDefaults.js");
+    const wrapper = String(INSTRUCTION_DEFAULTS["chat.wrapper"]);
+    const lines = wrapper.split("\n").filter((line) => /^([a-z_]+) \(/.exec(line));
+    expect(lines.length).toBeGreaterThanOrEqual(BASE_WIDGET_TYPE_SPECS.length);
+    for (const spec of BASE_WIDGET_TYPE_SPECS) {
+      expect(lines, `нет строки для базового типа ${spec.type}`).toContain(newWidgetTypeLine(spec));
+    }
+  });
+
+  it("пример из каталога проходит проверку — для каждого типа", () => {
+    for (const spec of ALL_WIDGET_TYPE_SPECS) {
+      const example = JSON.parse(widgetExample(spec.type));
+      expect(validateWidgetBlock(example, spec.type), `${spec.type}: пример не проходит`).toEqual([]);
+    }
   });
 });
 

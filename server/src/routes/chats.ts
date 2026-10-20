@@ -59,6 +59,7 @@ import {
   setChecklistItem,
 } from "../lib/chatChecklist.js";
 import { normalizeRoleReplyV1, structuredOutputText } from "../lib/roleContractV1.js";
+import { applyRoleFormat, roleFormatRefusal } from "../lib/roleFormat.js";
 import { roleProjectContext } from "../runtime/roleProjectContext.js";
 import { roleSlotSnapshotsBlock } from "../runtime/slotWorkSnapshot.js";
 import { normalizeWidgetBlocks } from "../lib/widgetNormalize.js";
@@ -768,6 +769,21 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
       if (mode !== "work" && roleFromUserId(req.userId)) return reply.code(403).send({error: "Режим выбирает человек"});
       const text = String(req.body?.text || "").trim();
+      // MAK-98 и гейт формата ниже используют отправителя — считаем один раз.
+      const senderRole = roleFromUserId(req.userId);
+      // ФОРМАТ СООБЩЕНИЯ РОЛИ (карточка cea8d997). Тема задачи — то же место,
+      // где пишут роли, поэтому гейт тот же: очевидное сервер заменяет сам
+      // (таблица Markdown → блок table), неверный блок роль получает назад
+      // с образцом и переписывает. Текст владельца не трогаем: он пишет в чат
+      // сам, и молча переписанная его таблица — потеря его слов.
+      let storedText = text;
+      if (senderRole && text) {
+        const formatted = applyRoleFormat(text);
+        if (formatted.problems.length) {
+          return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });
+        }
+        storedText = formatted.text;
+      }
       // Промежуточные сообщения ИИ в чате не валидируем по длине —
       // иначе агент падает на 400 посреди работы (владелец 04.10.2026).
       // Лимит остаётся только для финального ответа роли (см. ниже,
@@ -829,7 +845,6 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       }
       // MAK-98: быстрый отказ, когда адресата некому исполнить — лучше
       // сказать сразу с кодом причины, чем отправить вопрос в пустоту.
-      const senderRole = roleFromUserId(req.userId);
       if (senderRole && recipientSlot && chat.parent_chat_id) {
         const availability = evaluateRecipientAvailability({
           recipientSubtaskId: recipientSlot,
@@ -859,7 +874,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       db.prepare(
         `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id)
          VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, req.userId, text, chatId, taskId, mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
+      ).run(id, req.userId, storedText, chatId, taskId, mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
       if(outstanding && ["pending","picked"].includes(outstanding.status)){
         pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
         db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);
