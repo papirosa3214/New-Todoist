@@ -129,7 +129,7 @@
 | Память ролей                                                                 | БД TaskFlow: `taskflow_remember` (`scope`: `role` своя / `team` общая / `project`), `taskflow_recall` ищет везде      |
 | Редактор «Инструкция роли» в приложении                                      | пишет прямо в `AGENTS.md` и коммитит                                                                                  |
 
-Больше НЕ источник: `roles.prompt` в БД, `server/scripts/role-prompts/` (ждут решения владельца об удалении).
+Больше НЕ источник: `roles.prompt` в БД, `server/scripts/role-prompts/` (оставлены по решению владельца 20.10.2026, не читаются).
 
 Вызов инструментов: один инструмент `taskflow`, роль пишет только
 `{"operation":"…","arguments":{…}}`; action/version/request_id подставляет сервер
