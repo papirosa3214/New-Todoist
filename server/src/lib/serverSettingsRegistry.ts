@@ -77,6 +77,7 @@ export const SETTING_GROUP_ORDER: readonly SettingGroup[] = [
 export const DEFAULTS = {
   snapshot_keep: 20,
   chat_short_limit: 600,
+  chat_goal_max_turns: 50,
   role_run_concurrency: 3,
   task_context_timeout_ms: 15000,
   // Тишина
@@ -132,6 +133,7 @@ export type SettingOf<K extends DefaultsKey> = Defaults[K];
 export const SERVER_SETTINGS: readonly ServerSetting[] = [
   { key: "snapshot_keep", label: "Хранить снимков на шаг", group: "снимки", kind: "int", default: DEFAULTS.snapshot_keep, min: 1, max: 200, applies_to: ["runtime/slotWorkSnapshot.ts"] },
   { key: "chat_short_limit", label: "Длина сообщения до сокращения", group: "лимиты", kind: "int", default: DEFAULTS.chat_short_limit, min: 100, max: 10000, applies_to: ["lib/chatMessageShortening.ts"] },
+  { key: "chat_goal_max_turns", label: "Потолок ходов в режиме «Цель»", group: "лимиты", kind: "int", default: DEFAULTS.chat_goal_max_turns, min: 1, max: 500, applies_to: ["runtime/PiRuntimeAdapter.ts"] },
   { key: "role_run_concurrency", label: "Одновременных запусков", group: "лимиты", kind: "int", default: DEFAULTS.role_run_concurrency, min: 1, max: 8, applies_to: ["runtime/roleRunWorker.ts"] },
   { key: "task_context_timeout_ms", label: "Таймаут сборки контекста", group: "таймауты", kind: "duration_ms", default: DEFAULTS.task_context_timeout_ms, min: 1000, max: 120000, applies_to: ["runtime/taskContextBridge.ts"] },
   // Тишина
@@ -211,6 +213,7 @@ export function envOverride<K extends DefaultsKey>(
 export const DEV_OVERRIDES: Defaults = {
   snapshot_keep: envOverride("snapshot_keep", DEFAULTS.snapshot_keep),
   chat_short_limit: envOverride("chat_short_limit", DEFAULTS.chat_short_limit),
+  chat_goal_max_turns: envOverride("chat_goal_max_turns", DEFAULTS.chat_goal_max_turns),
   role_run_concurrency: envOverride("role_run_concurrency", DEFAULTS.role_run_concurrency),
   task_context_timeout_ms: envOverride("task_context_timeout_ms", DEFAULTS.task_context_timeout_ms),
 

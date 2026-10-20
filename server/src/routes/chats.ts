@@ -9,6 +9,7 @@ import { deliverTopicToWork, deliverChatToWork } from "../runtime/inProcessRun.j
 import { topicContext, taskTopicClosedAt, rehomeEmptyTopic } from "../lib/projectTopics.js";
 import { nudgeTaskPlan } from "../runtime/taskNudge.js";
 import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
+import { externalRuntime } from "../roleRouting.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { renderInstruction } from "../lib/roleContextResolver.js";
 // Чаты с ролями-агентами (владелец 21.09.2026, план
@@ -874,7 +875,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       db.prepare(
         `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id)
          VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, req.userId, storedText, chatId, taskId, mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
+      ).run(id, req.userId, storedText, chatId, taskId, mode === "goal" ? "work" : mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
       if(outstanding && ["pending","picked"].includes(outstanding.status)){
         pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
         db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);
@@ -1099,6 +1100,33 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const message = loadChatMessage(id);
       broadcastToUsers(memberIds(chatId), { type: "chat:new", message });
       return { message };
+    },
+  );
+
+  // «Сжать» (владелец 20.10.2026): принудительно сжать сессию роли в этом
+  // чате — то же сжатие, что Pi делает сам при переполнении, но по кнопке.
+  // Лента не трогается; роль продолжит ту же сессию, только короче.
+  app.post<{ Params: { id: string }; Body: { role_id?: string } }>(
+    "/api/chats/:id/compact",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const chatId = req.params.id;
+      if (!isMember(chatId, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+      if (roleFromUserId(req.userId)) return reply.code(403).send({ error: "Сжатие выбирает человек" });
+      const roleId = typeof req.body?.role_id === "string" ? req.body.role_id : "";
+      const role = roleFromUserId(roleId);
+      if (!role || !isMember(chatId, roleId)) return reply.code(400).send({ error: "role_id не участник этого чата" });
+      if (externalRuntime(role)) return reply.code(400).send({ error: "Внешний агент сжимает сессию сам" });
+      const saved = db.prepare("SELECT pi_session_id FROM chat_sessions WHERE chat_id = ? AND role_id = ?").get(chatId, roleId) as { pi_session_id: string } | undefined;
+      if (!saved) return reply.code(409).send({ error: "Сессии ещё нет — сжимать нечего" });
+      try {
+        await startChatRun({ chatId, role, roleId, prompt: "", sessionId: saved.pi_session_id, compactOnly: true });
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code === "CHAT_RUN_BUSY") return reply.code(409).send({ error: "Роль сейчас отвечает — сожмите после ответа" });
+        return reply.code(500).send({ error: error instanceof Error ? error.message : "Сжатие не удалось" });
+      }
+      return { ok: true };
     },
   );
 
@@ -2070,6 +2098,14 @@ async function deliverAgentReply(args: {
       sessionId: previousSessionId,
       onStep: (tool) => typing(true, tool),
       onEvent: live.onEvent,
+      // «Цель»: промежуточный итог роли сразу ложится в чат отдельным
+      // сообщением (владелец 20.10.2026). Без reply_to — иначе клиент
+      // принял бы его за конец живого хода.
+      onGoalProgress: (text) => {
+        const progressId = uid();
+        db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id) VALUES (?, ?, ?, 'chat', ?)").run(progressId, roleUserId, text, chatId);
+        broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(progressId) });
+      },
     });
     if((reply as {forwarded?:boolean})?.forwarded)throw new MessageForwardedToWork(false);
   } catch (error) {

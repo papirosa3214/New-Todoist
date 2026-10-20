@@ -46,3 +46,16 @@ describe('chat planning permissions',()=>{
   expect(()=>parseChatWorkMode('execute-anything')).toThrow();
  });
 });
+
+describe("режим «Цель»", () => {
+  it("принимается и распознаёт последнюю строку", async () => {
+    const m = await import("../src/runtime/chatWorkMode.js");
+    expect(m.parseChatWorkMode("goal")).toBe("goal");
+    expect(m.goalStatus("сделал шаг\n**ЦЕЛЬ: ПРОДОЛЖАЮ**")).toBe("continue");
+    expect(m.goalStatus("итог\nЦЕЛЬ: ДОСТИГНУТА.")).toBe("done");
+    expect(m.goalStatus("вопрос?\nЦЕЛЬ: НУЖЕН ВЛАДЕЛЕЦ")).toBe("owner");
+    expect(m.goalStatus("просто ответ")).toBeNull();
+    expect(m.stripGoalMark("итог\nЦЕЛЬ: ДОСТИГНУТА")).toBe("итог");
+    expect(m.stripGoalMark("просто ответ")).toBe("просто ответ");
+  });
+});

@@ -1,7 +1,8 @@
 import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import { connectInfraPanel } from "./infraPanelMcp.js";
-import { chatModeInstruction, PLANNING_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
+import { chatModeInstruction, GOAL_MARK, goalStatus, PLANNING_TOOLS, stripGoalMark, type ChatWorkMode } from "./chatWorkMode.js";
+import { getSetting } from "../lib/serverSettings.js";
 import { chatInstructionArgs, chatSystemPrompt, createTaskResourceLoader } from "./instructionResources.js";
 import { parseModelRef } from "../lib/attemptModel.js";
 import { providerAvailable } from "../lib/modelLadder.js";
@@ -1102,6 +1103,10 @@ export interface StartChatRunInput {
    *  живой ленты «что роль делает сейчас» в чате (owner UI). Необязательный:
    *  вызовы без колбэка (если такие появятся) работают как раньше. */
   onStep?: (tool: string) => void;
+  /** Режим «Цель»: промежуточный ответ роли между ходами — сервер кладёт его в чат. */
+  onGoalProgress?: (text: string) => void;
+  /** Только сжать сохранённую сессию (кнопка «Сжать»), без хода роли. */
+  compactOnly?: boolean;
 }
 
 /** Результат одного захода онлайн-сессии: runId живёт в логах, sessionId
@@ -1413,13 +1418,19 @@ export async function startChatRun(
     let finalSessionId: string | null = session.sessionId ?? input.sessionId ?? null;
     const timeoutMs = resolveChatRunTimeout(input.timeoutMs);
     let ceilingTimer: ReturnType<typeof setTimeout> | undefined;
-    const ceiling = new Promise<never>((_, reject) => {
-      ceilingTimer = setTimeout(() => {
-        session.abort().catch(() => {});
-        reject(new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs));
-      }, timeoutMs);
-    });
-    ceiling.catch(() => {});
+    // Потолок — на каждый ход: в режиме «Цель» ходов много, и общий
+    // 30-минутный потолок оборвал бы долгую цель посередине.
+    const armCeiling = () => {
+      clearTimeout(ceilingTimer);
+      const ceiling = new Promise<never>((_, reject) => {
+        ceilingTimer = setTimeout(() => {
+          session.abort().catch(() => {});
+          reject(new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs));
+        }, timeoutMs);
+      });
+      ceiling.catch(() => {});
+      return ceiling;
+    };
     const idleTimer = setInterval(() => {
       if (idleMs <= 0 || watchdogFired || runningTools.size > 0) return;
       if (Date.now() - lastActivity < idleMs) return;
@@ -1431,18 +1442,37 @@ export async function startChatRun(
     try {
       // Один user message = один ответ; сверху — общий потолок, сбоку —
       // сторож тишины.
-      try {
-        await Promise.race([
-          session.prompt(input.mode ? chatModeInstruction(input.mode) + "\n\n" + input.prompt : input.prompt),
-          watchdog,
-          ceiling,
-        ]);
-      } catch (error) {
-        if (run.cancelled) throw chatRunCancelledError();
-        if (watchdogFired) throw watchdogFired;
-        throw error;
+      const promptOnce = async (text: string) => {
+        try {
+          await Promise.race([session.prompt(text), watchdog, armCeiling()]);
+        } catch (error) {
+          if (run.cancelled) throw chatRunCancelledError();
+          if (watchdogFired) throw watchdogFired;
+          throw error;
+        }
+      };
+      if (input.compactOnly) {
+        // «Сжать» (владелец 20.10.2026): сжатие сохранённой сессии по кнопке.
+        await Promise.race([session.compact(), armCeiling()]);
+      } else {
+        await promptOnce(input.mode ? chatModeInstruction(input.mode) + "\n\n" + input.prompt : input.prompt);
       }
-      finalText = (session.getLastAssistantText?.() ?? "").trim();
+      if (input.mode === "goal" && !input.compactOnly) {
+        // «Цель»: пока роль пишет «ЦЕЛЬ: ПРОДОЛЖАЮ», даём следующий ход,
+        // до потолка из настроек (владелец 20.10.2026: 50, меняется).
+        const maxTurns = getSetting("chat_goal_max_turns");
+        for (let turn = 2; turn <= maxTurns; turn++) {
+          const text = (session.getLastAssistantText?.() ?? "").trim();
+          if (goalStatus(text) !== "continue" || run.cancelled) break;
+          const progress = stripGoalMark(text);
+          if (progress) input.onGoalProgress?.(progress);
+          const last = turn === maxTurns;
+          await promptOnce(last
+            ? `Ход ${turn} из ${maxTurns} — последний по потолку. Остановись: дай итог — что сделано, что осталось — и закончи строкой «${GOAL_MARK.owner}».`
+            : `Продолжай к цели. Ход ${turn} из ${maxTurns}.`);
+        }
+      }
+      finalText = input.compactOnly ? "" : stripGoalMark((session.getLastAssistantText?.() ?? "").trim());
       finalSessionId = session.sessionId ?? finalSessionId;
       if (run.cancelled) throw chatRunCancelledError();
       const lastTurn = turnState.last;
@@ -1521,7 +1551,7 @@ async function runExternalChat(input: StartChatRunInput, runId: string): Promise
     if (run.cancelled) throw chatRunCancelledError();
     const last = session.state.messages[session.state.messages.length - 1];
     if (last?.stopReason === "error") throw Object.assign(new Error(last.errorMessage || "внешний агент вернул ошибку"), { code: "CHAT_RUN_MODEL_ERROR" });
-    const text = stripActions((last?.content ?? []).map((c: any) => c?.text ?? "").join("\n")).trim();
+    const text = stripGoalMark(stripActions((last?.content ?? []).map((c: any) => c?.text ?? "").join("\n")).trim());
     if (session.sessionId) upsertChatSession(input.chatId, input.roleId, session.sessionId);
     return { runId, sessionId: session.sessionId, text };
   } finally {
