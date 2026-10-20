@@ -18,7 +18,8 @@ export function isReadOperation(name:string){return ["taskflow_hosts","taskflow_
 export function operationRestriction(name:string,c:Context):{code:string;message:string}|undefined{
  if(c.authorize && !c.authorize(name)) return {code:"FORBIDDEN",message:"Эта операция не разрешена роли "+c.role};
  if(c.mode==="plan" && !isReadOperation(name))return {code:"MODE_RESTRICTED",message:"Для изменения нужен режим Работа"};
- if(c.mode==="discussion" && !isReadOperation(name) && !DISCUSS.has(name))return {code:"MODE_RESTRICTED",message:"В обсуждении разрешены чтение, сообщения и консультация"};
+ // Инструменты Mac в обсуждении — без ограничений (владелец 20.10.2026).
+ if(c.mode==="discussion" && !isReadOperation(name) && !DISCUSS.has(name) && !name.startsWith("taskflow_host_"))return {code:"MODE_RESTRICTED",message:"В обсуждении разрешены чтение, сообщения, консультация и инструменты Mac"};
  if(CHAT_CONTEXT.has(name) && (!c.chatId || !c.messageId))return {code:"CONTEXT_REQUIRED",message:"Нужно исходное сообщение в чате"};
  if(TASK_CONTEXT.has(name) && !c.taskId)return {code:"CONTEXT_REQUIRED",message:"Нужна текущая задача"};
 }

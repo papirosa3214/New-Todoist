@@ -51,3 +51,13 @@ describe("universal TaskFlow",()=>{
   expect(decode(await host.execute("9",{action:"invoke",operation:"taskflow_comment",version:1,arguments:{id:"t",text:"x"},request_id:"host"})).error.code).toBe("OPERATION_FAILED");
  });
 });
+
+describe("режим «Обсуждение» в чате и инструменты Mac (20.10.2026)", () => {
+  it("инструменты Mac в обсуждении не ограничены, прочая запись — ограничена", async () => {
+    const { operationRestriction } = await import("../src/runtime/universalTaskflow.js");
+    const ctx = { role: "builder", mode: "discussion" } as any;
+    expect(operationRestriction("taskflow_host_bash", ctx)).toBeUndefined();
+    expect(operationRestriction("taskflow_host_write", ctx)).toBeUndefined();
+    expect(operationRestriction("taskflow_subtask_done", ctx)?.code).toBe("MODE_RESTRICTED");
+  });
+});
