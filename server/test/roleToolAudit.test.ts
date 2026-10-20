@@ -375,3 +375,74 @@ describe("тренер ошибок и учёт вместе: слияние в�
     }
   });
 });
+
+describe("провайдер в учёте вызовов", () => {
+  // Провайдер в записи об отказе — это то, по чему владелец понимает,
+  // у кого истёк ключ или исчерпан лимит. Модель в ходе приходит как
+  // «провайдер/модель», поэтому провайдер берётся из префикса.
+  const probe = async (model: string, runId: string) => {
+    const api = createUniversalTaskflow([operation], {
+      ...context,
+      model,
+      runId,
+    });
+    const out = decode(
+      await api.execute("p", {
+        action: "discover",
+        operation: operation.name,
+        query: "сводка",
+      }),
+    );
+    expect(out.ok).toBe(false);
+    expect(out.error.code).toBe("ACTION_CONFLICT");
+    return toolAuditRecords({ role: ROLE, model }).find(
+      (row) => row.error_code === "ACTION_CONFLICT",
+    );
+  };
+
+  it("модель с префиксом: провайдер из префикса, а не из эвристики", async () => {
+    const model = "opencode-go/deepseek-v4.1-flash";
+    const record = await probe(model, "run-provider-1");
+    expect(record, "отказ должен попасть в учёт").toBeTruthy();
+    expect(record?.provider).toBe("opencode-go");
+  });
+
+  it("известный провайдер из префикса не путается с minimax", async () => {
+    const model = "minimax/MiniMax-M3.1-Flash";
+    const record = await probe(model, "run-provider-2");
+    expect(record?.provider).toBe("minimax");
+  });
+
+  it("модель без префикса: провайдер по старой эвристике", async () => {
+    const record = await probe("claude-audit-probe-2", "run-provider-3");
+    expect(record?.provider).toBe("anthropic");
+  });
+
+  it("в счётчиках успешных вызовов провайдер тот же", async () => {
+    const model = "opencode-go/deepseek-v4.1-flash";
+    const api = createUniversalTaskflow([operation], {
+      ...context,
+      model,
+      runId: "run-provider-4",
+    });
+    const out = decode(
+      await api.execute("p", {
+        action: "invoke",
+        operation: operation.name,
+        version: 1,
+        arguments: { query: "сводка" },
+      }),
+    );
+    expect(out.ok).toBe(true);
+    const counters = db
+      .prepare(
+        "SELECT provider FROM role_tool_audit_counters WHERE role = ? AND model = ?",
+      )
+      .all(ROLE, model) as Array<{ provider: string }>;
+    expect(counters.length).toBeGreaterThan(0);
+    expect(
+      counters.every((row) => row.provider === "opencode-go"),
+      "в счётчике провайдер должен быть тем же, что и в журнале",
+    ).toBe(true);
+  });
+});
