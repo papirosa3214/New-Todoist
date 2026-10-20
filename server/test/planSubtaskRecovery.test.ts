@@ -5,7 +5,8 @@ import type { FastifyInstance } from "fastify";
 
 const runs = vi.hoisted(() => ({ count: 0 }));
 vi.mock("../src/runtime/inProcessRun.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/runtime/inProcessRun.js")>();
+  const actual =
+    await importOriginal<typeof import("../src/runtime/inProcessRun.js")>();
   return {
     ...actual,
     runRoleInProcess: async () => {
@@ -31,28 +32,65 @@ describe("узлы плана после перезапуска сервера",
     app = await buildApp();
     demoteSeededOwner(db);
     seedRoleAccounts(db);
-    const reg = await app.inject({ method: "POST", url: "/api/auth/register", payload: { name: "Recovery owner", email: `recovery-${Date.now()}@test`, password: "password123" } });
-    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(reg.json().user.id);
+    const reg = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        name: "Recovery owner",
+        email: `recovery-${Date.now()}@test`,
+        password: "password123",
+      },
+    });
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(
+      reg.json().user.id,
+    );
     ownerAuth = { authorization: `Bearer ${reg.json().token}` };
     // Создаём задачу под manual, чтобы applyIntakeToNewTask не успел
     // поставить свой план single_executor и не блокировал approve.
-    db.prepare("UPDATE users SET task_intake_mode='manual' WHERE role='owner'").run();
+    db.prepare(
+      "UPDATE users SET task_intake_mode='manual' WHERE role='owner'",
+    ).run();
 
-    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: ownerAuth, payload: { title: "Фабрика шаблона" } });
+    const task = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title: "Фабрика шаблона" },
+    });
     taskId = task.json().task.id;
     const plan = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/collaboration-plans`,
       headers: ownerAuth,
-      payload: { profile: "manual", rationale: "тест", nodes: [{ slot_key: "executor", role_key: "builder", required: true, expected_result: "Реализация" }], edges: [] },
+      payload: {
+        profile: "manual",
+        rationale: "тест",
+        nodes: [
+          {
+            slot_key: "executor",
+            role_key: "builder",
+            required: true,
+            expected_result: "Реализация",
+          },
+        ],
+        edges: [],
+      },
     });
     expect(plan.statusCode).toBeLessThan(300);
-    const approve = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.json().id ?? plan.json().plan?.id}/approve`, headers: ownerAuth });
+    const approve = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/collaboration-plans/${plan.json().id ?? plan.json().plan?.id}/approve`,
+      headers: ownerAuth,
+    });
     expect(approve.statusCode).toBeLessThan(300);
     // Разделение «вход vs цепочка»: mode='manual' больше не глушит
     // восстановление утверждённого плана — согласием владельца было
     // утверждение плана. Оставляем manual и проверяем именно это.
-    const row = db.prepare("SELECT id, agent_state FROM subtasks WHERE task_id = ? AND plan_node_key = 'executor'").get(taskId) as { id: string; agent_state: string };
+    const row = db
+      .prepare(
+        "SELECT id, agent_state FROM subtasks WHERE task_id = ? AND plan_node_key = 'executor'",
+      )
+      .get(taskId) as { id: string; agent_state: string };
     subtaskId = row.id;
     expect(row.agent_state).toBe("in_progress");
   });
@@ -61,15 +99,34 @@ describe("узлы плана после перезапуска сервера",
     await app.close();
   });
 
-  const subtask = () => db.prepare("SELECT agent_state, current_attempt_id FROM subtasks WHERE id = ?").get(subtaskId) as { agent_state: string | null; current_attempt_id: string | null };
-  const comments = () => (db.prepare("SELECT user_id, text FROM comments WHERE task_id = ? ORDER BY rowid").all(taskId) as Array<{ user_id: string; text: string }>);
+  const subtask = () =>
+    db
+      .prepare(
+        "SELECT agent_state, current_attempt_id FROM subtasks WHERE id = ?",
+      )
+      .get(subtaskId) as {
+      agent_state: string | null;
+      current_attempt_id: string | null;
+    };
+  const comments = () =>
+    db
+      .prepare(
+        "SELECT user_id, text FROM comments WHERE task_id = ? ORDER BY rowid",
+      )
+      .all(taskId) as Array<{ user_id: string; text: string }>;
 
   it("первый обрыв: попытка interrupted, роль пишет в ленту и продолжает", async () => {
     const before = subtask().current_attempt_id;
     const startedBefore = runs.count;
-    expect(await recoverInterruptedPlanSubtasks()).toEqual({ resumed: 1, blocked: 0, freed: 0 });
+    expect(await recoverInterruptedPlanSubtasks()).toEqual({
+      resumed: 1,
+      blocked: 0,
+      freed: 0,
+    });
 
-    const old = db.prepare("SELECT outcome, ended_at FROM attempts WHERE id = ?").get(before) as { outcome: string; ended_at: string | null };
+    const old = db
+      .prepare("SELECT outcome, ended_at FROM attempts WHERE id = ?")
+      .get(before) as { outcome: string; ended_at: string | null };
     expect(old.outcome).toBe("interrupted");
     expect(old.ended_at).toBeTruthy();
     expect(subtask().agent_state).toBe("in_progress");
@@ -82,7 +139,11 @@ describe("узлы плана после перезапуска сервера",
 
   it("второй обрыв за полчаса: blocked и сообщение владельцу, без нового запуска", async () => {
     const startedBefore = runs.count;
-    expect(await recoverInterruptedPlanSubtasks()).toEqual({ resumed: 0, blocked: 1, freed: 0 });
+    expect(await recoverInterruptedPlanSubtasks()).toEqual({
+      resumed: 0,
+      blocked: 1,
+      freed: 0,
+    });
     expect(subtask().agent_state).toBe("blocked");
     expect(runs.count).toBe(startedBefore);
     expect(comments().at(-1)!.text).toContain("Сам больше не продолжаю");
@@ -92,9 +153,17 @@ describe("узлы плана после перезапуска сервера",
     // Доработка MAK-66 (critic 05.10.2026): блокировка из-за обрыва сервера
     // — не навсегда; при рестарте узел снова попадает в общую очередь.
     // Владелец/оркестратор потом сам решает, что с ним делать.
-    expect(await recoverInterruptedPlanSubtasks()).toEqual({ resumed: 0, blocked: 0, freed: 1 });
+    expect(await recoverInterruptedPlanSubtasks()).toEqual({
+      resumed: 0,
+      blocked: 0,
+      freed: 1,
+    });
     expect(subtask().agent_state).toBeNull();
-    expect(comments().some((c) => c.text.includes("после рестарта сервера снят признак"))).toBe(true);
+    expect(
+      comments().some((c) =>
+        c.text.includes("после рестарта сервера снят признак"),
+      ),
+    ).toBe(true);
   });
 
   it("сбрасывает succeeded/dead role_run_jobs этой задачи (Г1-к: дедупликация не возвращает старое задание)", async () => {
@@ -106,7 +175,9 @@ describe("узлы плана после перезапуска сервера",
     // После предыдущего теста узел в `agent_state = NULL` — переводим
     // его в `todo`, чтобы `recoverInterruptedPlanSubtasks` подхватил
     // его в `freed`-ветке и прошёл по `resetRoleRunJobsForTask`.
-    db.prepare("UPDATE subtasks SET agent_state='todo' WHERE id = ?").run(subtaskId);
+    db.prepare("UPDATE subtasks SET agent_state='todo' WHERE id = ?").run(
+      subtaskId,
+    );
     db.prepare(
       `INSERT INTO role_run_jobs
          (id, task_id, reason, actor_id, dedupe_key, status, attempts, max_attempts, chain_depth, manual_start, last_error, started_at, finished_at)
@@ -123,12 +194,34 @@ describe("узлы плана после перезапуска сервера",
          (id, task_id, reason, actor_id, dedupe_key, status, attempts, max_attempts, chain_depth, manual_start, lease_owner, lease_expires_at, started_at)
        VALUES (?, ?, 'after_run', NULL, ?, 'running', 1, 3, 0, 0, 'live-worker', datetime('now','+5 minutes'), datetime('now','-1 minute'))`,
     ).run(`rrj_test_${Date.now()}_3`, taskId, `stale-dedupe-${Date.now()}_3`);
+    // Четвёртый — отработавший ответ на комментарий: заново его не проигрывать.
+    db.prepare(
+      `INSERT INTO role_run_jobs
+         (id, task_id, reason, actor_id, dedupe_key, status, attempts, max_attempts, chain_depth, manual_start, started_at, finished_at)
+       VALUES (?, ?, 'commented', NULL, ?, 'succeeded', 1, 3, 0, 0, datetime('now','-1 hour'), datetime('now','-30 minutes'))`,
+    ).run(`rrj_test_${Date.now()}_4`, taskId, `stale-comment-${Date.now()}_4`);
     await recoverInterruptedPlanSubtasks();
+    const comment = db
+      .prepare(
+        `SELECT status FROM role_run_jobs WHERE task_id = ? AND id LIKE 'rrj_test_%_4'`,
+      )
+      .get(taskId) as { status: string };
+    expect(comment.status).toBe("succeeded");
     // Два завершённых задания — обнулены и снова в очереди.
-    const queued = db.prepare(
-      `SELECT id, status, attempts, lease_owner, finished_at FROM role_run_jobs WHERE task_id = ? AND id LIKE 'rrj_test_%' ORDER BY id`,
-    ).all(taskId) as Array<{ id: string; status: string; attempts: number; lease_owner: string | null; finished_at: string | null }>;
-    const recovered = queued.filter((j) => j.id.endsWith("_1") || j.id.endsWith("_2"));
+    const queued = db
+      .prepare(
+        `SELECT id, status, attempts, lease_owner, finished_at FROM role_run_jobs WHERE task_id = ? AND id LIKE 'rrj_test_%' ORDER BY id`,
+      )
+      .all(taskId) as Array<{
+      id: string;
+      status: string;
+      attempts: number;
+      lease_owner: string | null;
+      finished_at: string | null;
+    }>;
+    const recovered = queued.filter(
+      (j) => j.id.endsWith("_1") || j.id.endsWith("_2"),
+    );
     for (const job of recovered) {
       expect(job.status).toBe("queued");
       expect(job.attempts).toBe(0);
