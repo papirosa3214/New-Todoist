@@ -170,7 +170,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       const attempt = db.prepare("SELECT id FROM attempts WHERE subtask_id=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1").get(subtask.id) as any;
       if (claimed !== attempt?.id) return reply.code(409).send({error:"Попытка исполнителя уже сменилась"});
     }
-    const revision = req.body?.base_revision;
+    // Без base_revision берём текущую версию: план правит только исполнитель
+    // своего слота, перезаписать чужое некому (4 отказа за 18–19.10.2026).
+    const revision = req.body?.base_revision ?? (readWorkPlan(subtask.id)?.revision ?? 0);
     if (!Number.isSafeInteger(revision) || revision < 0) return reply.code(400).send({error:"Нужен base_revision из последнего ответа (0 для нового плана)"});
     let items;
     try { items = validateWorkPlan(req.body?.items); }
