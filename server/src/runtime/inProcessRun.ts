@@ -25,7 +25,7 @@ import { ensureResultVersionForReview } from "../resultVersions.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { pickRecipientSlot } from "./roleMessageWait.js";
-import { connectInfraPanel } from "./infraPanelMcp.js";
+import { connectRoleMcp } from "./graftMcp.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import { branchMembership } from "./branchPlan.js";
 import { ensurePlanTopic, topicContext } from "../lib/projectTopics.js";
@@ -1443,8 +1443,8 @@ async function runRoleInProcessUnserialized(input: {
   const manager=input.subtaskId ? openSlotSession(taskId,role,input.subtaskId,cwd,input.freshSession) : SessionManager.continueRecent(cwd,sessionDir(taskId,role));
   cwd=manager.getCwd();
   const systemPrompt = [
-    composeLayer(role, "role.prompt")?.effective
-      || rolePrompt(role)
+    // Общий шаблон + AGENTS.md роли — один источник (20.10.2026).
+    rolePrompt(role)
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
     teamStructureText(role),
@@ -1477,7 +1477,7 @@ try {
   const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId);
   if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
-  const infra = await connectInfraPanel(role).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
+  const infra = await connectRoleMcp(role, cwd).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
   const toolCatalog = buildRoleToolCatalog({role,model:model.id??modelId,taskId,subtaskId:input.subtaskId,mode:"work",runId:manager.getSessionId()}, [...composio.tools,...infra.tools,...(host?createHostRoleTools(host,taskId,role):[])]);
   const customTools = toolCatalog.customTools;
   // На удалённой машине инструменты те же, но исполняются через шлюз:

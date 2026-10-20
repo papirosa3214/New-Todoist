@@ -21,7 +21,8 @@ export async function connectRoleComposio(role: string, mode: string, context: s
     const listed = await client.listTools();
     return {
       tools: listed.tools.map(tool => ({
-        name: "mcp__composio__" + tool.name,
+        // Плоские действия сервисов (todoist_*) — под своим именем, без префикса моста.
+        name: /^todoist_/.test(tool.name) ? tool.name : "mcp__composio__" + tool.name,
         label: "Composio · " + tool.name,
         description: tool.description ?? tool.name,
         parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema),

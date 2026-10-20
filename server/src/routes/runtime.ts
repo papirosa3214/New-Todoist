@@ -21,6 +21,7 @@ import { getFailoverSettings, setFailoverSettings } from "../lib/failoverSetting
 import { readProviderQuota } from "../lib/providerQuota.js";
 import { parseModelRef } from "../lib/attemptModel.js";
 import { pickStartModel } from "../runtime/providerFailover.js";
+import { classifyFailureReason } from "../runtime/failureReasons.js";
 
 /** Единый маппинг ошибок runtime-слоя в HTTP. Ключевое различие
  *  (спека §14): Pi недоступен → 503 runtime_unavailable; модели нет в
@@ -342,10 +343,37 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
         detail: q.detail ?? null,
       };
     }));
+    // Нерабочий ключ (владелец 20.10.2026: «видно, у каких провайдеров нерабочий ключ»).
+    // Pi сам о протухшем токене не знает — показывает «вписан», пока запрос не упадёт.
+    // Поэтому два признака: ключа нет совсем, или последний заход роли к провайдеру
+    // за трое суток упал отказом доступа (401/403, неверный ключ) и успехом не сменился.
+    let connected = new Map<string, string>();
+    try {
+      connected = new Map((await piRuntime.listProviders()).map((p) => [p.id, p.status]));
+    } catch { /* Pi недоступен — признак «нет ключа» просто не показываем */ }
+    const keyProblems = providers.flatMap((provider): { provider: string; reason: string; at: string | null }[] => {
+      const status = connected.get(provider);
+      if (status && status !== "connected") {
+        return [{ provider, reason: status === "expired" ? "ключ истёк" : "ключ не подключён", at: null }];
+      }
+      const last = db.prepare(
+        `SELECT outcome, reason, reason_code, ended_at FROM attempts
+          WHERE provider = ? AND ended_at IS NOT NULL AND ended_at > datetime('now', '-3 days')
+          ORDER BY ended_at DESC LIMIT 1`,
+      ).get(provider) as { outcome: string | null; reason: string | null; reason_code: string | null; ended_at: string } | undefined;
+      if (!last || (last.outcome !== "failed" && last.outcome !== "blocked")) return [];
+      const code = last.reason_code === "provider_auth_or_access"
+        ? last.reason_code
+        : classifyFailureReason(last.reason ?? "");
+      return code === "provider_auth_or_access"
+        ? [{ provider, reason: "ключ не принят провайдером", at: last.ended_at }]
+        : [];
+    });
     return {
       auto_switch: s.autoSwitch,
       auto_return: s.autoReturn,
       quota,
+      key_problems: keyProblems,
       limits: limits.map((l) => ({
         provider: l.provider,
         until: l.unavailable_until,

@@ -37,7 +37,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import db from "../db.js";
-import { rolePromptText } from "../roleRouting.js";
+import { roleAgentsText, writeRoleAgents } from "../runtime/roleHome.js";
 import { loadRoleRouting } from "../roleRouting.js";
 import { AGENT_RULES } from "../agentState.js";
 // LOCAL_EXECUTION_POLICY живёт в inProcessRun.ts, импорт через прямой
@@ -101,7 +101,7 @@ export const LAYER_CATALOG: LayerSpec[] = [
     scope: "role",
     modes: ["work", "resume", "reply", "review", "subtask", "chat", "voice"],
     sourceKind: "db",
-    originRef: "roles.prompt ∨ server/scripts/role-prompts/<role>.md",
+    originRef: "~/taskflow/roles/<role>/AGENTS.md",
     readOnly: false,
   },
   {
@@ -295,13 +295,9 @@ function readOriginal(layer: LayerSpec, role: string, ownerId?: string): string 
   if (Object.hasOwn(INSTRUCTION_DEFAULTS, layer.key)) return INSTRUCTION_DEFAULTS[layer.key];
   switch (layer.key) {
     case "role.prompt": {
-      const text = rolePromptText(role);
-      if (text === null) {
-        // Роль без промпта — пусть UI увидит «нет текста», а не сломался
-        // весь список. effective будет пустой строкой с пометкой original.
-        return "";
-      }
-      return text;
+      // Один источник (20.10.2026): «Инструкция роли» — это AGENTS.md в папке
+      // роли. Общий шаблон сюда не входит; недопустимый ключ — пустой текст.
+      try { return roleAgentsText(role); } catch { return ""; }
     }
     case "rules": {
       // AGENT_RULES — массив строк; для слоя контекста склеиваем в один
@@ -473,7 +469,7 @@ export function applyOverride(args: {scope:"role"|"command";roleKey:string;layer
    db.prepare("INSERT INTO role_context_overrides_history(id,scope,role_key,layer,version,text,source_kind,source_ref,action,by_user_id) VALUES (?,?,?,?,0,?,?,?,'set',?)").run(crypto.randomUUID(),args.scope,roleKey,args.layer,readOriginal(spec,args.roleKey,args.createdBy),spec.sourceKind,spec.originRef,args.createdBy);
   }
   db.prepare("UPDATE role_context_overrides SET is_active=0 WHERE scope=? AND role_key=? AND layer=?").run(args.scope,roleKey,args.layer);
-  if (args.layer === "role.prompt") db.prepare("UPDATE roles SET prompt=? WHERE key=?").run(args.action === "reset" ? null : args.text,args.roleKey);
+  if (args.layer === "role.prompt" && args.action !== "reset") writeRoleAgents(args.roleKey,args.text,args.createdBy);
   if(args.layer.startsWith("owner.")) {
    if(args.action==="reset")db.prepare("DELETE FROM user_ai_prompts WHERE user_id=? AND scope=?").run(args.createdBy,args.layer.slice(6));
    else db.prepare("INSERT INTO user_ai_prompts(user_id,scope,prompt) VALUES (?,?,?) ON CONFLICT(user_id,scope) DO UPDATE SET prompt=excluded.prompt,updated_at=datetime('now')").run(args.createdBy,args.layer.slice(6),args.text);

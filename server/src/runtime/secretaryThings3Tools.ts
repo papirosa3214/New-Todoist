@@ -34,16 +34,10 @@ export function things3CallExample(tool: string): string {
   const name = schema ? tool : "things_complete";
   const required = schema ? schema.required ?? [] : ["id_or_title"];
   const inner = Object.fromEntries(required.map((key) => [key, key === "patch" ? { "…": "…" } : "…"]));
-  const call = {
-    action: "invoke",
-    operation: "taskflow_things3",
-    version: 1,
-    request_id: "…",
-    arguments: { tool: name, arguments: inner },
-  };
+  const call = { operation: name, arguments: inner };
   return (
     `Правильный вызов: ${JSON.stringify(call)}. Параметры дела (${required.join(", ") || "нет"}) ` +
-    "кладутся внутрь arguments.arguments, а не рядом с tool и не на верхний уровень. " +
+    "кладутся прямо в arguments, а не на верхний уровень. " +
     "Исправь вызов по образцу; это ошибка вызова, а не поломка Things или шлюза."
   );
 }
@@ -70,25 +64,8 @@ export interface Things3ToolContext {
 }
 
 export function secretaryThings3Tools(context: Things3ToolContext): Tool[] {
-  return [
-    {
-      name: "taskflow_things3",
-      description:
-        "Things 3 владельца через TaskFlow Host на Mac. Структурированное чтение и поддержанные записи. " +
-        "Недоступные свойства не означают пустые: смотри availability в записи. " +
-        "Для неподдержанной записи инструмент возвращает причину и требуемую настройку. " +
-        "Повторы нельзя изменять через публичный API Things. " +
-        contract.tools.map((tool) => `${tool.name}: ${tool.description}`).join("; "),
-      parameters: Type.Unsafe<{ tool: string; arguments?: Record<string, unknown> }>({
-        anyOf: contract.tools.map((tool) => ({
-          type: "object",
-          properties: { tool: { const: tool.name, type: "string" }, arguments: tool.inputSchema },
-          required: ["tool"],
-          additionalProperties: false,
-        })),
-      }),
-      invalidArgsHint: (args) => things3CallExample(String(args.tool ?? "")),
-      execute: async (_id: string, p: { tool: string; arguments?: Record<string, unknown> }) => {
+  void context;
+  const выполнить = async (p: { tool: string; arguments?: Record<string, unknown> }) => {
         const имя = String(p.tool ?? "").trim();
         if (!(THINGS3_TOOLS as readonly string[]).includes(имя)) {
           throw new Error(`«${имя}» — не инструмент Things3. Доступны: ${THINGS3_TOOLS.join(", ")}`);
@@ -118,7 +95,16 @@ export function secretaryThings3Tools(context: Things3ToolContext): Tool[] {
         const data = ответ.data as { ok?: boolean; error?: string; tool?: string; result?: string } | undefined;
         if (data?.ok === false) throw new Error(`Things3: ${data.error ?? data.result ?? "операция не выполнена"}`);
         return text(data?.result ?? JSON.stringify(ответ));
-      },
-    },
-  ];
+      };
+  // Владелец 20.10.2026: каждое действие Things — своя операция, вызов в один
+  // уровень {"operation":"things_complete","arguments":{...}} вместо
+  // taskflow_things3 → arguments.tool → arguments.arguments.
+  return contract.tools.map((tool) => ({
+    name: tool.name,
+    description: "Things 3 владельца (через Mac): " + tool.description,
+    parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema),
+    invalidArgsHint: () => things3CallExample(tool.name),
+    execute: async (_id: string, p: Record<string, unknown>) =>
+      выполнить({ tool: tool.name, arguments: p ?? {} }),
+  }));
 }

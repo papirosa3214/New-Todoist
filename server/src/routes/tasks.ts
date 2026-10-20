@@ -635,6 +635,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
       );
       return {
         ...withAgentStale(t, subtasks, children),
+        // Снимок промпта списку не нужен: 2 МБ из 5 МБ ответа (20.10.2026),
+        // телефон перекачивал его на каждом обновлении. В базе остаётся.
+        composed_prompt_snapshot: undefined,
         mine: session ? t.agent_session_id === session || bySubtask : null,
         labels: stmtLabels.all(t.id),
         subtasks,

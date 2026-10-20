@@ -80,11 +80,13 @@ describe("разбор отказов 20.10.2026: мелочи прощаютс�
     expect(seen.length).toBe(count);
   });
 
-  it("не подставляет версию и не принимает task_id за id", async () => {
+  it("короткий вызов: только operation и arguments; task_id за id не принимает", async () => {
     const api = createUniversalTaskflow([task as any], ctx);
+    const short=parse(await api.execute("1",{operation:"taskflow_task",arguments:{id:"T1"}}));
+    expect(short.ok).toBe(true);
+    const wrong=parse(await api.execute("1",{action:"invoke",operation:"taskflow_task",version:2,arguments:{id:"T1"}}));
+    expect(wrong.ok).toBe(false);expect(wrong.error.code).toBe("VERSION_MISMATCH");
     const count=seen.length;
-    const noVersion=parse(await api.execute("1",{action:"invoke",operation:"taskflow_task",arguments:{id:"T1"}}));
-    expect(noVersion.ok).toBe(false);expect(noVersion.error.code).toBe("VERSION_MISMATCH");
     const alias=parse(await api.execute("2",{action:"invoke",operation:"taskflow_task",version:1,arguments:{task_id:"T1"}}));
     expect(alias.ok).toBe(false);expect(alias.error.code).toBe("INVALID_ARGUMENTS");
     expect(alias.error.hint).toContain("arguments.id");expect(seen.length).toBe(count);
@@ -103,10 +105,13 @@ describe("разбор отказов 20.10.2026: мелочи прощаютс�
     expect(r.error.message).toContain('"arguments":{"arguments":{"path":"a.swift"}}');
   });
 
-  it("нет ключа повтора или он занят — сказано, что делать", async () => {
+  it("ключ повтора подставляется сам; занятый — сказано, что делать", async () => {
     const api = createUniversalTaskflow([plan as any], ctx);
-    const нет = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, arguments: {} }));
-    expect(нет.error.message).toMatch(/придумай новый/);
+    const сам = parse(await api.execute("call-1", { operation: "taskflow_work_plan", arguments: {} }));
+    expect(сам.ok).toBe(true);
+    expect(сам.request_id).toMatch(/:call-1$/);
+    const пустой = parse(await api.execute("1", { operation: "taskflow_work_plan", request_id: "", arguments: {} }));
+    expect(пустой.error.message).toMatch(/придумай новый/);
     await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "k", arguments: {} });
     const занят = parse(await api.execute("1", { action: "invoke", operation: "taskflow_work_plan", version: 1, request_id: "k", arguments: { base_revision: 1 } }));
     expect(занят.error.message).toMatch(/новый request_id/);
@@ -239,17 +244,17 @@ describe("describe: шпаргалка вызова",()=>{
   const execute=vi.fn();
   const api=createUniversalTaskflow([{name:"taskflow_task_summary",description:"summary",parameters:Type.Object({query:Type.String({description:"Вопрос владельца"})}),execute}],context);
   const r=decode(await api.execute("schema",{action:"describe",operation:"taskflow_task_summary"}));
-  expect(r.data.invokeTemplate).toMatchObject({action:"invoke",operation:"taskflow_task_summary",version:1,arguments:{query:expect.any(String)}});
+  expect(r.data.invokeTemplate).toEqual({operation:"taskflow_task_summary",arguments:{query:expect.any(String)}});
   expect(r.data.invokeTemplate.request_id).toBeUndefined();
   expect(r.data.templateFields).toContainEqual(expect.objectContaining({path:"arguments.query",type:"строка",required:true,description:"Вопрос владельца"}));
   expect(r.data.templateInstructions).toContain("замени");
   expect(api.description).toContain('"arguments":{"query":');
   expect(execute).not.toHaveBeenCalled();
  });
- it("для изменения показывает request_id и законную вложенность host",async()=>{
+ it("для изменения не требует request_id и показывает законную вложенность host",async()=>{
   const api=createUniversalTaskflow([{name:"taskflow_host_write",description:"host",parameters:Type.Object({arguments:Type.Object({path:Type.String(),content:Type.String()})}),execute:vi.fn()}],context);
   const r=decode(await api.execute("schema",{action:"describe",operation:"taskflow_host_write"}));
-  expect(r.data.invokeTemplate.request_id).toEqual(expect.any(String));
+  expect(r.data.invokeTemplate.request_id).toBeUndefined();
   expect(r.data.invokeTemplate.arguments.arguments).toMatchObject({path:expect.any(String),content:expect.any(String)});
   expect(r.data.templateFields.map((f:any)=>f.path)).toContain("arguments.arguments.path");
  });
@@ -265,6 +270,21 @@ describe("describe: шпаргалка вызова",()=>{
   const api=createUniversalTaskflow([],context);
   const r=decode(await api.execute("schema",{action:"describe",operation:"requests.status"}));
   expect(r.data.invokeTemplate.arguments.request_id).toEqual(expect.any(String));
-  expect(r.data.invokeTemplate.version).toBe(1);
+  expect(r.data.invokeTemplate.version).toBeUndefined();
+  expect(decode(await api.execute("st",{operation:"requests.status",arguments:{request_id:"нет"}})).error.code).toBe("UNKNOWN_REQUEST");
+ });
+});
+describe("три неверных вызова подряд — остановка с готовым вызовом (20.10.2026)",()=>{
+ it("на третьей ошибке даёт coach с формой; успех обнуляет счёт",async()=>{
+  const t=tool();const api=createUniversalTaskflow([t],context);
+  const bad=()=>api.execute("x",{operation:t.name,arguments:{id:5}}).then(decode);
+  expect((await bad()).error.coach).toBeUndefined();
+  expect((await bad()).error.coach).toBeUndefined();
+  const third=await bad();
+  expect(third.error.code).toBe("INVALID_ARGUMENTS");
+  expect(third.error.coach.message).toMatch(/СТОП/);
+  expect(third.error.coach.call).toEqual({operation:t.name,arguments:{id:expect.any(String),text:expect.any(String)}});
+  expect(decode(await api.execute("ok",{operation:t.name,arguments:{id:"t",text:"x"}})).ok).toBe(true);
+  expect((await bad()).error.coach).toBeUndefined();
  });
 });

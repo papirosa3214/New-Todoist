@@ -136,3 +136,22 @@ describe("Composio MCP bridge", () => {
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe("плоские действия Todoist (20.10.2026)", () => {
+  it("берёт основные и не устаревшие; в плане — только чтение", async () => {
+    const { flatToolkitTools } = await import("../scripts/composio_mcp.mjs");
+    const raw = [
+      { slug: "TODOIST_CREATE_TASK", version: "v", tags: ["important", "createHint"], inputParameters: { type: "object", properties: { content: { type: "string" } }, required: ["content"] } },
+      { slug: "TODOIST_GET_ALL_TASKS", version: "v", tags: ["important", "readOnlyHint"] },
+      { slug: "TODOIST_CLOSE_TASK", version: "v", tags: ["important", "deprecated"] },
+      { slug: "TODOIST_GET_BACKUPS_X", version: "v", tags: ["readOnlyHint"] },
+    ];
+    const composio = { tools: { getRawComposioTools: async () => raw } };
+    const work = await flatToolkitTools(composio, { toolkits: { enable: ["todoist"] } }, false);
+    expect(work.map((t: any) => t.name)).toEqual(["todoist_create_task", "todoist_get_all_tasks"]);
+    expect(work[0].inputSchema.required).toEqual(["content"]);
+    const plan = await flatToolkitTools(composio, { toolkits: { enable: ["todoist"] } }, true);
+    expect(plan.map((t: any) => t.name)).toEqual(["todoist_get_all_tasks"]);
+    expect(await flatToolkitTools(composio, { toolkits: { enable: ["linear"] } }, false)).toEqual([]);
+  });
+});

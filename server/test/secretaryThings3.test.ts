@@ -50,6 +50,12 @@ describe("secretaryThings3Tools", () => {
     );
   });
 
+  it("каждое действие Things — своя операция с плоскими arguments", () => {
+    return import("../src/runtime/secretaryThings3Tools.js").then(({ secretaryThings3Tools }) => {
+      expect(secretaryThings3Tools({ role: "secretary" }).map((t) => t.name)).toEqual([...THINGS3_TOOLS]);
+    });
+  });
+
   it("онлайн-машина: уходит ровно одна операция things3", async () => {
     (listMachines as any).mockReturnValue([
       { id: "mac", name: "macbook", platform: "darwin", revoked_at: null },
@@ -62,12 +68,8 @@ describe("secretaryThings3Tools", () => {
     });
 
     const { secretaryThings3Tools } = await import("../src/runtime/secretaryThings3Tools.js");
-    const [инструмент] = secretaryThings3Tools({ role: "secretary" });
-    const ответ = await инструмент.execute(
-      "1",
-      { tool: "things_add", arguments: { title: "хлеб" } },
-      undefined as any,
-    );
+    const инструмент = secretaryThings3Tools({ role: "secretary" }).find((t) => t.name === "things_add")!;
+    const ответ = await инструмент.execute("1", { title: "хлеб" }, undefined as any);
 
     expect(runOperation).toHaveBeenCalledTimes(1);
     expect((runOperation as any).mock.calls[0][0]).toBe("mac");
@@ -142,9 +144,9 @@ describe("secretaryThings3Tools", () => {
     (isMachineOnline as any).mockReturnValue(true);
     (runOperation as any).mockResolvedValue({ ok: false, error: "arguments.id_or_title: обязательное поле" });
     const { secretaryThings3Tools } = await import("../src/runtime/secretaryThings3Tools.js");
-    const [инструмент] = secretaryThings3Tools({ role: "secretary" });
-    const ошибка = await инструмент.execute("1", { tool: "things_complete" }, undefined as any).catch((e: Error) => e.message);
-    expect(ошибка).toContain('"arguments":{"tool":"things_complete","arguments":{"id_or_title":"…"}}');
+    const инструмент = secretaryThings3Tools({ role: "secretary" }).find((t) => t.name === "things_complete")!;
+    const ошибка = await инструмент.execute("1", {}, undefined as any).catch((e: Error) => e.message);
+    expect(ошибка).toContain('{"operation":"things_complete","arguments":{"id_or_title":"…"}}');
     expect(ошибка).not.toMatch(/повтори этот же вызов/);
   });
 
@@ -152,7 +154,7 @@ describe("secretaryThings3Tools", () => {
     const { secretaryThings3Tools } = await import("../src/runtime/secretaryThings3Tools.js");
     const { createUniversalTaskflow } = await import("../src/runtime/universalTaskflow.js");
     const шлюз = createUniversalTaskflow(secretaryThings3Tools({ role: "secretary" }) as any, { actor: "u-secretary", role: "secretary", mode: "work", runId: "r" });
-    const ответ = await шлюз.execute("1", { action: "invoke", operation: "taskflow_things3", version: 1, request_id: "x", arguments: { id: "4Lx", yes: "true" } });
+    const ответ = await шлюз.execute("1", { operation: "things_complete", arguments: { id: "4Lx", yes: "true" } });
     const текст = JSON.stringify(ответ);
     expect(текст).toContain("INVALID_ARGUMENTS");
     expect(текст).toContain("Правильный вызов");

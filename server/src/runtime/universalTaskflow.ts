@@ -109,6 +109,8 @@ export function isReadOperation(name: string) {
       "taskflow_host_find",
     ].includes(name) ||
     READ.has(name) ||
+    /^things_(today|inbox|upcoming|anytime|someday|list|search|get|projects|areas)$/.test(name) ||
+    /^todoist_(get|list|filter|export)_/.test(name) ||
     name.startsWith("mcp__infra__")
   );
 }
@@ -206,6 +208,19 @@ function recordCall(
     const payload = typeof text === "string" ? JSON.parse(text) : null;
     const ok = payload?.ok !== false;
     const errorCode = ok ? null : (payload?.error?.code ?? null);
+    // Тренер ошибок дописывает в отказ своё сообщение (остановка и готовый
+    // вызов). Роль видела именно его — значит, и в журнале оно должно быть.
+    const coach =
+      typeof payload?.error?.coach?.message === "string"
+        ? payload.error.coach.message.replace(/\s+/g, " ").trim().slice(0, 400)
+        : null;
+    const baseMessage = ok
+      ? null
+      : safeAuditMessage(
+          errorCode ?? "",
+          payload?.error?.message ?? "",
+          detail,
+        );
     recordToolAudit({
       role: context.role,
       model: context.model ?? null,
@@ -218,13 +233,8 @@ function recordCall(
       operation: typeof p?.operation === "string" ? p.operation : null,
       outcome: ok ? "ok" : "error",
       errorCode,
-      errorMessage: ok
-        ? null
-        : safeAuditMessage(
-            errorCode ?? "",
-            payload?.error?.message ?? "",
-            detail,
-          ),
+      errorMessage:
+        baseMessage && coach ? baseMessage + " Тренер: " + coach : baseMessage,
       errorField: detail.field,
       errorExpected: detail.expected,
       requestId: payload?.request_id ?? p?.request_id ?? null,
@@ -633,19 +643,13 @@ function invocationTemplate(operation: string, schema: any, write: boolean) {
   const fields: TemplateField[] = [];
   const args = templateValue(schema, "arguments", true, fields);
   return {
-    invokeTemplate: {
-      action: "invoke",
-      operation,
-      version: 1,
-      ...(write ? { request_id: "<новый-уникальный-id>" } : {}),
-      arguments: args,
-    },
+    invokeTemplate: { operation, arguments: args },
     templateFields: fields.filter((f) => f.path !== "arguments"),
     templateInstructions:
       "Это шаблон формы, а не готовые данные: замени все строки <…> и примерные числа/значения своими данными. Числа оставляй числами, массивы — массивами [...], объекты — объектами {...}; не оборачивай массив в item. В invokeTemplate включены обязательные поля; необязательные перечислены в templateFields с required=false и example. Для anyOf/oneOf показан первый вариант: другие допустимые варианты смотри в inputSchema. Параметры операции находятся внутри arguments; второй arguments нужен только если он прямо объявлен в inputSchema этой операции. " +
       (write
-        ? "Перед записью придумай уникальный request_id; содержимое шаблона само по себе не разрешает действие."
-        : "Для этой операции чтения верхний request_id не нужен."),
+        ? "action, version и request_id сервер подставит сам; содержимое шаблона само по себе не разрешает действие."
+        : "action, version и request_id писать не нужно."),
   };
 }
 const СЛУЖЕБНЫЕ = new Set([
@@ -660,17 +664,37 @@ const СЛУЖЕБНЫЕ = new Set([
 ]);
 
 export const UNIVERSAL_INSTRUCTION =
-  "Серверные возможности доступны через один инструмент taskflow. Любая роль может работать с Mac через host: discover taskflow_hosts, затем taskflow_host_read/bash/edit/write/grep/find/ls. Назначение машины этапу и утверждение плана для доступа к host не нужны. При одном проекте машина и проект выбираются автоматически; для другого проекта на машине (например, iOS-репозитория из веб-карточки) передай project_id из taskflow_hosts. Рабочая копия создаётся в песочнице проекта. Сборка, тесты и симулятор — через host bash (долгим командам — timeout в секундах); прямой ssh не используется. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем invoke с operation, version и arguments. Для изменения передавай уникальный request_id; при повторе того же действия используй прежний request_id. Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующую без поиска. Каждый отказ несёт поле hint — что делать дальше: читай его и выполняй по шагам, а не перебирай вызовы вслепую.";
+  "Серверные возможности доступны через один инструмент taskflow. Любая роль может работать с Mac через host: discover taskflow_hosts, затем taskflow_host_read/bash/edit/write/grep/find/ls. Назначение машины этапу и утверждение плана для доступа к host не нужны. При одном проекте машина и проект выбираются автоматически; для другого проекта на машине (например, iOS-репозитория из веб-карточки) передай project_id из taskflow_hosts. Рабочая копия создаётся в песочнице проекта. Сборка, тесты и симулятор — через host bash (долгим командам — timeout в секундах); прямой ssh не используется. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем вызови с operation и arguments (action, version и request_id сервер подставит сам; при осознанном повторе того же действия передай прежний request_id). Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующую без поиска. Каждый отказ несёт поле hint — что делать дальше: читай его и выполняй по шагам, а не перебирай вызовы вслепую.";
 const CALL_CHEATSHEET = `
-Шпаргалка: печатай вызов инструмента taskflow как JSON-объект.
-1. Поиск: {"action":"discover","query":"сводка по задачам"}.
+Шпаргалка: печатай вызов инструмента taskflow как JSON-объект. Пиши только operation и arguments — остальное сервер подставит сам.
+1. Поиск: {"query":"сводка по задачам"}.
 2. Схема: {"action":"describe","operation":"taskflow_task_summary"}.
-3. Выполнение: {"action":"invoke","operation":"taskflow_task_summary","version":1,"arguments":{"query":"Сводка по всем задачам"}}.
-В describe возьми invokeTemplate и замени значения по templateFields. Не отправляй строки <…> и примерные числа как реальные данные.
+3. Выполнение: {"operation":"taskflow_task_summary","arguments":{"query":"Сводка по всем задачам"}}.
+В describe смотри inputSchema и templateFields. Не отправляй строки <…> и примерные числа как реальные данные.
 Все параметры операции — в arguments. Для сводки нужен arguments.query, а не query снаружи и не arguments.arguments.query.
 Второй arguments допустим только когда он явно есть в inputSchema (например, host). Массив передавай как [...], без {"item":[...]}.
-Для изменения добавь верхний "request_id":"новый-уникальный-id". Ошибка означает, что нужно исправить указанный путь и повторить исправленный вызов, а не копировать прежний.
+request_id и version писать не нужно. Свой request_id передавай только при осознанном повторе того же действия. Ошибка означает, что нужно исправить указанный путь и повторить исправленный вызов, а не копировать прежний.
 `;
+/** Параметры вызова в том виде, в каком их понял шлюз: без action вызов с
+ *  operation — это invoke, без operation — discover; для invoke шлюз сам
+ *  проставляет версию 1, пустые arguments и request_id. Правило одно и для
+ *  шлюза, и для учёта — иначе в журнал попал бы не тот вызов, который роль
+ *  на самом деле сделала. */
+function normalizeParams(raw: any, context: Context, id: string): any {
+  const p = raw && typeof raw === "object" ? { ...raw } : raw;
+  if (p && p.action === undefined)
+    p.action = p.operation !== undefined ? "invoke" : "discover";
+  if (p && p.action === "invoke") {
+    if (p.version === undefined) p.version = 1;
+    if (p.arguments === undefined) p.arguments = {};
+    if (
+      p.request_id === undefined &&
+      (p.arguments as any)?.request_id === undefined
+    )
+      p.request_id = (context.runId || "run") + ":" + id;
+  }
+  return p;
+}
 export function createUniversalTaskflow(
   tools: Tool[],
   context: Context,
@@ -687,18 +711,19 @@ export function createUniversalTaskflow(
     subtaskId: context.subtaskId ?? null,
     chatId: context.chatId ?? null,
   });
-  // Учёт вызовов: `detail` копит сведения о том, что не сошлось (путь поля
-  // и ожидаемый тип — без значений), а `execute` ниже пишет вызов в журнал
-  // (toolAuditStore.ts). Поведение шлюза для ролей от этого не меняется.
-  const tool: Tool = {
+  // Шлюз: сама операция. Поверх неё в конце функции — две обёртки: тренер
+  // ошибок (внутренняя) и учёт вызовов (внешняя).
+  const api: Tool = {
     name: "taskflow",
     description: UNIVERSAL_INSTRUCTION + CALL_CHEATSHEET,
     parameters: Type.Object({
-      action: Type.Union([
-        Type.Literal("discover"),
-        Type.Literal("describe"),
-        Type.Literal("invoke"),
-      ]),
+      action: Type.Optional(
+        Type.Union([
+          Type.Literal("discover"),
+          Type.Literal("describe"),
+          Type.Literal("invoke"),
+        ]),
+      ),
       query: Type.Optional(Type.String()),
       operation: Type.Optional(Type.String()),
       version: Type.Optional(Type.Integer()),
@@ -707,7 +732,11 @@ export function createUniversalTaskflow(
       offset: Type.Optional(Type.Integer({ minimum: 0 })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
     }),
-    execute: async (id, p, signal, onUpdate) => {
+    execute: async (id, raw, signal, onUpdate) => {
+      // Владелец 20.10.2026: модель пишет только operation и arguments. Без action
+      // вызов с operation — invoke, без operation — discover; version по умолчанию 1;
+      // request_id для изменения — из номера хода и вызова (явный по-прежнему главнее).
+      const p = normalizeParams(raw, context, id);
       const fail = (
         code: string,
         message: string,
@@ -943,11 +972,9 @@ export function createUniversalTaskflow(
           образецВложенных(tool, args, наружные);
         if (Check(tool.parameters, diagnosis.candidate)) {
           const corrected = {
-            action: "invoke",
             operation: tool.name,
-            version: 1,
-            ...(write
-              ? { request_id: requestId ?? "новый-уникальный-id" }
+            ...(write && raw?.request_id !== undefined
+              ? { request_id: requestId }
               : {}),
             arguments: diagnosis.candidate,
           };
@@ -1078,15 +1105,74 @@ export function createUniversalTaskflow(
       }
     },
   };
-  // Обёртка учёта: ответ шлюза уходит роли как есть, а сам вызов — в журнал.
-  const inner = tool.execute;
-  tool.execute = async (id, p, signal, onUpdate) => {
-    const detail: AuditDetail = { field: null, expected: null, kind: null };
-    const out = await auditStorage.run(detail, () =>
-      inner(id, p, signal, onUpdate),
-    );
-    recordCall(context, p, out, detail);
-    return out;
+  // Тренер ошибок — обёртка внутренняя: три неверных вызова одной операции
+  // подряд → отказ с остановкой и готовым вызовом. Счётчик ошибок живёт в
+  // ней, и обёртка учёта его не трогает.
+  const coached = withMistakeCoach(api, registry);
+  // Учёт вызовов — обёртка внешняя: ответ шлюза уходит роли как есть, а сам
+  // вызов — в журнал. Снаружи — чтобы в журнал попало ровно то, что увидела
+  // роль, включая сообщение тренера об остановке.
+  const inner = coached.execute;
+  const tool: Tool = {
+    ...coached,
+    execute: async (id, raw, signal, onUpdate) => {
+      // В журнал идёт фактический вызов — тот, который понял шлюз: правило
+      // про action одно и то же для шлюза и для учёта.
+      const p = normalizeParams(raw, context, id);
+      const detail: AuditDetail = { field: null, expected: null, kind: null };
+      const out = await auditStorage.run(detail, () =>
+        inner(id, raw, signal, onUpdate),
+      );
+      recordCall(context, p, out, detail);
+      return out;
+    },
   };
   return tool;
+}
+
+/** Сколько неверных вызовов одной операции подряд терпим до остановки роли. */
+export const MISTAKE_LIMIT = 3;
+const ОШИБКИ_ВЫЗОВА = new Set(["INVALID_ARGUMENTS", "VERSION_MISMATCH", "ACTION_CONFLICT", "UNKNOWN_OPERATION"]);
+/** Владелец 20.10.2026: «если три раза неправильно вызвал инструмент — прилетает
+ *  и говорит: дурью маешься, вот так надо». Счёт ведётся на операцию внутри
+ *  одного инструмента (один заход роли); успешный вызов обнуляет счёт. На третьей
+ *  ошибке подряд к отказу добавляется поле coach: остановка и готовый вызов. */
+function withMistakeCoach(api: Tool, registry: Map<string, Tool>): Tool {
+  const подряд = new Map<string, number>();
+  return {
+    ...api,
+    execute: async (id, p, signal, onUpdate) => {
+      const out = await api.execute(id, p, signal, onUpdate);
+      let env: any;
+      try {
+        env = JSON.parse(out?.content?.[0]?.text ?? "");
+      } catch {
+        return out;
+      }
+      const key = String(p?.operation ?? "(без operation)");
+      if (env?.ok) {
+        подряд.delete(key);
+        return out;
+      }
+      if (!ОШИБКИ_ВЫЗОВА.has(env?.error?.code)) return out;
+      const n = (подряд.get(key) ?? 0) + 1;
+      подряд.set(key, n);
+      if (n < MISTAKE_LIMIT) return out;
+      const tool = registry.get(key);
+      const form = tool
+        ? invocationTemplate(tool.name, tool.parameters, !isReadOperation(tool.name))
+        : null;
+      env.error.coach = {
+        attempts: n,
+        message:
+          `СТОП. Это ${n}-й неверный вызов ${key} подряд — ты повторяешь одну и ту же ошибку. ` +
+          "Не отправляй тот же вызов снова. " +
+          (form
+            ? "Возьми форму ниже, подставь свои значения в каждое поле и пришли ровно её: только operation и arguments."
+            : "Такой операции нет: сначала найди нужную через {\"query\":\"что ищешь\"}, затем describe."),
+        ...(form ? { call: form.invokeTemplate, fields: form.templateFields } : {}),
+      };
+      return { ...out, content: [{ type: "text", text: JSON.stringify(env) }, ...out.content.slice(1)] };
+    },
+  };
 }

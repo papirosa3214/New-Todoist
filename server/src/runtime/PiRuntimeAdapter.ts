@@ -1,16 +1,38 @@
-import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
+import {
+  buildRoleToolCatalog,
+  UNIVERSAL_INSTRUCTION,
+} from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
-import { connectInfraPanel } from "./infraPanelMcp.js";
-import { chatModeInstruction, GOAL_MARK, goalStatus, PLANNING_TOOLS, stripGoalMark, type ChatWorkMode } from "./chatWorkMode.js";
+import { connectRoleMcp } from "./graftMcp.js";
+import {
+  chatModeInstruction,
+  GOAL_MARK,
+  goalStatus,
+  PLANNING_TOOLS,
+  stripGoalMark,
+  type ChatWorkMode,
+} from "./chatWorkMode.js";
 import { getSetting } from "../lib/serverSettings.js";
-import { chatInstructionArgs, chatSystemPrompt, createTaskResourceLoader } from "./instructionResources.js";
+import {
+  chatInstructionArgs,
+  chatSystemPrompt,
+  createTaskResourceLoader,
+} from "./instructionResources.js";
 import { parseModelRef } from "../lib/attemptModel.js";
 import { providerAvailable } from "../lib/modelLadder.js";
 import { connectRoleComposio } from "./composioRuntime.js";
-import { ensureRoleHome, prepareChatSessionDirectory } from "./roleHome.js";
+import {
+  ensureRoleHome,
+  prepareChatSessionDirectory,
+  roleHome,
+} from "./roleHome.js";
 import { homedir } from "node:os";
 import { createCliAgentSession } from "./cliAgentSession.js";
-import { actionTurnHandler, externalAgentBoost, stripActions } from "./externalAgentActions.js";
+import {
+  actionTurnHandler,
+  externalAgentBoost,
+  stripActions,
+} from "./externalAgentActions.js";
 import { agentBinary } from "../lib/externalAgents.js";
 import { roleRunToken } from "./roleRunAccess.js";
 import { externalRuntime } from "../roleRouting.js";
@@ -62,16 +84,11 @@ import {
 import { authSessionManager, type AuthSessionView } from "./AuthSession.js";
 import { prepareRoleRunAccess, releaseRoleRunAccess } from "./roleRunAccess.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
-import {
-  ModelNotAvailableError,
-  RuntimeUnavailableError,
-} from "./errors.js";
+import { ModelNotAvailableError, RuntimeUnavailableError } from "./errors.js";
 
-const ROLE_PROMPTS_DIR = process.env.TASKFLOW_ROLE_PROMPTS_DIR
-  ?? path.join(process.cwd(), "scripts", "role-prompts");
-
-const ROLE_PROFILES_DIR = process.env.TASKFLOW_ROLE_PROFILES_DIR
-  ?? path.join(process.env.HOME ?? ".", ".pi", "agent", "taskflow-profiles");
+const ROLE_PROFILES_DIR =
+  process.env.TASKFLOW_ROLE_PROFILES_DIR ??
+  path.join(process.env.HOME ?? ".", ".pi", "agent", "taskflow-profiles");
 
 // 18.09.2026 (правка SDK): вся самописная обвязка вокруг `pi auth check`
 // / `pi --list-models` / `~/.pi/agent/auth.json` удалена. Источник
@@ -138,7 +155,9 @@ export function resetModelRuntime(): void {
  *  для deep_research, и resumed-сессии с persisted `"off"` оставались
  *  без размышлений.
  */
-export function resolveThinkingLevel(model: { reasoning?: boolean } | null | undefined): "off" | "medium" | null {
+export function resolveThinkingLevel(
+  model: { reasoning?: boolean } | null | undefined,
+): "off" | "medium" | null {
   if (!model) return "off";
   return model.reasoning ? null : "off";
 }
@@ -171,9 +190,11 @@ async function loadModelCatalog(): Promise<SdkModel[]> {
 
 function providerAuthMethods(provider: SdkProvider): AuthMethod[] {
   const methods: AuthMethod[] = [];
-  const auth = (provider as unknown as {
-    auth?: { apiKey?: unknown; oauth?: unknown };
-  }).auth;
+  const auth = (
+    provider as unknown as {
+      auth?: { apiKey?: unknown; oauth?: unknown };
+    }
+  ).auth;
   if (auth?.apiKey) methods.push("api_key");
   if (auth?.oauth) methods.push("oauth");
   return methods;
@@ -192,7 +213,8 @@ interface ProfileConfig {
 }
 
 function readPromptSize(role: RoleName): { source: string; size: number } {
-  const file = path.join(ROLE_PROMPTS_DIR, `${role}.md`);
+  // Инструкция роли — AGENTS.md в папке роли (один источник, 20.10.2026).
+  const file = roleHome(role).agents;
   try {
     const stat = fs.statSync(file);
     return { source: file, size: stat.size };
@@ -207,7 +229,10 @@ function readRoleTools(role: RoleName): string[] {
     const config = JSON.parse(fs.readFileSync(file, "utf8")) as ProfileConfig;
     const tools = config.mcpServers?.taskflow?.env?.TASKFLOW_MCP_TOOLS;
     if (!tools) return [];
-    return tools.split(",").map((t) => t.trim()).filter(Boolean);
+    return tools
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
   } catch {
     return [];
   }
@@ -230,20 +255,23 @@ function readRoleAccount(role: RoleName) {
         ORDER BY created_at LIMIT 1`,
     )
     .get(role) as
-      | {
-          id: string;
-          name: string;
-          permissions: string | null;
-          status: string | null;
-          last_seen_at: string | null;
-        }
-      | undefined;
+    | {
+        id: string;
+        name: string;
+        permissions: string | null;
+        status: string | null;
+        last_seen_at: string | null;
+      }
+    | undefined;
 }
 
 /** userId, которого попытка будет записана как executor. Исполнитель —
  *  ролевая учётка; иначе любой ai-пользователь (страховка до посева ролей).
  *  null = записать attempt нельзя (нет пользователя), run всё равно идёт. */
-function resolveExecutorId(role: string | null, _agentId: string): string | null {
+function resolveExecutorId(
+  role: string | null,
+  _agentId: string,
+): string | null {
   if (role && (ROLE_NAMES as readonly string[]).includes(role)) {
     const account = readRoleAccount(role as RoleName);
     if (account) return account.id;
@@ -347,7 +375,10 @@ function parseTurnResult(messages: unknown): TurnResult | null {
   const lastAssistant = [...messages]
     .reverse()
     .find(
-      (m) => m && typeof m === "object" && (m as { role?: string }).role === "assistant",
+      (m) =>
+        m &&
+        typeof m === "object" &&
+        (m as { role?: string }).role === "assistant",
     ) as { stopReason?: string; errorMessage?: string } | undefined;
   if (!lastAssistant?.stopReason) return null;
   return {
@@ -358,7 +389,10 @@ function parseTurnResult(messages: unknown): TurnResult | null {
 
 /** Обновляет активность/последний ход. НЕ завершает run и НЕ пишет
  *  терминальный итог: результат вычисляется только на agent_settled. */
-function recordRunActivity(run: ActiveRun, event: { type: string; [k: string]: unknown }): void {
+function recordRunActivity(
+  run: ActiveRun,
+  event: { type: string; [k: string]: unknown },
+): void {
   switch (event.type) {
     case "agent_end": {
       // agent_end — промежуточное событие: Pi после него может сделать
@@ -380,9 +414,10 @@ function recordRunActivity(run: ActiveRun, event: { type: string; [k: string]: u
       if (event.success === false) {
         run.lastTurn = {
           stopReason: "error",
-          errorMessage: typeof event.finalError === "string"
-            ? event.finalError
-            : "retry_failed",
+          errorMessage:
+            typeof event.finalError === "string"
+              ? event.finalError
+              : "retry_failed",
         };
       } else {
         // Успешный retry снимает промежуточную ошибку.
@@ -478,16 +513,21 @@ function createAttempt(input: {
 
 /** Итог run определяется НЕ boolean `success` (его в Pi нет), а
  *  stopReason / cancel / ошибкой. Pi event type не равен TaskFlow status. */
-async function finalizeRun(run: ActiveRun, outcome: AgentRun["status"], stopReason: string | null): Promise<void> {
+async function finalizeRun(
+  run: ActiveRun,
+  outcome: AgentRun["status"],
+  stopReason: string | null,
+): Promise<void> {
   if (run.settled) return;
   run.settled = true;
   releaseRoleRunAccess(run.mcpConfigPath);
 
-  const attemptOutcome = outcome === "completed"
-    ? "completed"
-    : outcome === "cancelled"
-    ? "cancelled"
-    : "failed";
+  const attemptOutcome =
+    outcome === "completed"
+      ? "completed"
+      : outcome === "cancelled"
+        ? "cancelled"
+        : "failed";
   const nextState = outcome === "completed" ? "review" : "blocked";
 
   try {
@@ -500,7 +540,9 @@ async function finalizeRun(run: ActiveRun, outcome: AgentRun["status"], stopReas
               session_id = COALESCE(?, session_id)
         WHERE id = ?`,
     ).run(attemptOutcome, stopReason, stopReason, run.sessionId, run.runId);
-  } catch { /* задача/попытка могла быть удалена */ }
+  } catch {
+    /* задача/попытка могла быть удалена */
+  }
 
   try {
     db.prepare(
@@ -512,7 +554,9 @@ async function finalizeRun(run: ActiveRun, outcome: AgentRun["status"], stopReas
               updated_at = datetime('now')
         WHERE id = ?`,
     ).run(nextState, stopReason, run.sessionId, run.taskId);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   if (nextState === "review") {
     // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
     void import("../routes/dispatch.js")
@@ -524,7 +568,9 @@ async function finalizeRun(run: ActiveRun, outcome: AgentRun["status"], stopReas
   // Pi может ещё продолжать (retry/compaction), гасить процесс нельзя.
   try {
     await run.client.stop();
-  } catch { /* процесс уже умер — окей */ }
+  } catch {
+    /* процесс уже умер — окей */
+  }
 
   activeRuns.delete(run.runId);
 }
@@ -542,7 +588,9 @@ async function cancelActiveRunsForTask(taskId: string): Promise<void> {
     run.cancelled = true;
     try {
       await run.client.abort();
-    } catch { /* процесс мог уже завершиться */ }
+    } catch {
+      /* процесс мог уже завершиться */
+    }
     await finalizeRun(run, "cancelled", "cancelled");
   }
 }
@@ -551,7 +599,10 @@ async function cancelActiveRunsForTask(taskId: string): Promise<void> {
  *  «плохого» исхода — явная отмена (cancelRun) или последний фактический
  *  ход с stopReason error/aborted. Промежуточные agent_end эту функцию не
  *  зовут. */
-function resultStatus(run: ActiveRun): { outcome: AgentRun["status"]; reason: string | null } {
+function resultStatus(run: ActiveRun): {
+  outcome: AgentRun["status"];
+  reason: string | null;
+} {
   if (run.cancelled) return { outcome: "cancelled", reason: "cancelled" };
   const turn = run.lastTurn;
   if (turn?.stopReason === "error") {
@@ -615,7 +666,9 @@ export const piRuntime: RuntimeAdapter = {
         contextWindow: sm.contextWindow,
         maxTokens: sm.maxTokens,
         thinking: sm.reasoning,
-        images: Array.isArray(sm.input) ? sm.input.includes("image") : undefined,
+        images: Array.isArray(sm.input)
+          ? sm.input.includes("image")
+          : undefined,
       });
     }
     return models;
@@ -647,14 +700,17 @@ export const piRuntime: RuntimeAdapter = {
     return providers.map((p) => {
       let status: ProviderConnection["status"] = "disconnected";
       try {
-        status = mapProviderStatus(rt.getProviderAuthStatus(p.id) as AuthStatus);
+        status = mapProviderStatus(
+          rt.getProviderAuthStatus(p.id) as AuthStatus,
+        );
       } catch {
         status = "expired";
       }
       let authType: "api_key" | "oauth" | null = null;
       try {
-        authType = (rt.checkAuth(p.id) as unknown as { type?: "api_key" | "oauth" })
-          ?.type ?? null;
+        authType =
+          (rt.checkAuth(p.id) as unknown as { type?: "api_key" | "oauth" })
+            ?.type ?? null;
       } catch {
         authType = null;
       }
@@ -688,7 +744,9 @@ export const piRuntime: RuntimeAdapter = {
     // для этого НЕ годится: он in-memory и умирает с процессом (спека §8).
     await rt.login(provider, "api_key", {
       signal: new AbortController().signal,
-      notify: () => { /* api_key flow не эмитит событий */ },
+      notify: () => {
+        /* api_key flow не эмитит событий */
+      },
       prompt: () => Promise.resolve(apiKey),
     } as never);
 
@@ -705,7 +763,9 @@ export const piRuntime: RuntimeAdapter = {
       runtime_id: RUNTIME_ID_PI,
       status: "connected",
       authType: "api_key",
-      authMethods: providerInfo ? providerAuthMethods(providerInfo) : ["api_key"],
+      authMethods: providerInfo
+        ? providerAuthMethods(providerInfo)
+        : ["api_key"],
       managedBy: "pi",
       lastCheckedAt: new Date().toISOString(),
     };
@@ -764,9 +824,10 @@ export const piRuntime: RuntimeAdapter = {
     // (RuntimeUnavailableError → 503) и «модели нет» (ModelNotAvailableError
     // → 422).
     const catalog = await loadModelCatalog();
-    const match = catalog.find(
-      (m) => m.id === model && (!provider || m.provider === provider),
-    ) ?? catalog.find((m) => m.id === model);
+    const match =
+      catalog.find(
+        (m) => m.id === model && (!provider || m.provider === provider),
+      ) ?? catalog.find((m) => m.id === model);
     if (!match) {
       throw new ModelNotAvailableError(model ?? "(default)", provider ?? null);
     }
@@ -780,7 +841,20 @@ export const piRuntime: RuntimeAdapter = {
     const client = new RpcClient({
       cliPath: resolvePiCliPath(),
       cwd: input.cwd ?? process.cwd(),
-      ...(mcpConfigPath ? { args: ["--mcp-config", mcpConfigPath, ...await chatInstructionArgs(role,mcpConfigPath,"work",input.cwd ?? process.cwd())] } : {}),
+      ...(mcpConfigPath
+        ? {
+            args: [
+              "--mcp-config",
+              mcpConfigPath,
+              ...(await chatInstructionArgs(
+                role,
+                mcpConfigPath,
+                "work",
+                input.cwd ?? process.cwd(),
+              )),
+            ],
+          }
+        : {}),
       provider,
       model,
       // NODE_USE_ENV_PROXY=1 — без него Pi встроенный fetch игнорирует
@@ -801,9 +875,13 @@ export const piRuntime: RuntimeAdapter = {
           executorId,
           model,
           provider: provider ?? null,
-          routingRole: (ROLE_NAMES as readonly string[]).includes(role) ? role : null,
+          routingRole: (ROLE_NAMES as readonly string[]).includes(role)
+            ? role
+            : null,
         });
-      } catch { /* attempt — не критично для запуска */ }
+      } catch {
+        /* attempt — не критично для запуска */
+      }
     }
     // Снимок effective system prompt на старте попытки (дизайн §8):
     // если у роли есть override слоёв prompt/rules/local_policy — он
@@ -824,7 +902,9 @@ export const piRuntime: RuntimeAdapter = {
         db.prepare(
           "UPDATE tasks SET composed_prompt_snapshot = ? WHERE id = ?",
         ).run(composed, input.taskId);
-      } catch { /* колонки ещё нет — после миграции 081 */ }
+      } catch {
+        /* колонки ещё нет — после миграции 081 */
+      }
     }
     try {
       db.prepare(
@@ -833,7 +913,9 @@ export const piRuntime: RuntimeAdapter = {
                 agent_started_at = datetime('now'), updated_at = datetime('now')
           WHERE id = ?`,
       ).run(runId, input.taskId);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     const run: ActiveRun = {
       runId,
@@ -879,7 +961,8 @@ export const piRuntime: RuntimeAdapter = {
         const state = await client.getState();
         if (state?.sessionId) run.sessionId = state.sessionId;
         // Проверяем, что Pi реально поднял запрошенную модель.
-        const actual = state?.model as { provider?: string; id?: string } | undefined;
+        const actual = state?.model as
+          { provider?: string; id?: string } | undefined;
         if (actual?.id) {
           run.model = actual.id;
           run.provider = actual.provider ?? run.provider;
@@ -892,13 +975,16 @@ export const piRuntime: RuntimeAdapter = {
       }
       if (run.sessionId) {
         try {
-          db.prepare(
-            `UPDATE attempts SET session_id = ? WHERE id = ?`,
-          ).run(run.sessionId, runId);
+          db.prepare(`UPDATE attempts SET session_id = ? WHERE id = ?`).run(
+            run.sessionId,
+            runId,
+          );
           db.prepare(
             `UPDATE tasks SET agent_session_id = ?, updated_at = datetime('now') WHERE id = ?`,
           ).run(run.sessionId, input.taskId);
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       await client.prompt(input.prompt);
     } catch (error) {
@@ -934,7 +1020,9 @@ export const piRuntime: RuntimeAdapter = {
     run.cancelled = true;
     try {
       await run.client.abort();
-    } catch { /* процесс мог уже завершиться */ }
+    } catch {
+      /* процесс мог уже завершиться */
+    }
     await finalizeRun(run, "cancelled", "cancelled");
   },
 
@@ -976,13 +1064,14 @@ export const piRuntime: RuntimeAdapter = {
         provider: attempt.provider,
         model: attempt.model,
         session_id: attempt.session_id ?? attempt.task_session,
-        status: mapAttemptStatus(attempt as AttemptRow) === "running"
-          ? "running"
-          : mapAttemptStatus(attempt as AttemptRow) === "cancelled"
-          ? "cancelled"
-          : mapAttemptStatus(attempt as AttemptRow) === "failed"
-          ? "failed"
-          : "completed",
+        status:
+          mapAttemptStatus(attempt as AttemptRow) === "running"
+            ? "running"
+            : mapAttemptStatus(attempt as AttemptRow) === "cancelled"
+              ? "cancelled"
+              : mapAttemptStatus(attempt as AttemptRow) === "failed"
+                ? "failed"
+                : "completed",
         started_at: attempt.started_at,
         finished_at: attempt.ended_at,
         stop_reason: attempt.reason,
@@ -1025,10 +1114,10 @@ export const piRuntime: RuntimeAdapter = {
         task.agent_state === "in_progress"
           ? "running"
           : task.agent_state === "review"
-          ? "completed"
-          : task.agent_state === "blocked"
-          ? "failed"
-          : "queued",
+            ? "completed"
+            : task.agent_state === "blocked"
+              ? "failed"
+              : "queued",
       started_at: task.agent_started_at ?? new Date().toISOString(),
       finished_at: task.agent_finished_at,
       stop_reason: task.stop_reason,
@@ -1196,7 +1285,9 @@ export async function stopAllChatRuns(): Promise<void> {
     run.cancelled = true;
     try {
       await run.abort();
-    } catch { /* процесс мог уже завершиться */ }
+    } catch {
+      /* процесс мог уже завершиться */
+    }
     releaseChatRoleLock(run.chatId, run.roleId);
   }
   activeChatRuns.clear();
@@ -1245,8 +1336,11 @@ export async function startChatRun(
   const runId = makeChatRunId();
 
   if (externalRuntime(role)) {
-    try { return await runExternalChat(input, runId); }
-    finally { releaseChatRoleLock(input.chatId, input.roleId); }
+    try {
+      return await runExternalChat(input, runId);
+    } finally {
+      releaseChatRoleLock(input.chatId, input.roleId);
+    }
   }
 
   try {
@@ -1258,24 +1352,36 @@ export async function startChatRun(
     const provider = providerOfModel(model);
 
     const catalog = await loadModelCatalog();
+    // «opencode-go/deepseek-…» в каталоге Pi лежит как id «deepseek-…» +
+    // provider «opencode-go»: без разбора ссылки модели с префиксом в чате
+    // не находились никогда — ни основная, ни запасные (20.10.2026).
     const findInCatalog = (id: string) => {
-      const p = providerOfModel(id);
-      return catalog.find((m) => m.id === id && m.provider === p) ?? catalog.find((m) => m.id === id);
+      const ref = parseModelRef(id);
+      return (
+        catalog.find((m) => m.id === ref.id && m.provider === ref.provider) ??
+        catalog.find((m) => m.id === id)
+      );
     };
     // Владелец 12.10.2026: «у нас должен был быть настроен запасной провайдер…
-      // лимиты кончились и не переключаются». ХОД ЧАТА вообще не смотрел на
+    // лимиты кончились и не переключаются». ХОД ЧАТА вообще не смотрел на
     // цепочку: бралась только основная модель роли, поэтому в чате не
     // переключался НИКТО — ни Помощник владельца (у которого цепочка была настроена),
     // ни кто-либо ещё. `pickFailoverModel` живёт в ветке шагов задачи и в чат
     // не заходит. Теперь идём по цепочке [основная, ...запасные] и берём
     // первую модель, чей провайдер сейчас не помечен как упёршийся в лимит.
     // Выбор в окне ввода чата — первым в цепочке (только на этот ход).
-    const chain = [input.model, model, ...(routing.fallbacks[role] ?? [])].filter(Boolean) as string[];
-    const match = chain.map(findInCatalog).find((m): m is NonNullable<typeof m> => {
-      if (!m) return false;
-      const ref = parseModelRef(m.id);
-      return providerAvailable(ref.provider || m.provider);
-    });
+    const chain = [
+      input.model,
+      model,
+      ...(routing.fallbacks[role] ?? []),
+    ].filter(Boolean) as string[];
+    const match = chain
+      .map(findInCatalog)
+      .find((m): m is NonNullable<typeof m> => {
+        // Провайдер — из каталога: по голому id «deepseek-…» угадывался
+        // minimax, и его лимит отбрасывал модели чужих провайдеров.
+        return !!m && providerAvailable(m.provider);
+      });
     if (!match) {
       throw new ModelNotAvailableError(model, provider);
     }
@@ -1290,42 +1396,98 @@ export async function startChatRun(
     const home = ensureRoleHome(role);
     const cwd = home.workspace;
     const mode: ChatWorkMode = input.mode ?? "work";
-    const sessionDirectory = await prepareChatSessionDirectory(role, input.chatId, input.sessionId);
+    const sessionDirectory = await prepareChatSessionDirectory(
+      role,
+      input.chatId,
+      input.sessionId,
+    );
     const known = input.sessionId
-      ? (await SessionManager.list(cwd, sessionDirectory)).find((s) => s.id === input.sessionId)
+      ? (await SessionManager.list(cwd, sessionDirectory)).find(
+          (s) => s.id === input.sessionId,
+        )
       : undefined;
     // Сохранённая сессия — продолжаем её; файла нет — заводим новую с тем же
     // id (как делал `--session-id` у Pi CLI), чтобы chat_sessions не терял её.
     const sessionManager = known
       ? SessionManager.open(known.path, sessionDirectory, cwd)
-      : SessionManager.create(cwd, sessionDirectory, input.sessionId ? { id: input.sessionId } : undefined);
+      : SessionManager.create(
+          cwd,
+          sessionDirectory,
+          input.sessionId ? { id: input.sessionId } : undefined,
+        );
 
     const runtime: any = await getModelRuntime();
     const piModel =
       runtime.getModel?.(resolvedProvider, resolvedModel) ??
-      ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === resolvedModel);
+      ((await runtime.getAvailable?.()) ?? []).find(
+        (m: any) => m.id === resolvedModel,
+      );
     if (!piModel) throw new ModelNotAvailableError(model, provider);
 
-    const systemPrompt = (await chatSystemPrompt(role, mode, cwd))+"\n\n"+UNIVERSAL_INSTRUCTION;
-    const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
-    const composio = await connectRoleComposio(role, mode, input.chatId).catch((error) => {
-      console.warn(`[chats] Composio для ${role} не подключился:`, error);
-      return { tools: [] as any[], close: async () => {} };
-    });
+    const systemPrompt =
+      (await chatSystemPrompt(role, mode, cwd)) +
+      "\n\n" +
+      UNIVERSAL_INSTRUCTION;
+    const resourceLoader = await createTaskResourceLoader(
+      role,
+      cwd,
+      systemPrompt,
+    );
+    const composio = await connectRoleComposio(role, mode, input.chatId).catch(
+      (error) => {
+        console.warn(`[chats] Composio для ${role} не подключился:`, error);
+        return { tools: [] as any[], close: async () => {} };
+      },
+    );
     // «Обсуждение» — как «Работа» (владелец 20.10.2026); ограничен только «План».
     const allowed = (name: string) =>
       mode !== "plan" ||
       PLANNING_TOOLS.includes(name) ||
-      ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_GET_TOOL_SCHEMAS"].some((n) => name.endsWith(n));
-    const builtin = [...new Map([...createCodingTools(cwd), ...createReadOnlyTools(cwd)].map((t) => [t.name, t])).values()]
+      [
+        "COMPOSIO_SEARCH_TOOLS",
+        "COMPOSIO_MULTI_EXECUTE_TOOL",
+        "COMPOSIO_GET_TOOL_SCHEMAS",
+      ].some((n) => name.endsWith(n));
+    const builtin = [
+      ...new Map(
+        [...createCodingTools(cwd), ...createReadOnlyTools(cwd)].map((t) => [
+          t.name,
+          t,
+        ]),
+      ).values(),
+    ]
       .filter((t) => allowed(t.name))
-      .map((t) => ({ ...t, description: composeLayer(role, "tool.builtin." + t.name)?.effective ?? t.description }));
-    const infra = await connectInfraPanel(role).catch(()=>({tools:[] as any[],close:async()=>{}}));
+      .map((t) => ({
+        ...t,
+        description:
+          composeLayer(role, "tool.builtin." + t.name)?.effective ??
+          t.description,
+      }));
+    const infra = await connectRoleMcp(role, cwd).catch(() => ({
+      tools: [] as any[],
+      close: async () => {},
+    }));
     // Дела владельца в комнате чата: у Помощника это один из каналов, где с ним
-  // говорят, поэтому инструмент должен быть и здесь.
-  const secretary=role==="secretary"?secretaryThings3Tools({role,chatId:input.chatId,messageId:input.messageId}):[];
-  const toolCatalog = buildRoleToolCatalog({role,model:resolvedModel,mode,runId:sessionManager.getSessionId(),chatId:input.chatId,messageId:input.messageId},[...composio.tools,...infra.tools,...secretary]);
-
+    // говорят, поэтому инструмент должен быть и здесь.
+    const secretary =
+      role === "secretary"
+        ? secretaryThings3Tools({
+            role,
+            chatId: input.chatId,
+            messageId: input.messageId,
+          })
+        : [];
+    const toolCatalog = buildRoleToolCatalog(
+      {
+        role,
+        model: resolvedModel,
+        mode,
+        runId: sessionManager.getSessionId(),
+        chatId: input.chatId,
+        messageId: input.messageId,
+      },
+      [...composio.tools, ...infra.tools, ...secretary],
+    );
 
     let session: any;
     try {
@@ -1335,7 +1497,9 @@ export async function startChatRun(
         // Как у прежнего процесса Pi: уровень размышлений по умолчанию (medium;
         // SDK сам выключит его у модели без reasoning). «off» здесь гасил
         // живые «размышления» в окне чата (владелец 02.10.2026).
-        ...(input.mode === "deep_research" && match.reasoning ? { thinkingLevel: "high" } : {}),
+        ...(input.mode === "deep_research" && match.reasoning
+          ? { thinkingLevel: "high" }
+          : {}),
         modelRuntime: runtime,
         resourceLoader,
         // `tools` у SDK — список ИМЁН разрешённых инструментов. Объекты сюда
@@ -1345,7 +1509,10 @@ export async function startChatRun(
         tools: [...builtin.map((t) => t.name), ...toolCatalog.activeNames],
         customTools: [...builtin, ...toolCatalog.customTools],
         sessionManager,
-        settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
+        settingsManager: SettingsManager.inMemory({
+          compaction: { enabled: true },
+          retry: { enabled: true, maxRetries: 2 },
+        }),
       } as any));
     } catch (error) {
       resourceLoader.disposeResources();
@@ -1358,9 +1525,16 @@ export async function startChatRun(
     // Мигрируем на уровень, который провайдер реально умеет, и пишем в
     // jsonl, чтобы следующий resume открылся с размышлениями. Без миграции
     // чат продолжал бы работать без thinking под persisted "off".
-    if (piModel?.reasoning && (session as any)?.thinkingLevel === "off" && typeof (session as any).setThinkingLevel === "function") {
-      try { (session as any).setThinkingLevel("medium", { persist: true }); }
-      catch { /* persist не прошёл — следующий resume сам поднимет */ }
+    if (
+      piModel?.reasoning &&
+      (session as any)?.thinkingLevel === "off" &&
+      typeof (session as any).setThinkingLevel === "function"
+    ) {
+      try {
+        (session as any).setThinkingLevel("medium", { persist: true });
+      } catch {
+        /* persist не прошёл — следующий resume сам поднимет */
+      }
     }
 
     const run: ActiveChatRun = {
@@ -1397,13 +1571,25 @@ export async function startChatRun(
         const turn = parseTurnResult(event.messages);
         if (turn) turnState.last = turn;
       } else if (event?.type === "auto_retry_end") {
-        turnState.last = event.success === false
-          ? { stopReason: "error", errorMessage: typeof event.finalError === "string" ? event.finalError : "retry_failed" }
-          : null;
+        turnState.last =
+          event.success === false
+            ? {
+                stopReason: "error",
+                errorMessage:
+                  typeof event.finalError === "string"
+                    ? event.finalError
+                    : "retry_failed",
+              }
+            : null;
       }
-      if (event?.type === "tool_execution_start" && event.toolCallId) runningTools.add(event.toolCallId);
-      else if (event?.type === "tool_execution_end" && event.toolCallId) runningTools.delete(event.toolCallId);
-      if (event?.type === "message_update" && event.assistantMessageEvent?.type === "toolcall_start") {
+      if (event?.type === "tool_execution_start" && event.toolCallId)
+        runningTools.add(event.toolCallId);
+      else if (event?.type === "tool_execution_end" && event.toolCallId)
+        runningTools.delete(event.toolCallId);
+      if (
+        event?.type === "message_update" &&
+        event.assistantMessageEvent?.type === "toolcall_start"
+      ) {
         input.onStep?.(event.assistantMessageEvent.toolName);
       }
       try {
@@ -1415,7 +1601,8 @@ export async function startChatRun(
     });
 
     let finalText = "";
-    let finalSessionId: string | null = session.sessionId ?? input.sessionId ?? null;
+    let finalSessionId: string | null =
+      session.sessionId ?? input.sessionId ?? null;
     const timeoutMs = resolveChatRunTimeout(input.timeoutMs);
     let ceilingTimer: ReturnType<typeof setTimeout> | undefined;
     // Потолок — на каждый ход: в режиме «Цель» ходов много, и общий
@@ -1431,13 +1618,16 @@ export async function startChatRun(
       ceiling.catch(() => {});
       return ceiling;
     };
-    const idleTimer = setInterval(() => {
-      if (idleMs <= 0 || watchdogFired || runningTools.size > 0) return;
-      if (Date.now() - lastActivity < idleMs) return;
-      watchdogFired = new ChatRunTimeoutError("CHAT_RUN_IDLE", idleMs);
-      session.abort().catch(() => {});
-      rejectWatchdog(watchdogFired);
-    }, Math.min(5_000, Math.max(50, Math.floor(idleMs / 4))));
+    const idleTimer = setInterval(
+      () => {
+        if (idleMs <= 0 || watchdogFired || runningTools.size > 0) return;
+        if (Date.now() - lastActivity < idleMs) return;
+        watchdogFired = new ChatRunTimeoutError("CHAT_RUN_IDLE", idleMs);
+        session.abort().catch(() => {});
+        rejectWatchdog(watchdogFired);
+      },
+      Math.min(5_000, Math.max(50, Math.floor(idleMs / 4))),
+    );
 
     try {
       // Один user message = один ответ; сверху — общий потолок, сбоку —
@@ -1455,7 +1645,11 @@ export async function startChatRun(
         // «Сжать» (владелец 20.10.2026): сжатие сохранённой сессии по кнопке.
         await Promise.race([session.compact(), armCeiling()]);
       } else {
-        await promptOnce(input.mode ? chatModeInstruction(input.mode) + "\n\n" + input.prompt : input.prompt);
+        await promptOnce(
+          input.mode
+            ? chatModeInstruction(input.mode) + "\n\n" + input.prompt
+            : input.prompt,
+        );
       }
       if (input.mode === "goal" && !input.compactOnly) {
         // «Цель»: пока роль пишет «ЦЕЛЬ: ПРОДОЛЖАЮ», даём следующий ход,
@@ -1467,12 +1661,16 @@ export async function startChatRun(
           const progress = stripGoalMark(text);
           if (progress) input.onGoalProgress?.(progress);
           const last = turn === maxTurns;
-          await promptOnce(last
-            ? `Ход ${turn} из ${maxTurns} — последний по потолку. Остановись: дай итог — что сделано, что осталось — и закончи строкой «${GOAL_MARK.owner}».`
-            : `Продолжай к цели. Ход ${turn} из ${maxTurns}.`);
+          await promptOnce(
+            last
+              ? `Ход ${turn} из ${maxTurns} — последний по потолку. Остановись: дай итог — что сделано, что осталось — и закончи строкой «${GOAL_MARK.owner}».`
+              : `Продолжай к цели. Ход ${turn} из ${maxTurns}.`,
+          );
         }
       }
-      finalText = input.compactOnly ? "" : stripGoalMark((session.getLastAssistantText?.() ?? "").trim());
+      finalText = input.compactOnly
+        ? ""
+        : stripGoalMark((session.getLastAssistantText?.() ?? "").trim());
       finalSessionId = session.sessionId ?? finalSessionId;
       if (run.cancelled) throw chatRunCancelledError();
       const lastTurn = turnState.last;
@@ -1486,7 +1684,11 @@ export async function startChatRun(
       clearInterval(idleTimer);
       clearTimeout(ceilingTimer);
       unsubscribe?.();
-      try { session.dispose(); } catch { /* уже закрыта */ }
+      try {
+        session.dispose();
+      } catch {
+        /* уже закрыта */
+      }
       resourceLoader.disposeResources();
       await composio.close().catch(() => {});
       await infra.close().catch(() => {});
@@ -1513,46 +1715,98 @@ export async function startChatRun(
  * taskflow-actions, который сервер исполняет шлюзом ролей. Сессия агента
  * продолжается между сообщениями: её id хранится в chat_sessions, как у Pi.
  */
-async function runExternalChat(input: StartChatRunInput, runId: string): Promise<StartChatRunResult> {
+async function runExternalChat(
+  input: StartChatRunInput,
+  runId: string,
+): Promise<StartChatRunResult> {
   const role = input.role;
   const runtimeKey = externalRuntime(role)!;
   const command = agentBinary(runtimeKey);
-  if (!command) throw new Error(`внешний агент «${roleTitle(role)}» не найден на машине — нажми «Найти агентов» в «Команде»`);
+  if (!command)
+    throw new Error(
+      `внешний агент «${roleTitle(role)}» не найден на машине — нажми «Найти агентов» в «Команде»`,
+    );
   const mode: ChatWorkMode = input.mode ?? "work";
   // Домашняя папка, как при обычном запуске агента, а не песочница роли.
   const cwd = homedir();
-  const allowed = (name: string) => mode !== "plan" || PLANNING_TOOLS.includes(name);
-  const catalog = buildRoleToolCatalog({ role, model: null, mode, runId, chatId: input.chatId, messageId: input.messageId });
-  const operations = catalog.customTools.filter((t: any) => t.name !== "taskflow" && allowed(t.name));
+  const allowed = (name: string) =>
+    mode !== "plan" || PLANNING_TOOLS.includes(name);
+  const catalog = buildRoleToolCatalog({
+    role,
+    model: null,
+    mode,
+    runId,
+    chatId: input.chatId,
+    messageId: input.messageId,
+  });
+  const operations = catalog.customTools.filter(
+    (t: any) => t.name !== "taskflow" && allowed(t.name),
+  );
   const token = roleRunToken(role);
   const session = await createCliAgentSession({
-    cwd, command,
+    cwd,
+    command,
     env: token ? { TASKFLOW_TOKEN: token } : undefined,
     resumeSessionId: input.sessionId ?? null,
     model: input.model,
-    onModel: (model) => { db.prepare("UPDATE roles SET last_model = ? WHERE key = ?").run(model, role); },
+    onModel: (model) => {
+      db.prepare("UPDATE roles SET last_model = ? WHERE key = ?").run(
+        model,
+        role,
+      );
+    },
     // Только буст: правила внутренних ролей (песочница, назначение, host-инструменты) внешнему агенту не передаются.
     systemPrompt: externalAgentBoost(roleTitle(role), operations, "chat"),
     onTurnEnd: actionTurnHandler(operations, runId),
   });
-  const run: ActiveChatRun = { runId, chatId: input.chatId, role, roleId: input.roleId, abort: () => session.abort(), startedAt: new Date().toISOString(), cancelled: false };
+  const run: ActiveChatRun = {
+    runId,
+    chatId: input.chatId,
+    role,
+    roleId: input.roleId,
+    abort: () => session.abort(),
+    startedAt: new Date().toISOString(),
+    cancelled: false,
+  };
   activeChatRuns.set(runId, run);
   const unsubscribe = session.subscribe((event: any) => {
     if (event?.type === "tool_execution_start") input.onStep?.(event.toolName);
-    try { input.onEvent?.(event); } catch (error) { console.warn("[chats] onEvent живого хода упал:", error); }
+    try {
+      input.onEvent?.(event);
+    } catch (error) {
+      console.warn("[chats] onEvent живого хода упал:", error);
+    }
   });
   const timeoutMs = resolveChatRunTimeout(input.timeoutMs);
   let ceilingTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      session.prompt(input.mode ? chatModeInstruction(input.mode) + "\n\n" + input.prompt : input.prompt),
-      new Promise<never>((_, reject) => { ceilingTimer = setTimeout(() => { void session.abort(); reject(new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs)); }, timeoutMs); }),
+      session.prompt(
+        input.mode
+          ? chatModeInstruction(input.mode) + "\n\n" + input.prompt
+          : input.prompt,
+      ),
+      new Promise<never>((_, reject) => {
+        ceilingTimer = setTimeout(() => {
+          void session.abort();
+          reject(new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs));
+        }, timeoutMs);
+      }),
     ]);
     if (run.cancelled) throw chatRunCancelledError();
     const last = session.state.messages[session.state.messages.length - 1];
-    if (last?.stopReason === "error") throw Object.assign(new Error(last.errorMessage || "внешний агент вернул ошибку"), { code: "CHAT_RUN_MODEL_ERROR" });
-    const text = stripGoalMark(stripActions((last?.content ?? []).map((c: any) => c?.text ?? "").join("\n")).trim());
-    if (session.sessionId) upsertChatSession(input.chatId, input.roleId, session.sessionId);
+    if (last?.stopReason === "error")
+      throw Object.assign(
+        new Error(last.errorMessage || "внешний агент вернул ошибку"),
+        { code: "CHAT_RUN_MODEL_ERROR" },
+      );
+    const text = stripGoalMark(
+      stripActions(
+        (last?.content ?? []).map((c: any) => c?.text ?? "").join("\n"),
+      ).trim(),
+    );
+    if (session.sessionId)
+      upsertChatSession(input.chatId, input.roleId, session.sessionId);
     return { runId, sessionId: session.sessionId, text };
   } finally {
     clearTimeout(ceilingTimer);
@@ -1572,7 +1826,9 @@ export async function cancelChatRun(runId: string): Promise<boolean> {
   run.cancelled = true;
   try {
     await run.abort();
-  } catch { /* процесс мог уже завершиться */ }
+  } catch {
+    /* процесс мог уже завершиться */
+  }
   // activeChatRuns сам себя почистит в finally startChatRun, но
   // освободим слот сразу — чтобы следующее сообщение могло стартовать
   // новую сессию, не дожидаясь финала cleanup.
@@ -1591,7 +1847,10 @@ function chatRunCancelledError(): Error {
 
 /** Остановить идущие ходы в чате: всех ролей или одной (roleId). Кнопка
  *  «Остановить» в окне чата. Возвращает число остановленных ходов. */
-export async function cancelChatRunsFor(chatId: string, roleId?: string): Promise<number> {
+export async function cancelChatRunsFor(
+  chatId: string,
+  roleId?: string,
+): Promise<number> {
   const runs = [...activeChatRuns.values()].filter(
     (run) => run.chatId === chatId && (!roleId || run.roleId === roleId),
   );

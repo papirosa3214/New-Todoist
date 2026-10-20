@@ -11,11 +11,12 @@
  *     сводка по Composio с подключениями — только владельцу;
  *   - выключенная роль не дёргает Composio зря.
  */
-import { beforeAll, afterAll, describe, it, expect, vi } from "vitest";
+import { beforeAll, afterAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { buildApp } from "../src/index.js";
 import { ROLE_NAMES } from "../src/roleRouting.js";
 import { saveComposioPolicy } from "../src/runtime/composioPolicy.js";
 import { inspectComposio } from "../src/runtime/composioRuntime.js";
+import { clearComposioCache } from "../src/runtime/roleIntegrations.js";
 
 vi.mock("../src/runtime/composioRuntime.js", async importOriginal => ({
   ...await importOriginal<typeof import("../src/runtime/composioRuntime.js")>(),
@@ -51,6 +52,8 @@ describe("интеграции в профиле роли", () => {
     vi.unstubAllEnvs();
     await app.close();
   });
+  // Копия каталога живёт минуту: без сброса один тест читал бы ответ другого.
+  beforeEach(() => clearComposioCache());
 
   it("отдаёт разрешённые сервисы и их состояние из каталога Composio", async () => {
     saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["todoist"] });
@@ -110,5 +113,33 @@ describe("интеграции в профиле роли", () => {
     expect(body.roles).toEqual(
       expect.arrayContaining([{ role, enabled: true, toolkits: ["linear"] }]),
     );
+  });
+
+  it("сводка отдаёт сервис роли по ключу, даже если его нет на первой странице каталога", async () => {
+    saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["todoist"] });
+    // Первая страница каталога todoist не содержит — так и бывает у Composio.
+    vi.mocked(inspectComposio).mockImplementation(async (_policy: any, _action: any, search = "") => {
+      if (search === "todoist") {
+        return { items: [{ slug: "todoist", name: "Todoist", connected: true, noAuth: false }] } as any;
+      }
+      return { items: [{ slug: "gmail", name: "Gmail", connected: true, noAuth: false }] } as any;
+    });
+    const res = await app.inject({ method: "GET", url: "/api/integrations/composio", headers: auth(ownerToken) });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.catalog.map((item: any) => item.slug)).toEqual(["gmail"]);
+    expect(body.services).toEqual([
+      { slug: "todoist", name: "Todoist", connected: true, noAuth: false },
+    ]);
+  });
+
+  it("сводка не выдумывает подключение, когда Composio не ответил", async () => {
+    saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["todoist"] });
+    vi.mocked(inspectComposio).mockRejectedValue(new Error("Composio не отвечает"));
+    const res = await app.inject({ method: "GET", url: "/api/integrations/composio", headers: auth(ownerToken) });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.services).toEqual([]);
+    expect(body.error).toContain("Composio");
   });
 });

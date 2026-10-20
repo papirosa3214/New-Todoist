@@ -5,7 +5,7 @@ import { ROLE_NAMES } from "../roleRouting.js";
 import { composioCredentialConfigured, roleComposioPolicy, saveComposioPolicy } from "../runtime/composioPolicy.js";
 import { inspectComposio } from "../runtime/composioRuntime.js";
 import { composioAccountsCall } from "../runtime/composioAccounts.js";
-import { composioCatalog } from "../runtime/roleIntegrations.js";
+import { composioCatalog, resolveToolkits } from "../runtime/roleIntegrations.js";
 import db from "../db.js";
 
 export function registerComposioRoutes(app: FastifyInstance) {
@@ -82,20 +82,30 @@ export function registerComposioRoutes(app: FastifyInstance) {
   app.get("/api/integrations/composio", { preHandler: authOrApiToken }, async (req: any, reply) => {
     if (!isOwner(req.userId)) return reply.code(403).send({ error: "Настройки Composio доступны владельцу" });
     const configured = composioCredentialConfigured();
-    const roles = db
+    const rows = db
       .prepare("SELECT role, enabled, toolkits FROM role_composio ORDER BY role")
       .all() as Array<{ role: string; enabled: number; toolkits: string | null }>;
+    const roles = rows.map((row) => ({
+      role: row.role,
+      enabled: !!row.enabled,
+      toolkits: row.toolkits == null ? null : (JSON.parse(row.toolkits) as string[]),
+    }));
     const catalog = configured ? await composioCatalog(req.userId, String(req.query?.search ?? "").slice(0, 100)) : { items: [], error: null };
+    // Каталог приходит постранично (первая страница — 50 сервисов), и
+    // сервиса роли — например, todoist — в ней может не быть. Поэтому
+    // разрешённые ролям сервисы спрашиваем по ключу: иначе экран показывал
+    // бы про подключённый todoist «состояние неизвестно», а на «Интеграциях»
+    // он не был бы виден без поиска. `toolkits: null` — весь каталог, его
+    // перечислять не нужно.
+    const allowedSlugs = [...new Set(roles.flatMap((role) => role.toolkits ?? []))];
+    const resolved = configured ? await resolveToolkits(req.userId, allowedSlugs) : { items: [], error: null };
     return {
       configured,
       available: configured && !catalog.error,
       catalog: catalog.items,
-      roles: roles.map((row) => ({
-        role: row.role,
-        enabled: !!row.enabled,
-        toolkits: row.toolkits == null ? null : (JSON.parse(row.toolkits) as string[]),
-      })),
-      error: configured ? catalog.error : "Ключ Composio ещё не настроен на сервере",
+      services: resolved.items,
+      roles,
+      error: configured ? (catalog.error ?? resolved.error) : "Ключ Composio ещё не настроен на сервере",
     };
   });
   const trusted = () => ({ items: db.prepare("SELECT address, added_at FROM mail_trusted_senders ORDER BY added_at").all() });

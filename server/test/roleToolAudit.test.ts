@@ -267,3 +267,111 @@ describe("HTTP: сводка и выгрузка", () => {
       expect(Object.values(row).join(" ")).not.toContain("sk-live-");
   });
 });
+
+describe("тренер ошибок и учёт вместе: слияние ветки с main", () => {
+  // У каждой проверки свой модель-маркер: записи учёта не мешают друг другу.
+  const MERGE_MODEL = "claude-merge-probe";
+  const mergeContext = { ...context, model: MERGE_MODEL };
+
+  it("третья ошибка подряд приходит с тренером, и все три отказа — в журнале", async () => {
+    const api = createUniversalTaskflow([operation], {
+      ...mergeContext,
+      runId: "run-merge-1",
+    });
+    // Без action шлюз сам понимает вызов с operation как invoke — в журнал
+    // должно попасть именно это действие, а не пустое поле.
+    const call = () =>
+      api
+        .execute("m", { operation: operation.name, arguments: { query: 42 } })
+        .then(decode);
+
+    expect((await call()).error.coach).toBeUndefined();
+    expect((await call()).error.coach).toBeUndefined();
+    const third = await call();
+    expect(third.error.code).toBe("INVALID_ARGUMENTS");
+    expect(third.error.coach.message).toMatch(/СТОП/);
+
+    const rows = toolAuditRecords({ role: ROLE, model: MERGE_MODEL });
+    expect(rows.length).toBe(3);
+    // Учёт — внешняя обёртка: в журнал попало то, что увидела роль, вместе
+    // с сообщением тренера об остановке. Записи одной секунды упорядочены по
+    // id, а не по времени, поэтому тренерскую ищем по содержимому.
+    const coached = rows.filter((row) =>
+      String(row.error_message ?? "").includes("Тренер:"),
+    );
+    expect(coached.length).toBe(1);
+    expect(coached[0].error_message).toContain("СТОП");
+    expect(coached[0].action).toBe("invoke");
+    expect(coached[0].operation).toBe(operation.name);
+    expect(coached[0].error_field).toBe("arguments.query");
+    expect(coached[0].error_code).toBe("INVALID_ARGUMENTS");
+  });
+
+  it("успех обнуляет счётчик тренера, разные операции считаются отдельно", async () => {
+    const another = {
+      name: "taskflow_task_status",
+      description: "статус задачи",
+      parameters: Type.Object({ id: Type.String() }),
+      execute: async () => ({ content: [{ type: "text", text: "ок" }] }),
+    };
+    const api = createUniversalTaskflow([operation, another], {
+      ...mergeContext,
+      runId: "run-merge-2",
+    });
+    const bad = () =>
+      api
+        .execute("m", { operation: operation.name, arguments: { query: 42 } })
+        .then(decode);
+    const badOther = () =>
+      api
+        .execute("o", { operation: another.name, arguments: { id: 5 } })
+        .then(decode);
+
+    expect((await bad()).error.coach).toBeUndefined();
+    expect((await bad()).error.coach).toBeUndefined();
+    // Успешный вызов той же операции обнуляет счёт.
+    const ok = await api
+      .execute("ok", {
+        action: "invoke",
+        operation: operation.name,
+        version: 1,
+        arguments: { query: "сводка" },
+      })
+      .then(decode);
+    expect(ok.ok).toBe(true);
+    expect((await bad()).error.coach).toBeUndefined();
+
+    // Ошибки другой операции свой счёт не поднимают и чужой не обнуляют.
+    expect((await badOther()).error.coach).toBeUndefined();
+    expect((await badOther()).error.coach).toBeUndefined();
+    expect((await bad()).error.coach).toBeUndefined();
+    expect((await badOther()).error.coach.message).toMatch(/СТОП/);
+  });
+
+  it("счётчик ошибок не зависит от записи в журнал", async () => {
+    // Запись в учёт отключена так же, как это делает сторож: триггер на вставку.
+    db.exec(
+      "CREATE TRIGGER merge_block_audit BEFORE INSERT ON role_tool_audit BEGIN SELECT RAISE(ABORT,'x'); END;",
+    );
+    try {
+      const before = toolAuditRecords({ role: ROLE, model: MERGE_MODEL }).length;
+      const api = createUniversalTaskflow([operation], {
+        ...mergeContext,
+        runId: "run-merge-3",
+      });
+      const call = () =>
+        api
+          .execute("m", { operation: operation.name, arguments: { query: 42 } })
+          .then(decode);
+      await call();
+      await call();
+      // Журнал молчит, а тренер всё равно останавливает роль на третьей ошибке.
+      expect((await call()).error.coach.message).toMatch(/СТОП/);
+      expect(toolAuditRecords({ role: ROLE, model: MERGE_MODEL }).length).toBe(
+        before,
+      );
+    } finally {
+      db.exec("DROP TRIGGER IF EXISTS merge_block_audit");
+    }
+  });
+});

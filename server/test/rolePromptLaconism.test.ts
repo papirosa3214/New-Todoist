@@ -90,10 +90,10 @@ describe("роль secretary: блок «Лаконичность» в roles.pro
     await app.close();
   });
 
-  it("rolePromptText('secretary') начинается с «## Лаконичность» и содержит пределы", () => {
+  it("rolePromptText('secretary') содержит «## Лаконичность» из общего шаблона и пределы", () => {
     const text = rolePromptText("secretary");
     expect(text).not.toBeNull();
-    expect(text!.startsWith("## Лаконичность")).toBe(true);
+    expect(text!.includes("## Лаконичность")).toBe(true);
     for (const marker of LIMIT_MARKERS) {
       expect(text!.includes(marker), `roles.prompt secretary: нет маркера «${marker}»`).toBe(true);
     }
