@@ -63,10 +63,11 @@ it("ambiguous roles require a slot; explicit targeting cannot select another rol
  const shared=roleProjectSnapshot('builder',null,'shared_task');
  expect(shared).toContain('Исходный блок');expect(shared).toContain('Дополнительный этап');expect(shared).toContain('постоянный участник');
 });
-it("discussion uses the common read/messaging policy without workflow transitions",()=>{
+// Владелец 20.10.2026: «Обсуждение» — то же, что работа по задаче, без ограничений.
+it("discussion has the same tools as work",()=>{
  const names=slotConversationTools('builder','test','shared_task','slot_a').map(tool=>tool.name);
  expect(names).toContain('taskflow_doc_read');expect(names).toContain('taskflow_task');
- expect(names).not.toContain('taskflow_claim');expect(names).not.toContain('taskflow_state');expect(names).not.toContain('taskflow_subtask_done');expect(names).not.toContain('taskflow_doc_write');expect(names).toContain('taskflow_topic_send');expect(names).not.toContain('taskflow_task_proposal');expect(names).toContain('taskflow');
+ expect(names).toContain('taskflow_state');expect(names).toContain('taskflow_subtask_done');expect(names).toContain('taskflow_doc_write');expect(names).toContain('taskflow_topic_send');expect(names).toContain('taskflow');
 });
 it("conversation continues work file without changing slot state or creating attempts",async()=>{
  const before=db.prepare("SELECT * FROM subtasks WHERE id='slot_a'").get();const attempts=(db.prepare("SELECT count(*) n FROM attempts").get() as any).n;

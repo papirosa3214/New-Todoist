@@ -23,7 +23,6 @@ import { classifyFailureReason, failureReasonLabel, type FailureReasonCode } fro
 import { decideFailureAction, failurePolicy } from "./failurePolicy.js";
 import { logStepAbandoned } from "./abandonedStep.js";
 import { closeStaleInboxForSubtask } from "./topicInbox.js";
-import { announceStepState } from "./stepTopicProgress.js";
 
 /**
  * Узлы collaboration plan — обычные `subtasks` с `collaboration_plan_id` +
@@ -207,6 +206,40 @@ export function planNodeAgentRefusal(subtaskId: string, userId: string, starting
  * `/approve` и для узлов, открывшихся по графу через
  * `unlockReadyPlanSubtasks`.
  */
+/** Исполнитель карточки следует за работой (владелец 20.10.2026): когда
+ *  стартует слот плана, исполнителем становится роль этого слота. Раньше
+ *  исполнителем навсегда оставалась роль первого шага, и на комментарии и
+ *  побудки реагировала она, а не тот, кто сейчас работает. Человека на
+ *  месте исполнителя не трогаем — его поставил владелец. */
+export function followSlotAssignee(taskId: string, roleKey: string, actorId: string): void {
+  const next = roleUserId(roleKey);
+  // Приоритет у роли в блоке: пока её слот ждёт, новые старты её не
+  // вытесняют — иначе ответ владельца комментарием разбудил бы не её.
+  const changed = db.prepare(
+    `UPDATE tasks SET assignee_id=?, updated_at=datetime('now')
+      WHERE id=? AND (assignee_id IS NULL OR assignee_id LIKE 'role\\_%' ESCAPE '\\') AND COALESCE(assignee_id,'')<>?
+        AND NOT EXISTS (SELECT 1 FROM subtasks s WHERE s.task_id=tasks.id AND s.agent_state='blocked' AND s.agent_id=tasks.assignee_id)`,
+  ).run(next, taskId, next);
+  if (changed.changes === 1) logEvent({ taskId, actorId, kind: "assignee_follows_slot", field: "assignee_id", toValue: next });
+}
+
+/** Комментарий владельца адресован в первую очередь роли, чей слот стоит в
+ *  блоке (владелец 20.10.2026): она ждёт его ответа. Делает её исполнителем
+ *  карточки — побудка по комментарию идёт к исполнителю. Возвращает, кого
+ *  поставили, или null, если слотов в блоке нет. */
+export function assigneeToBlockedSlot(taskId: string, actorId: string): string | null {
+  const blocked = db.prepare(
+    `SELECT s.agent_id FROM subtasks s JOIN tasks t ON t.id=s.task_id
+      WHERE s.task_id=? AND s.agent_state='blocked' AND s.agent_id LIKE 'role\\_%' ESCAPE '\\'
+        AND (t.assignee_id IS NULL OR t.assignee_id LIKE 'role\\_%' ESCAPE '\\')
+      ORDER BY CASE s.block_type WHEN 'needs_input' THEN 0 ELSE 1 END, s.agent_heartbeat_at DESC LIMIT 1`,
+  ).get(taskId) as { agent_id: string } | undefined;
+  if (!blocked) return null;
+  const changed = db.prepare("UPDATE tasks SET assignee_id=?, updated_at=datetime('now') WHERE id=? AND COALESCE(assignee_id,'')<>?").run(blocked.agent_id, taskId, blocked.agent_id);
+  if (changed.changes === 1) logEvent({ taskId, actorId, kind: "assignee_follows_slot", field: "assignee_id", toValue: blocked.agent_id });
+  return blocked.agent_id;
+}
+
 export async function startPlanSubtaskRun(subtaskId: string, actorId: string, options: { freshSession?: boolean } = {}): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
   const current = subtask(subtaskId);
   if (!current || !current.collaboration_plan_id || !current.plan_node_key) return { ok: false, error: "подзадача не узел плана" };
@@ -223,6 +256,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
   const terminalCritic = node.role_key === "critic_verifier" && !db.prepare("SELECT 1 FROM task_collaboration_plan_edges WHERE plan_id=? AND from_slot_key=?").get(current.collaboration_plan_id,current.plan_node_key);
   if ((terminalCritic || isPlanFinalReviewStep(current.id)) && !options.freshSession) {
     db.prepare("UPDATE task_collaboration_plan_nodes SET instructions=? || char(10) || COALESCE(instructions,'') WHERE plan_id=? AND slot_key=?").run(FINAL_REVIEW_MARKER,current.collaboration_plan_id,current.plan_node_key);
+    followSlotAssignee(current.task_id, node.role_key, actorId);
     return queuePlanFinalReview(current.id,actorId);
   }
 
@@ -252,10 +286,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
     });
     const changed=db.prepare(`UPDATE subtasks SET agent_state='in_progress',agent_id=?,current_attempt_id=?,agent_heartbeat_at=datetime('now'),admission_cycle=COALESCE(admission_cycle,0)+1,admission_fingerprint=? WHERE id=? AND done=0 AND agent_state IS NULL AND (admission_fingerprint IS NULL OR admission_fingerprint = ?)`).run(roleUserId(node.role_key),attemptId,newFingerprint,current.id,expectedFingerprint);
     if(changed.changes!==1)throw new Error("Слот уже запущен или его входные данные изменились");
-    // Карточка 7efcc173: одна строка прогресса в теме задачи на допуск
-    // шага. Транзакция ещё открыта, но announceStepState пишет в ту же БД,
-    // поэтому откат уносит и строку, и её дедупликатор.
-    announceStepState(current.id,"started");
+    followSlotAssignee(current.task_id, node.role_key, actorId);
     return true;
   })();
   if(!acquired)return {ok:false,error:"Слот уже запущен или его входные данные изменились"};
@@ -842,9 +873,6 @@ export function closeOpenCriticPlanNode(
   db.prepare(
     "UPDATE subtasks SET done = 1, agent_state = NULL, current_attempt_id = NULL, agent_heartbeat_at = NULL, result = ? WHERE id = ?",
   ).run(`${verdict}: ${findings}`, row.id);
-  // Вердикт закрыл узел плана — это та же сдача шага, что и сдача ролью:
-  // одна строка прогресса в теме задачи (карточка 7efcc173).
-  announceStepState(row.id,"submitted");
   logEvent({
     taskId,
     actorId: null,

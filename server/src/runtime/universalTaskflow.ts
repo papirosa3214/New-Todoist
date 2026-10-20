@@ -11,14 +11,14 @@ export function memoryRequestStore():RequestStore {
  finish:(a,id,state,result)=>{Object.assign(records.get(key(a,id))!,{state,result});}};
 }
 const READ=new Set(["taskflow_team_read","taskflow_plan_read","taskflow_children","taskflow_runtime","taskflow_status","taskflow_agents","taskflow_project_tasks","taskflow_my_stats","taskflow_task_summary","taskflow_recall","taskflow_weather","taskflow_my_tasks","taskflow_task_daily","taskflow_calendar_events","taskflow_task","taskflow_rules","taskflow_projects","taskflow_docs","taskflow_doc_read","taskflow_kb_search","taskflow_library","taskflow_chat_read","taskflow_checklist_state","taskflow_topic_read","web_search","web_get","ocr","youtube","local_model"]);
-const DISCUSS=new Set(["taskflow_chat_send","taskflow_chat_reply","taskflow_topic_reply","taskflow_topic_send","taskflow_consult"]);
 const CHAT_CONTEXT=new Set(["taskflow_chat_attach_file","taskflow_slot_restart","taskflow_work_start"]);
 const TASK_CONTEXT=new Set(["taskflow_topic_send","taskflow_topic_reply","taskflow_slot_snapshot"]);
 export function isReadOperation(name:string){return ["taskflow_hosts","taskflow_host_read","taskflow_host_ls","taskflow_host_grep","taskflow_host_find"].includes(name) || READ.has(name) || name.startsWith("mcp__infra__");}
 export function operationRestriction(name:string,c:Context):{code:string;message:string}|undefined{
  if(c.authorize && !c.authorize(name)) return {code:"FORBIDDEN",message:"Эта операция не разрешена роли "+c.role};
  if(c.mode==="plan" && !isReadOperation(name))return {code:"MODE_RESTRICTED",message:"Для изменения нужен режим Работа"};
- if(c.mode==="discussion" && !isReadOperation(name) && !DISCUSS.has(name))return {code:"MODE_RESTRICTED",message:"В обсуждении разрешены чтение, сообщения и консультация"};
+ // «Обсуждение» в чате — то же, что работа по задаче: владелец поручает в
+ // нём работу и заводит карточки, поэтому ограничений нет (20.10.2026).
  if(CHAT_CONTEXT.has(name) && (!c.chatId || !c.messageId))return {code:"CONTEXT_REQUIRED",message:"Нужно исходное сообщение в чате"};
  if(TASK_CONTEXT.has(name) && !c.taskId)return {code:"CONTEXT_REQUIRED",message:"Нужна текущая задача"};
 }
@@ -34,7 +34,7 @@ export /** Что делать дальше после ошибки. Требо�
 const ПОДСКАЗКИ:Record<string,string>={
  INVALID_ARGUMENTS:"1) вызови describe для этой операции и сверь arguments с inputSchema; 2) для изменения обязателен request_id длиной 1..200 — он принимается и на верхнем уровне вызова, и внутри arguments; 3) если в describe нет нужного поля — операции нет в этом наборе, найди её через discover.",
  FORBIDDEN:"Операция не разрешена роли. 1) вызови discover по этой операции — там поле available и restriction; 2) попроси владельца или оркестратора расширить права роли; 3) обходных путей нет: молчаливый отказ хуже слов.",
- MODE_RESTRICTED:"Режим не тот. 1) plan — только чтение, для изменения нужен режим Работа; 2) discussion — чтение, сообщения и консультация; 3) проверь, какой режим у текущего хода.",
+ MODE_RESTRICTED:"Режим не тот. 1) plan — только чтение, для изменения нужен режим Работа или Обсуждение; 2) проверь, какой режим у текущего хода.",
  CONTEXT_REQUIRED:"Не хватает контекста. 1) передай task_id — без него операции над задачей не положены; 2) вызови из того чата, где есть сообщение, чтобы в контексте были chat_id и message_id; 3) в чате без задачи сначала уточни у владельца, что делать.",
  UNKNOWN_OPERATION:"Операция не найдена. 1) discover — поиск по смыслу задачи, а не по точному имени; 2) describe — точная схема и версия; 3) старое имя может быть совместимым обращением — попробуй найти его в discover.",
  VERSION_MISMATCH:"Версия не та. Поддерживается version: 1 — получи describe и повтори с version 1.",
@@ -45,7 +45,7 @@ const ПОДСКАЗКИ:Record<string,string>={
 };
 const ответнаяПодсказка=(code:string)=>ПОДСКАЗКИ[code]??"Отказ нестандартный: 1) повтори discover/describe, чтобы сверить схему; 2) найди похожий случай в базе знаний (taskflow_kb_search); 3) не перебирай вручную — спроси архитектора или оркестратора, приложив код и текст ошибки.";
 
-export const UNIVERSAL_INSTRUCTION="Серверные возможности доступны через один инструмент taskflow. Любая роль может работать с Mac через host: discover taskflow_hosts, затем taskflow_host_read/bash/edit/write/grep/find/ls. Назначение машины этапу и утверждение плана для доступа к host не нужны. При одном проекте машина и проект выбираются автоматически; рабочая копия создаётся в песочнице проекта. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем invoke с operation, version и arguments. Для изменения передавай уникальный request_id; при повторе того же действия используй прежний request_id. Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующую без поиска. Каждый отказ несёт поле hint — что делать дальше: читай его и выполняй по шагам, а не перебирай вызовы вслепую.";
+export const UNIVERSAL_INSTRUCTION="Серверные возможности доступны через один инструмент taskflow. Любая роль может работать с Mac через host: discover taskflow_hosts, затем taskflow_host_read/bash/edit/write/grep/find/ls. Назначение машины этапу и утверждение плана для доступа к host не нужны. При одном проекте машина и проект выбираются автоматически; для другого проекта на машине (например, iOS-репозитория из веб-карточки) передай project_id из taskflow_hosts. Рабочая копия создаётся в песочнице проекта. Сборка, тесты и симулятор — через host bash (долгим командам — timeout в секундах); прямой ssh не используется. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем invoke с operation, version и arguments. Для изменения передавай уникальный request_id; при повторе того же действия используй прежний request_id. Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующую без поиска. Каждый отказ несёт поле hint — что делать дальше: читай его и выполняй по шагам, а не перебирай вызовы вслепую.";
 export function createUniversalTaskflow(tools:Tool[],context:Context,store:RequestStore=memoryRequestStore()):Tool {
  const registry=new Map<string,Tool>();
  for(const tool of tools){if(registry.has(tool.name))throw new Error("Duplicate operation: "+tool.name);registry.set(tool.name,tool);}

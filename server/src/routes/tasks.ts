@@ -243,6 +243,12 @@ export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.type as assignee_ty
              c.name as creator_name, c.type as creator_type, c.role as creator_role, c.avatar_color as creator_color, c.avatar_url as creator_avatar_url, c.initials as creator_initials,
              COALESCE(t.project_name_snapshot, p.name) as project_name, p.color as project_color,
              (SELECT COUNT(*) FROM tasks ch WHERE ch.parent_id = t.id) as children_count,
+             -- Состояние ветки по дочерним (владелец 20.10.2026): родитель ждёт, пока
+             -- работают дочерние, но в списке он тоже «в работе» — как в карточке.
+             (SELECT CASE WHEN SUM(bc.agent_state = 'in_progress') > 0 THEN 'in_progress'
+                          WHEN SUM(bc.agent_state = 'blocked') > 0 THEN 'blocked'
+                          WHEN SUM(bc.agent_state = 'review') > 0 THEN 'review' END
+                FROM tasks bc WHERE bc.parent_id = t.id AND bc.status = 'active' AND bc.archived_at IS NULL) as branch_agent_state,
              EXISTS(SELECT 1 FROM task_collaboration_plans cp WHERE cp.task_id = t.id AND cp.status = 'approved') as has_collaboration_plan,
              (SELECT 'role_' || n.role_key FROM subtasks s
                 JOIN task_collaboration_plans cp2 ON cp2.id = s.collaboration_plan_id AND cp2.status = 'approved'

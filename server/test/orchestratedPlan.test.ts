@@ -86,8 +86,11 @@ describe("режим «Оркестратор»", () => {
                 SELECT plan_id, 'builder_1', 'builder', 1, 'Реализация' FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key='orchestrate'`).run(planId);
     const sid = "orch-test-" + Date.now();
     db.prepare("INSERT INTO subtasks (id, task_id, title, collaboration_plan_id, plan_node_key) VALUES (?,?,?,?,?)").run(sid, taskId, "Реализация", planId, "builder_1");
+    db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES (?,'Заминки команды','direct','u-secretary')").run("orchestrator-wake:" + roleUserId("code_orchestrator"));
+    db.prepare("UPDATE chats SET created_by='u-secretary' WHERE id=?").run("orchestrator-wake:" + roleUserId("code_orchestrator"));
     const wake = wakeOrchestrator(sid, roleUserId("builder")!, "blocked", "нет доступа к API");
     expect(wake).not.toBeNull();
+    expect((db.prepare("SELECT created_by FROM chats WHERE id=?").get(wake!.chatId) as { created_by: string }).created_by).toBe(roleUserId("code_orchestrator"));
     expect(wake!.roleId).toBe(roleUserId("code_orchestrator"));
     const q = db.prepare("SELECT status FROM chat_message_queue WHERE message_id=?").get(wake!.messageId) as { status: string };
     expect(q.status).toBe("pending");
@@ -97,6 +100,25 @@ describe("режим «Оркестратор»", () => {
     expect((db.prepare("SELECT text FROM chat_messages WHERE id=?").get(ret!.messageId) as { text: string }).text).toContain("возвращён проверяющим");
     const ask = wakeOrchestrator(sid, roleUserId("builder")!, "approval", "op_id=x");
     expect((db.prepare("SELECT text FROM chat_messages WHERE id=?").get(ask!.messageId) as { text: string }).text).toContain("taskflow_plan_proposal_decide");
+  });
+
+  it("в плане другого профиля блок будит Оркестратора, а возврат — нет (20.10.2026)", () => {
+    // Шаг builder_1 заведён предыдущим тестом.
+    const sid = (db.prepare("SELECT id FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key='builder_1'").get(planId) as { id: string }).id;
+    db.prepare("UPDATE task_collaboration_plans SET profile='single_executor' WHERE id=?").run(planId);
+    try {
+      db.prepare("UPDATE subtasks SET block_type='capability' WHERE id=?").run(sid);
+      const wake = wakeOrchestrator(sid, roleUserId("builder")!, "blocked", "жду ответа владельца");
+      expect(wake).not.toBeNull();
+      const text = (db.prepare("SELECT text FROM chat_messages WHERE id=?").get(wake!.messageId) as { text: string }).text;
+      expect(text).toContain("Тебя разбудили, потому что шаг встал в блок");
+      expect(text).toContain("Вид блока: capability");
+      for (const tool of ["taskflow_plan_read", "taskflow_plan_ops", "taskflow_team_read", "taskflow_slot_restart", "taskflow_topic_send", "taskflow_comment"]) expect(text).toContain(tool);
+      expect(wakeOrchestrator(sid, roleUserId("qa")!, "returned", "дефект")).toBeNull();
+      expect(wakeOrchestrator(sid, roleUserId("builder")!, "retry", null)).toBeNull();
+    } finally {
+      db.prepare("UPDATE task_collaboration_plans SET profile='orchestrated' WHERE id=?").run(planId);
+    }
   });
 });
 

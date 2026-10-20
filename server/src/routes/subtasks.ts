@@ -1,4 +1,5 @@
 import { wakeAndDeliver } from "../runtime/orchestratorWake.js";
+import { assigneeToBlockedSlot } from "../runtime/planSubtaskAdmission.js";
 import { readWorkPlan, saveWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
 import { sandboxSubmissionError } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
@@ -11,10 +12,9 @@ import db from "../db.js";
 import { planNodeAgentRefusal, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { closeStaleInboxForSubtask } from "../runtime/topicInbox.js";
 import { logStepOutcome } from "../runtime/stepOutcome.js";
-import { announceStepState } from "../runtime/stepTopicProgress.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
-import { getTaskForRead, getTaskForWrite, getTaskForComment, commentRefusal, aiNotFound, isRoleAuthor } from "../access.js";
+import { getTaskForRead, getTaskForWrite, getTaskForComment, commentRefusal, aiNotFound, isRoleAuthor, isOwner } from "../access.js";
 import { isServiceUser } from "../serviceUser.js";
 import {
   blockedHelpError,
@@ -614,11 +614,6 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
               message: result ?? subtask.result,
             });
           }
-          // Карточка 7efcc173: смена отметки шага — одна строка прогресса
-          // в теме задачи. Отметка — сдача, снятие отметки владельцем —
-          // возврат на доработку.
-          if (done === true) announceStepState(subtask.id, "submitted");
-          else announceStepState(subtask.id, "returned");
         }
 
         // ЗАКРЫТ ПОСЛЕДНИЙ ШАГ — ЗАДАЧА САМА УХОДИТ НА ПРИЁМКУ.
@@ -1109,18 +1104,6 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         }
       }
 
-      // Карточка 7efcc173: смена состояния шага — строка прогресса в теме
-      // задачи. Словарь ровно четыре: начал, сдал, заблокирован, вернулся
-      // на доработку. Служебные переходы (отпустить шаг, уйти в review,
-      // todo) молчат — лишних строк владельцу не нужно.
-      if (state === "blocked") {
-        announceStepState(subtask.id, "blocked", (result ?? subtask.result) as string | null);
-      } else if (state === "in_progress") {
-        announceStepState(subtask.id, "started");
-      } else if (state === null && subtask.agent_state === "review") {
-        announceStepState(subtask.id, "returned");
-      }
-
       // MAK-98: сигнал по типизированному блоку шага — владельцу или
       // оркестратору; повтор того же типа на этом же шаге — отдельно.
       if (state === "blocked" && state !== subtask.agent_state && blockType) {
@@ -1251,9 +1234,18 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         db.prepare(
           "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
         ).run(id, req.params.taskId, req.userId, commentText);
+        // Роль реагирует на комментарий только владельца (владелец
+        // 20.10.2026): служебные записи ролей («Материал собран», «Начинаю
+        // проверку») будили исполнителя карточки и вставали в очередь перед
+        // шагом Критика. Ролям между собой — чат, не комментарии.
+        // Если чей-то слот стоит в блоке — комментарий будит его роль.
+        const assignee = isOwner(req.userId)
+          ? (assigneeToBlockedSlot(req.params.taskId, req.userId) ?? task.assignee_id)
+          : task.assignee_id;
         if (
-          String(task.assignee_id ?? "").startsWith("role_") &&
-          task.assignee_id !== req.userId
+          String(assignee ?? "").startsWith("role_") &&
+          assignee !== req.userId &&
+          isOwner(req.userId)
         ) {
           enqueueRoleRunJob({
             taskId: req.params.taskId,

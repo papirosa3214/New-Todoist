@@ -235,8 +235,23 @@ export function roleChoiceNoteRu(choice: RoleChoice): string {
  */
 export type TryStartOutcome =
   | { ok: true; reason: "started"; role: string; planId: string; subtaskId: string; runId: string }
-  | { ok: true; reason: "skipped-assignee" | "skipped-plan" | "skipped-inactive" }
+  | { ok: true; reason: "skipped-assignee" | "skipped-plan" | "skipped-inactive" | "skipped-parent-plan" }
   | { ok: false; reason: "failed"; code: number; error: string };
+
+/** Есть ли у кого-то из предков карточки план совместной работы (черновик
+ *  или утверждённый). Такой план сам решает, когда запускать дочерние. */
+export function ancestorHasPlan(taskId: string): boolean {
+  const row = db.prepare(
+    `WITH RECURSIVE up(id, parent_id, depth) AS (
+       SELECT id, parent_id, 0 FROM tasks WHERE id = ?
+       UNION ALL
+       SELECT t.id, t.parent_id, up.depth + 1 FROM tasks t JOIN up ON t.id = up.parent_id WHERE up.depth < 32
+     )
+     SELECT 1 FROM up JOIN task_collaboration_plans p ON p.task_id = up.id
+      WHERE up.depth > 0 AND p.status IN ('draft','approved') LIMIT 1`,
+  ).get(taskId);
+  return Boolean(row);
+}
 
 export async function tryStartSingleExecutorPlan(
   taskId: string,
@@ -254,6 +269,14 @@ export async function tryStartSingleExecutorPlan(
     .prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id = ? AND status IN ('draft','approved')")
     .get(taskId);
   if (activePlan) return { ok: true, reason: "skipped-plan" };
+  // Дочерняя карточка не стартует сама, если у предка есть план ветки:
+  // её запускает утверждённый владельцем план родителя (подготовка →
+  // дочерние → итог). Раньше автоприём отдавал дочерние исполнителю
+  // через 30 с после создания, пока план родителя висел черновиком
+  // (владелец 20.10.2026). Явный запуск владельцем (manualStart) не трогаем.
+  if (opts.manualStart !== true && ancestorHasPlan(taskId)) {
+    return { ok: true, reason: "skipped-parent-plan" };
+  }
 
   const full = db.prepare("SELECT owner_selected_role, machine_selected_role, role_exclusions FROM tasks WHERE id = ?").get(taskId) as
     | { owner_selected_role: string | null; machine_selected_role: string | null; role_exclusions: string | null }
