@@ -2243,8 +2243,16 @@ async function deliverAgentReply(args: {
 
   // A terminal run must leave a visible result even if the provider returned no final text.
   if (!replyText && !failure) {
-    replyText = partial || "Ход завершился без текста ответа. Отправьте сообщение ещё раз.";
-    if (!partial) failure = Object.assign(new Error("модель завершила ход без текста ответа"), { code: "CHAT_RUN_EMPTY" });
+    // Пустой ответ модели (21.10.2026): молчание с известной причиной —
+    // говорим ею, а не «ход завершился без текста».
+    const emptyReason = live.emptyAnswerReason();
+    if (emptyReason) {
+      failure = Object.assign(new Error(emptyReason), { code: "CHAT_RUN_EMPTY_ANSWER" });
+      replyText = chatRunFailureText(failure);
+    } else {
+      replyText = partial || "Ход завершился без текста ответа. Отправьте сообщение ещё раз.";
+      if (!partial) failure = Object.assign(new Error("модель завершила ход без текста ответа"), { code: "CHAT_RUN_EMPTY" });
+    }
   }
   if (!failure && !cancelled) live.replaceFinalText(replyText);
   const steps: SavedSteps | null = live.finish({ deferAnnounce: true });

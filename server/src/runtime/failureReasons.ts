@@ -21,6 +21,7 @@ export const FAILURE_REASON_CODES = [
   "model_unavailable",
   "step_stalled",
   "runtime_died",
+  "empty_answer",
   "cancelled",
   "unknown",
 ] as const;
@@ -39,6 +40,7 @@ export const FAILURE_REASON_LABELS: Record<FailureReasonCode, string> = {
   model_unavailable: "модель недоступна",
   step_stalled: "ход шага закончился без сдачи",
   runtime_died: "рантайм умер / оборвалась связь",
+  empty_answer: "модель вернула пустой ответ",
   cancelled: "запуск отменён",
   unknown: "причина не распознана",
 };
@@ -81,6 +83,9 @@ const RULES: Rule[] = [
   { code: "step_stalled", re: /stalled|ход закончился без сдачи|тишина \d+ мин|без движения|лимит продолжений|шаг заблокирован|заблокирован владельц/i },
   // Рантайм умер, связь оборвалась, процесс перезапустился.
   { code: "runtime_died", re: /runtime[_ ]?(died|unavailable|is unavailable)|econnreset|socket hang up|econnrefused|connection refused|process exited|out of memory|\boom\b|killed|перезапуск[а-я]* сервер|сервер[^\n]*перезапуст|перезапустил|ход оборвался|рантайм[^\n]*(умер|недоступ)/i },
+  // Провайдер вернул content без текста и usage 0/0 без ошибки (21.10.2026):
+  // ход молчал и выглядел успешным.
+  { code: "empty_answer", re: /пустой ответ|не отдал текста|empty answer|no content|текста ответа/i },
 ];
 
 /** Один классификатор: текст ошибки → код из закрытого списка. */
