@@ -473,6 +473,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
                   | undefined
               )?.title ?? null)
             : null,
+          // Проект сессии для группировки списка (21.10.2026): у проектного
+          // чата — свой, у сессии задачи («Заминки», тема) — проект задачи.
+          project_name: (db.prepare(`SELECT p.name FROM projects p WHERE p.id = COALESCE(?, (SELECT project_id FROM tasks WHERE id = ?))`)
+            .get((c as any).project_id ?? null, c.task_id ?? null) as { name: string } | undefined)?.name ?? null,
         };
       }),
     };

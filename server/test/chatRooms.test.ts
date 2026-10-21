@@ -101,6 +101,9 @@ describe("комнаты ролей и лички", () => {
     expect(closed.json().chat.closed_at).toBeTruthy();
     const list = (await app.inject({ method: "GET", url: "/api/chats", headers: ownerAuth })).json().chats.map((c: any) => c.id);
     expect(list).not.toContain(id);
+    const listed = (await app.inject({ method: "GET", url: "/api/chats?include_closed=1", headers: ownerAuth })).json().chats.find((c: any) => c.id === id);
+    expect(listed).toHaveProperty("room_kind", null);
+    expect(listed).toHaveProperty("project_name", null);
     const back = await app.inject({ method: "POST", url: `/api/chats/${id}/close`, headers: ownerAuth, payload: { closed: false } });
     expect(back.json().chat.closed_at).toBeNull();
   });
