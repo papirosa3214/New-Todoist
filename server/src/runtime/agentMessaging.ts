@@ -34,7 +34,7 @@ export function agentMessagingTools(role: string, context: Context = {}) {
   // в своей личной комнате с ролью; служебные чаты сюда не подбираются.
   const directChat = (recipientId: string) => recipientId===ownerAccountId() ? (ensurePersonalRoom(senderId) ?? ensureDirectRoom(senderId,recipientId)) : ensureDirectRoom(senderId,recipientId);
   return [
-    tool("taskflow_chat_send","Написать коллеге лично или в группу. to: имя, id или role_key; всем — контекст группы, без автоматического вызова всех. В личке @ не нужен; в группе адресный вызов добавляет @. Работающий коллега получает вопрос в свою сессию; свободный отвечает разговорным ходом. chat_id задаёт конкретную группу, task_id — контекст задачи; slot_key нужен при нескольких этапах адресата. Максимум 4 сообщения за ход.",Type.Object({to:Type.String(),text:Type.String(),chat_id:optional("Личный или групповой чат"),task_id:optional("Контекст задачи"),slot_key:optional("Конкретный этап адресата")}),async p=>{
+    tool("taskflow_chat_send","Написать коллеге. Без chat_id: если коллега участник текущего чата — сообщение уходит в этот чат (в группе с @), иначе в личку. to: имя, id или role_key; всем — контекст группы, без автоматического вызова всех. В личке @ не нужен; в группе адресный вызов добавляет @. Работающий коллега получает вопрос в свою сессию; свободный отвечает разговорным ходом. chat_id задаёт конкретную группу, task_id — контекст задачи; slot_key нужен при нескольких этапах адресата. Максимум 4 сообщения за ход.",Type.Object({to:Type.String(),text:Type.String(),chat_id:optional("Личный или групповой чат"),task_id:optional("Контекст задачи"),slot_key:optional("Конкретный этап адресата")}),async p=>{
       const raw=String(p.to??"").trim().toLowerCase();
       if(!raw) throw new ToolError("Укажи адресата");
       const all=["all","всем","*"].includes(raw);
@@ -49,6 +49,11 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       }
       let chatId=p.chat_id;
       if(!chatId && all) chatId=context.chatId??ensureCommonChat()??COMMON_CHAT_ID;
+      // Владелец 21.10.2026: если коллега уже участник чата, где идёт ход, —
+      // говорим здесь же, при всех (в группе с @). В личку — только когда в
+      // этом чате его нет: «завёл группу и сказал решать — решайте в ней».
+      if(!chatId && recipient && context.chatId && db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(context.chatId,recipient.id))
+        chatId=context.chatId;
       if(!chatId && recipient) chatId=directChat(recipient.id);
       const chat=(await asRole(role,"GET",`/api/chats/${chatId}`)).chat;
       if(recipient && !chat.members.some((m:any)=>m.id===recipient.id)) throw new ToolError("Адресат не участвует в этом чате");
