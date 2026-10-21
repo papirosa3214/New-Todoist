@@ -59,14 +59,12 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
   const secretary=input.role==="secretary"?secretaryThings3Tools({role:input.role,taskId:input.taskId,subtaskId:input.subtaskId,chatId:input.chatId,messageId:input.messageId}):[];
   const catalog=buildRoleToolCatalog({role:input.role,model:model.id??modelId,taskId:input.taskId,subtaskId:input.subtaskId,chatId:input.chatId,messageId:input.messageId,mode:"discussion",runId},[...infra.tools,...secretary]);
     const custom=catalog.customTools;
-    ({session}=await createAgentSession({cwd,model,thinkingLevel:resolveThinkingLevel(model as any) ?? undefined,modelRuntime:runtime,resourceLoader:resources,
+    ({session}=await createAgentSession({cwd,model,thinkingLevel:resolveThinkingLevel(model as any, input.role) ?? undefined,modelRuntime:runtime,resourceLoader:resources,
       tools:[...builtin.map(tool=>tool.name),...catalog.activeNames],customTools:[...builtin,...custom],sessionManager:manager,
       settingsManager:SettingsManager.inMemory({compaction:{enabled:true},retry:{enabled:true,maxRetries:2}})} as any));
-    // Тот же resumed-migration: старая persisted "off" у reasoning модели
-    // → включаем размышления и пишем обратно. MAK-121.
-    if ((model as any)?.reasoning && (session as any)?.thinkingLevel === "off" && typeof (session as any).setThinkingLevel === "function") {
-      try { (session as any).setThinkingLevel("medium", { persist: true }); }
-      catch { /* не критично: следующий resume сам разберётся */ }
+    const roleThinking = resolveThinkingLevel(model as any, input.role);
+    if (roleThinking && session.thinkingLevel !== roleThinking && typeof session.setThinkingLevel === "function") {
+      session.setThinkingLevel(roleThinking);
     }
     let timedOut=false;let lastAssistant:any;
     session.subscribe((event:any)=>{

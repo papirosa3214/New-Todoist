@@ -177,6 +177,19 @@ afterEach(async () => {
 });
 
 describe("startChatRun (ход чата внутри сервера)", () => {
+  it.each([["architect", "max"], ["qa", "medium"]])("owner thinking policy reaches chat SDK for %s", async (role, expected) => {
+    const entry = CATALOG.find(m => m.id === liveModelOf(role))!;
+    const prior = { ...entry };
+    Object.assign(entry, {reasoning:true, thinkingLevelMap:{max:"max"}});
+    try {
+      await startChatRun({chatId:"chat-direct",role,roleId:"role_"+role,prompt:"test"});
+      expect(fakeSessions[0].options.thinkingLevel).toBe(expected);
+    } finally {
+      Object.assign(entry, prior);
+      delete (entry as any).thinkingLevelMap;
+    }
+  });
+
   it("сессия SDK в папке роли, с моделью роли и инструментами трекера — без MCP", async () => {
     const result = await startChatRun({
       chatId: "chat-direct",
@@ -202,7 +215,7 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     }
     expect(session.prompt).toHaveBeenCalledWith("привет");
     // Размышления не выключаем: уровень — по умолчанию Pi, как было у CLI.
-    expect(session.options.thinkingLevel).toBeUndefined();
+    expect(session.options.thinkingLevel).toBe("off");
 
     const row = db
       .prepare("SELECT pi_session_id FROM chat_sessions WHERE chat_id = ? AND role_id = ?")
