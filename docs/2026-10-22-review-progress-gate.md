@@ -33,4 +33,8 @@ Heartbeat, чтение инструментами, комментарии, ст
 
 Перед выкладкой read-only API: active_runs=0, stuck=[], live turns критика=[], pending chat=0. Порядок: коммит, fast-forward в main, TypeScript build, повторная проверка отсутствия работы, бэкап БД, перезапуск taskflow-server и health/status.
 
+Выложено: 7a66274c в main, TypeScript build PASS. Сервис перезапущен, PID 3851460, ActiveState=active, ExecMainStatus=0, health ok=true. Бэкап: server/backups/pre-review-progress-20261022-004135.db.
+
+После рестарта pending chat=0, проблемная карточка остаётся blocked/needs_input; последний JEV по ней по-прежнему 00:14:07 МСК. Загруженный dist содержит проверку hasNewOutput/reviewRepeatBlockReason. Поведение первого пустого захода проверялось изолированной регрессией, не новым запуском живой карточки.
+
 iOS-код и чужие изменения не затронуты. Push не выполняется.
