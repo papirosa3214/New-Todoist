@@ -12,6 +12,7 @@ import {
 import {registerInstructionBlock, composeLayer, LAYER_CATALOG, type RunMode} from '../lib/roleContextResolver.js';
 import {INSTRUCTION_DEFAULTS} from './instructionDefaults.js';
 import {ensureRoleHome, roleHomeInstruction} from './roleHome.js';
+import { withObservationContext } from "../lib/contextObservability.js";
 import { selectSkillsByJev } from "../lib/memorySkillsJev.js";
 const ROLE_RESOURCE_MODES: RunMode[] = ['work','resume','reply','review','subtask','chat'];
 const keyFor=(file:string)=>'resource.'+crypto.createHash('sha256').update(file).digest('hex').slice(0,20);
@@ -144,7 +145,7 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  const names=stageSkillNames(work?.stageInstructions);
  const candidates=names === null ? skills : skills.filter(s=>names.includes(s.name));
  const missing=names?.filter(name=>!skills.some(s=>s.name===name)) ?? [];
- const keep=work ? await selectSkillsByJev({...work,step:[work.step,work.stageInstructions].filter(Boolean).join("\n")},candidates.map(s=>({name:s.name,description:s.description}))).catch(()=>null) : null;
+ const keep=work ? await withObservationContext({role},()=>selectSkillsByJev({...work,step:[work.step,work.stageInstructions].filter(Boolean).join("\n")},candidates.map(s=>({name:s.name,description:s.description})))).catch(()=>null) : null;
  const usedSkills=keep ? candidates.filter(s=>keep.has(s.name)) : candidates;
  const stagePrompt=work?.stageInstructions ? "\n\nЗадание текущего этапа:\n"+work.stageInstructions : "";
  const missingPrompt=missing.length ? "\n\nНедоступные навыки этапа: "+missing.join(", ")+". Не утверждай, что они подключены; укажи ограничение в результате." : "";

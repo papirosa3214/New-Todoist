@@ -6,6 +6,7 @@ import {
 export { artifactHasEvidence } from "./planArtifactGate.js";
 import { branchMembership } from "./branchPlan.js";
 import { nodePhase, parentPrepPending } from "./branchPhase.js";
+import { withObservationContext } from "../lib/contextObservability.js";
 import { unmetDependencyIds } from "../enricher.js";
 import {
   recoverSubmittedIncidentReviews,
@@ -505,7 +506,7 @@ export async function startPlanSubtaskRun(
     };
 
   try {
-    const run = await runRoleInProcess({
+    const run = await withObservationContext({taskId:current.task_id,subtaskId:current.id,role:node.role_key,runId:attemptId},async()=>runRoleInProcess({
       taskId: current.task_id,
       role: node.role_key,
       subtaskId: current.id,
@@ -522,7 +523,7 @@ export async function startPlanSubtaskRun(
           : undefined,
       freshSession: options.freshSession,
       model: current.model || undefined,
-    });
+    }));
     logEvent({
       taskId: current.task_id,
       actorId,

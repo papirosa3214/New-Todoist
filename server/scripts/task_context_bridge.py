@@ -9,6 +9,7 @@ from task_context import (
     build_context,
     context_summary_ru,
     serialize_context,
+    context_observations,
 )
 
 
@@ -28,8 +29,10 @@ def main() -> int:
         collaboration_context=payload.get("collaboration_context"),
         task_history=payload.get("task_history"),
     )
+    prompt = serialize_context(context)
     print(json.dumps({
-        "prompt": serialize_context(context),
+        "prompt": prompt,
+        "observations": context_observations(context, prompt),
         "summary": context_summary_ru(context),
         "knowledge_status": context.knowledge.get("status"),
         "dependency_status": context.dependency_context.get("status"),

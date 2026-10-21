@@ -2,7 +2,8 @@
 // раздела Ekko, но без лишнего — разбор в docs/jev-integration-points.md).
 // Общее правило всех трёх: выключено, нет ключа, не ответил, не уверен —
 // прежнее поведение. JEV только убирает лишнее, ничего не добавляет сам.
-import { evaluateJev, jevScenario, type JevQuestion } from "./jev.js";
+import { skippedObservation, updateObservation } from "./contextObservability.js";
+import { jevSkipReason, evaluateJev, jevScenario, type JevQuestion } from "./jev.js";
 
 /** Память подбирается на каждом ходу роли — дольше ждать нельзя. */
 const MEMORY_TIMEOUT_MS = 3000;
@@ -21,9 +22,9 @@ export async function filterMemoryByJev<
   T extends { text: string; title: string | null; pinned: boolean },
 >(query: string, items: T[]): Promise<T[] | null> {
   const cfg = jevScenario("memoryRecall");
-  if (!cfg || !query.trim()) return null;
+  if (!cfg || !query.trim()) {skippedObservation("memoryRecall",!cfg?jevSkipReason("memoryRecall"):"empty_query");return null;}
   const candidates = items.filter((i) => !i.pinned).slice(0, MEMORY_CANDIDATES);
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) {skippedObservation("memoryRecall","no_candidates");return null;}
 
   const questions: Record<string, JevQuestion> = {};
   candidates.forEach((c, i) => {
@@ -36,7 +37,7 @@ export async function filterMemoryByJev<
     };
   });
   const result = await evaluateJev({ work: query.slice(0, 6000) }, questions, {
-    timeoutMs: MEMORY_TIMEOUT_MS,
+    timeoutMs: MEMORY_TIMEOUT_MS, scenario:"memoryRecall",
   });
   if (!result) return null;
 
@@ -52,13 +53,14 @@ export async function filterMemoryByJev<
     // Выкидываем только УВЕРЕННО ненужное: «да» с вероятностью ниже 1-порога.
     if (a.noul >= 1 - cfg.minConfidence) useful.set(c, a.noul);
   });
-  if (answered === 0) return null;
+  if (answered === 0) {updateObservation(result.observationId,{reason:"no_valid_answers",inputCount:candidates.length,outputCount:candidates.length});return null;}
 
   const pinned = items.filter((i) => i.pinned);
   const rest = items.filter((i) => !i.pinned && !candidates.includes(i));
   const kept = candidates
     .filter((c) => useful.has(c))
     .sort((a, b) => useful.get(b)! - useful.get(a)!);
+  updateObservation(result.observationId,{reason:"applied",inputCount:candidates.length,outputCount:kept.length,details:kept.map(c=>c.title??"Запись памяти")});
   return [...pinned, ...kept, ...rest];
 }
 
@@ -75,7 +77,7 @@ export async function reviewMemoryWriteByJev(input: {
   text: string;
 }): Promise<void> {
   const cfg = jevScenario("memoryWrite");
-  if (!cfg) return;
+  if (!cfg) {skippedObservation("memoryWrite",jevSkipReason("memoryWrite"));return;}
   const result = await evaluateJev(
     { kind: input.kind, title: input.title, text: input.text },
     {
@@ -85,10 +87,11 @@ export async function reviewMemoryWriteByJev(input: {
           "Это устойчивое знание, которое пригодится команде в будущих задачах (факт, урок, предпочтение владельца), а не разовая деталь текущей работы, черновик или пересказ сделанного?",
       },
     },
-    { timeoutMs: MEMORY_TIMEOUT_MS },
+    { timeoutMs: MEMORY_TIMEOUT_MS, scenario:"memoryWrite" },
   );
   const a = result?.answers?.durable;
-  if (!a || a.type !== "noul" || typeof a.noul !== "number") return;
+  if (!a || a.type !== "noul" || typeof a.noul !== "number") {updateObservation(result?.observationId??null,{reason:"no_valid_answers"});return;}
+  updateObservation(result?.observationId??null,{reason:a.noul<=1-cfg.minConfidence?"rejected":"allowed",inputCount:1,outputCount:a.noul<=1-cfg.minConfidence?0:1,details:["Оценка устойчивости: "+a.noul]});
   if (a.noul <= 1 - cfg.minConfidence) {
     throw new MemoryWriteRejected(
       "запись не сохранена: похоже на разовую деталь текущей работы, а не на знание на будущее. Сформулируй как правило, факт или урок, который пригодится в других задачах.",
@@ -105,7 +108,7 @@ export async function selectSkillsByJev(
   skills: Array<{ name: string; description: string }>,
 ): Promise<Set<string> | null> {
   const cfg = jevScenario("skills");
-  if (!cfg || skills.length < SKILLS_MIN_TO_SELECT) return null;
+  if (!cfg || skills.length < SKILLS_MIN_TO_SELECT) {skippedObservation("skills",!cfg?jevSkipReason("skills"):"too_few_skills");return null;}
   const questions: Record<string, JevQuestion> = {};
   skills.forEach((s, i) => {
     questions[`s${i}`] = {
@@ -123,6 +126,7 @@ export async function selectSkillsByJev(
       current_step: work.step ?? null,
     },
     questions,
+    {scenario:"skills"},
   );
   if (!result) return null;
   const keep = new Set<string>();
@@ -132,5 +136,6 @@ export async function selectSkillsByJev(
     if (!a || a.type !== "noul" || typeof a.noul !== "number" || a.noul >= 0.5)
       keep.add(s.name);
   });
+  updateObservation(result.observationId,{reason:keep.size?"applied":"empty_selection_fallback",inputCount:skills.length,outputCount:keep.size||skills.length,details:(keep.size?skills.filter(s=>keep.has(s.name)):skills).map(s=>s.name)});
   return keep.size ? keep : null;
 }

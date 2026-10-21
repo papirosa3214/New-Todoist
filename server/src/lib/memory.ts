@@ -17,6 +17,7 @@
 // задание закреплённые записи и самые близкие к теме (memoryBlock).
 import crypto from "node:crypto";
 import db from "../db.js";
+import { startObservation, finishObservation, withObservationContext } from "./contextObservability.js";
 import {
   filterMemoryByJev,
   reviewMemoryWriteByJev,
@@ -618,7 +619,8 @@ export async function recall(args: {
   // Галочка «Отбор памяти для роли» (раздел JEV): из найденного по сходству
   // JEV убирает уверенно ненужное и ставит полезное вперёд. Не ответил —
   // исходный порядок.
-  const ordered = (await filterMemoryByJev(query, items)) ?? items;
+  const memoryObservation=startObservation("enricher","teamMemory",{role:args.roleKey??undefined});
+  const ordered = (await withObservationContext({role:args.roleKey??undefined},()=>filterMemoryByJev(query, items))) ?? items;
   const picked: RecallItem[] = [];
   const seenFiles = new Map<string, number>();
   for (const item of ordered) {
@@ -637,6 +639,7 @@ export async function recall(args: {
       `UPDATE memories SET use_count = use_count + 1, last_used_at = datetime('now') WHERE id IN (${used.map(() => "?").join(",")})`,
     ).run(...used);
   }
+  finishObservation(memoryObservation,{status:picked.length?"ok":"skipped",reason:picked.length?undefined:"empty",inputCount:items.length,outputCount:picked.length,details:picked.map(p=>p.title??p.id)});
   return picked;
 }
 

@@ -1,3 +1,4 @@
+import { OBSERVABILITY_SCHEMA } from "./lib/contextObservability.js";
 import { TOOL_REQUEST_SCHEMA } from "./runtime/toolRequestStore.js";
 import { installReviewHistory } from "./lib/reviewHistory.js";
 // Версионные миграции — поверх базовой схемы из `db.ts:migrate()`.
@@ -4906,6 +4907,7 @@ const migrations: Migration[] = [
     if (!cols.has("archived_at")) db.exec("ALTER TABLE chats ADD COLUMN archived_at TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_chats_archived_at ON chats(archived_at)");
   } },
+  { id: "163_context_observability", description: "Журнал вклада энричеров и JEV, расход по ключу", up: () => db.exec(OBSERVABILITY_SCHEMA) },
 ];
 /**
  * Опции прогона миграций.

@@ -12,7 +12,8 @@
 // Выключено, нет ключа, не ответил — пустой результат, и фанаут идёт
 // прежней дорогой (эмбеддинги). Подзадача, по которой JEV не уверен, —
 // тоже прежней дорогой.
-import { evaluateJev, jevSubtaskRoleConfig, type JevQuestion } from "./jev.js";
+import { skippedObservation, updateObservation } from "./contextObservability.js";
+import { jevSkipReason, evaluateJev, jevSubtaskRoleConfig, type JevQuestion } from "./jev.js";
 import { allRoles } from "../roleRouting.js";
 
 export interface JevSubtaskRolePick {
@@ -28,10 +29,10 @@ export async function pickRolesForSubtasksByJev(
 ): Promise<Map<string, JevSubtaskRolePick>> {
   const out = new Map<string, JevSubtaskRolePick>();
   const cfg = jevSubtaskRoleConfig();
-  if (!cfg || subtasks.length === 0) return out;
+  if (!cfg || subtasks.length === 0) {skippedObservation("subtaskRole",!cfg?jevSkipReason("subtaskRole"):"no_candidates");return out;}
 
   const roles = allRoles().filter((r) => r.enabled);
-  if (roles.length < 2) return out;
+  if (roles.length < 2) {skippedObservation("subtaskRole","too_few_roles");return out;}
   const criteria: Record<string, string> = {};
   for (const r of roles) criteria[r.key] = `${r.title}: ${r.summary}`;
 
@@ -57,6 +58,7 @@ export async function pickRolesForSubtasksByJev(
       subtasks: subtasks.map((s, i) => `${i + 1}. ${s.title}`),
     },
     questions,
+    {scenario:"subtaskRole"},
   );
   if (!result) return out;
 
@@ -73,5 +75,6 @@ export async function pickRolesForSubtasksByJev(
       sep && sep.type === "noul" && typeof sep.noul === "number" ? sep.noul : 1;
     out.set(s.id, { role: role.choice, confidence: role.confidence, separate });
   });
+  updateObservation(result.observationId,{reason:out.size?"selected":"low_confidence",inputCount:subtasks.length,outputCount:out.size,details:[...out].map(([id,p])=>`${id}: ${p.role}, уверенность ${p.confidence}, отдельно ${p.separate}`)});
   return out;
 }
