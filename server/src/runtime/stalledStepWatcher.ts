@@ -26,6 +26,7 @@ import { logStepAbandoned } from "./abandonedStep.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { startPlanSubtaskRun } from "./planSubtaskAdmission.js";
 import { wakeAndDeliverStalled } from "./orchestratorWake.js";
+import { activeInProcessRun } from "./inProcessRun.js";
 
 /** Возраст последнего события хода, после которого шаг считается
  *  зависшим и сервер сам перезапускает попытку. Один порог, без
@@ -363,7 +364,17 @@ export async function runStalledStepWatch(now: Date = new Date()): Promise<Stall
   for (const subtask of stalled) {
     const role = roleOf(subtask);
     if (!role) continue;
-    const lastMs = lastSessionEventMs(subtask, role);
+    const fileMs = lastSessionEventMs(subtask, role);
+    // Молчание хода, а не тишина файла: два разных факта (владелец 21.10.2026,
+    // карточка c8083c2a, раздел И4). Пока ход жив, SDK трогает его активность
+    // на каждом событии стрима, даже когда новых строк в журнал не пишется
+    // (долгий ответ провайдера). Опираться только на mtime — значит
+    // перезапускать живой ход на ровном месте (32 перезапуска в день,
+    // прерванные заходы). Наоборот, умерший держатель журнал уже не обновит.
+    const liveRun = activeInProcessRun(subtask.task_id, subtask.id);
+    const runMs = liveRun?.lastActivityAt ?? null;
+    const lastMs =
+      fileMs === null ? runMs : runMs === null ? fileMs : Math.max(fileMs, runMs);
     if (lastMs === null) {
       // Каталога сессии ещё нет (только что стартовали) или у роли
       // другая схема журнала. Опора только на `agent_heartbeat_at`:

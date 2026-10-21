@@ -1335,7 +1335,7 @@ async function askStopSummary(
  */
 export async function runRoleInProcess(input:Parameters<typeof runRoleInProcessUnserialized>[0]):Promise<{runId:string;completion:Promise<void>}> {
   if(!input.subtaskId)return runRoleInProcessUnserialized(input);
-  const release=await acquireSlotSession(input.subtaskId);
+  const release=await acquireSlotSession(input.subtaskId,undefined,()=>!!activeInProcessRun(input.taskId,input.subtaskId));
   try {
     const result=await runRoleInProcessUnserialized(input);
     void result.completion.then(release,release);
