@@ -2,9 +2,17 @@
 // route modules can push events without importing index.ts (which would be a
 // module cycle — index.ts registers the routes and starts the listener).
 
+import crypto from "node:crypto";
 import db from "./db.js";
 import { installRealtimeInvalidation } from "./lib/realtimeInvalidation.js";
 import { queueLiveActivityPush } from "./apns.js";
+import {
+  DEVICE_OP_TIMEOUT_MS,
+  DEVICE_PROTOCOL_VERSION,
+  type DeviceOpOutcome,
+  type DeviceOpRequest,
+  type DeviceOpResult,
+} from "./device/protocol.js";
 
 type Socket = { readyState: number; send: (data: string) => void; close?: (code?: number, reason?: string) => void };
 
@@ -87,6 +95,10 @@ export function removeClient(userId: string, socket: Socket) {
   for (const [deviceId, socketsOfOne] of deviceSockets) {
     if (socketsOfOne.delete(socket) && socketsOfOne.size === 0) {
       deviceSockets.delete(deviceId);
+      // Телефон отвалился посреди команды — висящий вызов должен упасть
+      // сейчас, а не ждать своего таймаута: иначе роль полминуты думает,
+      // что айфон думает.
+      failDeviceOps(deviceId, new Error("связь с телефоном потеряна"));
     }
   }
   if (!set) return;
@@ -203,3 +215,221 @@ export function pingAllClients() {
 }
 
 setInterval(pingAllClients, KEEPALIVE_MS).unref();
+
+// ─────────────────────────────────────────────────────────────────────────
+// Канал команд устройству: запрос → ответ (device_op).
+//
+// Зачем: сокет устройства до сих пор был только «доставкой событий»
+// (инвалидация доски, Live Activity). Этого мало — Apple Напоминания и
+// Apple Календарь лежат на айфоне, а роль работает на сервере .110: нужен
+// способ СКАЗАТЬ телефону «создай напоминание» и ДОЖДАТЬСЯ ответа.
+//
+// Образец — runOperation в host/gateway.ts: тот же приём (opId как ключ
+// корреляции, таймаут, отмена вызывающего), но адресат — устройство, а не
+// машина. Своя копия протокола (op, имена операций) — в device/protocol.ts.
+//
+// Чего тут нет: логики доступа к Apple-данным. Она живёт на устройстве
+// (EventKit), сервер только проксирует — ровно как с Things 3.
+// ─────────────────────────────────────────────────────────────────────────
+
+type PendingDeviceOp = {
+  deviceId: string;
+  op: string;
+  resolve: (outcome: DeviceOpOutcome) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+  /** Отменён ли вызов — чтобы результат, пришедший после отмены, её не воскресил. */
+  cancelled: boolean;
+  /** Снять слушатель abort: сигнал вызывающего живёт весь ход роли. */
+  снятьAbort?: () => void;
+};
+
+const pendingDeviceOps = new Map<string, PendingDeviceOp>();
+
+/** Есть ли живой сокет устройства. Проверяем сокет, а не запись в базе:
+ *  телефон мог отвалиться, а строка в devices живёт до отзыва. */
+export function deviceSocketAlive(deviceId: string): boolean {
+  const сокеты = deviceSockets.get(deviceId);
+  if (!сокеты) return false;
+  for (const socket of сокеты) if (socket.readyState === 1) return true;
+  return false;
+}
+
+/** Идентификаторы устройств с живым сокетом прямо сейчас. */
+export function liveDeviceIds(): string[] {
+  const ids: string[] = [];
+  for (const [deviceId, сокеты] of deviceSockets) {
+    for (const socket of сокеты) {
+      if (socket.readyState === 1) {
+        ids.push(deviceId);
+        break;
+      }
+    }
+  }
+  return ids;
+}
+
+/** Отправить сообщение устройству. Мёртвый сокет — не повод ронять вызов:
+ *  сокетов у устройства может быть несколько, пробуем следующий. */
+function sendToDevice(deviceId: string, message: DeviceOpRequest): boolean {
+  const сокеты = deviceSockets.get(deviceId);
+  if (!сокеты || сокеты.size === 0) return false;
+  const payload = JSON.stringify(message);
+  let доставлено = false;
+  for (const socket of [...сокеты]) {
+    if (socket.readyState !== 1) continue;
+    try {
+      socket.send(payload);
+      доставлено = true;
+    } catch {
+      // Сокет умер между проверкой и отправкой — следующий по списку.
+    }
+  }
+  return доставлено;
+}
+
+export type RunDeviceOpOptions = {
+  /** Отмена вызывающего (AbortSignal инструмента роли). */
+  signal?: AbortSignal;
+  /** Потолок ожидания; сервер может уменьшить, но не увеличить. */
+  timeoutMs?: number;
+};
+
+/**
+ * Вызвать операцию на устройстве и дождаться результата.
+ *
+ * Отказ (reject) — это поломка канала: устройства нет, связь пропала,
+ * телефон не ответил за отведённое время. Отказ самого устройства — не
+ * исключение, а { ok: false } с кодом: для роли это данные («нет доступа»),
+ * а не поломка шлюза.
+ */
+export function runDeviceOp(
+  deviceId: string,
+  op: string,
+  args: Record<string, unknown> = {},
+  options: RunDeviceOpOptions = {},
+): Promise<DeviceOpOutcome> {
+  if (!deviceSocketAlive(deviceId)) {
+    return Promise.reject(new Error("устройство сейчас офлайн"));
+  }
+  const opId = crypto.randomUUID();
+  const timeoutMs = Math.min(
+    options.timeoutMs ?? DEVICE_OP_TIMEOUT_MS,
+    DEVICE_OP_TIMEOUT_MS,
+  );
+
+  return new Promise<DeviceOpOutcome>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingDeviceOps.delete(opId);
+      pending.снятьAbort?.();
+      reject(new Error(`телефон не ответил за ${Math.round(timeoutMs / 1000)}с`));
+    }, timeoutMs);
+    timer.unref?.();
+
+    const pending: PendingDeviceOp = {
+      deviceId,
+      op,
+      resolve,
+      reject,
+      timer,
+      cancelled: false,
+    };
+    pendingDeviceOps.set(opId, pending);
+
+    const onAbort = () => cancelDeviceOp(opId);
+    if (options.signal) {
+      if (options.signal.aborted) {
+        onAbort();
+        return;
+      }
+      options.signal.addEventListener("abort", onAbort, { once: true });
+      pending.снятьAbort = () => options.signal!.removeEventListener("abort", onAbort);
+    }
+
+    const доставлено = sendToDevice(deviceId, {
+      type: "device_op",
+      v: DEVICE_PROTOCOL_VERSION,
+      opId,
+      op,
+      arguments: args,
+      timeoutMs,
+    });
+    if (!доставлено) {
+      clearTimeout(timer);
+      pending.снятьAbort?.();
+      pendingDeviceOps.delete(opId);
+      reject(new Error("устройство сейчас офлайн"));
+    }
+  });
+}
+
+/** Отменить вызов к устройству. true — отмена учтена; false — вызова уже нет. */
+export function cancelDeviceOp(opId: string): boolean {
+  const pending = pendingDeviceOps.get(opId);
+  if (!pending) return false;
+  pending.cancelled = true;
+  clearTimeout(pending.timer);
+  pendingDeviceOps.delete(opId);
+  pending.снятьAbort?.();
+  pending.reject(new Error("вызов отменён"));
+  return true;
+}
+
+/** Все висящие вызовы устройства — «связь потеряна». */
+function failDeviceOps(deviceId: string, error: Error) {
+  for (const [opId, pending] of [...pendingDeviceOps]) {
+    if (pending.deviceId !== deviceId) continue;
+    clearTimeout(pending.timer);
+    pendingDeviceOps.delete(opId);
+    pending.снятьAbort?.();
+    pending.reject(error);
+  }
+}
+
+/**
+ * Обработать сообщение от устройства. Возвращает false для всего, что
+ * серверу не адресовано: телефон шлёт и обычные события.
+ */
+export function handleDeviceOpResult(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const сообщение = raw as DeviceOpResult;
+  if (сообщение.type !== "device_op_result") return false;
+  const opId = typeof сообщение.opId === "string" ? сообщение.opId : "";
+  if (!opId) return true;
+  const pending = pendingDeviceOps.get(opId);
+  // Повторный ответ с тем же opId (или ответ на чужой) — игнор: телефон
+  // обязан ответить ровно один раз, но лишний ответ не должен ронять вызов.
+  if (!pending || pending.cancelled) return true;
+  clearTimeout(pending.timer);
+  pending.снятьAbort?.();
+  pendingDeviceOps.delete(opId);
+
+  if (сообщение.ok === true) {
+    pending.resolve({ ok: true, data: сообщение.data });
+    return true;
+  }
+  const ошибка = (сообщение.error ?? {}) as { code?: unknown; message?: unknown };
+  pending.resolve({
+    ok: false,
+    error: {
+      code: typeof ошибка.code === "string" ? ошибка.code : "internal",
+      message:
+        typeof ошибка.message === "string"
+          ? ошибка.message
+          : "телефон не объяснил, что случилось",
+    },
+  });
+  return true;
+}
+
+/** Сброс состояния канала. Только для тестов: в одном процессе живут
+ *  десятки тестовых файлов, и висящий вызов из одного теста иначе держал
+ *  бы таймер в следующем. */
+export function resetDeviceOpsForTests() {
+  for (const [opId, pending] of [...pendingDeviceOps]) {
+    clearTimeout(pending.timer);
+    pendingDeviceOps.delete(opId);
+    pending.reject(new Error("тест сбросил канал устройств"));
+  }
+  pendingDeviceOps.clear();
+}

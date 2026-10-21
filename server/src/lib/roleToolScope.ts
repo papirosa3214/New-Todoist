@@ -11,6 +11,17 @@ const ONLY: Record<string, string[]> = {
   taskflow_calendar_events: ["secretary"],
   taskflow_task_proposal: ["architect", "code_orchestrator", "secretary"],
   taskflow_archive: ["secretary"],
+  // Apple Напоминания и Apple Календарь (21.10.2026): данные личные, живут на
+  // айфоне, и доступ к ним — только у Помощника владельца. Без этой записи
+  // новый инструмент достаётся всем ролям (правило файла).
+  apple_reminders_create: ["secretary"],
+  apple_reminders_list: ["secretary"],
+  apple_reminders_complete: ["secretary"],
+  apple_reminders_reschedule: ["secretary"],
+  apple_reminders_delete: ["secretary"],
+  apple_calendar_agenda: ["secretary"],
+  apple_calendar_create: ["secretary"],
+  apple_calendar_update: ["secretary"],
 };
 
 const DENY: Record<string, string[]> = {
@@ -25,6 +36,8 @@ export function roleToolAllowed(role: string, tool: string): boolean {
   // Помощник владельца имеет общий набор TaskFlow-инструментов, кроме
   // операций удаления/физической очистки. Архивирование остаётся доступно.
   // things_delete лишь переносит дело в Корзину Things — как и до разделения операций.
+  // apple_reminders_delete — то же самое: стирание напоминания недоступно,
+  // закрыть (apple_reminders_complete) и перенести (apple_reminders_reschedule) можно.
   if (role === "secretary" && tool !== "things_delete" && /delete|purge|remove/i.test(tool)) return false;
   const only = ONLY[tool];
   if (only && !only.includes(role)) return false;
