@@ -1,7 +1,7 @@
 import {offerChatSteering} from "../runtime/chatSteering.js";
 import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
 import { clearChatWorkPlan, isWorkPlanFinished, readChatWorkPlan, readChatWorkPlans, saveChatWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
-import {registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination} from "../runtime/chatCoordination.js";
+import {registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination,markDeliveredToWork,markCoordinationAnswered} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
@@ -1857,6 +1857,8 @@ async function dispatchRoleReplies(args: {
       // Pending survives a process crash. The recipient's linked reply (or
       // persisted processing of an answer) completes the obligation.
       if(delivery==="busy") messengerAmbiguityNotice(chatId,accountId,args.messageId);
+      // Сообщение подмешано в текущую работу роли — служебная строка в чате.
+      else if(delivery==="working") traceCoordination(()=>markDeliveredToWork(args.messageId,accountId,args.fromUserId));
       continue;
     }
     pickDurableDelivery(durableRecord.id);
@@ -1918,16 +1920,27 @@ async function dispatchRoleReplies(args: {
         return null;
       }
     };
-    // Only owner input steers the current turn. Messages from roles retain
-    // normal addressing/queue semantics. SDK input preserves the current mode.
+    // Уточнение в ход: сообщение занятой роли — от владельца или от коллеги,
+    // из этого чата или из соседнего — подмешивается в её текущий ход. Роль
+    // сама решает, учесть его сейчас или отложить; непрочитанное уходит
+    // обычной очередью, ничего не теряется.
     const steeringMessage=db.prepare(`${HISTORY_SELECT} WHERE m.id = ?`).get(args.messageId) as HistoryRow | undefined;
-    const steeringText=steeringMessage
-      ? `${steeringMessage.from_name || steeringMessage.from_user_id}: ${unwrapRoleEnvelope(steeringMessage.text)}${steeringMessage.task_id ? "\nКонтекст задачи: "+steeringMessage.task_id : ""}${steeringMessage.attachments ? "\n[вложения: "+steeringMessage.attachments+"]" : ""}`
-      : text;
+    const steeringSource=steeringMessage
+      ? steeringSourceFor(chatId,steeringMessage)
+      : {from:"владелец",chatId,chatTitle:chatTitleOf(chatId),body:text};
     // Reserve FIFO position synchronously, before awaiting SDK/CLI acceptance.
-    const receiptPromise = isOwner(args.fromUserId) && !selectedSlot && !topic
-      ? offerChatSteering(chatId,accountId,args.messageId,steeringText)
+    const receiptPromise = !selectedSlot && !topic
+      ? offerChatSteering(chatId,accountId,args.messageId,steeringSource)
       : Promise.resolve(null);
+    // Служебная строка появляется сразу, как только SDK взял ввод: сообщение
+    // в работе роли. Ждать конца хода нельзя — строка должна быть видна
+    // во время работы, а очередь роли этим ходом занята.
+    void receiptPromise.then(receipt=>{
+      if(!receipt)return;
+      void receipt.delivered.then(taken=>{
+        if(taken)traceCoordination(()=>markDeliveredToWork(args.messageId,accountId,args.fromUserId));
+      });
+    });
     void enqueueChatReply(chatId,accountId,async () => {
       const receipt=await receiptPromise;
       if (fenceDeliveryIfStale(durableRecord.id,durableRecord.generation)) return;
@@ -1936,13 +1949,31 @@ async function dispatchRoleReplies(args: {
       if (fenceDeliveryIfStale(durableRecord.id,durableRecord.generation)) return;
       if (!consumed) return replyWork();
       const ok=await receipt.outcome;
-      if (!fenceDeliveryIfStale(durableRecord.id,durableRecord.generation))
+      if (!fenceDeliveryIfStale(durableRecord.id,durableRecord.generation)){
         completeDurableDelivery(durableRecord.id,ok);
+        // Роль ответила — служебная строка закрывается.
+        if (ok) traceCoordination(()=>markCoordinationAnswered(args.messageId,accountId));
+      }
     }).catch(error => {
       console.warn("[chats] clarification delivery failed",error);
       completeDurableDelivery(durableRecord.id,false);
     });
   }
+}
+
+/** Пометка источника уточнения: от кого, из какого чата и что написано. */
+function steeringSourceFor(chatId:string,message:HistoryRow):{from:string;chatId:string;chatTitle:string;body:string}{
+  return {
+    from:message.from_name||message.from_user_id,
+    chatId,
+    chatTitle:chatTitleOf(chatId),
+    body:`${unwrapRoleEnvelope(message.text)}${message.task_id ? "\nКонтекст задачи: "+message.task_id : ""}${message.attachments ? "\n[вложения: "+message.attachments+"]" : ""}`,
+  };
+}
+
+/** Название чата — чтобы роль видела, откуда пришло уточнение. */
+function chatTitleOf(chatId:string):string{
+  return (db.prepare("SELECT title FROM chats WHERE id=?").get(chatId) as {title:string}|undefined)?.title??"";
 }
 
 /** Персональный чат с ролью (ровно один собеседник-роль). В нём адресация

@@ -157,7 +157,9 @@ describe("агент роли внутри сервера", () => {
     await started;
     try {
       const count=script.sessions.length;
-      expect(await deliverTopicToWork(taskId,"builder","message-1","Уточни формат")).toBe("queued");
+      // Сообщение подмешано в текущую работу роли — это «working», а не «queued»
+      // (очередь ждёт слота, здесь сообщение уже в ходе).
+      expect(await deliverTopicToWork(taskId,"builder","message-1","Уточни формат")).toBe("working");
       expect(script.steering).toHaveLength(1);
       expect(script.steering[0]).toContain("message-1");
       expect(script.sessions).toHaveLength(count);
@@ -320,7 +322,7 @@ describe("агент роли внутри сервера", () => {
       msg.run("targeted", ownerId, "Вопрос");
       expect(await deliverTopicToWork(taskId,"builder","ambiguous","Вопрос")).toBe("busy");
       expect(script.steering).toHaveLength(0);
-      expect(await deliverTopicToWork(taskId,"builder","targeted","Вопрос","second_slot")).toBe("queued");
+      expect(await deliverTopicToWork(taskId,"builder","targeted","Вопрос","second_slot")).toBe("working");
       expect(script.steering).toHaveLength(1);
     } finally {release();await Promise.all([first.completion,next.completion]);script.steps=null;}
   });
