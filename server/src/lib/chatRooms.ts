@@ -67,9 +67,13 @@ export function isDirectRoom(chatId: string): boolean {
 
 type LastMessage = { text: string; created_at: string; from_user_id: string } | null;
 
+/** Превью строки: без конверта роли и кода виджетов — функцию даёт маршрут. */
+let preview: (text: string) => string = (text) => text;
+
 function lastMessage(chatId: string): LastMessage {
-  return (db.prepare(`SELECT text, created_at, from_user_id FROM chat_messages
+  const row = (db.prepare(`SELECT text, created_at, from_user_id FROM chat_messages
       WHERE chat_id=? AND COALESCE(is_session_marker,0)=0 ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(chatId) as LastMessage) ?? null;
+  return row ? { ...row, text: preview(row.text ?? "").slice(0, 200) } : null;
 }
 
 /** Идёт ли обмен в чате: свежее сообщение или доставка в очереди. */
@@ -88,7 +92,8 @@ function isWorking(roleId: string): boolean {
  * с её личками. `pair` — ключ пары для цвета облачка: одинаковый у обеих
  * ролей, поэтому клиент красит их одним цветом.
  */
-export function roomsSnapshot() {
+export function roomsSnapshot(previewText?: (text: string) => string) {
+  if (previewText) preview = previewText;
   ensureCommonChat();
   const roles = db.prepare(`SELECT u.id, u.name, u.role_key, u.avatar_color, u.avatar_url, u.initials
       FROM users u LEFT JOIN roles r ON r.key=u.role_key

@@ -401,7 +401,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // Панель «Комнаты» (21.10.2026): Общая, личные комнаты ролей и их лички.
   app.get("/api/chats/rooms", { preHandler: authPre }, async (req: any, reply) => {
     if (!isOwner(req.userId)) return reply.code(403).send({ error: "Комнаты видит владелец" });
-    return roomsSnapshot();
+    return roomsSnapshot(previewText);
   });
 
   app.get("/api/chats", { preHandler: authPre }, async (req: any) => {
