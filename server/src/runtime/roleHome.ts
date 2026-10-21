@@ -65,16 +65,64 @@ function scriptWrapper(name: string): string {
 }
 
 /** Канон системной инструкции — один файл на всех ролей, чтобы правила
- *  командной работы не расходились по текстам. */
+ *  командной работы не расходились по текстам.
+ *
+ *  TASKFLOW_ROLE_SYSTEM_PROMPT — явный путь к канону: нужен проверкам
+ *  (временный файл) и нестандартным раскладкам. По умолчанию канон лежит
+ *  рядом с сервером, в cwd процесса. */
 export function systemPromptSourceFile(): string {
+  const explicit = process.env.TASKFLOW_ROLE_SYSTEM_PROMPT;
+  if (explicit) return path.resolve(explicit);
   return path.resolve(process.cwd(), "scripts", "role-system-prompt.md");
+}
+
+/** Кэш канона в процессе сервера. Правка канона не должна требовать рестарта:
+ *  файл перечитывается, когда изменился (mtime и размер), а между изменениями
+ *  содержимое не читается заново — ensureRoleHome зовётся несколько раз на
+ *  каждый ход роли, и чтение файла на каждом вызове съедало бюджет хода
+ *  (тесты чата ждут порядка 120 мс на завершение первого хода).
+ *
+ *  В кэше — только успешно прочитанный текст: если файл стал недоступен,
+ *  канон не выбрасывается молча (иначе мигающая ошибка правки уронила бы
+ *  SYSTEM.md роли на запасную рамку), а запасная рамка остаётся для случая,
+ *  когда канон не прочитан ни разу. */
+type CanonCache = { file: string; mtimeMs: number; size: number; text: string };
+let canonCache: CanonCache | undefined;
+
+/** Прочитать канон с кэшем по mtime/размеру. null — файл недоступен. */
+function readCanon(file: string): string | null {
+  let mtimeMs = 0;
+  let size = 0;
+  let available = true;
+  try {
+    const stat = fs.statSync(file);
+    mtimeMs = stat.mtimeMs;
+    size = stat.size;
+  } catch {
+    available = false;
+  }
+  const cached = canonCache;
+  if (cached && cached.file === file) {
+    // Файл пропал после успешного чтения — держим прежний текст.
+    if (!available) return cached.text;
+    if (cached.mtimeMs === mtimeMs && cached.size === size) return cached.text;
+  }
+  try {
+    const text = fs.readFileSync(file, "utf8");
+    canonCache = { file, mtimeMs, size, text };
+    return text;
+  } catch {
+    // Недоступный файл — прежнее поведение: запасная рамка. Успешное чтение
+    // не запоминаем, чтобы файл, появившийся или ставший доступным позже,
+    // подхватился сразу.
+    if (canonCache?.file === file) canonCache = undefined;
+    return null;
+  }
 }
 
 /** Подстановка личности роли и её папки в канон. Если файл канона недоступен
  *  (запуск не из server/) — короткая запасная рамка, роль всё равно знает, кто
  *  она и где её инструментарий. */
-let systemTemplate: string | null | undefined;
-
 export function renderSystemPrompt(role: string, home: ReturnType<typeof roleHome>): string {
   const identity = `Ты — ${roleTitle(role)} в трекере TaskFlow (ключ роли: ${role}).`;
   const folder = [
@@ -84,18 +132,11 @@ export function renderSystemPrompt(role: string, home: ReturnType<typeof roleHom
     `- скрипты роли: ${home.scripts} (указывай абсолютный путь)`,
     `- рабочие файлы чата: ${home.workspace}`,
   ].join("\n");
-  // Канон читается один раз за процесс: ensureRoleHome зовётся несколько раз на
-  // каждый ход роли, и синхронное чтение файла на каждом вызове съедало
-  // бюджет (тесты чата ждут порядка 120 мс на завершение первого хода).
-  if (systemTemplate === undefined) {
-    try {
-      systemTemplate = fs.readFileSync(systemPromptSourceFile(), "utf8");
-    } catch {
-      systemTemplate = null;
-    }
-  }
-  let template = systemTemplate ?? "";
-  if (systemTemplate === null) {
+  // Канон кэшируется по mtime/размеру: правка файла видна сразу, без
+  // рестарта сервера, но между правками содержимое не читается заново.
+  const canon = readCanon(systemPromptSourceFile());
+  let template = canon ?? "";
+  if (canon === null) {
     template = [
       "# Системная инструкция роли",
       "",
