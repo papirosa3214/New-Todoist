@@ -4894,6 +4894,18 @@ const migrations: Migration[] = [
       revision INTEGER NOT NULL, items_json TEXT NOT NULL, updated_at TEXT NOT NULL,
       PRIMARY KEY (chat_id, role_id)
     );`) },
+  // 21.10.2026: уборка лишних чатов (карточка 0b7a8b81…): «удалить чат» —
+  // это архивирование, а не стирание строк. `closed_at` помечает чат
+  // закрытым (уходит из общего списка, новые сообщения не принимаются), но
+  // он не различает «тема закрылась вместе с задачей» и «чат убран
+  // человеком». `archived_at` — явная отметка уборки: её не снимает
+  // возвращение задачи в работу (projectTopics.setTaskTopicClosed), поэтому
+  // убранный чат остаётся убранным, а история и счётчики — в базе.
+  { id: "162_chat_archive", description: "chats.archived_at: чат убран человеком в архив (строки не стираются)", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!cols.has("archived_at")) db.exec("ALTER TABLE chats ADD COLUMN archived_at TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_chats_archived_at ON chats(archived_at)");
+  } },
 ];
 /**
  * Опции прогона миграций.
