@@ -14,8 +14,6 @@ import { COMMON_CHAT_ID, ensureCommonChat } from "./chatCommon.js";
  */
 
 const SECRETARY_ID = "u-secretary";
-/** Сколько минут после последнего сообщения пара считается «на связи». */
-const LIVE_MINUTES = 15;
 
 function ownerId(): string | null {
   return (db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY id LIMIT 1").get() as { id: string } | undefined)?.id ?? null;
@@ -76,10 +74,11 @@ function lastMessage(chatId: string): LastMessage {
   return row ? { ...row, text: preview(row.text ?? "").slice(0, 200) } : null;
 }
 
-/** Идёт ли обмен в чате: свежее сообщение или доставка в очереди. */
+/** Идёт ли обмен в чате прямо сейчас: есть недоставленная или выполняемая
+ *  доставка роли. Окна «15 минут после сообщения» больше нет (владелец
+ *  21.10.2026): облачко гасится, как только разговор закончился. */
 function isLive(chatId: string): boolean {
-  if (db.prepare("SELECT 1 FROM chat_message_queue WHERE chat_id=? AND status IN ('pending','picked') LIMIT 1").get(chatId)) return true;
-  return !!db.prepare(`SELECT 1 FROM chat_messages WHERE chat_id=? AND created_at > datetime('now', ?) LIMIT 1`).get(chatId, `-${LIVE_MINUTES} minutes`);
+  return !!db.prepare("SELECT 1 FROM chat_message_queue WHERE chat_id=? AND status IN ('pending','picked') LIMIT 1").get(chatId);
 }
 
 /** Работает ли роль прямо сейчас: забранная доставка любого чата. */

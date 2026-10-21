@@ -70,7 +70,8 @@ describe("комнаты ролей и лички", () => {
     const a = builder.dms.find((d) => d.chat_id === dm)!;
     const b = orch.dms.find((d) => d.chat_id === dm)!;
     expect(a.pair).toBe(b.pair);
-    expect(a.live).toBe(true);
+    // Сообщение без доставки в очереди — разговор не идёт, облачка нет.
+    expect(a.live).toBe(false);
     expect(a.peer_id).toBe("role_code_orchestrator");
     expect(orch.personal_chat_id).toBeTruthy();
   });
