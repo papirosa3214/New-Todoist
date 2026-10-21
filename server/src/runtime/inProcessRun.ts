@@ -20,6 +20,7 @@ import { searchNotes } from "../lib/noteSearch.js";
 import { KB_CATEGORIES, KB_DROP_MARK } from "../lib/kbCategories.js";
 import { secretaryMailTools } from "./secretaryMailTools.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
+import { secretaryAppleTools } from "./secretaryAppleTools.js";
 import { openMidPlanCritic } from "./planSubtaskAdmission.js";
 import { ensureResultVersionForReview } from "../resultVersions.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
@@ -878,7 +879,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   // а в чате у неё есть контекст сообщения.
   const chatOperationNames = new Set(chatOperations.map((tool) => tool.name));
   const managementOperations = orchestratorTools(role, T).filter((tool) => !chatOperationNames.has(tool.name));
-  const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? [...secretaryMailTools(T), ...secretaryThings3Tools({role,subtaskId})] : [])];
+  const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? [...secretaryMailTools(T), ...secretaryThings3Tools({role,subtaskId}), ...secretaryAppleTools({role,subtaskId})] : [])];
   if (unscoped) return all;
   return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }

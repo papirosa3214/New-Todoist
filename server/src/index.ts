@@ -31,7 +31,7 @@ import { ensureJwtSecret } from "./env.js";
 import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserId, resolveUserIdFromToken, authOrApiToken, isRevokedDeviceToken } from "./auth.js";
-import { addClient, removeClient, resetAllOffline } from "./ws.js";
+import { addClient, handleDeviceOpResult, removeClient, resetAllOffline } from "./ws.js";
 import {
   attachHostSocket,
   detachHostSocket,
@@ -727,6 +727,10 @@ export async function buildApp(): Promise<FastifyInstance> {
           const data = JSON.parse(msg.toString());
           if (data.type === "ping")
             socket.send(JSON.stringify({ type: "pong" }));
+          // Ответ устройства на команду (device_op → device_op_result).
+          // Телефон шлёт его сам, без запроса с сервера, поэтому маршрут
+          // живёт здесь, в единственном месте, где сервер слушает сокет.
+          else handleDeviceOpResult(data);
         } catch {}
       });
       socket.send(JSON.stringify({ type: "connected" }));
