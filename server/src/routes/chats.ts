@@ -1,3 +1,4 @@
+import {offerChatSteering} from "../runtime/chatSteering.js";
 import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
 import { clearChatWorkPlan, isWorkPlanFinished, readChatWorkPlan, readChatWorkPlans, saveChatWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
 import {registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination} from "../runtime/chatCoordination.js";
@@ -1865,7 +1866,7 @@ async function dispatchRoleReplies(args: {
     // другая — fence-им до постановки в in-memory очередь, и
     // никакого Pi-вызова не будет.
     if (fenceDeliveryIfStale(durableRecord.id, durableRecord.generation)) continue;
-    void enqueueChatReply(chatId, accountId, async () => {
+    const replyWork = async () => {
       try {
         const replyId = await deliverAgentReply({
           chatId,
@@ -1916,6 +1917,30 @@ async function dispatchRoleReplies(args: {
         }
         return null;
       }
+    };
+    // Only owner input steers the current turn. Messages from roles retain
+    // normal addressing/queue semantics. SDK input preserves the current mode.
+    const steeringMessage=db.prepare(`${HISTORY_SELECT} WHERE m.id = ?`).get(args.messageId) as HistoryRow | undefined;
+    const steeringText=steeringMessage
+      ? `${steeringMessage.from_name || steeringMessage.from_user_id}: ${unwrapRoleEnvelope(steeringMessage.text)}${steeringMessage.task_id ? "\nКонтекст задачи: "+steeringMessage.task_id : ""}${steeringMessage.attachments ? "\n[вложения: "+steeringMessage.attachments+"]" : ""}`
+      : text;
+    // Reserve FIFO position synchronously, before awaiting SDK/CLI acceptance.
+    const receiptPromise = isOwner(args.fromUserId) && !selectedSlot && !topic
+      ? offerChatSteering(chatId,accountId,args.messageId,steeringText)
+      : Promise.resolve(null);
+    void enqueueChatReply(chatId,accountId,async () => {
+      const receipt=await receiptPromise;
+      if (fenceDeliveryIfStale(durableRecord.id,durableRecord.generation)) return;
+      if (!receipt) return replyWork();
+      const consumed=await receipt.consumed;
+      if (fenceDeliveryIfStale(durableRecord.id,durableRecord.generation)) return;
+      if (!consumed) return replyWork();
+      const ok=await receipt.outcome;
+      if (!fenceDeliveryIfStale(durableRecord.id,durableRecord.generation))
+        completeDurableDelivery(durableRecord.id,ok);
+    }).catch(error => {
+      console.warn("[chats] clarification delivery failed",error);
+      completeDurableDelivery(durableRecord.id,false);
     });
   }
 }
@@ -2143,12 +2168,16 @@ async function deliverAgentReply(args: {
   let replyText = "";
   let reply: { sessionId: string | null; text: string } | null = null;
   let failure: unknown = null;
+  let settleDelivery!:(ok:boolean)=>void;
+  const deliveryOutcome=new Promise<boolean>(resolve=>{settleDelivery=resolve;});
+  let persistedReply=false;
   try {
     typing(true);
   try {
     reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:live.onEvent}) : await startChatRun({
       mode: integrationContext ? "work" : roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
       messageId: trigger.id,
+      deliveryOutcome,
       chatId,
       role,
       roleId: roleUserId,
@@ -2244,8 +2273,10 @@ async function deliverAgentReply(args: {
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
     traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure));
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
+    persistedReply=!failure;
   }
   } finally {
+    settleDelivery(persistedReply);
     live.finish({ deferAnnounce: true });
     live.announceEnd(replyId);
     typing(false);

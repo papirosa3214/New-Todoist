@@ -10,7 +10,7 @@ export const PLANNING_TOOLS = [
   "taskflow_my_tasks", "taskflow_task", "taskflow_rules", "taskflow_status",
   "taskflow_agents", "taskflow_chat_read", "taskflow_projects", "taskflow_project_tasks",
   "taskflow_my_stats", "taskflow_docs", "taskflow_doc_read", "taskflow_kb_search",
-  "taskflow_runtime", "taskflow_weather",
+  "taskflow_runtime", "taskflow_weather", "taskflow_recall",
 ];
 export function chatModeInstruction(mode: ChatWorkMode): string {
   switch (mode) {

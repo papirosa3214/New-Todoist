@@ -1,3 +1,4 @@
+import {registerChatSteering} from "./chatSteering.js";
 import {
   buildRoleToolCatalog,
   UNIVERSAL_INSTRUCTION,
@@ -1165,6 +1166,8 @@ export async function modelExists(ref: string): Promise<boolean> {
 /** Аргументы старта живой сессии Пи в чате. Никакого taskId — чат живёт
  *  отдельной осью, карточки и аренда остаются нетронутыми. */
 export interface StartChatRunInput {
+  /** Settles after the visible reply is persisted, never merely on SDK completion. */
+  deliveryOutcome?: Promise<boolean>;
   mode?: ChatWorkMode;
   chatId: string;
   messageId?: string;
@@ -1547,6 +1550,9 @@ export async function startChatRun(
       cancelled: false,
     };
     activeChatRuns.set(runId, run);
+    const steering = input.deliveryOutcome
+      ? registerChatSteering({chatId:input.chatId,roleId:input.roleId,steer:text=>session.steer(text),outcome:input.deliveryOutcome})
+      : null;
 
     // Сторож тишины: каждое событие рантайма — признак жизни. Пока идёт
     // вызов инструмента, тишина не копится (команда может честно работать
@@ -1566,6 +1572,7 @@ export async function startChatRun(
     const turnState: { last: TurnResult | null } = { last: null };
 
     const unsubscribe = session.subscribe((event: any) => {
+      steering?.observe(event);
       lastActivity = Date.now();
       if (event?.type === "agent_end") {
         const turn = parseTurnResult(event.messages);
@@ -1681,6 +1688,7 @@ export async function startChatRun(
         );
       }
     } finally {
+      steering?.close();
       clearInterval(idleTimer);
       clearTimeout(ceilingTimer);
       unsubscribe?.();
@@ -1769,7 +1777,11 @@ async function runExternalChat(
     cancelled: false,
   };
   activeChatRuns.set(runId, run);
+  const steering=input.deliveryOutcome
+    ? registerChatSteering({chatId:input.chatId,roleId:input.roleId,steer:text=>session.steer(text),outcome:input.deliveryOutcome})
+    : null;
   const unsubscribe = session.subscribe((event: any) => {
+    steering?.observe(event);
     if (event?.type === "tool_execution_start") input.onStep?.(event.toolName);
     try {
       input.onEvent?.(event);
@@ -1809,6 +1821,7 @@ async function runExternalChat(
       upsertChatSession(input.chatId, input.roleId, session.sessionId);
     return { runId, sessionId: session.sessionId, text };
   } finally {
+    steering?.close();
     clearTimeout(ceilingTimer);
     unsubscribe();
     session.dispose();

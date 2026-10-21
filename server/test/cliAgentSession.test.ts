@@ -67,3 +67,21 @@ describe("каталог внешних агентов", () => {
     expect(findBinary("no-such-agent-xyz", { PATH: "" })).toBeNull();
   });
 });
+
+it("подтверждает пользовательское уточнение отдельно от tool_result",()=>{
+ const events:any[]=[];const t=new StreamJsonTranslator(e=>events.push(e));
+ t.line(JSON.stringify({type:"user",message:{content:[{type:"text",text:"уточнение"},{type:"tool_result",tool_use_id:"a"}]}}));
+ expect(events.some(e=>e.type==="message_start")).toBe(false);
+ t.line(JSON.stringify({type:"result",subtype:"success",result:"ответ с уточнением"}));
+ expect(events).toContainEqual({type:"message_start",message:{role:"user",content:[{type:"text",text:"уточнение"}]}});
+});
+
+it("CLI replay второго сообщения не закрывает его по результату первого",()=>{
+ const events:any[]=[];const t=new StreamJsonTranslator(e=>events.push(e));
+ for(const text of ["первое","уточнение"])t.line(JSON.stringify({type:"user",message:{content:text}}));
+ t.line(JSON.stringify({type:"result",subtype:"success",result:"первый ответ"}));
+ expect(events.filter(e=>e.type==="message_start").map(e=>e.message.content[0].text)).toEqual(["первое"]);
+ t.line(JSON.stringify({type:"result",subtype:"success",result:"второй ответ"}));
+ expect(events.filter(e=>e.type==="message_start").map(e=>e.message.content[0].text)).toEqual(["первое","уточнение"]);
+ expect(t.resultCount).toBe(2);
+});
