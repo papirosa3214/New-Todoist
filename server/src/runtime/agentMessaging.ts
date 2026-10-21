@@ -67,7 +67,11 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       } else if(p.slot_key) throw new ToolError("slot_key задаётся в теме задачи");
       if(recipientRole && !targetSlot && listActiveInProcessRuns().filter(run=>run.role===recipientRole).length>1)
         throw new ToolError("У адресата несколько работающих этапов; используй тему задачи и slot_key");
-      const text=chat.kind!=="direct" && recipientRole ? `@${recipientRole} ${p.slot_key?`[slot: ${p.slot_key}] `:""}${p.text}` : String(p.text);
+      // Роль уже обратилась к адресату сама («@Разработчик» или «@builder») —
+      // второй раз не добавляем, иначе в чате «@builder @Разработчик» (21.10.2026).
+      const body=String(p.text), lowered=body.toLowerCase();
+      const alreadyAddressed=!!recipientRole && [recipientRole,String(recipient?.name??"")].some(n=>n && lowered.includes("@"+n.toLowerCase()));
+      const text=chat.kind!=="direct" && recipientRole && (!alreadyAddressed || p.slot_key) ? `@${recipientRole} ${p.slot_key?`[slot: ${p.slot_key}] `:""}${body}` : body;
       return write(chatId,{text,task_id:taskId,subtask_id:context.subtaskId,recipient_subtask_id:targetSlot});
     }),
     tool("taskflow_chat_reply","Ответить автору конкретного сообщения: message_id и короткий text. Ответ связан с вопросом и возвращается в сессию автора; не запускает рабочий этап. Максимум 4 сообщения за ход.",Type.Object({message_id:Type.String(),text:Type.String()}),async p=>{
