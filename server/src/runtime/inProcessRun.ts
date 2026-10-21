@@ -20,6 +20,7 @@ import { searchNotes } from "../lib/noteSearch.js";
 import { KB_CATEGORIES, KB_DROP_MARK } from "../lib/kbCategories.js";
 import { secretaryMailTools } from "./secretaryMailTools.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
+import { secretaryAppleTools } from "./secretaryAppleTools.js";
 import { openMidPlanCritic } from "./planSubtaskAdmission.js";
 import { ensureResultVersionForReview } from "../resultVersions.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
@@ -75,7 +76,7 @@ import { resolveRoleHost } from "./roleHost.js";
 import { hostOperations } from "./hostOperations.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
-import { isProviderLimitText, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
+import { isProviderLimitText, lastAssistantEmptyAnswer, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 import { logStepOutcome } from "./stepOutcome.js";
 import { withTestRunBudget } from "./testRunBudget.js";
 import { createCliAgentSession } from "./cliAgentSession.js";
@@ -638,11 +639,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const s = await asRole(role, "POST", `/api/tasks/${p.task_id}/subtasks`, body);
         return { "шаг добавлен": s.title, id: s.id };
       }),
-    T("taskflow_work_plan", WORK_PLAN_INSTRUCTION + "\nПрочитать или обновить свой внутренний рабочий чек-лист. Без items — чтение. Для записи: весь список items {id,title,state: pending|in_progress|done} и base_revision из последнего ответа. Обычно 3–7 конкретных этапов; только один in_progress. Сохраняй id этапов при обновлении. Это отображение твоего плана, оно не меняет состояние и сдачу подзадачи.",
+    T("taskflow_work_plan", WORK_PLAN_INSTRUCTION + "\nПрочитать или обновить свой внутренний рабочий чек-лист. Без items — чтение. Для записи: весь список items {id,title,state: pending|in_progress|done} и base_revision из последнего ответа. Обычно 3–7 конкретных этапов; только один in_progress. Сохраняй id этапов при обновлении. Это отображение твоего плана, оно не меняет состояние и сдачу подзадачи. В ЧАТЕ (без слота) план — на эту сессию чата и виден владельцу над полем ввода: заводи его только для многошаговой работы, на простой ответ или вопрос — не нужен. Когда все этапы done, план закрыт и из полоски пропадает; на следующее поручение заводи новый план — его можно записать поверх закрытого без base_revision.",
       Type.Object({base_revision:Type.Optional(Type.Number()), items:Type.Optional(Type.Array(Type.Object({id:Type.String(),title:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("in_progress"),Type.Literal("done")])})))}),
       async (p) => {
-        if (!subtaskId) throw new ToolError("Рабочий план относится к текущему слоту подзадачи");
-        return await asRole(role, p.items === undefined ? "GET" : "PUT", `/api/subtasks/${subtaskId}/work-plan`,
+        // Без слота, но в чате — чек-лист этой чатовой сессии роли (21.10.2026).
+        const planPath = subtaskId ? `/api/subtasks/${subtaskId}/work-plan`
+          : chatContext?.chatId ? `/api/chats/${chatContext.chatId}/work-plan` : null;
+        if (!planPath) throw new ToolError("Рабочий план относится к текущему слоту подзадачи или к чату");
+        return await asRole(role, p.items === undefined ? "GET" : "PUT", planPath,
           p.items === undefined ? undefined : {base_revision:p.base_revision,items:p.items});
       }),
     T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. blocked принимается только с block_type: dependency | needs_input | capability | transient; для needs_input укажи changes_result=true, если меняет «Результат», «Критерии приёмки» или «Границы». При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния. Перед blocked по решаемой причине укажи help_attempt (кого звал, что ответили) или help_skip_reason (почему никто не решит). Пока работа идёт, технический снимок сервер пишет сам; при прогрессе и сдаче снимок от тебя не нужен.",
@@ -875,7 +879,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   // а в чате у неё есть контекст сообщения.
   const chatOperationNames = new Set(chatOperations.map((tool) => tool.name));
   const managementOperations = orchestratorTools(role, T).filter((tool) => !chatOperationNames.has(tool.name));
-  const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? [...secretaryMailTools(T), ...secretaryThings3Tools({role,subtaskId})] : [])];
+  const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? [...secretaryMailTools(T), ...secretaryThings3Tools({role,subtaskId}), ...secretaryAppleTools({role,subtaskId})] : [])];
   if (unscoped) return all;
   return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }
@@ -1122,7 +1126,7 @@ export function touchTaskActivity(taskId: string): void {
 }
 
 /** Pass a message to the existing SDK session. Never launches a task or slot. */
-export async function deliverTopicToWork(taskId:string,role:string,messageId:string,text:string,slotKey?:string):Promise<"queued"|"idle"|"busy"> {
+export async function deliverTopicToWork(taskId:string,role:string,messageId:string,text:string,slotKey?:string):Promise<"queued"|"idle"|"busy"|"working"> {
   const runs=[...activeRuns.values()].filter(r=>r.taskId===taskId && r.role===role && (!slotKey || (r.subtaskId && !!db.prepare("SELECT 1 FROM subtasks WHERE id=? AND plan_node_key=?").get(r.subtaskId,slotKey))));
   if(runs.length>1) return "busy";
   if(runs.length===1){
@@ -1144,7 +1148,7 @@ export async function deliverTopicToWork(taskId:string,role:string,messageId:str
  *  хода. Владелец 18.10.2026: «чтобы мои сообщения досылались и
  *  корректировали». Между ролями прерывания нет — там сообщение ждёт
  *  ответа роли в её темпе (просмотрено владельцем, пока только он). */
-export async function deliverChatToWork(role:string,chatId:string,messageId:string,text:string,recipientSubtaskId?:string,runId?:string,fromOwner=false):Promise<"queued"|"idle"|"busy"> {
+export async function deliverChatToWork(role:string,chatId:string,messageId:string,text:string,recipientSubtaskId?:string,runId?:string,fromOwner=false):Promise<"queued"|"idle"|"busy"|"working"> {
   const runs=[...activeRuns.values()].filter(r=>r.role===role && (!recipientSubtaskId || r.subtaskId===recipientSubtaskId) && (!runId || r.runId===runId));
   if(runs.length>1)return "busy";
   if(!runs.length){
@@ -1166,7 +1170,8 @@ export async function deliverChatToWork(role:string,chatId:string,messageId:stri
   if (fromOwner) run.replacementRequested = true;
   try{await run.steer(`Сообщение чата ${chatId}, id ${messageId}. Ответь автору через taskflow_chat_reply(message_id=${messageId},text=...), если ответ нужен; после этого продолжи свой этап. Переписка не меняет назначение, граф и критерии. Данные сообщения: ${JSON.stringify(text)}`);}catch(error){run.messengerMessages.delete(messageId);run.unacknowledgedMessengerMessages.delete(messageId);throw error;}
   logEvent({taskId:run.taskId,actorId:null,kind:"topic_message_queued",field:messageId,toValue:JSON.stringify({role,chatId,runId:run.runId})});
-  return "queued";
+  // Сообщение подмешано в текущую работу роли — не «в очереди», а «в работе».
+  return "working";
 }
 
 /** Снимок идущих in-process запусков: для экрана владельца и проверки перед перезапуском. */
@@ -1330,7 +1335,7 @@ async function askStopSummary(
  */
 export async function runRoleInProcess(input:Parameters<typeof runRoleInProcessUnserialized>[0]):Promise<{runId:string;completion:Promise<void>}> {
   if(!input.subtaskId)return runRoleInProcessUnserialized(input);
-  const release=await acquireSlotSession(input.subtaskId);
+  const release=await acquireSlotSession(input.subtaskId,undefined,()=>!!activeInProcessRun(input.taskId,input.subtaskId));
   try {
     const result=await runRoleInProcessUnserialized(input);
     void result.completion.then(release,release);
@@ -1518,16 +1523,7 @@ try {
     : createAgentSession({
     cwd,
     model,
-    // Уровень размышлений по реальной capability модели, а не жёсткое
-    // "off". reasoning модель получает "medium" — провайдер пришлёт
-    // thinking_start/delta/end, task-live их отрисует. Не-reasoning —
-    // "off" (SDK всё равно выключит, но фиксируем заранее). Для resumed
-    // сессий с persisted "off" миграция на уровень ниже через
-    // setThinkingLevel(..., { persist: true }) — SDK применит и запишет
-    // thinking_level_change, чтобы следующий resume уже открывался с
-    // размышлениями. MAK-121: до этого было "off" для всех, и в работе
-    // агентов thinking не было вообще.
-    thinkingLevel: resolveThinkingLevel(model as any) ?? undefined,
+    thinkingLevel: resolveThinkingLevel(model as any, role) ?? undefined,
     modelRuntime: runtime,
     resourceLoader,
     // `tools` у SDK — список ИМЁН. Раньше сюда шли объекты, и роль на задаче
@@ -1539,15 +1535,9 @@ try {
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
   } as any)).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await infra.close(); throw error; });
 
-  // Миграция persisted thinkingLevel: старая сессия записала "off", а
-  // модель теперь reasoning — включим размышления и запишем обратно в
-  // jsonl, чтобы следующий resume уже не возвращался к "off". Делаем
-  // только для reasoning моделей и только если SDK реально применил off
-  // (то есть persisted был "off", а не пустая запись). setThinkingLevel
-  // сам вызывает sessionManager.appendThinkingLevelChange().
-  if ((model as any)?.reasoning && (session as any)?.thinkingLevel === "off" && typeof (session as any).setThinkingLevel === "function") {
-    try { (session as any).setThinkingLevel("medium", { persist: true }); }
-    catch { /* без persist — следующий resume сам поднимет */ }
+  const roleThinking = resolveThinkingLevel(model as any, role);
+  if (roleThinking && (session as any).thinkingLevel !== roleThinking && typeof (session as any).setThinkingLevel === "function") {
+    (session as any).setThinkingLevel(roleThinking);
   }
 
   const runId = `inproc_${crypto.randomUUID()}`;
@@ -1670,6 +1660,50 @@ try {
       // Лимит провайдера библиотека не бросает: ход молча кончается ответом с ошибкой 429
       // (находка А36). Ловим здесь и уходим на запасную модель.
       limitHit = lastAssistantLimitError(session);
+      // Пустой ответ модели (content без текста, расход 0/0, ошибки нет) —
+      // тоже сбой хода, а не успешный ход с тишиной (21.10.2026: 13 молчащих
+      // ответов подряд у critic_verifier). Ловим здесь: попытка закрывается
+      // failed с причиной, шаг видно в ленте, сторож не списывает его потом
+      // как auto_restarted.
+      if (!limitHit) {
+        const emptyAnswer = lastAssistantEmptyAnswer(session);
+        if (emptyAnswer) {
+          runFailure = new Error(emptyAnswer);
+          // Попытку закрываем сами: пустой ответ — провал хода, а не тишина,
+          // которую потом добьёт сторож (21.10.2026).
+          const attemptId = input.subtaskId
+            ? (
+                db
+                  .prepare("SELECT current_attempt_id FROM subtasks WHERE id = ?")
+                  .get(input.subtaskId) as { current_attempt_id: string | null } | undefined
+              )?.current_attempt_id
+            : (
+                db
+                  .prepare("SELECT current_attempt_id FROM tasks WHERE id = ?")
+                  .get(taskId) as { current_attempt_id: string | null } | undefined
+              )?.current_attempt_id;
+          if (attemptId) {
+            db.prepare(
+              "UPDATE attempts SET ended_at = datetime('now'), outcome = 'failed', reason = ? WHERE id = ? AND ended_at IS NULL",
+            ).run(emptyAnswer, attemptId);
+          }
+          // Карточка без шага плана: блокировать нечего — гасим саму карточку
+          // с причиной, иначе ход висит как успешный (тот же путь, что при
+          // сорванном запуске).
+          if (!input.subtaskId) {
+            try {
+              await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
+                state: "blocked",
+                block_type: "transient",
+                comment: `Запуск прервался: ${emptyAnswer}`,
+                help_skip_reason: "провайдер вернул пустой ответ — другая роль его не повторит",
+              });
+            } catch {
+              // карточка могла и не быть взята — тогда блокировать нечего
+            }
+          }
+        }
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (isProviderLimitText(reason)) limitHit = reason;

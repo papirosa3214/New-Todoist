@@ -9,6 +9,7 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "crypto";
 import { AccessToken } from "livekit-server-sdk";
 import db from "../db.js";
+import { assertVoiceChat } from "../lib/secretaryVoiceConversation.js";
 import { authOrApiToken } from "../auth.js";
 
 // Gemini Live молча подменяет незнакомое имя голосом по умолчанию, поэтому
@@ -30,6 +31,11 @@ export function registerSecretaryVoiceRoutes(app: FastifyInstance): void {
       return reply.code(403).send({ error: "только владелец" });
     }
 
+    const chatId = req.body?.chat_id;
+    if (chatId !== undefined) {
+      try { assertVoiceChat(owner,chatId); }
+      catch { return reply.code(403).send({error:"нужен доступный личный чат с Помощником"}); }
+    }
     const url = process.env.LIVEKIT_URL;
     const apiKey = process.env.LIVEKIT_API_KEY;
     const apiSecret = process.env.LIVEKIT_API_SECRET;
@@ -39,7 +45,9 @@ export function registerSecretaryVoiceRoutes(app: FastifyInstance): void {
 
     const room = `secretary-voice-${owner}-${randomUUID().slice(0, 8)}`;
     const voice = req.body?.voice;
-    const attributes = SECRETARY_VOICES.has(voice) ? { voice } : undefined;
+    const attributes: Record<string,string> = {};
+    if (SECRETARY_VOICES.has(voice)) attributes.voice = voice;
+    if (chatId !== undefined) attributes.chat_id = chatId;
     const at = new AccessToken(apiKey, apiSecret, { identity: owner, ttl: "10m", attributes });
     at.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true });
     const token = await at.toJwt();

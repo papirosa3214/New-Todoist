@@ -404,3 +404,46 @@ it("перезапуск даёт отдельные неперекрывающ�
   expect(new Date(b.ended_at).getTime()-new Date(b.started_at).getTime()).toBe(10*60*1000);
  }finally{db.prepare("DELETE FROM task_events WHERE task_id=?").run(taskId);db.prepare("DELETE FROM tasks WHERE id=?").run(taskId);}
 });
+
+describe("task_created_at в слоях role-load", () => {
+  it("отдаёт время создания задачи в attempts, active_now и open_slots", async () => {
+    const taskId = `task_created_${uid()}`;
+    db.prepare(
+      `INSERT INTO tasks (id, title, status, creator_id, assignee_id, agent_state, created_at)
+       VALUES (?,?,?,?,?,?,?)`,
+    ).run(taskId, "created at stamp", "active", ownerId, "role_builder", "in_progress", "2026-10-12 13:10:00");
+    const attemptId = `attempt_created_${uid()}`;
+    db.prepare(
+      `INSERT INTO attempts (id, task_id, executor_id, started_at, ended_at, routing_role)
+       VALUES (?,?,?,datetime('now','-30 minutes'),datetime('now','-20 minutes'),?)`,
+    ).run(attemptId, taskId, "role_builder", "builder");
+    const openId = `task_open_created_${uid()}`;
+    db.prepare(
+      `INSERT INTO tasks (id, title, status, creator_id, assignee_id, agent_state, created_at)
+       VALUES (?,?,?,?,?,?,?)`,
+    ).run(openId, "open created stamp", "active", ownerId, null, "in_progress", "2026-10-11 09:05:00");
+    try {
+      const body = (await serverApp.inject({
+        method: "GET",
+        url: "/api/coordination/role-load",
+        headers: bearer(),
+      })).json() as {
+        attempts: Array<{ task_id: string; task_created_at: string }>;
+        active_now: Array<{ task_id: string; task_created_at: string }>;
+        open_slots: Array<{ id: string; task_created_at: string }>;
+      };
+      const attempt = body.attempts.find((a) => a.task_id === taskId);
+      expect(attempt, "попытка должна быть в attempts").toBeTruthy();
+      expect(attempt?.task_created_at).toBe("2026-10-12 13:10:00");
+      const active = body.active_now.find((a) => a.task_id === taskId);
+      expect(active, "задача с назначенным исполнителем должна быть в active_now").toBeTruthy();
+      expect(active?.task_created_at).toBe("2026-10-12 13:10:00");
+      const open = body.open_slots.find((s) => s.id === openId);
+      expect(open, "слот без исполнителя должен быть в open_slots").toBeTruthy();
+      expect(open?.task_created_at).toBe("2026-10-11 09:05:00");
+    } finally {
+      db.prepare("DELETE FROM attempts WHERE id=?").run(attemptId);
+      db.prepare("DELETE FROM tasks WHERE id IN (?,?)").run(taskId, openId);
+    }
+  });
+});

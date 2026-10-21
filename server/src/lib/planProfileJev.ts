@@ -8,8 +8,9 @@
 // шаблоны (баг/регрессия, продуктовая фича) по-прежнему ловятся раньше —
 // их JEV не перебивает. Выключен, не ответил, не уверен — null, и остаётся
 // выбор по словам. План — черновик: утверждает его всё равно владелец.
+import { skippedObservation, updateObservation, withObservationContext } from "./contextObservability.js";
 import db from "../db.js";
-import { evaluateJev, jevPlanProfileConfig } from "./jev.js";
+import { jevSkipReason, evaluateJev, jevPlanProfileConfig } from "./jev.js";
 
 export type JevPlanProfile =
   "single_executor" | "research" | "delivery" | "full_cycle" | "ux_concept" | "api_integration" | "audit";
@@ -39,13 +40,13 @@ export async function pickPlanProfileByJev(
   taskId: string,
 ): Promise<JevPlanProfilePick | null> {
   const cfg = jevPlanProfileConfig();
-  if (!cfg) return null;
+  if (!cfg) {skippedObservation("planProfile",jevSkipReason("planProfile"),{taskId});return null;}
   const task = db
     .prepare("SELECT title, description FROM tasks WHERE id = ?")
     .get(taskId) as { title: string; description: string | null } | undefined;
   if (!task) return null;
 
-  const result = await evaluateJev(
+  const result = await withObservationContext({taskId},()=>evaluateJev(
     { title: task.title, description: (task.description ?? "").slice(0, 6000) },
     {
       profile: {
@@ -54,15 +55,17 @@ export async function pickPlanProfileByJev(
         criteria: CRITERIA,
       },
     },
-  );
+    {scenario:"planProfile"},
+  ));
   const answer = result?.answers?.profile;
-  if (!answer || answer.type !== "choice") return null;
-  if (!(answer.choice in CRITERIA)) return null;
+  if (!answer || answer.type !== "choice") {updateObservation(result?.observationId??null,{reason:"no_valid_answers"});return null;}
+  if (!(answer.choice in CRITERIA)) {updateObservation(result?.observationId??null,{reason:"invalid_choice"});return null;}
   if (
     !(typeof answer.confidence === "number") ||
     answer.confidence < cfg.minConfidence
   )
-    return null;
+    {updateObservation(result?.observationId??null,{reason:"low_confidence",details:["Уверенность: "+answer.confidence]});return null;}
+  updateObservation(result?.observationId??null,{reason:"selected",inputCount:Object.keys(CRITERIA).length,outputCount:1,details:[answer.choice,"Уверенность: "+answer.confidence]});
   return {
     profile: answer.choice as JevPlanProfile,
     confidence: answer.confidence,

@@ -58,9 +58,14 @@ export function ensurePlanTopic(taskId: string): string | null {
  *  `closed=false` при возврате в работу. История при этом сохраняется,
  *  закрытая тема только перестаёт быть «открытой» и становится read-only. */
 export function setTaskTopicClosed(taskId:string,closed:boolean):number {
+  // Возврат задачи в работу открывает её тему заново — но только если тему
+  // не убрали человеком (архив, lib/chatArchive.ts): убранное остаётся
+  // убранным, иначе уборка тихо отменилась бы при первом же переоткрытии.
   const result=db.prepare(
-    "UPDATE chats SET closed_at = CASE WHEN ? THEN datetime('now') ELSE NULL END WHERE task_id = ? AND parent_chat_id IS NOT NULL",
-  ).run(closed?1:0,taskId);
+    `UPDATE chats SET closed_at = CASE WHEN ? THEN datetime('now') ELSE NULL END
+       WHERE task_id = ? AND (parent_chat_id IS NOT NULL OR room_kind = 'wake')
+         AND (? = 1 OR COALESCE(archived_at, '') = '')`,
+  ).run(closed?1:0,taskId,closed?1:0);
   return result.changes;
 }
 

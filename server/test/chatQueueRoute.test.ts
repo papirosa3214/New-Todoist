@@ -385,19 +385,24 @@ describe("chatQueue: маршруты /messages и /new-session", () => {
       expect(sent.statusCode).toBe(200);
       const messageId = sent.json().message.id as string;
 
-      // Даём очереди шанс докатиться до finally — Pi вызывается
-      // по цепочке microtasks.
-      for (let i = 0; i < 12; i++) {
-        await new Promise((r) => setTimeout(r, 50));
+      // Даём очереди дойти до finally. Ждём по условию, а не фиксированным
+      // окном: под нагрузкой полного прогона (28 потоков) 600 мс не
+      // хватало, запись оставалась 'picked', и тест падал без причины —
+      // гейт автослияния резал слияния на ложной регрессии (21.10.2026).
+      const deadline = Date.now() + 15_000;
+      let durableStatus: string | undefined;
+      while (Date.now() < deadline) {
+        const cur = db
+          .prepare(
+            `SELECT status FROM chat_message_queue
+              WHERE chat_id=? AND message_id=?`,
+          )
+          .get("chat-common", messageId) as { status: string } | undefined;
+        durableStatus = cur?.status;
+        if (durableStatus && durableStatus !== "pending" && durableStatus !== "picked") break;
+        await new Promise((r) => setTimeout(r, 100));
       }
-
-      const row = db
-        .prepare(
-          `SELECT status FROM chat_message_queue
-            WHERE chat_id=? AND message_id=?`,
-        )
-        .get("chat-common", messageId) as { status: string } | undefined;
-      expect(row?.status).toBe("failed");
+      expect(durableStatus).toBe("failed");
     } finally {
       THROW_ON_TEXT = "";
     }

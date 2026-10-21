@@ -80,7 +80,7 @@ export interface CliAgentSession {
   readonly sessionId: string | null;
   subscribe(listener: Listener): () => void;
   prompt(text: string): Promise<void>;
-  steer(text: string): void;
+  steer(text: string): Promise<void>;
   abort(): Promise<void>;
   dispose(): void;
 }
@@ -90,6 +90,8 @@ export class StreamJsonTranslator {
   sessionId: string | null = null;
   model: string | null = null;
   result: { isError: boolean; text: string } | null = null;
+  resultCount = 0;
+  private userInputs: any[][] = [];
   private partialText = false;
   private partialThinking = false;
   /** Размер запроса последнего обращения к модели и число обращений. */
@@ -196,8 +198,12 @@ export class StreamJsonTranslator {
         });
       return;
     }
-    if (msg.type === "user" && Array.isArray(msg.message?.content)) {
-      for (const block of msg.message.content) {
+    if (msg.type === "user" && msg.message) {
+      const raw=msg.message.content;
+      const content=typeof raw==="string" ? [{type:"text",text:raw}] : (Array.isArray(raw) ? raw : []);
+      const text=content.filter((block:any)=>block?.type==="text");
+      if(text.length)this.userInputs.push(text);
+      for (const block of content) {
         if (block?.type === "tool_result") {
           this.emit({
             type: "tool_execution_end",
@@ -209,6 +215,11 @@ export class StreamJsonTranslator {
       return;
     }
     if (msg.type === "result") {
+      this.resultCount++;
+      // replay-user-messages is only acknowledgment. A result consumes one
+      // stdin user turn, in FIFO order; do not acknowledge later input early.
+      const content=this.userInputs.shift();
+      if(content)this.emit({type:"message_start",message:{role:"user",content}});
       const isError =
         msg.is_error === true ||
         (typeof msg.subtype === "string" && msg.subtype.startsWith("error"));
@@ -258,6 +269,7 @@ export async function createCliAgentSession(
   let reportedModel: string | null = null;
   let child: ChildProcessWithoutNullStreams | null = null;
   let aborted = false;
+  let submittedTurns = 0;
   let disposed = false;
   const emit = (event: any) => {
     for (const l of listeners) {
@@ -301,8 +313,12 @@ export async function createCliAgentSession(
         next = await input.onTurnEnd(answer);
       }
     },
-    steer(text) {
-      if (child && !child.stdin.destroyed) child.stdin.write(userLine(text));
+    async steer(text) {
+      const stream=child?.stdin;
+      if(!stream || stream.destroyed || stream.writableEnded)throw new Error("внешний агент не принимает ввод");
+      submittedTurns++;
+      try {await new Promise<void>((resolve,reject)=>stream.write(userLine(text),error=>error ? reject(error) : resolve()));}
+      catch(error){submittedTurns--;throw error;}
     },
     async abort() {
       aborted = true;
@@ -320,6 +336,7 @@ export async function createCliAgentSession(
     if (disposed) throw new Error("сессия внешнего агента закрыта");
     if (child) throw new Error("внешний агент уже выполняет ход");
     aborted = false;
+    submittedTurns = 1;
     messages.push({ role: "user", content: [{ type: "text", text }] });
     const args = [
       "-p",
@@ -329,6 +346,7 @@ export async function createCliAgentSession(
       "stream-json",
       "--verbose",
       "--include-partial-messages",
+      "--replay-user-messages",
       "--append-system-prompt",
       input.systemPrompt,
       // Без подтверждений, как роль на Pi: в фоне спросить некого.
@@ -364,7 +382,8 @@ export async function createCliAgentSession(
           }
         }
         // Ход закончен — закрываем ввод, CLI выйдет сам.
-        if (translator.result && !proc.stdin.destroyed) proc.stdin.end();
+        if (translator.result && !proc.stdin.destroyed &&
+            (translator.result.isError || translator.resultCount >= submittedTurns)) proc.stdin.end();
       }
     });
     proc.stderr.setEncoding("utf8");

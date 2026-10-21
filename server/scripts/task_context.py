@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
@@ -312,8 +313,13 @@ def enrich_knowledge(task: dict) -> KnowledgeBlock:
     if not query:
         return {"status": "empty", "excerpts": []}
 
+    kb_start = time.monotonic()
     kb_status, kb_excerpts = _knowledge_from_kb(query)
+    kb_ms = int((time.monotonic()-kb_start)*1000)
+    mem_start = time.monotonic()
     mem_status, mem_excerpts = _knowledge_from_mnemosyne(query)
+    mem_ms = int((time.monotonic()-mem_start)*1000)
+    sources = [dict(scenario="kb",status=kb_status,inputCount=len(kb_excerpts),durationMs=kb_ms),dict(scenario="mnemosyne",status=mem_status,inputCount=len(mem_excerpts),durationMs=mem_ms)]
 
     # Квоты, а не «сколько влезет по порядку». Без них база знаний
     # забирает весь лимит первой, и память не доходит до исполнителя
@@ -330,11 +336,11 @@ def enrich_knowledge(task: dict) -> KnowledgeBlock:
     )
     excerpts = (kb_quota + mem_quota)[:MAX_KNOWLEDGE_EXCERPTS]
     if excerpts:
-        return {"status": "ok", "excerpts": excerpts}
+        return {"status": "ok", "excerpts": excerpts, "observations": sources}
     # Оба молчат — различаем «нечего сказать» и «не смогли спросить».
     if kb_status == "unavailable" and mem_status == "unavailable":
-        return {"status": "unavailable", "excerpts": []}
-    return {"status": "empty", "excerpts": []}
+        return {"status": "unavailable", "excerpts": [], "observations": sources}
+    return {"status": "empty", "excerpts": [], "observations": sources}
 
 
 def _knowledge_from_kb(query: str) -> tuple[BlockStatus, list[KnowledgeExcerpt]]:
@@ -530,7 +536,9 @@ def build_context(
         ctx.knowledge = {"status": "unavailable", "excerpts": []}
         ctx.warnings.append(f"knowledge: {exc!r}")
     try:
+        repo_start = time.monotonic()
         ctx.repository = enrich_repository(task, projects_config)
+        ctx.repository["durationMs"] = int((time.monotonic()-repo_start)*1000)
     except Exception as exc:  # noqa: BLE001
         ctx.repository = {"status": "empty", "branch": "", "dirty_files": []}
         ctx.warnings.append(f"repository: {exc!r}")
@@ -791,6 +799,33 @@ def serialize_context(ctx, max_total_chars: int = MAX_TOTAL_CHARS) -> str:
         out_lines.append(line)
         total += len(line) + 1
     return "\n".join(out_lines)
+
+
+def context_observations(ctx, prompt: str) -> list[dict]:
+    observations = []
+    knowledge = ctx.knowledge or {}
+    excerpts = knowledge.get("excerpts") or []
+    for source in knowledge.get("observations") or []:
+        selected = [e for e in excerpts if e.get("source") == source["scenario"]]
+        delivered = [e for e in selected if f"    - [{e.get('source', '?')}] {e.get('title', '')}" in prompt and (not e.get("excerpt") or truncate(e["excerpt"], MAX_EXCERPT_CHARS) in prompt)]
+        observations.append({**source, "outputCount": len(delivered), "reason": "truncated" if len(delivered)<len(selected) else None,
+                             "details": [e.get("title", "") for e in delivered]})
+    repo = ctx.repository or {}
+    repo_delivered = "repository: branch=" in prompt
+    observations.append(dict(scenario="repository", status=repo.get("status","empty"), durationMs=repo.get("durationMs",0), inputCount=len(repo.get("dirty_files") or []), outputCount=len(repo.get("dirty_files") or []) if repo_delivered else 0, reason=None if repo_delivered else "truncated",details=["Ветка: "+str(repo.get("branch",""))] if repo_delivered and repo.get("branch") else []))
+    for scenario, block, items, marker in [("dependencies",ctx.dependency_context or {},"dependencies","dependency_context:"),("collaboration",ctx.collaboration_context or {},"predecessor_artifacts","collaboration_context:")]:
+        values=block.get(items) or []
+        # The section may survive while individual items are clipped.
+        delivered=[]
+        for item in values[:12]:
+            line=(f"  - predecessor: {item.get('slot_key', '?')} -> {item.get('artifact_key', '?')}" if scenario=="collaboration" else f"  - dependency: {item.get('task_id', '?')}")
+            if scenario=="dependencies":
+                delivered.append(item) if str(item.get("task_id") or item.get("id") or "__absent__") in prompt and marker in prompt else None
+            elif line in prompt:delivered.append(item)
+        observations.append(dict(scenario=scenario,status=block.get("status","empty"),inputCount=len(values),outputCount=len(delivered),details=[str(x.get("title") or x.get("artifact_key") or x.get("task_id") or "") for x in delivered],reason="truncated" if len(delivered)<min(12,len(values)) else None))
+    history=ctx.task_history or {}
+    observations.append(dict(scenario="history",status="ok" if history.get("block") else "empty",inputCount=int(history.get("past_steps") or 0),outputCount=int(history.get("past_steps") or 0) if history.get("block") and truncate(history["block"],1600) in prompt else 0,details=[]))
+    return observations
 
 def _load_projects_config() -> dict:
     """Загружает явное сопоставление project_id -> repo_root рядом со скриптом.

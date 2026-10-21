@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import db from "../src/db.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, requeueMerge, retryClearedObstructions, sweepUnmergedBranches, worktreeMaintenancePass } from "../src/runtime/worktreeMergeQueue.js";
+import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, recoverStaleRunning, requeueMerge, retryClearedObstructions, sweepMergeScratch, sweepUnmergedBranches, worktreeMaintenancePass } from "../src/runtime/worktreeMergeQueue.js";
 import { reloadServerSettings, setSetting } from "../src/lib/serverSettings.js";
 import { saveBaseline } from "../src/lib/worktree/testGate.js";
 
@@ -304,5 +304,54 @@ describe("очередь автослияния", () => {
     } finally {
       setSetting("auto_merge_mode", "on", null, "возврат боевого режима");
     }
+  });
+
+  it("зависшая в running строка возвращается в очередь сама", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-stuck-running");
+    seedTask("t-stuck-running");
+    enqueueMerge("t-stuck-running", "integration_step");
+    // Сервер упал посреди слияния: строка осталась в `running`.
+    db.prepare(
+      "UPDATE worktree_merge_queue SET state = 'running', updated_at = datetime('now', '-3 hours') WHERE task_id = ?",
+    ).run("t-stuck-running");
+    expect(recoverStaleRunning()).toEqual(["t-stuck-running"]);
+    expect(mergeQueueRow("t-stuck-running")?.state).toBe("queued");
+    expect(mergeQueueRow("t-stuck-running")?.error).toBeNull();
+    // Дальше обычный путь: карточка сливается.
+    await worktreeMaintenancePass();
+    expect(mergeQueueRow("t-stuck-running")?.state).toBe("merged");
+    expect(git(repo.live, "log", "--oneline", "main")).toContain("работа роли");
+  });
+
+  it("свежая строка running не трогается: слияние ещё идёт", async () => {
+    freshRepo();
+    seedTask("t-live-running");
+    enqueueMerge("t-live-running", "integration_step");
+    db.prepare("UPDATE worktree_merge_queue SET state = 'running' WHERE task_id = ?").run("t-live-running");
+    expect(recoverStaleRunning()).toEqual([]);
+    expect(mergeQueueRow("t-live-running")?.state).toBe("running");
+  });
+
+  it("временная копия упавшего слияния убирается с диска", async () => {
+    const repo = freshRepo();
+    seedTask("t-scratch");
+    enqueueMerge("t-scratch", "integration_step");
+    const scratch = path.join(repo.base, ".merge-t-scratch");
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, "хвост.txt"), "остаток\n");
+    expect(sweepMergeScratch()).toBe(1);
+    expect(fs.existsSync(scratch)).toBe(false);
+  });
+
+  it("временная копия живой строки running остаётся на месте", async () => {
+    const repo = freshRepo();
+    seedTask("t-scratch-live");
+    enqueueMerge("t-scratch-live", "integration_step");
+    db.prepare("UPDATE worktree_merge_queue SET state = 'running' WHERE task_id = ?").run("t-scratch-live");
+    const scratch = path.join(repo.base, ".merge-t-scratch-live");
+    fs.mkdirSync(scratch, { recursive: true });
+    expect(sweepMergeScratch()).toBe(0);
+    expect(fs.existsSync(scratch)).toBe(true);
   });
 });

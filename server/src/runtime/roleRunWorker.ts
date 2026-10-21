@@ -1,3 +1,4 @@
+import { withObservationContext } from "../lib/contextObservability.js";
 import crypto from "node:crypto";
 import { getSetting } from "../lib/serverSettings.js";
 import {
@@ -64,7 +65,7 @@ export async function processOneRoleRunJob(input: {
   heartbeat.unref();
 
   try {
-    const result = await (input.executor ?? defaultExecutor)(job);
+    const result = await withObservationContext({taskId:job.task_id,runId:job.id},()=> (input.executor ?? defaultExecutor)(job));
     if (result.outcome === "deferred") {
       deferRoleRunJob({
         jobId: job.id,

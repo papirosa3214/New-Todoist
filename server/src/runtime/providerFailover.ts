@@ -34,6 +34,38 @@ export function lastAssistantLimitError(session: any): string | null {
   return isProviderLimitText(text) ? text : null;
 }
 
+/**
+ * Ответ модели без слов: content пустой, расход токенов 0/0, ошибки
+ * провайдера нет (21.10.2026, роль critic_verifier: 13 таких ответов подряд).
+ * Такой ход снаружи не виден: ошибки нет, heartbeat тикает, сторож потом
+ * закрывает попытку как auto_restarted. Считаем это пустым ответом.
+ *
+ * Не пустой: текст, вызов инструмента (ход ещё идёт), ошибка модели и
+ * отмена — у них свои пути.
+ */
+export function emptyAssistantAnswer(message: any): string | null {
+  if (!message || message.role !== "assistant") return null;
+  const stop = String(message.stopReason ?? "");
+  // Ошибка модели и отмена ловятся своими путями (лимит провайдера, остановка).
+  if (stop === "error" || stop === "aborted") return null;
+  const content: any[] = Array.isArray(message.content) ? message.content : [];
+  const hasText = content.some((part) => part?.type === "text" && String(part.text ?? "").trim().length > 0);
+  const hasToolCall = content.some((part) => part?.type === "toolCall");
+  if (hasText || hasToolCall) return null;
+  return "модель вернула пустой ответ: ни текста, ни вызова инструмента";
+}
+
+/**
+ * Последний ответ модели в сессии — пустой. Причина молчания или null,
+ * если ответ был: текст, вызов инструмента или понятная ошибка.
+ */
+export function lastAssistantEmptyAnswer(session: any): string | null {
+  const messages: any[] = session?.state?.messages ?? [];
+  const answer = [...messages].reverse().find((m) => m?.role === "assistant");
+  if (!answer) return null;
+  return emptyAssistantAnswer(answer);
+}
+
 /** С какой модели начинать: явная, иначе первая доступная из цепочки роли. */
 export function pickStartModel(routing: RoleRouting, role: string, explicit?: string | null): string {
   if (explicit) return explicit;

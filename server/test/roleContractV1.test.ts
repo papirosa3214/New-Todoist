@@ -415,3 +415,40 @@ describe("список блоков в инструкции — из схемы 
     }
   });
 });
+
+describe("кривой блок не ломает показ всего ответа (21.10.2026)", () => {
+  const answer = JSON.stringify({
+    schema_version: 1, ok: true,
+    output: [
+      { type: "heading", level: 2, text: "Заголовок" },
+      { type: "text", text: "Абзац по делу" },
+      { type: "widget", widget: { title: "без типа" } },
+    ],
+    artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: false,
+  });
+
+  it("голый JSON: остальные блоки показываются, претензия сохранена", () => {
+    const parsed = parseRoleContractV1(answer);
+    expect(parsed.text).toContain("Абзац по делу");
+    expect(parsed.text).not.toContain("schema_version");
+    expect(parsed.structuredEnvelope?.output).toHaveLength(2);
+    expect(parsed.errors.join(" ")).toMatch(/widget/);
+  });
+
+  it("в блоке кода — так же", () => {
+    const parsed = parseRoleContractV1("```json\n" + answer + "\n```");
+    expect(parsed.text).toContain("Заголовок");
+    expect(parsed.text).not.toContain("schema_version");
+  });
+
+  it("финальный ответ: показ без сырого JSON, правка сервера видна в журнале", () => {
+    const normalized = normalizeRoleReplyV1(answer);
+    expect(normalized.displayText).not.toContain("schema_version");
+    expect(normalized.normalizedByServer).toBe(true);
+    expect(normalized.validationErrors.length).toBeGreaterThan(0);
+  });
+
+  it("строгая проверка формата по-прежнему отклоняет кривой ответ", () => {
+    expect(validateStructuredRoleContractV1(JSON.parse(answer)).valid).toBe(false);
+  });
+});

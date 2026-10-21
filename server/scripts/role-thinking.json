@@ -1,0 +1,9 @@
+{
+  "default": "medium",
+  "roles": {
+    "code_orchestrator": "max",
+    "architect": "max",
+    "critic_verifier": "low",
+    "secretary": "low"
+  }
+}

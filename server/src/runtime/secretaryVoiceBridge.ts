@@ -1,3 +1,5 @@
+import { assertVoiceChat, voiceChatContext, saveVoiceMessage, voiceSummaryText } from "../lib/secretaryVoiceConversation.js";
+import { randomUUID } from "node:crypto";
 import { NonTaskInputError } from "../lib/taskPreparation.js";
 import { composeLayer, instructionManifest } from "../lib/roleContextResolver.js";
 // Закрытый канал Python-воркера к живому серверу. Никаких TCP-маршрутов
@@ -36,14 +38,14 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       try { send(200,{tools:await voiceToolManifest()}); } catch (error) { app.log.error({err:error},"не собран список инструментов голосового Помощника владельца"); send(500,{error:"сбой списка инструментов"}); }
       return;
     }
-    if (req.method !== "POST" || !["/secretary/tasks", "/secretary/summary", "/secretary/task", "/secretary/roles", "/secretary/tool", "/secretary/owner-chat"].includes(req.url || "")) {
+    if (req.method !== "POST" || !["/secretary/tasks", "/secretary/summary", "/secretary/task", "/secretary/roles", "/secretary/tool", "/secretary/owner-chat", "/secretary/conversation", "/secretary/transcript"].includes(req.url || "")) {
       send(404, { error: "неизвестный инструмент" }); return;
     }
     try {
       let raw = "";
       for await (const chunk of req) {
         raw += chunk.toString();
-        if (Buffer.byteLength(raw) > 32768) { send(413, {error:"слишком большой запрос"}); return; }
+        if (Buffer.byteLength(raw) > 1048576) { send(413, {error:"слишком большой запрос"}); return; }
       }
       let body: any;
       try { body = JSON.parse(raw); } catch { send(400, {error:"неверный JSON"}); return; }
@@ -51,22 +53,44 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       if (!owner || body.owner_id !== owner.id) {
         send(403, {error:"только владелец голосовой комнаты"}); return;
       }
+      let chatId: string | undefined;
+      if (body.chat_id !== undefined || req.url === "/secretary/conversation" || req.url === "/secretary/transcript") {
+        try { assertVoiceChat(owner.id,body.chat_id); chatId=body.chat_id; }
+        catch { send(403,{error:"нет доступа к исходному чату"}); return; }
+      }
+      if (req.url === "/secretary/conversation") { send(200,{messages:voiceChatContext(owner.id,chatId!)}); return; }
+      if (req.url === "/secretary/transcript") {
+        if (!["user","assistant"].includes(body.role) || typeof body.event_id!=="string" || !body.event_id || typeof body.text!=="string" || !body.text.trim() || body.text.length>100000) {
+          send(400,{error:"неверная расшифровка"}); return;
+        }
+        send(200,{message_id:saveVoiceMessage(owner.id,chatId!,body.event_id,body.role,body.text)}); return;
+      }
       if (req.url === "/secretary/roles") { send(200,roleLoadNow(owner.id)); return; }
       if (req.url === "/secretary/tool") {
         if (typeof body.name !== "string") { send(400,{error:"нужно имя инструмента"}); return; }
-        send(200,await runVoiceTool(owner.id,body.name,body.arguments)); return;
+        const messageId = chatId ? (db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id=? ORDER BY rowid DESC LIMIT 1").get(chatId,owner.id) as {id:string}|undefined)?.id : undefined;
+        const result = await runVoiceTool(owner.id,body.name,body.arguments,{chatId,messageId});
+        if (chatId && body.arguments?.operation==="taskflow_task_summary" && (!body.arguments.action || body.arguments.action==="invoke")) {
+          const text = voiceSummaryText(result.result);
+          if (text) saveVoiceMessage(owner.id,chatId,"summary:"+(body.arguments.request_id || randomUUID()),"assistant",text);
+        }
+        send(200,result); return;
       }
       const text = body.text;
       if (typeof text !== "string" || !text.trim() || text.length > 6000) {
         send(400,{error:"нужен полный текст поручения, до 6000 символов"}); return;
       }
       if (req.url === "/secretary/task") { send(200,lookupTaskDetails(owner.id,text)); return; }
-      if (req.url === "/secretary/owner-chat") { send(200,{message_id:sendSummaryToSecretaryChat(owner.id,text)}); return; }
+      if (req.url === "/secretary/owner-chat") { send(200,{message_id:chatId ? saveVoiceMessage(owner.id,chatId,"message:"+randomUUID(),"assistant",text) : sendSummaryToSecretaryChat(owner.id,text)}); return; }
       if (req.url === "/secretary/summary") {
         if (body.send_to_chat !== undefined && typeof body.send_to_chat !== "boolean") {
           send(400,{error:"send_to_chat должен быть boolean"}); return;
         }
-        send(200,await requestTaskSummary(owner.id,text,body.send_to_chat===true)); return;
+        const result = await requestTaskSummary(owner.id,text,!chatId && body.send_to_chat===true);
+        if (chatId && "text" in result && typeof result.text==="string") {
+          send(200,{...result,message_id:saveVoiceMessage(owner.id,chatId,"summary:"+randomUUID(),"assistant",result.text)}); return;
+        }
+        send(200,result); return;
       }
       const mode = (db.prepare("SELECT task_intake_mode FROM users WHERE id=?").get(owner.id) as any).task_intake_mode;
       const intake = await submitOwnerTaskText(text,owner.id,mode);

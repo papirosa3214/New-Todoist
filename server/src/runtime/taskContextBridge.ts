@@ -1,3 +1,4 @@
+import { startObservation, finishObservation } from "../lib/contextObservability.js";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { getSetting } from "../lib/serverSettings.js";
@@ -49,6 +50,8 @@ export async function buildInProcessTaskContext(
   input: LaunchContextInput,
   runner: LaunchContextRunner = runPythonContext,
 ): Promise<LaunchContext> {
+  const observationContext={taskId:String(input.task.id??""),role:input.actor.id.replace(/^role_/,""),subtaskId:typeof input.collaboration_context?.subtask_id==="string"?input.collaboration_context.subtask_id:undefined};
+  const observationId=startObservation("enricher","taskContext",observationContext);
   let payload: unknown;
   // Один автоповтор при таймауте или сбое (карточка 71651ad0, Г1: первый
   // запуск падает на «TaskContext >15 с»). Повторный сбой уже не
@@ -62,16 +65,25 @@ export async function buildInProcessTaskContext(
     } catch (error) {
       lastError = error;
       if (attempt === 1) {
+        finishObservation(observationId,{status:"error",reason:"context_build_failed"});
         throw new Error(`не удалось собрать TaskContext v1 после автоповтора: ${String(error)}`);
       }
     }
   }
   if (!payload || typeof payload !== "object") {
+    finishObservation(observationId,{status:"error",reason:"invalid_response"});
     throw new Error(`не удалось собрать TaskContext v1: ${String(lastError)}`);
   }
   const value = payload as Record<string, unknown>;
   if (typeof value.prompt !== "string" || typeof value.summary !== "string") {
+    finishObservation(observationId,{status:"error",reason:"invalid_response"});
     throw new Error("не удалось собрать TaskContext v1: bridge вернул неполный пакет");
+  }
+  finishObservation(observationId,{status:"ok",inputCount:value.prompt.length,outputCount:value.prompt.length,details:["Собран стартовый контекст; объём в символах"]});
+  if(Array.isArray(value.observations))for(const item of value.observations){
+    if(!item||typeof item!=="object")continue;const o=item as any;
+    if(!["kb","mnemosyne","repository","dependencies","collaboration","history"].includes(o.scenario))continue;
+    finishObservation(startObservation("enricher",o.scenario,observationContext),{...o,status:o.status==="unavailable"?"error":o.status==="empty"?"skipped":o.status,reason:o.reason??(o.status==="unavailable"?"source_unavailable":o.status==="empty"?"empty":undefined)});
   }
   return {
     prompt: value.prompt,

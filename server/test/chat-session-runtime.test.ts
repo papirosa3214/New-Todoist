@@ -27,6 +27,7 @@ import {
 import {
   _resetChatRoleLocksForTests,
 } from "../src/runtime/chatSession.js";
+import {offerChatSteering} from "../src/runtime/chatSteering.js";
 import { liveModelOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
 // === Замоканный Pi SDK ===
@@ -45,6 +46,7 @@ interface FakeSession {
   options: any;
   sessionId: string;
   prompt: ReturnType<typeof vi.fn>;
+  steer: ReturnType<typeof vi.fn>;
   abort: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
   getLastAssistantText: ReturnType<typeof vi.fn>;
@@ -90,6 +92,7 @@ function makeFakeSession(options: any): FakeSession {
         aborted = resolve;
       });
     }),
+    steer: vi.fn(async () => {}),
     abort: vi.fn(async () => { aborted?.(); }),
     dispose: vi.fn(() => {}),
     getLastAssistantText: vi.fn(() => "какой-то ответ"),
@@ -174,6 +177,19 @@ afterEach(async () => {
 });
 
 describe("startChatRun (ход чата внутри сервера)", () => {
+  it.each([["architect", "max"], ["qa", "medium"]])("owner thinking policy reaches chat SDK for %s", async (role, expected) => {
+    const entry = CATALOG.find(m => m.id === liveModelOf(role))!;
+    const prior = { ...entry };
+    Object.assign(entry, {reasoning:true, thinkingLevelMap:{max:"max"}});
+    try {
+      await startChatRun({chatId:"chat-direct",role,roleId:"role_"+role,prompt:"test"});
+      expect(fakeSessions[0].options.thinkingLevel).toBe(expected);
+    } finally {
+      Object.assign(entry, prior);
+      delete (entry as any).thinkingLevelMap;
+    }
+  });
+
   it("сессия SDK в папке роли, с моделью роли и инструментами трекера — без MCP", async () => {
     const result = await startChatRun({
       chatId: "chat-direct",
@@ -199,7 +215,7 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     }
     expect(session.prompt).toHaveBeenCalledWith("привет");
     // Размышления не выключаем: уровень — по умолчанию Pi, как было у CLI.
-    expect(session.options.thinkingLevel).toBeUndefined();
+    expect(session.options.thinkingLevel).toBe("off");
 
     const row = db
       .prepare("SELECT pi_session_id FROM chat_sessions WHERE chat_id = ? AND role_id = ?")
@@ -351,4 +367,222 @@ describe("startChatRun: сторож тишины (владелец 27.09.2026)"
     expect(session.abort).toHaveBeenCalled();
   });
 
+});
+
+
+it("уточнение попадает в незавершённую SDK-сессию без второго prompt",async()=>{
+ blockPromptFor(0);
+ const running=startChatRun({chatId:"chat-direct",role:"architect",roleId:"role_architect",prompt:"начало",deliveryOutcome:Promise.resolve(true)});
+ await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+ try {
+  const receipt=await offerChatSteering("chat-direct","role_architect","clarification","уточнение сейчас");
+  expect(receipt).not.toBeNull();
+  expect(fakeSessions[0].steer).toHaveBeenCalledOnce();
+  const text=fakeSessions[0].steer.mock.calls[0][0];
+  fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text}]}});
+  releasePromptWaiter(0);await running;
+  expect(await receipt!.consumed).toBe(true);
+  expect(fakeSessions[0].prompt).toHaveBeenCalledTimes(1);
+ } finally {releasePromptWaiter(0);await running;}
+});
+
+it("HTTP: второе сообщение меняет работающий ход, durable закрывается после ответа",async()=>{
+ const chatId="steering-http";
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Уточнения","direct","owner-test");
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect");
+ const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ blockPromptFor(0);
+ try{
+  expect((await send("начни проверку")).statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  const second=await send("учти второе условие");
+  expect(second.statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  expect(fakeSessions).toHaveLength(1);
+  const steered=fakeSessions[0].steer.mock.calls[0][0];
+  fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
+  const pending=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=? ORDER BY rowid").all(chatId) as any[];
+  expect(pending).toHaveLength(2);
+  expect(pending[1].status).not.toBe("done");
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>{
+   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatId) as any[];
+   expect(rows.every(row=>row.status==="done")).toBe(true);
+  });
+  expect(fakeSessions).toHaveLength(1);
+ }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
+});
+
+it("HTTP: непрочитанное уточнение исполняется очередью, а не исчезает",async()=>{
+ const chatId="steering-fallback";
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Fallback","direct","owner-test");
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect");
+ const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ blockPromptFor(0);
+ try {
+  await send("первый запрос");
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  await send("позднее уточнение");
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  // Нет user/message_start: SDK не успел применить уточнение.
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>expect(fakeSessions).toHaveLength(2));
+  await vi.waitFor(()=>{
+   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatId) as any[];
+   expect(rows).toHaveLength(2);expect(rows.every(row=>row.status==="done")).toBe(true);
+  });
+  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("позднее уточнение");
+ } finally {releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
+});
+
+it("HTTP: fallback сохраняет место перед более поздним сообщением",async()=>{
+ const chatId="steering-fallback-order";
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Fallback","direct","owner-test");
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect");
+ const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ blockPromptFor(0);
+ try {
+  await send("первый запрос");
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  await send("позднее уточнение");
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  fakeSessions[0].steer.mockRejectedValueOnce(new Error("closed input"));
+  await send("третье сообщение");
+  // B не прочитано, C поступило в обычную очередь.
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>expect(fakeSessions).toHaveLength(3),{timeout:5000});
+  await vi.waitFor(()=>{
+   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatId) as any[];
+   expect(rows).toHaveLength(3);expect(rows.every(row=>row.status==="done")).toBe(true);
+  });
+  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("позднее уточнение");
+  const prompts=fakeSessions.slice(1).map(s=>s.prompt.mock.calls[0][0] as string);
+  const ids=db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id=? ORDER BY rowid").all(chatId,"owner-test") as any[];
+  expect(prompts[0]).toContain("Отвечаешь на сообщение "+ids[1].id);
+  expect(prompts[1]).toContain("Отвечаешь на сообщение "+ids[2].id);
+ } finally {releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
+});
+
+it("HTTP: async steer не позволяет позднему сообщению обогнать уточнение",async()=>{
+ const chatId="steering-async-order";
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Fallback","direct","owner-test");
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect");
+ const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ blockPromptFor(0);
+ try {
+  await send("первый запрос");
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  let accept!:()=>void;
+  fakeSessions[0].steer.mockImplementationOnce(()=>new Promise<void>(r=>{accept=r;}));
+  const second=send("позднее уточнение");
+  // app.inject starts on awaiting its thenable.
+  const secondDone=Promise.resolve(second);
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  fakeSessions[0].steer.mockRejectedValueOnce(new Error("closed input"));
+  await send("третье сообщение");
+  accept();await secondDone;
+  // B не прочитано, C поступило в обычную очередь.
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>expect(fakeSessions).toHaveLength(3),{timeout:5000});
+  await vi.waitFor(()=>{
+   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatId) as any[];
+   expect(rows).toHaveLength(3);expect(rows.every(row=>row.status==="done")).toBe(true);
+  });
+  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("позднее уточнение");
+  const prompts=fakeSessions.slice(1).map(s=>s.prompt.mock.calls[0][0] as string);
+  const ids=db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id=? ORDER BY rowid").all(chatId,"owner-test") as any[];
+  expect(prompts[0]).toContain("Отвечаешь на сообщение "+ids[1].id);
+  expect(prompts[1]).toContain("Отвечаешь на сообщение "+ids[2].id);
+ } finally {releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
+});
+
+// === Умная очередь: уточнение занятой роли из любого чата и от кого угодно ===
+
+function makeChat(id:string,title:string,kind="direct"){
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(id,title,kind,"owner-test");
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(id,"owner-test",id,"role_architect");
+}
+it("HTTP: уточнение из другого чата меняет работающий ход роли",async()=>{
+ const chatA="steering-cross-a",chatB="steering-cross-b";
+ makeChat(chatA,"Первый чат");makeChat(chatB,"Второй чат");
+ const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const send=(chat:string,text:string)=>app!.inject({method:"POST",url:`/api/chats/${chat}/messages`,headers,payload:{text}});
+ blockPromptFor(0);
+ try{
+  expect((await send(chatA,"начни проверку")).statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  expect((await send(chatB,"учти и это")).statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  const steered=fakeSessions[0].steer.mock.calls[0][0] as string;
+  expect(steered).toContain("учти и это");
+  // Пометка источника: от кого и откуда.
+  expect(steered).toContain("Test Owner");
+  expect(steered).toContain("Второй чат");
+  fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>{
+   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatB) as any[];
+   expect(rows).toHaveLength(1);expect(rows.every(row=>row.status==="done")).toBe(true);
+  });
+  // Второй чат не получил своего хода: сообщение ушло в ход первого.
+  expect(fakeSessions).toHaveLength(1);
+ }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id IN (?,?)").run(chatA,chatB);}
+});
+
+it("HTTP: уточнение от коллеги-роли тоже подмешивается в ход",async()=>{
+ const chatId="steering-from-role";
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Коллеги","direct","owner-test");
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect",chatId,"role_qa");
+ const ownerHeaders={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const roleHeaders={authorization:"Bearer "+app!.jwt.sign({id:"role_qa"})};
+ const send=(headers:any,text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ blockPromptFor(0);
+ try{
+  expect((await send(ownerHeaders,"@Архитектор начни проверку")).statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  expect((await send(roleHeaders,"коллега, уточнение по твоей работе")).statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  const steered=fakeSessions[0].steer.mock.calls[0][0] as string;
+  expect(steered).toContain("коллега, уточнение по твоей работе");
+  expect(steered).toContain("QA");
+  fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>{
+   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=? AND role_id=?").all(chatId,"role_architect") as any[];
+   expect(rows.length).toBeGreaterThanOrEqual(1);
+   expect(rows.every(row=>row.status==="done")).toBe(true);
+  });
+  expect(fakeSessions).toHaveLength(1);
+ }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
+});
+
+it("HTTP: служебная строка — доставлено в работу, после ответа закрыта",async()=>{
+ const chatId="steering-service-row";
+ makeChat(chatId,"Служебная строка");
+ const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ const card=()=>db.prepare("SELECT text,steps FROM chat_messages WHERE message_type='system' AND json_valid(steps) AND json_extract(steps,'$.coordination.question_id') IS NOT NULL").get() as any;
+ blockPromptFor(0);
+ try{
+  await send("начни проверку");
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  await send("уточнение в ход");
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  const steered=fakeSessions[0].steer.mock.calls[0][0] as string;
+  fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
+  await vi.waitFor(()=>{
+   const row=card();
+   expect(row).toBeTruthy();
+   expect(row.text.toLowerCase()).toContain("доставлено в работу");
+  });
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>{
+   const row=card();
+   expect(JSON.parse(row.steps).coordination.status).toBe("answered");
+  });
+ }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });

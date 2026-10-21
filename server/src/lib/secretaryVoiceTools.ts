@@ -118,16 +118,16 @@ export function roleLoadNow(ownerId: string) {
 // Голос получает тот же универсальный taskflow, что и чат: один каталог,
 // один исполнитель и один протокол discover/describe/invoke. Отдельного
 // списка возможностей для голоса нет.
-function voiceCatalog(ownerId: string) {
-  const adapters = secretaryThings3Tools({ role: "secretary" });
+function voiceCatalog(ownerId: string, context: {chatId?:string;messageId?:string} = {}) {
+  const adapters = secretaryThings3Tools({ role: "secretary", ...context });
   return buildRoleToolCatalog(
-    { role: "secretary", mode: "work", runId: `secretary-voice:${ownerId}` },
+    { role: "secretary", mode: "work", runId: `secretary-voice:${ownerId}`, ...context },
     adapters,
   );
 }
 
-function universalVoiceTool(ownerId: string) {
-  const tool = voiceCatalog(ownerId).customTools.find((candidate) => candidate.name === "taskflow");
+function universalVoiceTool(ownerId: string, context: {chatId?:string;messageId?:string} = {}) {
+  const tool = voiceCatalog(ownerId,context).customTools.find((candidate) => candidate.name === "taskflow");
   if (!tool) throw new Error("универсальный каталог TaskFlow для голоса не собран");
   return tool;
 }
@@ -171,9 +171,9 @@ export async function voiceToolManifest() {
   return [{ name: tool.name, description: tool.description, parameters: plainSchema(tool.parameters) }];
 }
 
-export async function runVoiceTool(ownerId: string, name: string, args: unknown) {
+export async function runVoiceTool(ownerId: string, name: string, args: unknown, context: {chatId?:string;messageId?:string} = {}) {
   if (!isOwner(ownerId)) throw new Error("только владелец");
-  const tool = universalVoiceTool(ownerId);
+  const tool = universalVoiceTool(ownerId,context);
   if (name !== tool.name) {
     const requestId = args && typeof args === "object" && "request_id" in args ? (args as any).request_id : undefined;
     return { ok: true, result: JSON.stringify({ ok: false, operation: name, request_id: requestId,

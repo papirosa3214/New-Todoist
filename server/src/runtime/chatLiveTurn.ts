@@ -20,6 +20,7 @@ import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 // роняет весь снимок.
 import { broadcastToUsers } from "../ws.js";
 import { unwrapRoleEnvelopeText } from "../lib/roleContractV1.js";
+import { emptyAssistantAnswer } from "./providerFailover.js";
 
 export const LIVE_BROADCAST_MS = 150;
 const DETAIL_MAX = 140;
@@ -366,6 +367,9 @@ export class LiveTurn {
   /** Ход-двойник: для этой пары уже идёт живой ход, этот ничего не
    *  рассылает и не трогает чужой снимок. */
   private readonly detached: boolean;
+  /** Модель ответила пустотой (21.10.2026): ни текста, ни вызова
+   *  инструмента. Ход молчал — в чате это видно как сбой. */
+  private emptyReason: string | null = null;
 
   constructor(args: {
     chatId: string;
@@ -402,6 +406,14 @@ export class LiveTurn {
     const sub = e.type === "message_update" ? e.assistantMessageEvent?.type : undefined;
     if (sub && this.genStartedAt === null) this.genStartedAt = Date.now();
     if (e.type === "message_end" || e.type === "turn_usage") this.addUsage(event);
+    // Ответ модели без текста — молчание (21.10.2026). Помечаем последний
+    // такой ответ: пустой ответ виден как сбой, а не как «роль молчит».
+    if (e.type === "message_end") {
+      const answer = (event as { message?: { role?: string } }).message;
+      if (answer && answer.role === "assistant") {
+        this.emptyReason = emptyAssistantAnswer(answer);
+      }
+    }
     if (sub === "thinking_start") {
       this.endThinking();
       this.startThinking();
@@ -653,6 +665,11 @@ export class LiveTurn {
       turn: null,
       message_id: messageId,
     });
+  }
+
+  /** Причина молчания: модель ответила пустым content (null — ответ был). */
+  emptyAnswerReason(): string | null {
+    return this.emptyReason;
   }
 
   /** Текст ответа, который роль успела написать, — для хода, остановленного

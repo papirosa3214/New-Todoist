@@ -15,6 +15,7 @@
 // ГЛАВНОЕ ПРАВИЛО: улучшение никогда не ломает основу. Выключен, нет ключа,
 // тайм-аут, ошибка провайдера, кривой ответ — всё это `null`, и вызывающий
 // идёт своей прежней дорогой. Исключения отсюда наружу не летят.
+import { startObservation, finishObservation, keyIdentity } from "./contextObservability.js";
 import db from "../db.js";
 import { ProxyAgent } from "undici";
 
@@ -58,6 +59,8 @@ export interface JevResult {
   model: string;
   answers: Record<string, JevAnswer>;
   usage?: { input_tokens: number; output_tokens: number };
+  /** Internal correlation; never sent to the provider. */
+  observationId?: string | null;
 }
 
 /** Сценарии JEV: колонка-галочка, колонка-порог (если есть) и имена полей
@@ -289,17 +292,11 @@ export async function testJevConnection(): Promise<
   const key = apiKey(r);
   if (!key) return { ok: false, error: "Ключ API не задан" };
   const t0 = Date.now();
+  const connectionOp=isJevai(r)?startObservation("jev","connectionTest",{keyId:keyIdentity(r.base_url,key)}):null;
   try {
     if (isJevai(r)) {
-      const data = unwrapJevai(
-        await call(r, key, "POST", "/api/v1/decisions", {
-          model: r.model,
-          state: "Проверка подключения TaskFlow.",
-          questions: {
-            ping: { type: "noul", instructions: "Это проверочный запрос?" },
-          },
-        }),
-      );
+      const data = unwrapJevai(await call(r,key,"POST","/api/v1/decisions",{model:r.model,state:"Проверка подключения TaskFlow.",questions:{ping:{type:"noul",instructions:"Это проверочный запрос?"}}}));
+      finishObservation(connectionOp,{status:data?.answers?.ping?"ok":"error",reason:data?.answers?.ping?undefined:"invalid_response",usage:data?.usage});
       if (!data?.answers?.ping)
         return { ok: false, error: "Неожиданный ответ jevai.org" };
       return { ok: true, models: [r.model], ms: Date.now() - t0 };
@@ -314,6 +311,7 @@ export async function testJevConnection(): Promise<
     };
   } catch (err: any) {
     const timeout = err?.name === "TimeoutError" || err?.name === "AbortError";
+    finishObservation(connectionOp,{status:timeout?"timeout":"error",reason:timeout?"timeout":"provider_error"});
     return {
       ok: false,
       error: timeout
@@ -332,11 +330,12 @@ export async function evaluateJev(
   questions: Record<string, JevQuestion>,
   /** Свой предел ожидания (не больше общего тайм-аута подключения): память
    *  подбирается на каждом ходу роли, и ждать там 10 с нельзя. */
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; scenario?: string } = {},
 ): Promise<JevResult | null> {
   const r = row();
   const key = apiKey(r);
-  if (!key) return null;
+  const observationId=startObservation("jev",opts.scenario??"unspecified",{keyId:key?keyIdentity(r.base_url,key):undefined});
+  if (!key) { finishObservation(observationId,{status:"skipped",reason:"no_key"});return null; }
   try {
     const body = { model: r.model, state, questions };
     const limit = opts.timeoutMs
@@ -353,13 +352,20 @@ export async function evaluateJev(
       !out.answers ||
       typeof out.answers !== "object"
     )
-      return null;
-    return out as JevResult;
+      {finishObservation(observationId,{status:"error",reason:"invalid_response",usage:out?.usage});return null;}
+    finishObservation(observationId,{status:"ok",inputCount:Object.keys(questions).length,outputCount:Object.keys(out.answers).length,usage:out.usage});
+    return {...out,observationId} as JevResult;
   } catch (err: any) {
-    console.warn("JEV: оценка не получена:", err?.message || err);
+    const timeout=err?.name==="TimeoutError"||err?.name==="AbortError";
+    finishObservation(observationId,{status:timeout?"timeout":"error",reason:timeout?"timeout":"provider_error"});
+    console.warn("JEV: оценка не получена",timeout?"timeout":"provider_error");
     return null;
   }
 }
+
+export function jevSkipReason(scenario:string):string {const r=row(),entry=SCENARIOS.find(s=>s.key===scenario);return !apiKey(r)?"no_key":entry&&!r[entry.flag]?"disabled":"not_required";}
+
+export function currentJevKeyIdentity():string|null {const r=row(),key=apiKey(r);return key?keyIdentity(r.base_url,key):null;}
 
 /** Только для сценариев: включён ли выбор плана и есть ли чем его делать. */
 export function jevPlanProfileConfig(): { minConfidence: number } | null {

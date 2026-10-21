@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { ensureDirectRoom, ensurePersonalRoom } from "../lib/chatRooms.js";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import db from "../db.js";
@@ -8,6 +8,8 @@ import { COMMON_CHAT_ID, ensureCommonChat } from "../lib/chatCommon.js";
 import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolver.js";
 import { resolveTopicSlot } from "./slotSession.js";
 import { asRole, asText, ToolError, listActiveInProcessRuns } from "./inProcessRun.js";
+
+const ownerAccountId = () => (db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY id LIMIT 1").get() as {id:string}|undefined)?.id;
 
 type Context = { taskId?: string; subtaskId?: string; chatId?: string; messageId?:string };
 const optional = (description: string) => Type.Optional(Type.String({ description }));
@@ -28,20 +30,11 @@ export function agentMessagingTools(role: string, context: Context = {}) {
     sentCount++;
     return {id:result.message.id,chat_id:chatId,отправлено:result.message.text};
   };
-  const directChat = (recipientId: string) => db.transaction(() => {
-    const existing = db.prepare(`SELECT c.id FROM chats c WHERE c.kind='direct' AND c.parent_chat_id IS NULL AND c.branch_of_chat_id IS NULL
-      AND c.task_id IS NULL AND (SELECT count(*) FROM chat_members WHERE chat_id=c.id)=2
-      AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
-      AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?) ORDER BY c.created_at,c.id LIMIT 1`).get(senderId,recipientId) as {id:string}|undefined;
-    if (existing) return existing.id;
-    const id=crypto.randomUUID();
-    db.prepare("INSERT INTO chats(id,kind,created_by) VALUES(?,'direct',?)").run(id,senderId);
-    const insert=db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)");
-    insert.run(id,senderId);insert.run(id,recipientId);
-    return id;
-  })();
+  // Личка роль↔роль — постоянная переписка пары (21.10.2026). Владелец —
+  // в своей личной комнате с ролью; служебные чаты сюда не подбираются.
+  const directChat = (recipientId: string) => recipientId===ownerAccountId() ? (ensurePersonalRoom(senderId) ?? ensureDirectRoom(senderId,recipientId)) : ensureDirectRoom(senderId,recipientId);
   return [
-    tool("taskflow_chat_send","Написать коллеге лично или в группу. to: имя, id или role_key; всем — контекст группы, без автоматического вызова всех. В личке @ не нужен; в группе адресный вызов добавляет @. Работающий коллега получает вопрос в свою сессию; свободный отвечает разговорным ходом. chat_id задаёт конкретную группу, task_id — контекст задачи; slot_key нужен при нескольких этапах адресата. Максимум 4 сообщения за ход.",Type.Object({to:Type.String(),text:Type.String(),chat_id:optional("Личный или групповой чат"),task_id:optional("Контекст задачи"),slot_key:optional("Конкретный этап адресата")}),async p=>{
+    tool("taskflow_chat_send","Написать коллеге. Без chat_id: если коллега участник текущего чата — сообщение уходит в этот чат (в группе с @), иначе в личку. to: имя, id или role_key; всем — контекст группы, без автоматического вызова всех. В личке @ не нужен; в группе адресный вызов добавляет @. Работающий коллега получает вопрос в свою сессию; свободный отвечает разговорным ходом. chat_id задаёт конкретную группу, task_id — контекст задачи; slot_key нужен при нескольких этапах адресата. Максимум 4 сообщения за ход.",Type.Object({to:Type.String(),text:Type.String(),chat_id:optional("Личный или групповой чат"),task_id:optional("Контекст задачи"),slot_key:optional("Конкретный этап адресата")}),async p=>{
       const raw=String(p.to??"").trim().toLowerCase();
       if(!raw) throw new ToolError("Укажи адресата");
       const all=["all","всем","*"].includes(raw);
@@ -56,6 +49,11 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       }
       let chatId=p.chat_id;
       if(!chatId && all) chatId=context.chatId??ensureCommonChat()??COMMON_CHAT_ID;
+      // Владелец 21.10.2026: если коллега уже участник чата, где идёт ход, —
+      // говорим здесь же, при всех (в группе с @). В личку — только когда в
+      // этом чате его нет: «завёл группу и сказал решать — решайте в ней».
+      if(!chatId && recipient && context.chatId && db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(context.chatId,recipient.id))
+        chatId=context.chatId;
       if(!chatId && recipient) chatId=directChat(recipient.id);
       const chat=(await asRole(role,"GET",`/api/chats/${chatId}`)).chat;
       if(recipient && !chat.members.some((m:any)=>m.id===recipient.id)) throw new ToolError("Адресат не участвует в этом чате");
@@ -69,7 +67,11 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       } else if(p.slot_key) throw new ToolError("slot_key задаётся в теме задачи");
       if(recipientRole && !targetSlot && listActiveInProcessRuns().filter(run=>run.role===recipientRole).length>1)
         throw new ToolError("У адресата несколько работающих этапов; используй тему задачи и slot_key");
-      const text=chat.kind!=="direct" && recipientRole ? `@${recipientRole} ${p.slot_key?`[slot: ${p.slot_key}] `:""}${p.text}` : String(p.text);
+      // Роль уже обратилась к адресату сама («@Разработчик» или «@builder») —
+      // второй раз не добавляем, иначе в чате «@builder @Разработчик» (21.10.2026).
+      const body=String(p.text), lowered=body.toLowerCase();
+      const alreadyAddressed=!!recipientRole && [recipientRole,String(recipient?.name??"")].some(n=>n && lowered.includes("@"+n.toLowerCase()));
+      const text=chat.kind!=="direct" && recipientRole && (!alreadyAddressed || p.slot_key) ? `@${recipientRole} ${p.slot_key?`[slot: ${p.slot_key}] `:""}${body}` : body;
       return write(chatId,{text,task_id:taskId,subtask_id:context.subtaskId,recipient_subtask_id:targetSlot});
     }),
     tool("taskflow_chat_reply","Ответить автору конкретного сообщения: message_id и короткий text. Ответ связан с вопросом и возвращается в сессию автора; не запускает рабочий этап. Максимум 4 сообщения за ход.",Type.Object({message_id:Type.String(),text:Type.String()}),async p=>{

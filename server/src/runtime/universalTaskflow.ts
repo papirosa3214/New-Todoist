@@ -270,6 +270,133 @@ const ПОДСКАЗКИ: Record<string, string> = {
   DUPLICATE_OPERATION:
     "Один и тот же ход уже выполняется. Дождись текущего; второй запуск того же хода не нужен.",
 };
+/**
+ * Форма вызова — самая частая причина отказов ролей: за неделю 21.10.2026
+ * 971 отказ из 2157 (45 %) — это та же операция в другой записи, а не другое
+ * действие: массив приходит объектом `{"item": [...]}` или строкой JSON,
+ * число — строкой "0", имя аргумента — синонимом (`task_id` вместо `id`,
+ * `content` вместо `text`), параметры host-операции — плоско вместо
+ * `arguments.arguments`. Отказ здесь стоит роли раунда и ~7,6 с модели, а
+ * исправить его она не может: в схеме написано не то, что она прислала.
+ * Поэтому разворачиваем до проверки схемы (владелец 21.10.2026, карточка
+ * c8083c2a, раздел И1 отчёта docs/2026-10-21-agent-speed-budget.md).
+ */
+const ГРУППЫ_ИМЁН: string[][] = [
+  ["id", "task_id"],
+  ["text", "content"],
+  ["machine", "host_id"],
+];
+const свойстваСхемы = (schema: any): Record<string, any> =>
+  (schema?.properties as Record<string, any> | undefined) ?? {};
+/** Тип значения по схеме: первый непустой вариант anyOf/oneOf. */
+function типСхемы(schema: any): string | undefined {
+  const choices = schema?.anyOf ?? schema?.oneOf;
+  if (Array.isArray(choices)) {
+    for (const variant of choices) {
+      const type = типСхемы(variant);
+      if (type && type !== "null") return type;
+    }
+    return undefined;
+  }
+  if (schema?.const !== undefined) return typeof schema.const;
+  if (Array.isArray(schema?.enum) && schema.enum.length)
+    return typeof schema.enum[0];
+  return schema?.type;
+}
+/** Массив, присланный объектом-обёрткой или строкой JSON. */
+function какМассив(value: unknown): unknown {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      return value;
+    }
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    if (Array.isArray(object.item)) return object.item;
+    if (Array.isArray(object.items)) return object.items;
+    const arrays = Object.values(object).filter(Array.isArray);
+    if (arrays.length === 1) return arrays[0];
+  }
+  return value;
+}
+const какОбъект = (value: unknown): unknown => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return value;
+};
+/** Значение по типу схемы: только те приведения, которые не меняют смысла. */
+function поТипуСхемы(schema: any, value: unknown, depth = 0): unknown {
+  if (value === undefined || depth > 4) return value;
+  const type = типСхемы(schema);
+  if (type === "array") return какМассив(value);
+  if (type === "number" || type === "integer") {
+    if (typeof value === "string" && value.trim() !== "") {
+      const number = Number(value.trim());
+      if (Number.isFinite(number)) return type === "integer" ? Math.trunc(number) : number;
+    }
+    return value;
+  }
+  if (type === "boolean") {
+    if (typeof value === "string" && /^(true|false)$/i.test(value.trim()))
+      return value.trim().toLowerCase() === "true";
+    return value;
+  }
+  if (type === "object") {
+    const object = какОбъект(value);
+    if (object !== value) return object;
+    return нормализоватьАргументы(schema, value as Record<string, unknown>, depth + 1);
+  }
+  return value;
+}
+function нормализоватьАргументы(
+  schema: any,
+  raw: Record<string, unknown>,
+  depth = 0,
+): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || depth > 4) return raw;
+  const properties = свойстваСхемы(schema);
+  const args: Record<string, unknown> = { ...raw };
+  // 1. Синоним имени: в схеме одно имя, в вызове — другое, и оно свободно.
+  for (const group of ГРУППЫ_ИМЁН) {
+    const declared = group.filter((name) => name in properties);
+    const foreign = group.filter((name) => name in args && !(name in properties));
+    if (declared.length === 1 && foreign.length === 1 && args[declared[0]] === undefined) {
+      args[declared[0]] = args[foreign[0]];
+      delete args[foreign[0]];
+    }
+  }
+  // 2. Тип по схеме: массив из объекта/строки, число из строки, boolean из
+  //    "true"/"false". Значение того же смысла, другая запись.
+  for (const [key, value] of Object.entries(args)) {
+    const property = properties[key];
+    if (!property || value === undefined) continue;
+    args[key] = поТипуСхемы(property, value, depth);
+  }
+  // 3. Плоский вызов вложенной операции (Mac): лишние ключи — внутрь arguments.
+  const nested = properties.arguments;
+  if (nested && типСхемы(nested) === "object") {
+    const extra = Object.entries(args).filter(
+      ([key, value]) => !(key in properties) && value !== undefined,
+    );
+    const already =
+      args.arguments && typeof args.arguments === "object" && !Array.isArray(args.arguments)
+        ? (args.arguments as Record<string, unknown>)
+        : undefined;
+    if (extra.length && (!already || extra.every(([key]) => !(key in already)))) {
+      const merged: Record<string, unknown> = { ...(already ?? {}) };
+      for (const [key, value] of extra) {
+        merged[key] = value;
+        delete args[key];
+      }
+      args.arguments = нормализоватьАргументы(nested, merged, depth + 1);
+    }
+  }
+  return args;
+}
 const ответнаяПодсказка = (code: string) =>
   ПОДСКАЗКИ[code] ??
   "Отказ нестандартный: 1) повтори discover/describe, чтобы сверить схему; 2) найди похожий случай в базе знаний (taskflow_kb_search); 3) не перебирай вручную — спроси архитектора или оркестратора, приложив код и текст ошибки.";
@@ -685,8 +812,15 @@ function normalizeParams(raw: any, context: Context, id: string): any {
   if (p && p.action === undefined)
     p.action = p.operation !== undefined ? "invoke" : "discover";
   if (p && p.action === "invoke") {
-    if (p.version === undefined) p.version = 1;
+    // Версия операции — не то, что роль должна помнить: любая присланная
+    // версия означает ту же операцию (174 отказа за неделю — version: 2).
+    p.version = 1;
     if (p.arguments === undefined) p.arguments = {};
+    // `request_id: null` — это «не задан», а не неверный ключ (53 отказа
+    // за неделю): подставляем ключ хода так же, как при отсутствии поля.
+    if (p.request_id === null) delete (p as any).request_id;
+    if ((p.arguments as any)?.request_id === null)
+      delete (p.arguments as any).request_id;
     if (
       p.request_id === undefined &&
       (p.arguments as any)?.request_id === undefined
@@ -851,8 +985,6 @@ export function createUniversalTaskflow(
             },
           });
         }
-        if (p.version !== 1)
-          return fail("VERSION_MISMATCH", "Поддерживается version: 1");
         const record = store.get(context.actor, p.arguments?.request_id);
         if (!record || record.scope !== scope)
           return fail(
@@ -917,11 +1049,6 @@ export function createUniversalTaskflow(
         });
       }
       if (restriction) return fail(restriction.code, restriction.message);
-      if (p.version !== 1)
-        return fail(
-          "VERSION_MISMATCH",
-          "Поддерживается version: 1; получи describe",
-        );
       const write = !isReadOperation(tool.name);
       // request_id приходит и внутри arguments. Рантайм агента вырезает поля, которых
       // нет в схеме операции, а в схемах host-операций (`roleHostAccess.ts`) его нет —
@@ -931,7 +1058,7 @@ export function createUniversalTaskflow(
       const { request_id: изАргументов, ...присланные } = {
         ...(p.arguments ?? {}),
       } as Record<string, unknown>;
-      const args = присланные;
+      const args = нормализоватьАргументы(tool.parameters, присланные);
       const наружные = Object.fromEntries(
         Object.entries(p).filter(([k]) => !СЛУЖЕБНЫЕ.has(k)),
       );

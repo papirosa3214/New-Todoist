@@ -28,6 +28,7 @@ import {
   ScreenHeader,
 } from "../components/UI";
 import { formatAbsoluteTime } from "../lib/date";
+import { ChatCleanupSheet } from "./ChatCleanupSheet";
 import { CreateChatSheet } from "./CreateChatSheet";
 import type { ApiChat, ApiChatMember } from "../api/types";
 
@@ -36,22 +37,38 @@ export function ChatsScreen() {
   const { data: me } = useCurrentUser();
   const { data: chats = [], isLoading, isError, error } = useChats();
   const [createOpen, setCreateOpen] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
 
   const openCreate = () => setCreateOpen(true);
   const closeCreate = () => setCreateOpen(false);
+  // Уборку запускает владелец: это действие над всеми темами сразу, а не
+  // над одним чатом. Сервер проверит и откажет, но кнопку нечего показывать
+  // тому, кто не сможет ею воспользоваться.
+  const isOwner = me?.role === "owner";
 
   return (
     <div className="px-4 pb-4">
       <ScreenHeader
         title="Чаты"
         actions={
-          <button
-            onClick={openCreate}
-            aria-label="Новый чат"
-            className="w-[44px] h-[44px] -mr-2.5 flex items-center justify-center tap-row"
-          >
-            <Icon name="plus" size={18} />
-          </button>
+          <div className="flex items-center">
+            {isOwner && (
+              <button
+                onClick={() => setCleanupOpen(true)}
+                aria-label="Убрать лишние чаты"
+                className="w-[44px] h-[44px] flex items-center justify-center tap-row"
+              >
+                <Icon name="archive" size={18} />
+              </button>
+            )}
+            <button
+              onClick={openCreate}
+              aria-label="Новый чат"
+              className="w-[44px] h-[44px] -mr-2.5 flex items-center justify-center tap-row"
+            >
+              <Icon name="plus" size={18} />
+            </button>
+          </div>
         }
       />
 
@@ -89,6 +106,13 @@ export function ChatsScreen() {
           и (опционально) название, на месте же возвращает id нового
           чата и навигирует в него (см. CreateChatSheet.submit). */}
       <CreateChatSheet open={createOpen} onClose={closeCreate} />
+
+      {/* Уборка лишних чатов: предпросмотр (сколько и какие) и уборка
+          после подтверждения. */}
+      <ChatCleanupSheet
+        open={cleanupOpen}
+        onClose={() => setCleanupOpen(false)}
+      />
     </div>
   );
 }

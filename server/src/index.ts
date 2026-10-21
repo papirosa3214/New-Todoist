@@ -31,7 +31,7 @@ import { ensureJwtSecret } from "./env.js";
 import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserId, resolveUserIdFromToken, authOrApiToken, isRevokedDeviceToken } from "./auth.js";
-import { addClient, removeClient, resetAllOffline } from "./ws.js";
+import { addClient, handleDeviceOpResult, removeClient, resetAllOffline } from "./ws.js";
 import {
   attachHostSocket,
   detachHostSocket,
@@ -122,6 +122,7 @@ import { startOllamaHealthWatcher } from "./lib/ollamaHealthWatcher.js";
 import { startWorktreeMergeWatcher } from "./lib/worktreeMergeWatcher.js";
 import { startRoleFormatWatcher } from "./lib/roleFormatWatcher.js";
 import { startToolErrorAccountingWatcher } from "./runtime/toolErrorAccountingWatcher.js";
+import { startKbSearchWatcher } from "./lib/kbSearchWatcher.js";
 import { startInboxResultsWriter } from "./lib/inboxResultsWriter.js";
 import { registerSeedRoutes } from "./seed.js";
 import { registerEnrichmentRoutes } from "./routes/enrichment.js";
@@ -593,6 +594,9 @@ export async function buildApp(): Promise<FastifyInstance> {
       const stopToolErrorAccountingWatcher = startToolErrorAccountingWatcher();
       app.addHook("onClose", async () => stopToolErrorAccountingWatcher());
     }
+    // Поиск по базе знаний: пробный запрос с известным ответом (docs/watchers.md).
+    const stopKbSearchWatcher = startKbSearchWatcher();
+    app.addHook("onClose", async () => stopKbSearchWatcher());
   }
   // Результаты: при закрытии карточки на диагностику/устранение дописывает
   // блок в файл уведомления (Phase 4, правило Maksim 27.09.2026 — внутри
@@ -736,6 +740,10 @@ export async function buildApp(): Promise<FastifyInstance> {
           const data = JSON.parse(msg.toString());
           if (data.type === "ping")
             socket.send(JSON.stringify({ type: "pong" }));
+          // Ответ устройства на команду (device_op → device_op_result).
+          // Телефон шлёт его сам, без запроса с сервера, поэтому маршрут
+          // живёт здесь, в единственном месте, где сервер слушает сокет.
+          else handleDeviceOpResult(data);
         } catch {}
       });
       socket.send(JSON.stringify({ type: "connected" }));

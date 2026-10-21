@@ -1,3 +1,4 @@
+import {registerChatSteering,_resetChatSteeringForTests} from "./chatSteering.js";
 import {
   buildRoleToolCatalog,
   UNIVERSAL_INSTRUCTION,
@@ -156,10 +157,20 @@ export function resetModelRuntime(): void {
  *  без размышлений.
  */
 export function resolveThinkingLevel(
-  model: { reasoning?: boolean } | null | undefined,
-): "off" | "medium" | null {
-  if (!model) return "off";
-  return model.reasoning ? null : "off";
+  model: { reasoning?: boolean; thinkingLevelMap?: Record<string, unknown> } | null | undefined,
+  role?: string,
+): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null {
+  if (!model?.reasoning) return "off";
+  // Legacy callers without a role keep SDK defaults.
+  if (!role) return null;
+  const config = JSON.parse(fs.readFileSync(new URL("../../scripts/role-thinking.json", import.meta.url), "utf8"));
+  const requested = config.roles?.[role] ?? config.default;
+  const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+  if (!levels.includes(requested)) throw new Error("Invalid role thinking level: " + requested);
+  const available = levels.filter(level => model.thinkingLevelMap?.[level] !== null &&
+    (!(level === "max" || level === "xhigh") || model.thinkingLevelMap?.[level] !== undefined));
+  // Clamp down to the strongest level supported by a fallback model.
+  return [...levels.slice(0, levels.indexOf(requested) + 1)].reverse().find(level => available.includes(level)) ?? "off";
 }
 
 /** Полный каталог моделей Pi (все модели, независимо от того,
@@ -1165,6 +1176,8 @@ export async function modelExists(ref: string): Promise<boolean> {
 /** Аргументы старта живой сессии Пи в чате. Никакого taskId — чат живёт
  *  отдельной осью, карточки и аренда остаются нетронутыми. */
 export interface StartChatRunInput {
+  /** Settles after the visible reply is persisted, never merely on SDK completion. */
+  deliveryOutcome?: Promise<boolean>;
   mode?: ChatWorkMode;
   chatId: string;
   messageId?: string;
@@ -1494,12 +1507,7 @@ export async function startChatRun(
       ({ session } = await createAgentSession({
         cwd,
         model: piModel,
-        // Как у прежнего процесса Pi: уровень размышлений по умолчанию (medium;
-        // SDK сам выключит его у модели без reasoning). «off» здесь гасил
-        // живые «размышления» в окне чата (владелец 02.10.2026).
-        ...(input.mode === "deep_research" && match.reasoning
-          ? { thinkingLevel: "high" }
-          : {}),
+        thinkingLevel: resolveThinkingLevel(piModel, role) ?? undefined,
         modelRuntime: runtime,
         resourceLoader,
         // `tools` у SDK — список ИМЁН разрешённых инструментов. Объекты сюда
@@ -1521,20 +1529,10 @@ export async function startChatRun(
       throw error;
     }
 
-    // MAK-121: persisted "off" у reasoning модели в resumed чат-сессии.
-    // Мигрируем на уровень, который провайдер реально умеет, и пишем в
-    // jsonl, чтобы следующий resume открылся с размышлениями. Без миграции
-    // чат продолжал бы работать без thinking под persisted "off".
-    if (
-      piModel?.reasoning &&
-      (session as any)?.thinkingLevel === "off" &&
-      typeof (session as any).setThinkingLevel === "function"
-    ) {
-      try {
-        (session as any).setThinkingLevel("medium", { persist: true });
-      } catch {
-        /* persist не прошёл — следующий resume сам поднимет */
-      }
+    // Role policy also replaces the level restored from an older session.
+    const roleThinking = resolveThinkingLevel(piModel, role);
+    if (roleThinking && session.thinkingLevel !== roleThinking && typeof session.setThinkingLevel === "function") {
+      session.setThinkingLevel(roleThinking);
     }
 
     const run: ActiveChatRun = {
@@ -1547,6 +1545,9 @@ export async function startChatRun(
       cancelled: false,
     };
     activeChatRuns.set(runId, run);
+    const steering = input.deliveryOutcome
+      ? registerChatSteering({chatId:input.chatId,roleId:input.roleId,steer:text=>session.steer(text),outcome:input.deliveryOutcome})
+      : null;
 
     // Сторож тишины: каждое событие рантайма — признак жизни. Пока идёт
     // вызов инструмента, тишина не копится (команда может честно работать
@@ -1566,6 +1567,7 @@ export async function startChatRun(
     const turnState: { last: TurnResult | null } = { last: null };
 
     const unsubscribe = session.subscribe((event: any) => {
+      steering?.observe(event);
       lastActivity = Date.now();
       if (event?.type === "agent_end") {
         const turn = parseTurnResult(event.messages);
@@ -1681,6 +1683,7 @@ export async function startChatRun(
         );
       }
     } finally {
+      steering?.close();
       clearInterval(idleTimer);
       clearTimeout(ceilingTimer);
       unsubscribe?.();
@@ -1769,7 +1772,11 @@ async function runExternalChat(
     cancelled: false,
   };
   activeChatRuns.set(runId, run);
+  const steering=input.deliveryOutcome
+    ? registerChatSteering({chatId:input.chatId,roleId:input.roleId,steer:text=>session.steer(text),outcome:input.deliveryOutcome})
+    : null;
   const unsubscribe = session.subscribe((event: any) => {
+    steering?.observe(event);
     if (event?.type === "tool_execution_start") input.onStep?.(event.toolName);
     try {
       input.onEvent?.(event);
@@ -1809,6 +1816,7 @@ async function runExternalChat(
       upsertChatSession(input.chatId, input.roleId, session.sessionId);
     return { runId, sessionId: session.sessionId, text };
   } finally {
+    steering?.close();
     clearTimeout(ceilingTimer);
     unsubscribe();
     session.dispose();
@@ -1865,4 +1873,7 @@ export async function cancelChatRunsFor(
  *  локи. В проде не нужна — после рестарта процесса всё и так пусто. */
 export function _resetActiveChatRunsForTests(): void {
   activeChatRuns.clear();
+  // Реестр подмешивания живёт рядом с ходами: без сброса уточнение ушло бы
+  // в ход, которого уже нет.
+  _resetChatSteeringForTests();
 }
