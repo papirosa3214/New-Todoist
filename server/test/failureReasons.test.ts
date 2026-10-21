@@ -81,6 +81,12 @@ describe("классификатор причин сбоя", () => {
     expect(classifyFailureReason("сервер перезапустился")).toBe("runtime_died");
   });
 
+  it("пустой ответ модели — свой код, а не застой и не смерть рантайма", () => {
+    expect(classifyFailureReason("модель вернула пустой ответ: ни текста, ни вызова инструмента")).toBe("empty_answer");
+    expect(classifyFailureReason("модель завершила ход без текста ответа")).toBe("empty_answer");
+    expect(classifyFailureReason("empty answer from provider")).toBe("empty_answer");
+  });
+
   it("непонятный текст — unknown, пустой — тоже", () => {
     expect(classifyFailureReason("что-то пошло не так")).toBe("unknown");
     expect(classifyFailureReason("")).toBe("unknown");

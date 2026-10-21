@@ -75,7 +75,7 @@ import { resolveRoleHost } from "./roleHost.js";
 import { hostOperations } from "./hostOperations.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
-import { isProviderLimitText, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
+import { isProviderLimitText, lastAssistantEmptyAnswer, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 import { logStepOutcome } from "./stepOutcome.js";
 import { withTestRunBudget } from "./testRunBudget.js";
 import { createCliAgentSession } from "./cliAgentSession.js";
@@ -1673,6 +1673,27 @@ try {
       // Лимит провайдера библиотека не бросает: ход молча кончается ответом с ошибкой 429
       // (находка А36). Ловим здесь и уходим на запасную модель.
       limitHit = lastAssistantLimitError(session);
+      // Пустой ответ модели (content без текста, расход 0/0, ошибки нет) —
+      // тоже сбой хода, а не успешный ход с тишиной (21.10.2026: 13 молчащих
+      // ответов подряд у critic_verifier). Ловим здесь: попытка закрывается
+      // failed с причиной, шаг видно в ленте, сторож не списывает его потом
+      // как auto_restarted.
+      if (!limitHit) {
+        const emptyAnswer = lastAssistantEmptyAnswer(session);
+        if (emptyAnswer) {
+          runFailure = new Error(emptyAnswer);
+          if (input.subtaskId) {
+            const attemptRow = db
+              .prepare("SELECT current_attempt_id FROM subtasks WHERE id = ?")
+              .get(input.subtaskId) as { current_attempt_id: string | null } | undefined;
+            if (attemptRow?.current_attempt_id) {
+              db.prepare(
+                "UPDATE attempts SET ended_at = datetime('now'), outcome = 'failed', reason = ? WHERE id = ? AND ended_at IS NULL",
+              ).run(emptyAnswer, attemptRow.current_attempt_id);
+            }
+          }
+        }
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (isProviderLimitText(reason)) limitHit = reason;

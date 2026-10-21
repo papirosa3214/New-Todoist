@@ -63,6 +63,10 @@ export const FAILURE_POLICIES: Record<FailureReasonCode, FailurePolicy> = {
   // Отмена, застой шага и нераспознанная причина — дальше решает человек.
   cancelled: { kind: "block", maxRetries: 0, label: "блок (отменено)" },
   step_stalled: { kind: "block", maxRetries: 0, label: "блок (застой)" },
+  // Пустой ответ модели (21.10.2026): ход молчал — ни текста, ни вызова
+  // инструмента. Повтор в той же сессии может прийти таким же пустым,
+  // поэтому ход блокируется с причиной: её видно и в ленте, и в попытке.
+  empty_answer: { kind: "block", maxRetries: 0, label: "блок (пустой ответ)" },
   unknown: { kind: "block", maxRetries: 0, label: "блок (причина неизвестна)" },
 };
 
