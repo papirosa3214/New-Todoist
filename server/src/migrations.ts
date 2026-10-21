@@ -4878,6 +4878,14 @@ const migrations: Migration[] = [
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_chats_room_kind ON chats(room_kind)");
   } },
+  // 21.10.2026: у внешних агентов (roles.runtime ≠ pi) постоянной комнаты по
+  // умолчанию нет — их переписка с владельцем остаётся обычной сессией, а
+  // комнату владелец заводит сам из меню «…».
+  { id: "160_external_agent_rooms", description: "Личные комнаты внешних агентов, размеченные миграцией 159, становятся обычными сессиями", up: () => {
+    db.exec(`UPDATE chats SET room_kind=NULL WHERE room_kind='personal' AND id IN (
+      SELECT m.chat_id FROM chat_members m JOIN users u ON u.id=m.member_id LEFT JOIN roles r ON r.key=u.role_key
+       WHERE u.type='ai' AND COALESCE(r.runtime,'pi') <> 'pi')`);
+  } },
 ];
 /**
  * Опции прогона миграций.

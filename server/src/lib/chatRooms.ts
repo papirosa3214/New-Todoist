@@ -95,10 +95,17 @@ function isWorking(roleId: string): boolean {
 export function roomsSnapshot(previewText?: (text: string) => string) {
   if (previewText) preview = previewText;
   ensureCommonChat();
-  const roles = db.prepare(`SELECT u.id, u.name, u.role_key, u.avatar_color, u.avatar_url, u.initials
+  // Внутренние роли (runtime pi) держат постоянную комнату всегда; внешние
+  // агенты — только если владелец сам её завёл (21.10.2026: «внешние —
+  // разовые, постоянные только у внутренних»).
+  const all = db.prepare(`SELECT u.id, u.name, u.role_key, u.avatar_color, u.avatar_url, u.initials,
+        COALESCE(r.runtime, 'pi') <> 'pi' AS external,
+        EXISTS(SELECT 1 FROM chats c JOIN chat_members m ON m.chat_id=c.id WHERE c.room_kind='personal' AND m.member_id=u.id) AS has_room
       FROM users u LEFT JOIN roles r ON r.key=u.role_key
      WHERE u.type='ai' AND u.role_key IS NOT NULL AND COALESCE(u.archived,0)=0
-     ORDER BY CASE WHEN u.id=? THEN 0 ELSE 1 END, COALESCE(r.position, 999), u.name`).all(SECRETARY_ID) as Array<{ id: string; name: string; role_key: string; avatar_color: string | null; avatar_url: string | null; initials: string | null }>;
+     ORDER BY CASE WHEN u.id=? THEN 0 ELSE 1 END, COALESCE(r.position, 999), u.name`).all(SECRETARY_ID) as Array<{ id: string; name: string; role_key: string; avatar_color: string | null; avatar_url: string | null; initials: string | null; external: number; has_room: number }>;
+  const roles = all.filter((r) => !r.external || r.has_room).map(({ external: _e, has_room: _h, ...role }) => role);
+  const externalCandidates = all.filter((r) => r.external && !r.has_room).map(({ external: _e, has_room: _h, ...role }) => role);
   const dms = db.prepare(`SELECT c.id, GROUP_CONCAT(m.member_id) AS members FROM chats c JOIN chat_members m ON m.chat_id=c.id
       WHERE c.room_kind='dm' GROUP BY c.id`).all() as Array<{ id: string; members: string }>;
   const dmInfo = dms.map((d) => {
@@ -107,6 +114,8 @@ export function roomsSnapshot(previewText?: (text: string) => string) {
   });
   return {
     common: { chat_id: COMMON_CHAT_ID, live: isLive(COMMON_CHAT_ID), last_message: lastMessage(COMMON_CHAT_ID) },
+    /** Внешние агенты без комнаты — пункт «Комната внешнего агента» в меню. */
+    external_candidates: externalCandidates,
     roles: roles.map((role) => {
       const personal = ensurePersonalRoom(role.id);
       const mine = dmInfo.filter((d) => d.members.includes(role.id));

@@ -107,4 +107,18 @@ describe("комнаты ролей и лички", () => {
     const back = await app.inject({ method: "POST", url: `/api/chats/${id}/close`, headers: ownerAuth, payload: { closed: false } });
     expect(back.json().chat.closed_at).toBeNull();
   });
+
+  it("внешний агент без комнаты не в панели, а в кандидатах; с комнатой — в панели", () => {
+    db.prepare("INSERT OR IGNORE INTO roles (key, title, summary, enabled, position, runtime) VALUES ('ext_agent','Внешний','внешний',1,20,'claude-code')").run();
+    db.prepare(`INSERT OR IGNORE INTO users (id, name, role, role_key, type, email, password_hash, is_system_bot)
+      VALUES ('role_ext_agent','Внешний','agent','ext_agent','ai','ext@rooms-test','!test',1)`).run();
+    let snap = roomsSnapshot();
+    expect(snap.roles.some((r) => r.id === "role_ext_agent")).toBe(false);
+    expect(snap.external_candidates.some((r) => r.id === "role_ext_agent")).toBe(true);
+    expect(snap.roles.some((r) => r.id === "role_builder")).toBe(true);
+    ensurePersonalRoom("role_ext_agent");
+    snap = roomsSnapshot();
+    expect(snap.roles.some((r) => r.id === "role_ext_agent")).toBe(true);
+    expect(snap.external_candidates.some((r) => r.id === "role_ext_agent")).toBe(false);
+  });
 });
