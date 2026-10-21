@@ -4841,6 +4841,43 @@ const migrations: Migration[] = [
     const roles = new Set((db.prepare("PRAGMA table_info(roles)").all() as Array<{ name: string }>).map((c) => c.name));
     if (!roles.has("last_model")) db.exec("ALTER TABLE roles ADD COLUMN last_model TEXT");
   } },
+  // 21.10.2026, раздел «Чаты»: комнаты и сессии (docs/2026-10-21-chats-rooms-and-sessions.md).
+  // Назначение комнаты хранится явно: личную комнату и личку роль↔роль раньше
+  // угадывали по «первому чату, где ровно эти двое», и поручение Помощника
+  // Оркестратору легло в служебную «Передачу принятых изменений».
+  { id: "159_chat_room_kind", description: "chats.room_kind: personal (владелец↔роль), dm (роль↔роль), common, wake (Заминки задачи), handoff (Передача принятых изменений); общая комната «Заминки команды» закрыта", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!cols.has("room_kind")) db.exec("ALTER TABLE chats ADD COLUMN room_kind TEXT CHECK (room_kind IS NULL OR room_kind IN ('personal','dm','common','wake','handoff'))");
+    db.exec(`
+      UPDATE chats SET room_kind='common' WHERE id='chat-common';
+      UPDATE chats SET room_kind='personal' WHERE id='chat-secretary';
+      UPDATE chats SET room_kind='handoff' WHERE id LIKE 'integration:%';
+      UPDATE chats SET room_kind='wake', closed_at=COALESCE(closed_at, datetime('now')) WHERE id LIKE 'orchestrator-wake:%';
+    `);
+    const owner = (db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY id LIMIT 1").get() as { id: string } | undefined)?.id;
+    const plain = db.prepare(`SELECT c.id FROM chats c WHERE c.room_kind IS NULL AND c.kind='direct'
+        AND c.task_id IS NULL AND c.project_id IS NULL AND c.parent_chat_id IS NULL AND c.branch_of_chat_id IS NULL AND c.closed_at IS NULL
+        AND (SELECT COUNT(*) FROM chat_members WHERE chat_id=c.id)=2 ORDER BY c.created_at, c.id`).all() as Array<{ id: string }>;
+    const seen = new Set<string>();
+    for (const row of db.prepare("SELECT id FROM chats WHERE room_kind='personal'").all() as Array<{ id: string }>) {
+      for (const m of db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(row.id) as Array<{ member_id: string }>) seen.add("p:" + m.member_id);
+    }
+    for (const chat of plain) {
+      const members = (db.prepare("SELECT u.id, u.type FROM chat_members m JOIN users u ON u.id=m.member_id WHERE m.chat_id=?").all(chat.id) as Array<{ id: string; type: string }>);
+      const ai = members.filter((m) => m.type === "ai").map((m) => m.id).sort();
+      if (owner && ai.length === 1 && members.some((m) => m.id === owner)) {
+        if (seen.has("p:" + ai[0])) continue;
+        seen.add("p:" + ai[0]);
+        db.prepare("UPDATE chats SET room_kind='personal' WHERE id=?").run(chat.id);
+      } else if (ai.length === 2) {
+        const key = "d:" + ai.join(":");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        db.prepare("UPDATE chats SET room_kind='dm' WHERE id=?").run(chat.id);
+      }
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_chats_room_kind ON chats(room_kind)");
+  } },
 ];
 /**
  * Опции прогона миграций.

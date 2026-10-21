@@ -49,20 +49,21 @@ const BLOCK_GUIDE = [
   "Работу роли сам не делай. Если всё уже идёт штатно — ничего не делай.",
 ];
 
-/** Открыть личный чат «Заминки команды» и положить в него сообщение.
- *  Оркестратор — всегда участник; автор карточки добавляется, только если
- *  он есть и это не он сам (`chat_members.member_id` NOT NULL, а вставка
- *  идёт в транзакции: пустой `creator_id` уронил бы всю отправку). */
-function openWakeChat(chatId: string, orchestratorId: string, creatorId: string | null): void {
-  db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES (?,'Заминки команды','direct',?)").run(chatId, orchestratorId);
-  // Создатель чата — Оркестратор. Чат завёлся 14.10.2026 ещё прежним кодом,
-  // который брал автора карточки (Помощник владельца), а INSERT OR IGNORE
-  // существующую строку не правит (владелец 20.10.2026).
-  db.prepare("UPDATE chats SET created_by=? WHERE id=? AND created_by<>?").run(orchestratorId, chatId, orchestratorId);
-  db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES (?,?)").run(chatId, orchestratorId);
-  if (creatorId && creatorId !== orchestratorId) {
-    db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES (?,?)").run(chatId, creatorId);
-  }
+/** Сессия «Заминки» задачи (владелец 21.10.2026): вместо одной вечной
+ *  комнаты «Заминки команды» — своя на каждую задачу, а значит и свой сеанс
+ *  Оркестратора (`chat_sessions` — строка на пару чат+роль): заминки чужих
+ *  карточек ему в контекст не попадают. Создатель и участник — владелец;
+ *  автор карточки добавляется, если это не владелец и не Оркестратор.
+ *  Закрывается вместе с задачей (`setTaskTopicClosed`). */
+export function wakeChatId(taskId: string): string { return "wake:" + taskId; }
+
+function openWakeChat(chatId: string, taskId: string, orchestratorId: string, creatorId: string | null): void {
+  const owner = (db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY id LIMIT 1").get() as { id: string } | undefined)?.id ?? creatorId ?? orchestratorId;
+  db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by,task_id,room_kind) VALUES (?,'Заминки','direct',?,?,'wake')").run(chatId, owner, taskId);
+  // Новая заминка по задаче, чья сессия была закрыта, открывает её снова.
+  db.prepare("UPDATE chats SET closed_at=NULL WHERE id=? AND closed_at IS NOT NULL").run(chatId);
+  const member = db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES (?,?)");
+  for (const id of new Set([orchestratorId, owner, creatorId].filter(Boolean) as string[])) member.run(chatId, id);
 }
 
 /**
@@ -84,9 +85,9 @@ export function wakeOrchestrator(subtaskId: string, actorId: string | null, kind
     if (!row || row.slot === ORCHESTRATE_SLOT || row.slot === ORCHESTRATE_ASSEMBLE_SLOT) return null;
     const orch = db.prepare("SELECT id FROM users WHERE id = ? AND type = 'ai' AND COALESCE(archived,0) = 0").get(roleUserId("code_orchestrator")) as { id: string } | undefined;
     if (!orch) return null;
-    const chatId = "orchestrator-wake:" + orch.id;
+    const chatId = wakeChatId(row.task_id);
     const messageId = `orch-${kind}:${subtaskId}:${crypto.randomUUID()}`;
-    openWakeChat(chatId, orch.id, row.creator_id);
+    openWakeChat(chatId, row.task_id, orch.id, row.creator_id);
     const attempt = kind === "retry" && row.cycle ? ` Это попытка №${row.cycle}.` : "";
     const text = [
       `Заминка в команде по карточке «${row.task_title}» (${row.task_id}), план ${row.plan_id}.`,
@@ -161,13 +162,13 @@ export function wakeOrchestratorStalled(subtaskId: string, kind: StalledWakeKind
     if (!row || row.slot === ORCHESTRATE_SLOT || row.slot === ORCHESTRATE_ASSEMBLE_SLOT) return null;
     const orch = db.prepare("SELECT id FROM users WHERE id = ? AND type = 'ai' AND COALESCE(archived,0) = 0").get(roleUserId("code_orchestrator")) as { id: string } | undefined;
     if (!orch) return null;
-    const chatId = "orchestrator-wake:" + orch.id;
+    const chatId = wakeChatId(row.task_id);
     // id шага в ключе обязателен: у шага без попытки attemptKey — `cycle:N`,
     // одинаковый у всех карточек, и INSERT OR IGNORE молча глотал побудку,
     // если такое сообщение уже было по другой карточке (20.10.2026: Критик
     // веб-карточки завис, сторож «разбудил», а сообщение не создалось).
     const messageId = `orch-${kind}:${subtaskId}:${attemptKey}`;
-    openWakeChat(chatId, orch.id, row.creator_id);
+    openWakeChat(chatId, row.task_id, orch.id, row.creator_id);
     const text = [
       `Заминка в команде по карточке «${row.task_title}» (${row.task_id}), план ${row.plan_id}.`,
       `Шаг «${row.title}» (${row.slot}, id ${subtaskId}) ${STALLED_HEADLINE[kind]}.`,

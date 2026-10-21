@@ -111,11 +111,12 @@ const notifications = (kind: string): Array<{ text: string }> => {
 };
 
 /** Сообщения сторожа оркестратору: личный чат «Заминки команды». */
-const ORCH_CHAT = `orchestrator-wake:${roleUserId("code_orchestrator")}`;
+// Заминки — сессия на задачу (`wake:<task_id>`, 21.10.2026).
+const ORCH_CHAT = "wake:%";
 const orchMessages = (): Array<{ id: string; text: string; task_id: string }> =>
-  db.prepare("SELECT id, text, task_id FROM chat_messages WHERE chat_id = ? ORDER BY rowid").all(ORCH_CHAT) as Array<{ id: string; text: string; task_id: string }>;
+  db.prepare("SELECT id, text, task_id FROM chat_messages WHERE chat_id LIKE ? ORDER BY rowid").all(ORCH_CHAT) as Array<{ id: string; text: string; task_id: string }>;
 const orchQueue = (): Array<{ delivery_id: string; role_id: string; status: string }> =>
-  db.prepare("SELECT delivery_id, role_id, status FROM chat_message_queue WHERE chat_id = ? ORDER BY rowid").all(ORCH_CHAT) as Array<{ delivery_id: string; role_id: string; status: string }>;
+  db.prepare("SELECT delivery_id, role_id, status FROM chat_message_queue WHERE chat_id LIKE ? ORDER BY rowid").all(ORCH_CHAT) as Array<{ delivery_id: string; role_id: string; status: string }>;
 
 /** Создать «журнал» потока событий: каталог с одним .jsonl, mtime которого
  *  отстоит от текущего момента на `minutesAgo` минут. `step` — реальный
@@ -203,8 +204,8 @@ describe("stalledStepWatcher", () => {
     // Уведомления сторожа живут в личном чате оркестратора и не каскадом
     // чистятся вместе с карточкой — снимаем их на каждый тест, иначе
     // счётчики «ровно одно сообщение» копятся между кейсами.
-    db.prepare("DELETE FROM chat_message_queue WHERE chat_id LIKE 'orchestrator-wake:%'").run();
-    db.prepare("DELETE FROM chat_messages WHERE chat_id LIKE 'orchestrator-wake:%'").run();
+    db.prepare("DELETE FROM chat_message_queue WHERE chat_id LIKE 'wake:%'").run();
+    db.prepare("DELETE FROM chat_messages WHERE chat_id LIKE 'wake:%'").run();
     // Сначала снимаем аренду со ВСЕХ плановых subtasks, чтобы FK на
     // agent_id/current_attempt_id не упёрся при удалении задач.
     db.prepare(

@@ -59,7 +59,7 @@ export function ensurePlanTopic(taskId: string): string | null {
  *  закрытая тема только перестаёт быть «открытой» и становится read-only. */
 export function setTaskTopicClosed(taskId:string,closed:boolean):number {
   const result=db.prepare(
-    "UPDATE chats SET closed_at = CASE WHEN ? THEN datetime('now') ELSE NULL END WHERE task_id = ? AND parent_chat_id IS NOT NULL",
+    "UPDATE chats SET closed_at = CASE WHEN ? THEN datetime('now') ELSE NULL END WHERE task_id = ? AND (parent_chat_id IS NOT NULL OR room_kind = 'wake')",
   ).run(closed?1:0,taskId);
   return result.changes;
 }
