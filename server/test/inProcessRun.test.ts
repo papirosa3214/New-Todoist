@@ -671,20 +671,20 @@ describe("агент роли внутри сервера", () => {
     expect(runs).toBe(1);
   });
 
-  it("ошибка SDK не считается успехом: три review-захода, затем стойкий блок", async () => {
+  it("ошибка SDK без результата блокирует сразу, повтор не доходит до модели", async () => {
     db.prepare("UPDATE users SET reviewer_first_default=1 WHERE role='owner'").run();
     const { taskId } = builderTask("Review context overflow");
     db.prepare("UPDATE tasks SET agent_state='review',assignee_id='role_critic_verifier' WHERE id=?").run(taskId);
     script.steps = async () => {};
     script.answer = { role: "assistant", stopReason: "error", errorMessage: "400 context window exceeds limit (2013)", content: [] };
     try {
-      for (let i=0; i<3; i++) {
+      for (let i=0; i<1; i++) {
         const run = await kickRoleTaskStrict(taskId, i % 2 ? "after_run" : "review");
         expect(run.outcome).toBe("started");
         if (run.outcome === "started") await expect(run.completion).rejects.toThrow(/context window exceeds limit/);
       }
       expect(db.prepare("SELECT agent_state,block_type,blocked_reason FROM tasks WHERE id=?").get(taskId)).toMatchObject({
-        agent_state: "blocked", block_type: "needs_input", blocked_reason: expect.stringContaining("3"),
+        agent_state: "blocked", block_type: "needs_input", blocked_reason: expect.stringContaining("нового сохранённого результата"),
       });
       const before = script.sessions.length;
       await kickRoleTaskStrict(taskId, "review");

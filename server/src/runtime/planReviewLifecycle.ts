@@ -1,4 +1,4 @@
-import { reviewBudgetExhausted, blockReviewRun } from "./reviewRunBudget.js";
+import { reviewRepeatBlockReason, blockReviewRun } from "./reviewRunBudget.js";
 import {
   branchMembership,
   branchReworkRequest,
@@ -244,8 +244,9 @@ export function queuePlanFinalReview(subtaskId: string, actorId: string) {
   const step = db
     .prepare("SELECT * FROM subtasks WHERE id=?")
     .get(subtaskId) as ReviewStep;
-  if(reviewBudgetExhausted(step.task_id)) {
-    const error="Проверка заблокирована: 3 захода без вердикта; нужно решение владельца.";
+  const repeatBlock=reviewRepeatBlockReason(step.task_id);
+  if(repeatBlock) {
+    const error=repeatBlock;
     blockReviewRun(step.task_id,error);
     return {ok:false as const,error};
   }

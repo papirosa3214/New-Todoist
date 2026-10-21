@@ -130,8 +130,8 @@ describe("повторная постановка итоговой приёмк�
       { status: "queued" },
     ]);
   });
-  it("три прохода без вердикта нельзя обойти новой очередью и сбросом шага", () => {
-    for(let i=0;i<3;i++){
+  it("пустой проход нельзя обойти новой очередью и сбросом шага", () => {
+    for(let i=0;i<1;i++){
       const ticket=reserveReviewRun(task);
       assertReviewRunAllowed(ticket);
       expect(()=>finishReviewRun(ticket)).toThrow(/без сохранённого вердикта/);
