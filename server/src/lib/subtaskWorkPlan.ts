@@ -39,9 +39,17 @@ export function readChatWorkPlan(chatId: string, roleId: string): ChatWorkPlan |
 export function readChatWorkPlans(chatId: string): ChatWorkPlan[] {
   return (db.prepare("SELECT * FROM chat_work_plans WHERE chat_id=? ORDER BY updated_at DESC").all(chatId) as any[]).map(chatPlanRow);
 }
+/** План выполнен целиком — закрыт: в полоске не показывается, а новый план
+ *  ложится поверх него без сверки revision (владелец 21.10.2026). */
+export function isWorkPlanFinished(items: WorkPlanItem[]): boolean {
+  return items.length > 0 && items.every((item) => item.state === "done");
+}
 export function saveChatWorkPlan(chatId: string, roleId: string, revision: number, items: WorkPlanItem[]): ChatWorkPlan {
   return db.transaction(() => {
-    if ((readChatWorkPlan(chatId, roleId)?.revision ?? 0) !== revision) throw new Error("revision_conflict");
+    const existing = readChatWorkPlan(chatId, roleId);
+    const finished = existing ? isWorkPlanFinished(existing.items) : false;
+    if (!finished && (existing?.revision ?? 0) !== revision) throw new Error("revision_conflict");
+    revision = existing?.revision ?? 0;
     db.prepare(`INSERT INTO chat_work_plans(chat_id,role_id,revision,items_json,updated_at) VALUES(?,?,?,?,?)
       ON CONFLICT(chat_id,role_id) DO UPDATE SET revision=excluded.revision,items_json=excluded.items_json,updated_at=excluded.updated_at`)
       .run(chatId, roleId, revision + 1, JSON.stringify(items), new Date().toISOString());

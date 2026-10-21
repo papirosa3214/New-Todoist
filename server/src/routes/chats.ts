@@ -1,5 +1,5 @@
 import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
-import { clearChatWorkPlan, readChatWorkPlan, readChatWorkPlans, saveChatWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
+import { clearChatWorkPlan, isWorkPlanFinished, readChatWorkPlan, readChatWorkPlans, saveChatWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
 import {registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
@@ -1082,7 +1082,8 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // Рабочие чек-листы ролей в чате (21.10.2026): полоска над полем ввода.
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plans", { preHandler: authPre }, async (req: any, reply) => {
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
-    return { plans: readChatWorkPlans(req.params.id).filter((p) => p.items.length) };
+    // Выполненный целиком план закрыт — полоска его не показывает.
+    return { plans: readChatWorkPlans(req.params.id).filter((p) => p.items.length && !isWorkPlanFinished(p.items)) };
   });
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });

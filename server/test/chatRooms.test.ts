@@ -134,6 +134,14 @@ describe("комнаты ролей и лички", () => {
     expect(list.json().plans[0]).toMatchObject({ role_id: "role_builder", revision: 1 });
     const ownerPut = await app.inject({ method: "PUT", url: `/api/chats/${room}/work-plan`, headers: ownerAuth, payload: { base_revision: 1, items: plan.items } });
     expect(ownerPut.statusCode).toBe(403);
+    // Выполнен целиком — закрыт: в полоске нет, новый план ложится без сверки revision.
+    const done = saveChatWorkPlan(room, "role_builder", 1, validateWorkPlan([
+      { id: "a", title: "Разобрать", state: "done" }, { id: "b", title: "Сделать", state: "done" },
+    ]));
+    expect((await app.inject({ method: "GET", url: `/api/chats/${room}/work-plans`, headers: ownerAuth })).json().plans).toHaveLength(0);
+    const fresh = saveChatWorkPlan(room, "role_builder", 0, validateWorkPlan([{ id: "c", title: "Новое", state: "in_progress" }]));
+    expect(fresh.revision).toBe(done.revision + 1);
+    expect((await app.inject({ method: "GET", url: `/api/chats/${room}/work-plans`, headers: ownerAuth })).json().plans).toHaveLength(1);
     const reset = await app.inject({ method: "POST", url: `/api/chats/${room}/new-session`, headers: ownerAuth, payload: { role_id: "role_builder" } });
     expect(reset.statusCode).toBeLessThan(300);
     expect(readChatWorkPlan(room, "role_builder")).toBeNull();
