@@ -486,3 +486,90 @@ it("HTTP: async steer не позволяет позднему сообщени�
   expect(prompts[1]).toContain("Отвечаешь на сообщение "+ids[2].id);
  } finally {releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });
+
+// === Умная очередь: уточнение занятой роли из любого чата и от кого угодно ===
+
+function makeChat(id:string,title:string,kind="direct"){
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(id,title,kind,"owner-test");
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(id,"owner-test",id,"role_architect");
+}
+it("HTTP: уточнение из другого чата меняет работающий ход роли",async()=>{
+ const chatA="steering-cross-a",chatB="steering-cross-b";
+ makeChat(chatA,"Первый чат");makeChat(chatB,"Второй чат");
+ const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const send=(chat:string,text:string)=>app!.inject({method:"POST",url:`/api/chats/${chat}/messages`,headers,payload:{text}});
+ blockPromptFor(0);
+ try{
+  expect((await send(chatA,"начни проверку")).statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  expect((await send(chatB,"учти и это")).statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  const steered=fakeSessions[0].steer.mock.calls[0][0] as string;
+  expect(steered).toContain("учти и это");
+  // Пометка источника: от кого и откуда.
+  expect(steered).toContain("Test Owner");
+  expect(steered).toContain("Второй чат");
+  fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>{
+   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatB) as any[];
+   expect(rows).toHaveLength(1);expect(rows.every(row=>row.status==="done")).toBe(true);
+  });
+  // Второй чат не получил своего хода: сообщение ушло в ход первого.
+  expect(fakeSessions).toHaveLength(1);
+ }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id IN (?,?)").run(chatA,chatB);}
+});
+
+it("HTTP: уточнение от коллеги-роли тоже подмешивается в ход",async()=>{
+ const chatId="steering-from-role";
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Коллеги","direct","owner-test");
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect",chatId,"role_qa");
+ const ownerHeaders={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const roleHeaders={authorization:"Bearer "+app!.jwt.sign({id:"role_qa"})};
+ const send=(headers:any,text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ blockPromptFor(0);
+ try{
+  expect((await send(ownerHeaders,"@Архитектор начни проверку")).statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  expect((await send(roleHeaders,"коллега, уточнение по твоей работе")).statusCode).toBe(200);
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  const steered=fakeSessions[0].steer.mock.calls[0][0] as string;
+  expect(steered).toContain("коллега, уточнение по твоей работе");
+  expect(steered).toContain("QA");
+  fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>{
+   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=? AND role_id=?").all(chatId,"role_architect") as any[];
+   expect(rows.length).toBeGreaterThanOrEqual(1);
+   expect(rows.every(row=>row.status==="done")).toBe(true);
+  });
+  expect(fakeSessions).toHaveLength(1);
+ }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
+});
+
+it("HTTP: служебная строка — доставлено в работу, после ответа закрыта",async()=>{
+ const chatId="steering-service-row";
+ makeChat(chatId,"Служебная строка");
+ const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ const card=()=>db.prepare("SELECT text,steps FROM chat_messages WHERE message_type='system' AND json_valid(steps) AND json_extract(steps,'$.coordination.question_id') IS NOT NULL").get() as any;
+ blockPromptFor(0);
+ try{
+  await send("начни проверку");
+  await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
+  await send("уточнение в ход");
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  const steered=fakeSessions[0].steer.mock.calls[0][0] as string;
+  fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
+  await vi.waitFor(()=>{
+   const row=card();
+   expect(row).toBeTruthy();
+   expect(row.text.toLowerCase()).toContain("доставлено в работу");
+  });
+  releasePromptWaiter(0);
+  await vi.waitFor(()=>{
+   const row=card();
+   expect(JSON.parse(row.steps).coordination.status).toBe("answered");
+  });
+ }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
+});

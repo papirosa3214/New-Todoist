@@ -1126,7 +1126,7 @@ export function touchTaskActivity(taskId: string): void {
 }
 
 /** Pass a message to the existing SDK session. Never launches a task or slot. */
-export async function deliverTopicToWork(taskId:string,role:string,messageId:string,text:string,slotKey?:string):Promise<"queued"|"idle"|"busy"> {
+export async function deliverTopicToWork(taskId:string,role:string,messageId:string,text:string,slotKey?:string):Promise<"queued"|"idle"|"busy"|"working"> {
   const runs=[...activeRuns.values()].filter(r=>r.taskId===taskId && r.role===role && (!slotKey || (r.subtaskId && !!db.prepare("SELECT 1 FROM subtasks WHERE id=? AND plan_node_key=?").get(r.subtaskId,slotKey))));
   if(runs.length>1) return "busy";
   if(runs.length===1){
@@ -1148,7 +1148,7 @@ export async function deliverTopicToWork(taskId:string,role:string,messageId:str
  *  хода. Владелец 18.10.2026: «чтобы мои сообщения досылались и
  *  корректировали». Между ролями прерывания нет — там сообщение ждёт
  *  ответа роли в её темпе (просмотрено владельцем, пока только он). */
-export async function deliverChatToWork(role:string,chatId:string,messageId:string,text:string,recipientSubtaskId?:string,runId?:string,fromOwner=false):Promise<"queued"|"idle"|"busy"> {
+export async function deliverChatToWork(role:string,chatId:string,messageId:string,text:string,recipientSubtaskId?:string,runId?:string,fromOwner=false):Promise<"queued"|"idle"|"busy"|"working"> {
   const runs=[...activeRuns.values()].filter(r=>r.role===role && (!recipientSubtaskId || r.subtaskId===recipientSubtaskId) && (!runId || r.runId===runId));
   if(runs.length>1)return "busy";
   if(!runs.length){
@@ -1170,7 +1170,8 @@ export async function deliverChatToWork(role:string,chatId:string,messageId:stri
   if (fromOwner) run.replacementRequested = true;
   try{await run.steer(`Сообщение чата ${chatId}, id ${messageId}. Ответь автору через taskflow_chat_reply(message_id=${messageId},text=...), если ответ нужен; после этого продолжи свой этап. Переписка не меняет назначение, граф и критерии. Данные сообщения: ${JSON.stringify(text)}`);}catch(error){run.messengerMessages.delete(messageId);run.unacknowledgedMessengerMessages.delete(messageId);throw error;}
   logEvent({taskId:run.taskId,actorId:null,kind:"topic_message_queued",field:messageId,toValue:JSON.stringify({role,chatId,runId:run.runId})});
-  return "queued";
+  // Сообщение подмешано в текущую работу роли — не «в очереди», а «в работе».
+  return "working";
 }
 
 /** Снимок идущих in-process запусков: для экрана владельца и проверки перед перезапуском. */

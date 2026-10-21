@@ -1,4 +1,4 @@
-import {registerChatSteering} from "./chatSteering.js";
+import {registerChatSteering,_resetChatSteeringForTests} from "./chatSteering.js";
 import {
   buildRoleToolCatalog,
   UNIVERSAL_INSTRUCTION,
@@ -1878,4 +1878,7 @@ export async function cancelChatRunsFor(
  *  локи. В проде не нужна — после рестарта процесса всё и так пусто. */
 export function _resetActiveChatRunsForTests(): void {
   activeChatRuns.clear();
+  // Реестр подмешивания живёт рядом с ходами: без сброса уточнение ушло бы
+  // в ход, которого уже нет.
+  _resetChatSteeringForTests();
 }

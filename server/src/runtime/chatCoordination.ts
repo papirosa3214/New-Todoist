@@ -42,6 +42,28 @@ export function ensureCoordinationCard(questionId:string,recipientId:string){
   .run(id,origin.requester_id,c.requester_name+" → "+c.recipient_name+": вопрос в очереди",origin.chat_id,origin.message_id,JSON.stringify({duration_ms:0,items:[],coordination:c}));
  publish(id);
 }
+/** Исток обращения для сообщения владельца: сам вопрос — исток. */
+export function registerCoordinationOriginSelf(questionId:string,requesterId:string){
+ const row=db.prepare("SELECT chat_id,steps FROM chat_messages WHERE id=?").get(questionId) as {chat_id:string;steps:string|null}|undefined;
+ if(!row||!member(row.chat_id,requesterId))return;
+ const steps=parse(row.steps);
+ if(steps.coordination_origin)return;
+ const origin:Origin={chat_id:row.chat_id,message_id:questionId,requester_id:requesterId};
+ db.prepare("UPDATE chat_messages SET steps=? WHERE id=?").run(JSON.stringify({duration_ms:0,items:[],...steps,coordination_origin:origin}),questionId);
+}
+
+/** Сообщение доставлено в текущую работу адресата: строка в чате показывает это. */
+export function markDeliveredToWork(questionId:string,recipientId:string,requesterId?:string){
+ if(requesterId)registerCoordinationOriginSelf(questionId,requesterId);
+ ensureCoordinationCard(questionId,recipientId);
+ updateCoordination(questionId,recipientId,{status:"delivered",activity:"Доставлено в работу",last_activity_at:new Date().toISOString()});
+}
+
+/** Адресат ответил — служебная строка закрывается (клиент её прячет). */
+export function markCoordinationAnswered(questionId:string,recipientId:string){
+ updateCoordination(questionId,recipientId,{status:"answered",activity:"Ответ получен",terminal:true,last_activity_at:new Date().toISOString()});
+}
+
 export function coordinationCardData(row:{steps?:string|null}):Coordination|undefined{
  const c:Coordination|undefined=parse(row.steps??null).coordination;
  if(!c || c.terminal)return c;
