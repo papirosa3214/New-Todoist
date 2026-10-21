@@ -93,6 +93,20 @@ describe("POST /api/secretary/voice-token — только владелец", ()
     expect(tokenAttributes(res.json().token)?.voice).toBeUndefined();
   });
 
+  it("сохраняет исходный чат в подписанных атрибутах", async () => {
+    const chatId = "voice-source-chat";
+    db.prepare("INSERT INTO chats(id,kind,created_by) VALUES (?, 'direct', ?)").run(chatId, ownerId);
+    for (const member of [ownerId, "u-secretary"]) db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?)").run(chatId,member);
+    const res = await app.inject({method:"POST",url:"/api/secretary/voice-token",headers:{authorization:`Bearer ${ownerToken}`},payload:{voice:"Kore",chat_id:chatId}});
+    expect(res.statusCode).toBe(200);
+    expect(tokenAttributes(res.json().token)).toEqual({voice:"Kore",chat_id:chatId});
+  });
+
+  it("не разрешает привязать звонок к чужому или отсутствующему чату", async () => {
+    const res = await app.inject({method:"POST",url:"/api/secretary/voice-token",headers:{authorization:`Bearer ${ownerToken}`},payload:{chat_id:"missing-private-chat"}});
+    expect(res.statusCode).toBe(403);
+  });
+
   it("не-владельцу — 403", async () => {
     const res = await app.inject({
       method: "POST",

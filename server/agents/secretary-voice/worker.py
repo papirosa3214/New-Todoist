@@ -5,6 +5,7 @@ taskflow-secretary-voice.service. Ручной прогон (dev):
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import logging
 import os
 import json
@@ -22,6 +23,7 @@ from livekit.agents import (
     RunContext,
     cli,
     function_tool,
+    llm,
 )
 from livekit.plugins.google.realtime import RealtimeModel
 
@@ -113,14 +115,14 @@ def gender_instruction(voice: str) -> str:
             "(«я поняла», «я приняла», «я запустила»), никогда в мужском.")
 
 
-async def create_task_via_api(text: str, socket_path: str, owner_id: str) -> dict:
+async def create_task_via_api(text: str, socket_path: str, owner_id: str, chat_id: str | None = None) -> dict:
     # Unix socket доступен только процессам владельца сервера. Старый
     # постоянный ключ не читаем и не передаём.
     connector = aiohttp.UnixConnector(path=socket_path)
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=240)) as http:
         async with http.post(
             "http://localhost/secretary/tasks",
-            json={"text": text, "owner_id": owner_id},
+            json={"text": text, "owner_id": owner_id, **({"chat_id": chat_id} if chat_id else {})},
         ) as resp:
             body = await resp.json()
             if resp.status not in (200, 201):
@@ -128,21 +130,21 @@ async def create_task_via_api(text: str, socket_path: str, owner_id: str) -> dic
             return body
 
 
-async def summary_via_api(text: str, socket_path: str, owner_id: str, send_to_chat: bool = False) -> dict:
+async def summary_via_api(text: str, socket_path: str, owner_id: str, send_to_chat: bool = False, chat_id: str | None = None) -> dict:
     connector = aiohttp.UnixConnector(path=socket_path)
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=240)) as http:
         async with http.post("http://localhost/secretary/summary",
-                             json={"text": text, "owner_id": owner_id, "send_to_chat": send_to_chat}) as resp:
+                             json={"text": text, "owner_id": owner_id, "send_to_chat": send_to_chat, **({"chat_id": chat_id} if chat_id else {})}) as resp:
             body = await resp.json()
             if resp.status != 200:
                 raise RuntimeError(f"TaskFlow отказал: {body.get('error', resp.status)}")
             return body
 
 
-async def lookup_via_api(path: str, socket_path: str, owner_id: str, text: str = "") -> dict:
+async def lookup_via_api(path: str, socket_path: str, owner_id: str, text: str = "", chat_id: str | None = None) -> dict:
     connector = aiohttp.UnixConnector(path=socket_path)
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=30)) as http:
-        async with http.post(f"http://localhost/secretary/{path}", json={"text": text, "owner_id": owner_id}) as resp:
+        async with http.post(f"http://localhost/secretary/{path}", json={"text": text, "owner_id": owner_id, **({"chat_id": chat_id} if chat_id else {})}) as resp:
             body = await resp.json()
             if resp.status != 200:
                 raise RuntimeError(f"TaskFlow отказал: {body.get('error', resp.status)}")
@@ -167,12 +169,15 @@ BACKGROUND_RESULT = (
 
 
 class BackgroundRunner:
-    """Ответ сразу, если инструмент быстрый; иначе — фон и доклад по готовности."""
+    """Фоновая работа и последовательная доставка результатов в паузах разговора."""
 
     def __init__(self, quick_seconds: float = QUICK_ANSWER_SECONDS) -> None:
         self.quick_seconds = quick_seconds
         self.session: AgentSession | None = None
         self.jobs: set[asyncio.Future] = set()
+        self.pending: deque[tuple[str, str]] = deque()
+        self._delivery: asyncio.Task | None = None
+        self._closed = False
 
     async def run(self, label: str, work: Callable[[], Awaitable[str]]) -> str:
         job = asyncio.ensure_future(work())
@@ -180,26 +185,156 @@ class BackgroundRunner:
             return await asyncio.wait_for(asyncio.shield(job), self.quick_seconds)
         except asyncio.TimeoutError:
             pass
-        self.jobs.add(job)
-        job.add_done_callback(lambda done: self._report(label, done))
+        except asyncio.CancelledError:
+            # Перебивание ожидания не отменяет уже начатое поручение и его доклад.
+            self._track(label, job)
+            raise
+        self._track(label, job)
         logger.info("инструмент «%s» ушёл в фон", label)
         return BACKGROUND_ACK.format(label=label)
 
+    def _track(self, label: str, job: asyncio.Future) -> None:
+        self.jobs.add(job)
+        job.add_done_callback(lambda done: self._report(label, done))
+
     def _report(self, label: str, job: asyncio.Future) -> None:
         self.jobs.discard(job)
-        try:
-            result = job.result()
-        except Exception as exc:  # инструмент сам ловит свои ошибки; это — запас
-            result = f"не получилось: {exc}"
-        if self.session is None:
+        if job.cancelled():
             return
         try:
-            self.session.generate_reply(instructions=BACKGROUND_RESULT.format(label=label, result=result))
-        except Exception as exc:  # звонок уже закончился — сделанное на сервере остаётся
-            logger.warning("итог «%s» не озвучен: %s", label, exc)
+            result = job.result()
+        except Exception as exc:
+            result = f"не получилось: {exc}"
+        self.pending.append((label, result))
+        if self._closed or self.session is None:
+            logger.warning("итог «%s» сохранён без озвучивания: звонок закрыт", label)
+            return
+        if self._delivery is None or self._delivery.done():
+            self._delivery = asyncio.create_task(self._deliver())
+
+    async def _deliver(self) -> None:
+        failures = 0
+        while self.pending and not self._closed:
+            session = self.session
+            if session is None:
+                return
+            # SDK ждёт окончания речи пользователя, ответа агента и обработки хода.
+            try:
+                await session.wait_for_idle()
+            except Exception as exc:
+                logger.warning("очередь результатов сохранена: %s", exc)
+                return
+            if self._closed:
+                return
+            # Состояние могло смениться при выходе wait_for_idle.
+            if session.user_state == "speaking" or session.agent_state in ("speaking", "thinking"):
+                await asyncio.sleep(0.05)
+                continue
+            label, result = self.pending[0]
+            instructions = BACKGROUND_RESULT.format(label=label, result=result)
+            try:
+                speech = session.generate_reply(instructions=instructions)
+                await speech
+                error = speech.exception()
+                interrupted = speech.interrupted
+            except Exception as exc:
+                error, interrupted = exc, False
+            if error is not None:
+                failures += 1
+                logger.warning("доклад «%s» не завершён, повтор в очереди: %s", label, error)
+                await asyncio.sleep(min(0.1 * 2 ** min(failures - 1, 6), 5.0))
+                continue
+            failures = 0
+            if interrupted:
+                # Поручение НЕ повторяем: повторяется только его недосказанный итог.
+                await asyncio.sleep(0.05)
+                continue
+            self.pending.popleft()
+
+    async def close(self, *_args) -> None:
+        """Прекратить озвучивание при закрытии звонка; поручения не отменять."""
+        self._closed = True
+        self.session = None
+        if self._delivery is not None and not self._delivery.done():
+            self._delivery.cancel()
+            await asyncio.gather(self._delivery, return_exceptions=True)
 
 
-async def shared_tools_via_api(socket_path: str, owner_id: str, runner: BackgroundRunner | None = None) -> list:
+async def conversation_via_api(socket_path: str, owner_id: str, chat_id: str) -> list[dict]:
+    connector = aiohttp.UnixConnector(path=socket_path)
+    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
+        async with http.post("http://localhost/secretary/conversation", json={"owner_id": owner_id, "chat_id": chat_id}) as response:
+            if response.status != 200:
+                raise RuntimeError("Не удалось загрузить исходный чат")
+            return (await response.json())["messages"]
+
+
+async def transcript_via_api(socket_path: str, owner_id: str, chat_id: str, room: str, item_id: str, role: str, text: str) -> None:
+    connector = aiohttp.UnixConnector(path=socket_path)
+    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
+        async with http.post("http://localhost/secretary/transcript", json={"owner_id": owner_id, "chat_id": chat_id, "event_id": room + ":" + item_id, "role": role, "text": text}) as response:
+            if response.status != 200:
+                raise RuntimeError("Не удалось сохранить голосовую реплику")
+            await response.read()
+
+
+def context_from_messages(messages: list[dict]) -> llm.ChatContext:
+    context = llm.ChatContext.empty()
+    for message in messages:
+        if message.get("role") in ("user", "assistant") and message.get("text"):
+            context.add_message(role=message["role"], content=message["text"])
+    return context
+
+
+class VoiceConversationRecorder:
+    """Последовательная запись финальных реплик; повтор HTTP безопасен по event_id."""
+
+    def __init__(self, write: Callable[[str, str, str], Awaitable[None]]) -> None:
+        self._write = write
+        self._pending: deque[tuple[str, str, str]] = deque()
+        self._seen: set[str] = set()
+        self._task: asyncio.Task | None = None
+        self._closed = False
+
+    def record(self, item) -> None:
+        if self._closed or not isinstance(item, llm.ChatMessage):
+            return
+        text = item.text_content
+        if item.role not in ("user", "assistant") or not text or not text.strip() or item.id in self._seen:
+            return
+        self._seen.add(item.id)
+        self._pending.append((item.id, item.role, text))
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._drain())
+
+    async def _drain(self) -> None:
+        while self._pending:
+            try:
+                await self._write(*self._pending[0])
+            except Exception as exc:
+                logger.warning("расшифровка ждёт повторной записи в чат: %s", exc)
+                await asyncio.sleep(0.2)
+                continue
+            self._pending.popleft()
+
+    async def flush(self, timeout: float = 2.0) -> bool:
+        if self._task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(self._task), timeout)
+            except asyncio.TimeoutError:
+                return False
+        return not self._pending
+
+    async def close(self, *_args) -> None:
+        self._closed = True
+        if not await self.flush():
+            logger.error("звонок завершён с %s несохранёнными репликами", len(self._pending))
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+
+
+async def shared_tools_via_api(socket_path: str, owner_id: str, runner: BackgroundRunner | None = None, chat_id: str | None = None, recorder: VoiceConversationRecorder | None = None) -> list:
     """Общие инструменты Помощника владельца (те же, что в чате) — как инструменты звонка."""
     connector = aiohttp.UnixConnector(path=socket_path)
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
@@ -215,11 +350,13 @@ async def shared_tools_via_api(socket_path: str, owner_id: str, runner: Backgrou
             return await runner.run(spec["name"], lambda: invoke(raw_arguments))
 
         async def invoke(raw_arguments: dict[str, object]) -> str:
+            if recorder is not None:
+                await recorder.flush()
             inner = aiohttp.UnixConnector(path=socket_path)
             try:
                 async with aiohttp.ClientSession(connector=inner, timeout=aiohttp.ClientTimeout(total=120)) as http:
                     async with http.post("http://localhost/secretary/tool",
-                                         json={"owner_id": owner_id, "name": spec["name"], "arguments": raw_arguments}) as resp:
+                                         json={"owner_id": owner_id, "name": spec["name"], "arguments": raw_arguments, **({"chat_id": chat_id} if chat_id else {})}) as resp:
                         body = await resp.json()
             except (aiohttp.ClientError, TimeoutError) as exc:
                 return f"Инструмент недоступен: {exc}"
@@ -244,9 +381,10 @@ async def instructions_via_api(socket_path: str) -> dict:
 
 
 class Assistant(Agent):
-    def __init__(self, owner_id: str, instructions: str = SECRETARY_INSTRUCTIONS, greeting: str = "поздоровайся коротко и спроси, чем помочь", tools: list | None = None, runner: BackgroundRunner | None = None, instructions_suffix: str = "") -> None:
-        super().__init__(instructions=instructions + ("\n\n" + instructions_suffix if instructions_suffix else ""), tools=tools or [])
+    def __init__(self, owner_id: str, instructions: str = SECRETARY_INSTRUCTIONS, greeting: str = "поздоровайся коротко и спроси, чем помочь", tools: list | None = None, runner: BackgroundRunner | None = None, instructions_suffix: str = "", chat_ctx: llm.ChatContext | None = None, chat_id: str | None = None) -> None:
+        super().__init__(instructions=instructions + ("\n\n" + instructions_suffix if instructions_suffix else ""), tools=tools or [], chat_ctx=chat_ctx)
         self.owner_id = owner_id
+        self.chat_id = chat_id
         self.greeting = greeting
         self.runner = runner or BackgroundRunner()
 
@@ -264,7 +402,7 @@ class Assistant(Agent):
         async def work() -> str:
             cfg = load_config()
             try:
-                result = await create_task_via_api(text, cfg.taskflow_socket_path, self.owner_id)
+                result = await create_task_via_api(text, cfg.taskflow_socket_path, self.owner_id, **({"chat_id": self.chat_id} if self.chat_id else {}))
             except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
                 return f"Не получилось разобрать поручение: {exc}"
             return json.dumps(result, ensure_ascii=False)
@@ -281,7 +419,7 @@ class Assistant(Agent):
         async def work() -> str:
             cfg = load_config()
             try:
-                result = await summary_via_api(text, cfg.taskflow_socket_path, self.owner_id, send_to_chat)
+                result = await summary_via_api(text, cfg.taskflow_socket_path, self.owner_id, send_to_chat, **({"chat_id": self.chat_id} if self.chat_id else {}))
             except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
                 return f"Не удалось получить сводку: {exc}"
             return json.dumps(result, ensure_ascii=False)
@@ -297,7 +435,7 @@ class Assistant(Agent):
         async def work() -> str:
             cfg = load_config()
             try:
-                result = await lookup_via_api("task", cfg.taskflow_socket_path, self.owner_id, text)
+                result = await lookup_via_api("task", cfg.taskflow_socket_path, self.owner_id, text, **({"chat_id": self.chat_id} if self.chat_id else {}))
             except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
                 return f"Не удалось посмотреть задачу: {exc}"
             return json.dumps(result, ensure_ascii=False)
@@ -313,7 +451,7 @@ class Assistant(Agent):
         async def work() -> str:
             cfg = load_config()
             try:
-                result = await lookup_via_api("owner-chat", cfg.taskflow_socket_path, self.owner_id, text)
+                result = await lookup_via_api("owner-chat", cfg.taskflow_socket_path, self.owner_id, text, **({"chat_id": self.chat_id} if self.chat_id else {}))
             except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
                 return f"Не удалось написать в чат: {exc}"
             return json.dumps(result, ensure_ascii=False)
@@ -325,7 +463,7 @@ class Assistant(Agent):
         async def work() -> str:
             cfg = load_config()
             try:
-                result = await lookup_via_api("roles", cfg.taskflow_socket_path, self.owner_id)
+                result = await lookup_via_api("roles", cfg.taskflow_socket_path, self.owner_id, chat_id=self.chat_id)
             except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
                 return f"Не удалось посмотреть загрузку ролей: {exc}"
             return json.dumps(result, ensure_ascii=False)
@@ -345,6 +483,8 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     owner = await ctx.wait_for_participant()
     voice = pick_voice(owner.attributes)
+    chat_id = owner.attributes.get("chat_id", "chat-secretary")
+    history = await conversation_via_api(cfg.taskflow_socket_path, owner.identity, chat_id)
     logger.info("голос Помощника владельца: %s", voice)
 
     session = AgentSession(
@@ -354,16 +494,26 @@ async def entrypoint(ctx: JobContext) -> None:
             voice=voice,
         ),
     )
+    async def write_transcript(item_id: str, role: str, text: str) -> None:
+        await transcript_via_api(cfg.taskflow_socket_path, owner.identity, chat_id, ctx.room.name, item_id, role, text)
+    recorder = VoiceConversationRecorder(write_transcript)
+    ctx.add_shutdown_callback(recorder.close)
+
+    @session.on("conversation_item_added")
+    def on_conversation_item(event):
+        recorder.record(event.item)
+
     snapshot = await instructions_via_api(cfg.taskflow_socket_path)
     runner = BackgroundRunner()
     runner.session = session
+    ctx.add_shutdown_callback(runner.close)
     try:
-        shared = await shared_tools_via_api(cfg.taskflow_socket_path, owner.identity, runner)
+        shared = await shared_tools_via_api(cfg.taskflow_socket_path, owner.identity, runner, chat_id, recorder)
     except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
         # Звонок важнее полного набора: без общих инструментов остаются базовые.
         logger.warning("общие инструменты Помощника владельца недоступны: %s", exc)
         shared = []
-    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=snapshot["greeting"], tools=shared, runner=runner, instructions_suffix=gender_instruction(voice)), room=ctx.room)
+    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=("Продолжи разговор из истории чата. Коротко скажи, что голос подключён; не повторяй прежние ответы." if history else snapshot["greeting"]), tools=shared, runner=runner, chat_ctx=context_from_messages(history), chat_id=chat_id, instructions_suffix=gender_instruction(voice) + "\nГолос и переписка — один разговор. Твои реплики сохраняются в исходном чате. Для файлов используй общий инструмент прикрепления к текущему чату; не говори, что файл отправлен без успешного результата инструмента."), room=ctx.room)
 
     # Тап по анимации на телефоне — перебить Помощника владельца на полуслове.
     @ctx.room.local_participant.register_rpc_method("interrupt")
