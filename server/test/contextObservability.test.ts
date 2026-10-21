@@ -1,3 +1,6 @@
+import * as noteSearch from "../src/lib/noteSearch.js";
+import * as memoryLib from "../src/lib/memory.js";
+import { roleProjectContext } from "../src/runtime/roleProjectContext.js";
 import { buildApp } from "../src/index.js";
 import { afterAll, beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import db, {migrate} from "../src/db.js";
@@ -10,9 +13,23 @@ let app:Awaited<ReturnType<typeof buildApp>>;
 beforeAll(async()=>{migrate();runMigrations();app=await buildApp();});
 afterAll(async()=>{await app.close();});
 beforeEach(()=>{db.prepare("DELETE FROM context_operations").run(); resetJevSettings();});
-afterEach(()=>vi.unstubAllGlobals());
+afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();});
 const record=(key:string,usage?:any)=>{const id=startObservation("jev","skills",{keyId:key});finishObservation(id,{status:"ok",inputCount:12,outputCount:4,usage});return id;};
 describe("контекст и JEV: наблюдаемость",()=>{
+ it("ошибка чтения памяти не исчезает из наблюдаемости",async()=>{
+ const prepare=db.prepare.bind(db);
+ vi.spyOn(db,"prepare").mockImplementation(((sql:string)=>{if(sql.includes("FROM memories m WHERE"))throw Error("private failure");return prepare(sql);}) as typeof db.prepare);
+ await expect(memoryLib.recall({roleKey:"builder",query:"q"})).rejects.toThrow();
+ expect(readObservability("24h").events.find(e=>e.scenario==="teamMemory")).toMatchObject({status:"error",reason:"source_unavailable",role:"builder"});
+ });
+
+ it("отказ библиотеки проекта виден отдельно от отсутствия знаний",async()=>{
+ vi.spyOn(memoryLib,"memoryBlock").mockResolvedValue("");
+ vi.spyOn(noteSearch,"searchNotes").mockImplementation(()=>{throw Error("private");});
+ await roleProjectContext({role:"builder",taskId:"fixture-missing-task",query:"q"});
+ expect(readObservability("24h").events.find(e=>e.scenario==="projectLibrary")).toMatchObject({status:"error",reason:"source_unavailable",role:"builder",taskId:"fixture-missing-task"});
+ });
+
  it("доступен только владельцу и проверяет период",async()=>{
  const headers=(id:string)=>({authorization:'Bearer '+app.jwt.sign({id})});
  expect((await app.inject({method:'GET',url:'/api/jev/usage'})).statusCode).toBe(401);

@@ -532,6 +532,8 @@ export async function recall(args: {
   query: string;
   limit?: number;
 }): Promise<RecallItem[]> {
+  const memoryObservation=startObservation("enricher","teamMemory",{role:args.roleKey??undefined});
+  try {
   const limit = Math.min(Math.max(args.limit ?? 6, 1), 20);
   const vis = visibleWhere(args.roleKey, args.projectId ?? null);
   const query = args.query.trim();
@@ -619,7 +621,6 @@ export async function recall(args: {
   // Галочка «Отбор памяти для роли» (раздел JEV): из найденного по сходству
   // JEV убирает уверенно ненужное и ставит полезное вперёд. Не ответил —
   // исходный порядок.
-  const memoryObservation=startObservation("enricher","teamMemory",{role:args.roleKey??undefined});
   const ordered = (await withObservationContext({role:args.roleKey??undefined},()=>filterMemoryByJev(query, items))) ?? items;
   const picked: RecallItem[] = [];
   const seenFiles = new Map<string, number>();
@@ -641,6 +642,10 @@ export async function recall(args: {
   }
   finishObservation(memoryObservation,{status:picked.length?"ok":"skipped",reason:picked.length?undefined:"empty",inputCount:items.length,outputCount:picked.length,details:picked.map(p=>p.title??p.id)});
   return picked;
+  } catch(error) {
+    finishObservation(memoryObservation,{status:"error",reason:"source_unavailable"});
+    throw error;
+  }
 }
 
 /** Блок «что ты помнишь» для задания роли. Пусто — пустая строка. */
