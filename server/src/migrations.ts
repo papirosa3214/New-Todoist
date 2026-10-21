@@ -4885,7 +4885,15 @@ const migrations: Migration[] = [
     db.exec(`UPDATE chats SET room_kind=NULL WHERE room_kind='personal' AND id IN (
       SELECT m.chat_id FROM chat_members m JOIN users u ON u.id=m.member_id LEFT JOIN roles r ON r.key=u.role_key
        WHERE u.type='ai' AND COALESCE(r.runtime,'pi') <> 'pi')`);
-  } },
+  } },  // 21.10.2026: рабочий чек-лист роли в чате — тот же, что у слота
+  // (subtask_work_plans), но на пару «чат + роль», то есть на сессию роли.
+  { id: "161_chat_work_plans", description: "chat_work_plans(chat_id, role_id): рабочий чек-лист роли в чатовой сессии", up: () => db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_work_plans (
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL, items_json TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY (chat_id, role_id)
+    );`) },
 ];
 /**
  * Опции прогона миграций.

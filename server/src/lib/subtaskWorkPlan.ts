@@ -27,3 +27,28 @@ export function saveWorkPlan(subtaskId: string, authorId: string, revision: numb
     return readWorkPlan(subtaskId);
   })();
 }
+
+/** Рабочий чек-лист роли в чате (21.10.2026): одна запись на «чат + роль».
+ *  Правила и проверка — те же, что у слота (`validateWorkPlan`). */
+export type ChatWorkPlan = { chat_id: string; role_id: string; revision: number; items: WorkPlanItem[]; updated_at: string };
+const chatPlanRow = (row: any): ChatWorkPlan => ({ chat_id: row.chat_id, role_id: row.role_id, revision: row.revision, items: JSON.parse(row.items_json), updated_at: row.updated_at });
+export function readChatWorkPlan(chatId: string, roleId: string): ChatWorkPlan | null {
+  const row = db.prepare("SELECT * FROM chat_work_plans WHERE chat_id=? AND role_id=?").get(chatId, roleId);
+  return row ? chatPlanRow(row) : null;
+}
+export function readChatWorkPlans(chatId: string): ChatWorkPlan[] {
+  return (db.prepare("SELECT * FROM chat_work_plans WHERE chat_id=? ORDER BY updated_at DESC").all(chatId) as any[]).map(chatPlanRow);
+}
+export function saveChatWorkPlan(chatId: string, roleId: string, revision: number, items: WorkPlanItem[]): ChatWorkPlan {
+  return db.transaction(() => {
+    if ((readChatWorkPlan(chatId, roleId)?.revision ?? 0) !== revision) throw new Error("revision_conflict");
+    db.prepare(`INSERT INTO chat_work_plans(chat_id,role_id,revision,items_json,updated_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(chat_id,role_id) DO UPDATE SET revision=excluded.revision,items_json=excluded.items_json,updated_at=excluded.updated_at`)
+      .run(chatId, roleId, revision + 1, JSON.stringify(items), new Date().toISOString());
+    return readChatWorkPlan(chatId, roleId)!;
+  })();
+}
+/** «Новая сессия» роли в чате начинает и план с чистого листа. */
+export function clearChatWorkPlan(chatId: string, roleId: string): void {
+  db.prepare("DELETE FROM chat_work_plans WHERE chat_id=? AND role_id=?").run(chatId, roleId);
+}

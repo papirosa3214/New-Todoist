@@ -638,11 +638,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const s = await asRole(role, "POST", `/api/tasks/${p.task_id}/subtasks`, body);
         return { "шаг добавлен": s.title, id: s.id };
       }),
-    T("taskflow_work_plan", WORK_PLAN_INSTRUCTION + "\nПрочитать или обновить свой внутренний рабочий чек-лист. Без items — чтение. Для записи: весь список items {id,title,state: pending|in_progress|done} и base_revision из последнего ответа. Обычно 3–7 конкретных этапов; только один in_progress. Сохраняй id этапов при обновлении. Это отображение твоего плана, оно не меняет состояние и сдачу подзадачи.",
+    T("taskflow_work_plan", WORK_PLAN_INSTRUCTION + "\nПрочитать или обновить свой внутренний рабочий чек-лист. Без items — чтение. Для записи: весь список items {id,title,state: pending|in_progress|done} и base_revision из последнего ответа. Обычно 3–7 конкретных этапов; только один in_progress. Сохраняй id этапов при обновлении. Это отображение твоего плана, оно не меняет состояние и сдачу подзадачи. В ЧАТЕ (без слота) план — на эту сессию чата и виден владельцу над полем ввода: заводи его только для многошаговой работы, на простой ответ или вопрос — не нужен.",
       Type.Object({base_revision:Type.Optional(Type.Number()), items:Type.Optional(Type.Array(Type.Object({id:Type.String(),title:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("in_progress"),Type.Literal("done")])})))}),
       async (p) => {
-        if (!subtaskId) throw new ToolError("Рабочий план относится к текущему слоту подзадачи");
-        return await asRole(role, p.items === undefined ? "GET" : "PUT", `/api/subtasks/${subtaskId}/work-plan`,
+        // Без слота, но в чате — чек-лист этой чатовой сессии роли (21.10.2026).
+        const planPath = subtaskId ? `/api/subtasks/${subtaskId}/work-plan`
+          : chatContext?.chatId ? `/api/chats/${chatContext.chatId}/work-plan` : null;
+        if (!planPath) throw new ToolError("Рабочий план относится к текущему слоту подзадачи или к чату");
+        return await asRole(role, p.items === undefined ? "GET" : "PUT", planPath,
           p.items === undefined ? undefined : {base_revision:p.base_revision,items:p.items});
       }),
     T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. blocked принимается только с block_type: dependency | needs_input | capability | transient; для needs_input укажи changes_result=true, если меняет «Результат», «Критерии приёмки» или «Границы». При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния. Перед blocked по решаемой причине укажи help_attempt (кого звал, что ответили) или help_skip_reason (почему никто не решит). Пока работа идёт, технический снимок сервер пишет сам; при прогрессе и сдаче снимок от тебя не нужен.",

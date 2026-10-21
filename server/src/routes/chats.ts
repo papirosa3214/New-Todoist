@@ -1,4 +1,5 @@
 import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
+import { clearChatWorkPlan, readChatWorkPlan, readChatWorkPlans, saveChatWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
 import {registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
@@ -151,6 +152,12 @@ function syncChatKindFromMembers(chatId: string): void {
       THEN 'group' ELSE 'direct' END
     WHERE id = ? AND id <> 'chat-common'
       AND project_id IS NULL AND parent_chat_id IS NULL AND task_id IS NULL`).run(chatId);
+}
+
+/** Владелец видит лички ролей, не будучи участником, — ему тоже шлём. */
+function ownerIdsForChat(chatId: string): string[] {
+  if (!isDirectRoom(chatId)) return [];
+  return (db.prepare("SELECT id FROM users WHERE role='owner'").all() as Array<{ id: string }>).map((r) => r.id);
 }
 
 function memberIds(chatId: string): string[] {
@@ -1072,6 +1079,36 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Рабочие чек-листы ролей в чате (21.10.2026): полоска над полем ввода.
+  app.get<{ Params: { id: string } }>("/api/chats/:id/work-plans", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+    return { plans: readChatWorkPlans(req.params.id).filter((p) => p.items.length) };
+  });
+  app.get<{ Params: { id: string } }>("/api/chats/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+    return readChatWorkPlan(req.params.id, req.userId) ?? { chat_id: req.params.id, role_id: req.userId, revision: 0, items: [] };
+  });
+  // Пишет только сама роль — участник чата, и только свой план.
+  app.put<{ Params: { id: string }; Body: { base_revision?: unknown; items?: unknown } }>("/api/chats/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
+    const chatId = req.params.id;
+    if (!roleFromUserId(req.userId)) return reply.code(403).send({ error: "Чек-лист ведёт роль" });
+    if (!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(chatId, req.userId))
+      return reply.code(404).send({ error: "Чат не найден" });
+    let items;
+    try { items = validateWorkPlan(req.body?.items); }
+    catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "Неверный план" }); }
+    const base = Number(req.body?.base_revision ?? 0);
+    try {
+      const plan = saveChatWorkPlan(chatId, req.userId, Number.isFinite(base) ? base : 0, items);
+      broadcastToUsers(memberIds(chatId).concat(ownerIdsForChat(chatId)), { type: "chat:work_plan", chat_id: chatId, plan });
+      return plan;
+    } catch (error) {
+      if (error instanceof Error && error.message === "revision_conflict")
+        return reply.code(409).send({ error: "План уже обновлён: прочитай его заново и возьми свежий revision", current: readChatWorkPlan(chatId, req.userId) });
+      throw error;
+    }
+  });
+
   // Новая сессия без удаления истории (владелец 25.09.2026, docs/ПЛАН
   // Супер Помощник владельца/): сбрасывает pi_session_id роли в этом чате — агент
   // следующим сообщением поднимет разговор с нуля, сама лента остаётся
@@ -1104,6 +1141,8 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         chatId,
         roleId,
       );
+      clearChatWorkPlan(chatId, roleId);
+      broadcastToUsers(memberIds(chatId).concat(ownerIdsForChat(chatId)), { type: "chat:work_plan", chat_id: chatId, plan: { chat_id: chatId, role_id: roleId, revision: 0, items: [] } });
 
       // Карточка ebc4d338: fence ответа от старой сессии. Любые
       // pending в chat_message_queue со старым generation уходят в

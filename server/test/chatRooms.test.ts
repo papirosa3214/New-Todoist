@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { ensureDirectRoom, ensurePersonalRoom, roomsSnapshot } from "../src/lib/chatRooms.js";
+import { readChatWorkPlan, saveChatWorkPlan, validateWorkPlan } from "../src/lib/subtaskWorkPlan.js";
 
 vi.mock("../src/lib/embeddingClient.js", () => ({
   getEmbeddings: vi.fn(async () => ({ embeddings: [], dim: 0, durationMs: 0 })),
@@ -120,5 +121,21 @@ describe("комнаты ролей и лички", () => {
     snap = roomsSnapshot();
     expect(snap.roles.some((r) => r.id === "role_ext_agent")).toBe(true);
     expect(snap.external_candidates.some((r) => r.id === "role_ext_agent")).toBe(false);
+  });
+
+  it("чек-лист роли в чате: сохраняется, виден участнику, владелец не пишет, новая сессия сбрасывает", async () => {
+    const room = ensurePersonalRoom("role_builder")!;
+    const plan = saveChatWorkPlan(room, "role_builder", 0, validateWorkPlan([
+      { id: "a", title: "Разобрать", state: "done" }, { id: "b", title: "Сделать", state: "in_progress" },
+    ]));
+    expect(plan.revision).toBe(1);
+    expect(() => saveChatWorkPlan(room, "role_builder", 0, plan.items)).toThrow("revision_conflict");
+    const list = await app.inject({ method: "GET", url: `/api/chats/${room}/work-plans`, headers: ownerAuth });
+    expect(list.json().plans[0]).toMatchObject({ role_id: "role_builder", revision: 1 });
+    const ownerPut = await app.inject({ method: "PUT", url: `/api/chats/${room}/work-plan`, headers: ownerAuth, payload: { base_revision: 1, items: plan.items } });
+    expect(ownerPut.statusCode).toBe(403);
+    const reset = await app.inject({ method: "POST", url: `/api/chats/${room}/new-session`, headers: ownerAuth, payload: { role_id: "role_builder" } });
+    expect(reset.statusCode).toBeLessThan(300);
+    expect(readChatWorkPlan(room, "role_builder")).toBeNull();
   });
 });
