@@ -446,6 +446,22 @@ function legacyEnvelope(body: string, output: string): RoleEnvelopeV1 | null {
 }
 
 /**
+ * Показ ответа с кривыми блоками (владелец 21.10.2026): один блок без типа
+ * ронял весь конверт, и владелец видел сырой JSON вместо заголовка и текста.
+ * Здесь кривые блоки `output` отбрасываются по одному, остальное проверяется
+ * заново. Только для показа: претензии остаются в `errors`, а проверка
+ * формата при отправке смотрит на сам валидатор и по-прежнему возвращает
+ * роли кривой ответ.
+ */
+function salvageStructured(candidate: Record<string, unknown>): StructuredRoleEnvelopeV1 | null {
+  if (!Array.isArray(candidate.output)) return null;
+  const blocks = candidate.output.filter((block) => validateStructuredRoleContractV1({ ...candidate, output: [block] }).valid);
+  if (!blocks.length || blocks.length === candidate.output.length) return null;
+  const checked = validateStructuredRoleContractV1({ ...candidate, output: blocks });
+  return checked.valid ? checked.envelope : null;
+}
+
+/**
  * Разобрать ответ роли: сначала JSON-контракт v1, затем старый
  * YAML-подобный вид, иначе — обычный текст без изменений.
  *
@@ -471,7 +487,11 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
       const checked = validateStructuredRoleContractV1(candidate);
       if (!checked.valid || !checked.envelope) {
         errors.push(...checked.errors);
-        return whole;
+        const salvaged = salvageStructured(candidate);
+        if (!salvaged) return whole;
+        replaced = true;
+        structuredEnvelope ??= salvaged;
+        return structuredOutputText(salvaged.output);
       }
       replaced = true;
       structuredEnvelope ??= checked.envelope;
@@ -497,6 +517,10 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
       const checked = validateStructuredRoleContractV1(bare);
       if (checked.valid && checked.envelope) {
         return { format: "v1", text: structuredOutputText(checked.envelope.output), envelope: null, structuredEnvelope: checked.envelope, errors: [], warnings: [] };
+      }
+      const salvaged = salvageStructured(bare);
+      if (salvaged) {
+        return { format: "v1", text: structuredOutputText(salvaged.output), envelope: null, structuredEnvelope: salvaged, errors: checked.errors, warnings: [] };
       }
       return { format: "v1", text, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: [] };
     }
@@ -601,8 +625,10 @@ export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
     return {
       envelope: parsed.structuredEnvelope,
       displayText: structuredOutputText(parsed.structuredEnvelope.output),
-      normalizedByServer: false,
-      validationErrors: [],
+      // Спасённый конверт (кривые блоки отброшены) — тоже правка сервера:
+      // претензии уходят в журнал, а не теряются.
+      normalizedByServer: parsed.errors.length > 0,
+      validationErrors: parsed.errors,
     };
   }
 
