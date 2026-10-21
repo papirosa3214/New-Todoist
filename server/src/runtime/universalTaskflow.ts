@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "typebox";
 import { Check, Errors } from "typebox/value";
+import { recordToolAudit } from "./toolAuditStore.js";
 export type Tool = {
   name: string;
   description: string;
@@ -23,6 +25,8 @@ export type Context = {
   subtaskId?: string;
   chatId?: string;
   messageId?: string;
+  /** Модель хода — пишется в учёт вызовов вместе с провайдером. */
+  model?: string | null;
   authorize?: (name: string) => boolean;
 };
 export type RequestRecord = {
@@ -151,6 +155,94 @@ const response = (payload: any, extra: any[] = []) => ({
   content: [{ type: "text", text: JSON.stringify(payload) }, ...extra],
   details: { operation: payload.operation, request_id: payload.request_id },
 });
+
+/** Что именно не сошлось в аргументах — без присланных значений: в учёт
+ *  вызовов уходит только путь поля и ожидаемый тип. */
+type AuditDetail = {
+  field: string | null;
+  expected: string | null;
+  kind: string | null;
+};
+
+/** Хранилище на время одного вызова: параллельные вызовы не путают друг
+ *  друга, у каждого своё «что не сошлось». */
+const auditStorage = new AsyncLocalStorage<AuditDetail>();
+
+/** Длинные «похожие на ключ» куски вырезаем: в учёт не должны попасть
+ *  токены и значения, которые роль случайно приложила к вызову. */
+const ПОХОЖЕ_НА_КЛЮЧ = /[A-Za-z0-9+/=_-]{32,}/g;
+
+function safeAuditMessage(
+  code: string,
+  message: string,
+  detail: AuditDetail,
+): string {
+  if (code === "INVALID_ARGUMENTS") {
+    // Текст отказа про аргументы содержит присланные значения — в учёт он
+    // не идёт. Остаются путь поля и ожидаемый тип.
+    if (detail.field)
+      return (
+        "не сошлась схема аргументов: " +
+        detail.field +
+        (detail.expected ? " (ожидается " + detail.expected + ")" : "")
+      );
+    return "не сошлась схема аргументов";
+  }
+  return String(message ?? "")
+    .replace(ПОХОЖЕ_НА_КЛЮЧ, "<…>")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
+
+/** Записать вызов в учёт (toolAuditStore.ts). Ответ шлюза при этом не
+ *  меняется: учёт — побочный эффект, его сбой не должен ломать вызов. */
+function recordCall(
+  context: Context,
+  p: any,
+  out: any,
+  detail: AuditDetail,
+): void {
+  try {
+    const text = out?.content?.[0]?.text;
+    const payload = typeof text === "string" ? JSON.parse(text) : null;
+    const ok = payload?.ok !== false;
+    const errorCode = ok ? null : (payload?.error?.code ?? null);
+    // Тренер ошибок дописывает в отказ своё сообщение (остановка и готовый
+    // вызов). Роль видела именно его — значит, и в журнале оно должно быть.
+    const coach =
+      typeof payload?.error?.coach?.message === "string"
+        ? payload.error.coach.message.replace(/\s+/g, " ").trim().slice(0, 400)
+        : null;
+    const baseMessage = ok
+      ? null
+      : safeAuditMessage(
+          errorCode ?? "",
+          payload?.error?.message ?? "",
+          detail,
+        );
+    recordToolAudit({
+      role: context.role,
+      model: context.model ?? null,
+      mode: context.mode ?? null,
+      runId: context.runId ?? null,
+      taskId: context.taskId ?? null,
+      subtaskId: context.subtaskId ?? null,
+      action: typeof p?.action === "string" ? p.action : null,
+      tool: "taskflow",
+      operation: typeof p?.operation === "string" ? p.operation : null,
+      outcome: ok ? "ok" : "error",
+      errorCode,
+      errorMessage:
+        baseMessage && coach ? baseMessage + " Тренер: " + coach : baseMessage,
+      errorField: detail.field,
+      errorExpected: detail.expected,
+      requestId: payload?.request_id ?? p?.request_id ?? null,
+    });
+  } catch (error) {
+    console.warn("[tool-audit] вызов не записан:", error);
+  }
+}
 export /** Что делать дальше после ошибки. Требование владельца 19.10.2026: отказ
  *  без следующего шага бесполезен — агент или человек должен знать, куда идти.
  *  Подсказка приходит вместе с кодом в каждом отказе. */
@@ -404,6 +496,10 @@ const expectedType = (schema: any): string => {
     )[schema?.type] ?? "значение по схеме"
   );
 };
+/** Несовпадение схемы — без значения: только путь поля, ожидаемый тип и
+ *  вид ошибки. В учёт вызовов уходит именно это (значения не храним). */
+type ArgProblem = { path: string; expected: string; kind: string };
+
 /** Только объясняет и строит предложение исправления; исходный вызов не меняется. */
 function argumentDiagnostics(
   schema: any,
@@ -411,12 +507,21 @@ function argumentDiagnostics(
   path = "arguments",
   issues: string[] = [],
   moves: string[] = [],
-): { candidate: any; issues: string[]; moves: string[] } {
-  if (issues.length >= 8) return { candidate: value, issues, moves };
+  problems: ArgProblem[] = [],
+): {
+  candidate: any;
+  issues: string[];
+  moves: string[];
+  problems: ArgProblem[];
+} {
+  if (issues.length >= 8) return { candidate: value, issues, moves, problems };
   const key = path.split(".").at(-1) ?? "";
   const received = () =>
     valueType(value) + " " + JSON.stringify(diagnosticValue(value, key));
-  const issue = (text: string) => issues.push(path + ": " + text);
+  const issue = (text: string, problem?: ArgProblem) => {
+    issues.push(path + ": " + text);
+    if (problem) problems.push(problem);
+  };
   const choices = schema?.anyOf ?? schema?.oneOf;
   if (choices) {
     if (!choices.some((s: any) => Check(s, value)))
@@ -428,14 +533,16 @@ function argumentDiagnostics(
           ". Исправь " +
           path +
           ".",
+        { path, expected: expectedType(schema), kind: "type" },
       );
-    return { candidate: value, issues, moves };
+    return { candidate: value, issues, moves, problems };
   }
   if (schema?.const !== undefined && value !== schema.const) {
     issue(
       "ожидается " + expectedType(schema) + "; получен " + received() + ".",
+      { path, expected: expectedType(schema), kind: "value" },
     );
-    return { candidate: value, issues, moves };
+    return { candidate: value, issues, moves, problems };
   }
   if (schema?.enum && !schema.enum.includes(value)) {
     issue(
@@ -444,8 +551,9 @@ function argumentDiagnostics(
         "; получен " +
         received() +
         ".",
+      { path, expected: expectedType(schema), kind: "value" },
     );
-    return { candidate: value, issues, moves };
+    return { candidate: value, issues, moves, problems };
   }
   const wrong =
     schema?.type === "array"
@@ -462,6 +570,7 @@ function argumentDiagnostics(
   if (wrong) {
     issue(
       "ожидается " + expectedType(schema) + "; получен " + received() + ".",
+      { path, expected: expectedType(schema), kind: "type" },
     );
     if (
       schema.type === "array" &&
@@ -477,9 +586,9 @@ function argumentDiagnostics(
           path +
           ". Убери объект-обёртку item, передай сам массив.",
       );
-      return argumentDiagnostics(schema, value.item, path, issues, moves);
+      return argumentDiagnostics(schema, value.item, path, issues, moves, problems);
     }
-    return { candidate: value, issues, moves };
+    return { candidate: value, issues, moves, problems };
   }
   if (schema?.type === "object") {
     let candidate = { ...value };
@@ -510,7 +619,7 @@ function argumentDiagnostics(
       }
     }
     for (const k of schema.required ?? [])
-      if (candidate[k] === undefined)
+      if (candidate[k] === undefined) {
         issues.push(
           path +
             "." +
@@ -523,6 +632,12 @@ function argumentDiagnostics(
             k +
             ".",
         );
+        problems.push({
+          path: path + "." + k,
+          expected: expectedType(properties[k]),
+          kind: "missing",
+        });
+      }
     for (const [k, child] of Object.entries(properties))
       if (candidate[k] !== undefined)
         candidate[k] = argumentDiagnostics(
@@ -531,6 +646,7 @@ function argumentDiagnostics(
           path + "." + k,
           issues,
           moves,
+          problems,
         ).candidate;
     if (schema.additionalProperties === false)
       for (const k of Object.keys(candidate))
@@ -543,7 +659,7 @@ function argumentDiagnostics(
               Object.keys(properties).join(", ") +
               ".",
           );
-    return { candidate, issues, moves };
+    return { candidate, issues, moves, problems };
   }
   if (schema?.type === "array")
     return {
@@ -555,10 +671,12 @@ function argumentDiagnostics(
             path + "[" + i + "]",
             issues,
             moves,
+            problems,
           ).candidate,
       ),
       issues,
       moves,
+      problems,
     };
   if (!Check(schema, value))
     issue(
@@ -568,8 +686,9 @@ function argumentDiagnostics(
         received() +
         "." +
         местаОшибок(schema, value),
+      { path, expected: expectedType(schema), kind: "value" },
     );
-  return { candidate: value, issues, moves };
+  return { candidate: value, issues, moves, problems };
 }
 type TemplateField = {
   path: string;
@@ -683,6 +802,33 @@ const CALL_CHEATSHEET = `
 Второй arguments допустим только когда он явно есть в inputSchema (например, host). Массив передавай как [...], без {"item":[...]}.
 request_id и version писать не нужно. Свой request_id передавай только при осознанном повторе того же действия. Ошибка означает, что нужно исправить указанный путь и повторить исправленный вызов, а не копировать прежний.
 `;
+/** Параметры вызова в том виде, в каком их понял шлюз: без action вызов с
+ *  operation — это invoke, без operation — discover; для invoke шлюз сам
+ *  проставляет версию 1, пустые arguments и request_id. Правило одно и для
+ *  шлюза, и для учёта — иначе в журнал попал бы не тот вызов, который роль
+ *  на самом деле сделала. */
+function normalizeParams(raw: any, context: Context, id: string): any {
+  const p = raw && typeof raw === "object" ? { ...raw } : raw;
+  if (p && p.action === undefined)
+    p.action = p.operation !== undefined ? "invoke" : "discover";
+  if (p && p.action === "invoke") {
+    // Версия операции — не то, что роль должна помнить: любая присланная
+    // версия означает ту же операцию (174 отказа за неделю — version: 2).
+    p.version = 1;
+    if (p.arguments === undefined) p.arguments = {};
+    // `request_id: null` — это «не задан», а не неверный ключ (53 отказа
+    // за неделю): подставляем ключ хода так же, как при отсутствии поля.
+    if (p.request_id === null) delete (p as any).request_id;
+    if ((p.arguments as any)?.request_id === null)
+      delete (p.arguments as any).request_id;
+    if (
+      p.request_id === undefined &&
+      (p.arguments as any)?.request_id === undefined
+    )
+      p.request_id = (context.runId || "run") + ":" + id;
+  }
+  return p;
+}
 export function createUniversalTaskflow(
   tools: Tool[],
   context: Context,
@@ -699,6 +845,8 @@ export function createUniversalTaskflow(
     subtaskId: context.subtaskId ?? null,
     chatId: context.chatId ?? null,
   });
+  // Шлюз: сама операция. Поверх неё в конце функции — две обёртки: тренер
+  // ошибок (внутренняя) и учёт вызовов (внешняя).
   const api: Tool = {
     name: "taskflow",
     description: UNIVERSAL_INSTRUCTION + CALL_CHEATSHEET,
@@ -722,40 +870,36 @@ export function createUniversalTaskflow(
       // Владелец 20.10.2026: модель пишет только operation и arguments. Без action
       // вызов с operation — invoke, без operation — discover; version по умолчанию 1;
       // request_id для изменения — из номера хода и вызова (явный по-прежнему главнее).
-      const p = raw && typeof raw === "object" ? { ...raw } : raw;
-      if (p && p.action === undefined)
-        p.action = p.operation !== undefined ? "invoke" : "discover";
-      if (p && p.action === "invoke") {
-        // Версия операции — не то, что роль должна помнить: любая присланная
-        // версия означает ту же операцию (174 отказа за неделю — version: 2).
-        p.version = 1;
-        if (p.arguments === undefined) p.arguments = {};
-        // `request_id: null` — это «не задан», а не неверный ключ (53 отказа
-        // за неделю): подставляем ключ хода так же, как при отсутствии поля.
-        if (p.request_id === null) delete (p as any).request_id;
-        if ((p.arguments as any)?.request_id === null)
-          delete (p.arguments as any).request_id;
-        if (
-          p.request_id === undefined &&
-          (p.arguments as any)?.request_id === undefined
-        )
-          p.request_id = (context.runId || "run") + ":" + id;
-      }
+      const p = normalizeParams(raw, context, id);
       const fail = (
         code: string,
         message: string,
         hint = ответнаяПодсказка(code),
-      ) =>
-        response({
+        extra?: { field?: string | null; expected?: string | null; kind?: string | null },
+      ) => {
+        const current = auditStorage.getStore();
+        if (current && extra) {
+          current.field = extra.field ?? null;
+          current.expected = extra.expected ?? null;
+          current.kind = extra.kind ?? null;
+        }
+        return response({
           ok: false,
           operation: p?.operation,
           request_id: p?.request_id ?? (p?.arguments as any)?.request_id,
           error: { code, message, hint },
         });
+      };
       if (!p || !["discover", "describe", "invoke"].includes(p.action))
         return fail(
           "INVALID_ARGUMENTS",
           "action: discover, describe или invoke",
+          ответнаяПодсказка("INVALID_ARGUMENTS"),
+          {
+            field: "action",
+            expected: "discover | describe | invoke",
+            kind: "value",
+          },
         );
       const denied = (name: string) => operationRestriction(name, context);
       if (p.action === "discover") {
@@ -980,7 +1124,17 @@ export function createUniversalTaskflow(
         const detail = diagnosis.issues.length
           ? diagnosis.issues.join(" ")
           : "Неверное размещение параметров.";
-        return fail("INVALID_ARGUMENTS", detail + " " + hint, hint);
+        const firstProblem = diagnosis.problems[0];
+        return fail(
+          "INVALID_ARGUMENTS",
+          detail + " " + hint,
+          hint,
+          {
+            field: firstProblem?.path ?? null,
+            expected: firstProblem?.expected ?? null,
+            kind: firstProblem?.kind ?? null,
+          },
+        );
       }
       if (
         write &&
@@ -998,6 +1152,7 @@ export function createUniversalTaskflow(
           "INVALID_ARGUMENTS",
           "Для изменения нужен request_id длиной 1..200 — придумай новый уникальный для этого действия.",
           hint,
+          { field: "request_id", expected: "строка 1..200", kind: "missing" },
         );
       }
       const hash = crypto
@@ -1077,7 +1232,29 @@ export function createUniversalTaskflow(
       }
     },
   };
-  return withMistakeCoach(api, registry);
+  // Тренер ошибок — обёртка внутренняя: три неверных вызова одной операции
+  // подряд → отказ с остановкой и готовым вызовом. Счётчик ошибок живёт в
+  // ней, и обёртка учёта его не трогает.
+  const coached = withMistakeCoach(api, registry);
+  // Учёт вызовов — обёртка внешняя: ответ шлюза уходит роли как есть, а сам
+  // вызов — в журнал. Снаружи — чтобы в журнал попало ровно то, что увидела
+  // роль, включая сообщение тренера об остановке.
+  const inner = coached.execute;
+  const tool: Tool = {
+    ...coached,
+    execute: async (id, raw, signal, onUpdate) => {
+      // В журнал идёт фактический вызов — тот, который понял шлюз: правило
+      // про action одно и то же для шлюза и для учёта.
+      const p = normalizeParams(raw, context, id);
+      const detail: AuditDetail = { field: null, expected: null, kind: null };
+      const out = await auditStorage.run(detail, () =>
+        inner(id, raw, signal, onUpdate),
+      );
+      recordCall(context, p, out, detail);
+      return out;
+    },
+  };
+  return tool;
 }
 
 /** Сколько неверных вызовов одной операции подряд терпим до остановки роли. */

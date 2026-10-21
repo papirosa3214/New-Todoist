@@ -121,6 +121,7 @@ import { startKbTriageWatcher } from "./lib/kbTriageWatcher.js";
 import { startOllamaHealthWatcher } from "./lib/ollamaHealthWatcher.js";
 import { startWorktreeMergeWatcher } from "./lib/worktreeMergeWatcher.js";
 import { startRoleFormatWatcher } from "./lib/roleFormatWatcher.js";
+import { startToolErrorAccountingWatcher } from "./runtime/toolErrorAccountingWatcher.js";
 import { startKbSearchWatcher } from "./lib/kbSearchWatcher.js";
 import { startInboxResultsWriter } from "./lib/inboxResultsWriter.js";
 import { registerSeedRoutes } from "./seed.js";
@@ -138,6 +139,7 @@ import { registerRuntimeContextRoutes } from "./routes/runtime-context.js";
 import { registerLinearRoutes } from "./routes/linear.js";
 import { registerComposioRoutes } from "./routes/composio.js";
 import { registerCoordinationRoutes } from "./routes/coordination.js";
+import { registerRoleToolAuditRoutes } from "./routes/role-tool-audit.js";
 import {
   logServerEvent,
   normalizeServerError,
@@ -515,6 +517,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   // `runtime/coordinationResolver.read.ts`. Наблюдательный, без
   // побочных эффектов; действия делают существующие маршруты.
   registerCoordinationRoutes(app);
+  // Учёт вызовов инструментов ролями: сводка ошибок и выгрузка JSON/CSV
+  // (карточка 64af4c85-93ed-4926-bd78-5cdfaf6a9ba5). Наблюдательный
+  // маршрут: ничего не меняет и не запускает.
+  registerRoleToolAuditRoutes(app);
   registerNotificationRoutes(app);
   registerEscalationRoutes(app);
   registerLiveActivityRoutes(app);
@@ -581,6 +587,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     // свой сторож (карточка cea8d997, docs/watchers.md).
     const stopRoleFormatWatcher = startRoleFormatWatcher();
     app.addHook("onClose", async () => stopRoleFormatWatcher());
+    // Учёт ошибок вызовов инструментов: прибор ломается тихо — шлюз отсекает
+    // неверный вызов раньше журнала операций. Сторож проверяет пробным ходом
+    // через тот же шлюз (карточка 64af4c85, docs/watchers.md).
+    if (process.env.TOOL_ERROR_ACCOUNTING_WATCHER_DISABLED !== "1") {
+      const stopToolErrorAccountingWatcher = startToolErrorAccountingWatcher();
+      app.addHook("onClose", async () => stopToolErrorAccountingWatcher());
+    }
     // Поиск по базе знаний: пробный запрос с известным ответом (docs/watchers.md).
     const stopKbSearchWatcher = startKbSearchWatcher();
     app.addHook("onClose", async () => stopKbSearchWatcher());

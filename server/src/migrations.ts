@@ -1,5 +1,7 @@
 import { OBSERVABILITY_SCHEMA } from "./lib/contextObservability.js";
 import { TOOL_REQUEST_SCHEMA } from "./runtime/toolRequestStore.js";
+import { TOOL_AUDIT_SCHEMA } from "./runtime/toolAuditStore.js";
+import { KNOWN_MODEL_PROVIDERS } from "./lib/attemptModel.js";
 import { installReviewHistory } from "./lib/reviewHistory.js";
 // Версионные миграции — поверх базовой схемы из `db.ts:migrate()`.
 //
@@ -4841,6 +4843,24 @@ const migrations: Migration[] = [
     if (!msg.has("model")) db.exec("ALTER TABLE chat_messages ADD COLUMN model TEXT");
     const roles = new Set((db.prepare("PRAGMA table_info(roles)").all() as Array<{ name: string }>).map((c) => c.name));
     if (!roles.has("last_model")) db.exec("ALTER TABLE roles ADD COLUMN last_model TEXT");
+  } },
+  // Карточка 64af4c85-93ed-4926-bd78-5cdfaf6a9ba5: учёт ошибок вызовов
+  // инструментов ролями. Отказы — строкой в role_tool_audit (без значений
+  // аргументов), успешные вызовы — счётчиком в role_tool_audit_counters.
+  { id: "159_role_tool_audit", description: "Учёт вызовов инструментов ролями: отказы подробно, успешные — счётчиками", up: () => { db.exec(TOOL_AUDIT_SCHEMA); } },
+  // Карточка 64af4c85-93ed-4926-bd78-5cdfaf6a9ba5, доработка 1: в уже
+  // записанных отказах провайдер был назван эвристикой — «minimax» для всего,
+  // что не anthropic/openai. Модель в ходе приходит как «провайдер/модель»,
+  // значит провайдер известен: переписываем метку в старых записях, чтобы
+  // выгрузка показывала, у кого истёк ключ. Счётчики не трогаем: их сводка
+  // по провайдеру не отдаёт, а переписывание ключа потребовало бы сливать
+  // строки.
+  { id: "160_role_tool_audit_provider", description: "Провайдер в старых записях учёта — из префикса модели", up: () => {
+    for (const provider of KNOWN_MODEL_PROVIDERS) {
+      db.prepare(
+        "UPDATE role_tool_audit SET provider = ? WHERE model LIKE ? AND (provider IS NULL OR provider <> ?)",
+      ).run(provider, `${provider}/%`, provider);
+    }
   } },
   // 21.10.2026, раздел «Чаты»: комнаты и сессии (docs/2026-10-21-chats-rooms-and-sessions.md).
   // Назначение комнаты хранится явно: личную комнату и личку роль↔роль раньше
