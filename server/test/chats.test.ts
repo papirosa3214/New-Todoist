@@ -152,7 +152,7 @@ describe("Чаты (этап 1, миграция 053)", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("себя из чата убрать нельзя → 400; чужой не удаляет чат → 403; создатель удаляет → 200", async () => {
+  it("себя из чата убрать нельзя → 400; чужой чат не убирает → 403; создатель убирает в архив → 200", async () => {
     const created = await createChat({ member_ids: [otherId] });
     const id = created.json().chat.id;
     const selfRemove = await app.inject({
@@ -173,6 +173,14 @@ describe("Чаты (этап 1, миграция 053)", () => {
       headers: ownerAuth,
     });
     expect(ownDelete.statusCode).toBe(200);
+    // Убрать = архивировать (карточка 0b7a8b81…): строка чата остаётся в
+    // базе, чат помечен закрытым — история и счётчики не теряются.
+    const row = db
+      .prepare("SELECT id, closed_at, archived_at FROM chats WHERE id = ?")
+      .get(id) as { id: string; closed_at: string | null; archived_at: string | null };
+    expect(row.id).toBe(id);
+    expect(row.closed_at).toBeTruthy();
+    expect(row.archived_at).toBeTruthy();
   });
 
   it("участников меняет только создатель", async () => {

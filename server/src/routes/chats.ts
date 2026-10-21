@@ -10,6 +10,13 @@ import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { deliverTopicToWork, deliverChatToWork } from "../runtime/inProcessRun.js";
 import { topicContext, taskTopicClosedAt, rehomeEmptyTopic } from "../lib/projectTopics.js";
+import {
+  archiveChat,
+  archiveRight,
+  chatRoomRow,
+  cleanupCandidates,
+  runCleanup,
+} from "../lib/chatArchive.js";
 import { nudgeTaskPlan } from "../runtime/taskNudge.js";
 import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
 import { externalRuntime } from "../roleRouting.js";
@@ -578,11 +585,15 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: authPre },
     async (req: any, reply) => {
       if (!isOwner(req.userId)) return reply.code(403).send({ error: "Закрывает сессию владелец" });
-      const chat = db.prepare("SELECT id, room_kind FROM chats WHERE id=?").get(req.params.id) as { id: string; room_kind: string | null } | undefined;
+      const chat = db.prepare("SELECT id, room_kind, archived_at FROM chats WHERE id=?").get(req.params.id) as { id: string; room_kind: string | null; archived_at: string | null } | undefined;
       if (!chat || !isMember(chat.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
       if (chat.room_kind === "personal" || chat.room_kind === "dm" || chat.room_kind === "common")
         return reply.code(409).send({ error: "Постоянную комнату закрыть нельзя" });
       const closed = req.body?.closed !== false;
+      // Убранный чат в список не возвращается: уборка — это не «закрыть и
+      // потом открыть», а спрятать пустую комнату навсегда.
+      if (!closed && chat.archived_at)
+        return reply.code(409).send({ error: "Убранный в архив чат вернуть нельзя" });
       db.prepare("UPDATE chats SET closed_at = CASE WHEN ? THEN COALESCE(closed_at, datetime('now')) ELSE NULL END WHERE id=?").run(closed ? 1 : 0, chat.id);
       return { chat: chatRow(chat.id) };
     },
@@ -1286,21 +1297,66 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Удалить чат (создатель). Сообщения уходят каскадом (chat_messages.chat_id).
+  // Убрать чат = архивировать (карточка 0b7a8b81…, 21.10.2026). Строки НЕ
+  // стираются: чат получает closed_at (уходит из общего списка, новые
+  // сообщения не принимаются) и archived_at (отметка уборки, её не снимает
+  // возврат задачи в работу). История, счётчики и статистика по задачам
+  // остаются в базе.
+  //
+  // Право: системные комнаты — темы задач — убирает любой участник проекта
+  // (создатель у них один на весь проект, проверка «только создатель» была
+  // неприменима); личные и групповые переписки (dm, personal, handoff, wake)
+  // — только их создатель.
+  const archiveChatRoute = async (req: any, reply: any) => {
+    const chat = chatRoomRow(req.params.id);
+    if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+    if (!isMember(chat.id, req.userId))
+      return reply.code(404).send({ error: "Чат не найден" });
+    const right = archiveRight(chat, req.userId);
+    if (!right.allowed) return reply.code(403).send({ error: right.reason });
+    archiveChat(chat.id);
+    return { ok: true, archived: true, chat: chatRow(chat.id) };
+  };
+
   app.delete<{ Params: { id: string } }>(
     "/api/chats/:id",
     { preHandler: authPre },
-    async (req: any, reply) => {
-      const chat = db.prepare("SELECT created_by FROM chats WHERE id = ?").get(req.params.id) as
-        | { created_by: string }
-        | undefined;
-      if (!chat) return reply.code(404).send({ error: "Чат не найден" });
-      if (chat.created_by !== req.userId)
-        return reply.code(403).send({ error: "удалить чат может создатель" });
-      db.prepare("DELETE FROM chats WHERE id = ?").run(req.params.id);
-      return { ok: true };
-    },
+    archiveChatRoute,
   );
+
+  // То же действие другим методом: DELETE в TaskFlow закрыт для
+  // делегированных ролей (auth.ts), а тему задачи убирать вправе участник
+  // проекта — в том числе роль.
+  app.post<{ Params: { id: string } }>(
+    "/api/chats/:id/archive",
+    { preHandler: authPre },
+    archiveChatRoute,
+  );
+
+  // Уборка лишних чатов (карточка 0b7a8b81…). Кандидаты — пустые темы
+  // задач: без сообщений, без строк в очереди доставки, не тронутые два
+  // часа, без живых попыток. Личные и групповые переписки в кандидаты не
+  // попадают никогда.
+  //
+  // Два шага: сначала предпросмотр (сколько и какие), потом сама уборка —
+  // и только после подтверждения (confirm: true в теле запроса).
+  app.get("/api/chats/cleanup/candidates", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isOwner(req.userId))
+      return reply.code(403).send({ error: "Уборку запускает владелец" });
+    const chats = cleanupCandidates();
+    return { count: chats.length, chats };
+  });
+
+  app.post("/api/chats/cleanup", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isOwner(req.userId))
+      return reply.code(403).send({ error: "Уборку запускает владелец" });
+    // Без подтверждения уборки не делаем: сначала человек должен увидеть
+    // список и количество.
+    if (req.body?.confirm !== true)
+      return reply.code(400).send({ error: "Нужно подтверждение уборки" });
+    const archived = runCleanup();
+    return { archived: archived.length, chats: archived };
+  });
 }
 
 // ===== Помощники онлайн-сессии (этап 2) =====

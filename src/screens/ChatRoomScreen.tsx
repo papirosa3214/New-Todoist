@@ -22,7 +22,7 @@ import {
   useChat,
   useChatMessages,
   useChatsLiveUpdates,
-  useDeleteChat,
+  useArchiveChat,
   useSendChatMessage,
 } from "../api/chats";
 import { useCurrentUser } from "../api/auth";
@@ -41,6 +41,7 @@ import {
 } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import { SmoothText } from "../components/SmoothText";
+import { canArchiveChat } from "../lib/chatRights";
 import type { ApiChatRoomMessage } from "../api/types";
 
 // Отступ в px от низа ленты, при котором пользователь считается
@@ -66,7 +67,7 @@ export function ChatRoomScreen() {
   // Живые ответы ролей — ws.ts → onChatMessage → фильтр по chat_id.
   useChatsLiveUpdates(chatId);
   const send = useSendChatMessage(chatId ?? "");
-  const deleteChat = useDeleteChat();
+  const archiveChat = useArchiveChat();
 
   // Чужих отправителей (не себя) показываем с аватаром и именем.
   // Свои — справа, без аватара (он и так весь экран).
@@ -119,19 +120,22 @@ export function ChatRoomScreen() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  const handleDelete = async () => {
+  // Убрать чат = архивировать (карточка 0b7a8b81…): строки остаются в базе,
+  // чат уходит из общего списка. Тему задачи убирает любой участник
+  // проекта, личные и групповые переписки — только создатель.
+  const handleArchive = async () => {
     if (!chat) return;
     const ok = await confirm({
-      title: "Удалить чат?",
+      title: "Убрать чат?",
       description:
-        "История сообщений пропадёт без возможности восстановления.",
-      confirmLabel: "Удалить",
+        "Чат уйдёт из общего списка, но останется в базе и в карточке своей задачи. История и статистика не пострадают.",
+      confirmLabel: "Убрать",
       cancelLabel: "Отмена",
       danger: true,
     });
     if (!ok) return;
     try {
-      await deleteChat.mutateAsync(chat.id);
+      await archiveChat.mutateAsync(chat.id);
       navigate("/chats", { replace: true });
     } catch {
       // Ошибка уже в mutation.error — на этом экране не показываем,
@@ -139,7 +143,7 @@ export function ChatRoomScreen() {
     }
   };
 
-  const isCreator = !!chat && !!meId && chat.created_by === meId;
+  const mayArchive = !!chat && canArchiveChat(chat, meId);
 
   return (
     <div className="px-4 pb-4 flex flex-col h-[calc(100dvh-var(--screen-header-h,0px))]">
@@ -149,13 +153,13 @@ export function ChatRoomScreen() {
         variant="compact"
         title={chat?.title || "Чат"}
         actions={
-          isCreator && chat ? (
+          mayArchive && chat ? (
             <button
-              onClick={handleDelete}
-              aria-label="Удалить чат"
+              onClick={handleArchive}
+              aria-label="Убрать чат"
               className="w-[44px] h-[44px] -mr-2.5 flex items-center justify-center text-sub tap-row"
             >
-              <Icon name="trash" size={18} />
+              <Icon name="archive" size={18} />
             </button>
           ) : null
         }
@@ -247,7 +251,7 @@ export function ChatRoomScreen() {
         chat.closed_at ? (
           <div className="pt-2">
             <p className="tf-meta text-dim text-center py-3">
-              Чат закрыт вместе с задачей. История сохранена.
+              Чат в архиве: новые сообщения не принимаются. История сохранена.
             </p>
           </div>
         ) : (
