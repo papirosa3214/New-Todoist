@@ -11,7 +11,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { runMigrations } from "../src/migrations.js";
 import db, { migrate } from "../src/db.js";
 import { purgeTasks } from "../src/lib/taskPurge.js";
-import { getSetting } from "../src/lib/serverSettings.js";
+import { getSetting, resetSetting, setSetting } from "../src/lib/serverSettings.js";
 import * as watcher from "../src/lib/ollamaHealthWatcher.js";
 
 const MODEL = "bge-m3-embed:latest";
@@ -73,6 +73,11 @@ const incidentRows = () =>
     .prepare("SELECT id, title FROM tasks WHERE incident_key = 'ollama-health'")
     .all() as Array<{ id: string; title: string }>;
 
+const incidentDescription = (id: string) =>
+  (db.prepare("SELECT description FROM tasks WHERE id = ?").get(id) as {
+    description: string;
+  }).description;
+
 describe("сторож локальной модели (Ollama)", () => {
   beforeAll(() => {
     migrate();
@@ -89,6 +94,7 @@ describe("сторож локальной модели (Ollama)", () => {
     vi.unstubAllGlobals();
     watcher.__setProbeWindow(null);
     watcher.__resetWatchState();
+    resetSetting("embedding_timeout_ms", null, "тест: возврат окна приборов");
     purgeTasks(incidentRows().map((r) => r.id));
   });
 
@@ -104,6 +110,29 @@ describe("сторож локальной модели (Ollama)", () => {
       window,
       "с запасом на холодный старт модели (около минуты)",
     ).toBeGreaterThanOrEqual(instrument + 60_000);
+  });
+
+  it("окно пробы не строже прибора даже при максимальном окне приборов", () => {
+    watcher.__setProbeWindow(null);
+    // 10 минут — максимум, который допускает реестр настроек для
+    // embedding_timeout_ms. Жёсткий потолок пробы (5 мин) был ниже него,
+    // и при таком таймауте проба снова становилась строже прибора.
+    setSetting(
+      "embedding_timeout_ms",
+      10 * 60_000,
+      null,
+      "тест: максимум окна приборов",
+    );
+    const instrument = getSetting("embedding_timeout_ms");
+    expect(instrument, "реестр должен принять максимум окна").toBe(10 * 60_000);
+    const window = watcher.probeWindowMs();
+    expect(
+      window,
+      "проба обязана ждать не меньше прибора при любом его окне",
+    ).toBeGreaterThanOrEqual(instrument);
+    expect(window, "и ещё запас на холодный старт").toBeGreaterThanOrEqual(
+      instrument + 60_000,
+    );
   });
 
   it("на выгруженной модели (холодный старт) тревогу не поднимает", async () => {
@@ -139,6 +168,49 @@ describe("сторож локальной модели (Ollama)", () => {
     const rows = incidentRows();
     expect(rows.length, "карточка починки должна появиться").toBe(1);
     expect(rows[0].title).toContain("Ollama");
+    expect(
+      incidentDescription(rows[0].id),
+      "подсказка должна говорить про очередь",
+    ).toContain("очередь запросов исчерпана");
+  });
+
+  it("503 «не хватает памяти под модель» — это не очередь", async () => {
+    // Ollama отвечает 503 и на исчерпанную очередь, и на нехватку памяти
+    // под модель. Считать все 503 «очередью» — уводить разбор не туда.
+    mockOllama({
+      embeddings: async () =>
+        jsonResponse(503, {
+          error: "model requires more system memory than is available",
+        }),
+    });
+
+    const { result, raised } = await watcher.runOllamaHealthCheck();
+
+    expect(result.state).toBe("memory");
+    expect(result.reason).toContain("памят");
+    expect(result.reason).not.toContain("очередь");
+    expect(raised, "без памяти приборы тоже будут падать — тревога нужна").toBe(true);
+    const rows = incidentRows();
+    expect(rows.length).toBe(1);
+    expect(rows[0].title).toContain("память");
+    const description = incidentDescription(rows[0].id);
+    expect(description, "подсказка должна говорить про память").toContain("памяти");
+    expect(
+      description,
+      "разбор не должен уводить в исчерпанную очередь",
+    ).not.toContain("очередь запросов исчерпана");
+  });
+
+  it("503 без известной причины не выдаётся за исчерпанную очередь", async () => {
+    mockOllama({
+      embeddings: async () => jsonResponse(503, { error: "upstream connect error" }),
+    });
+
+    const { result } = await watcher.runOllamaHealthCheck();
+
+    expect(result.state).toBe("unavailable");
+    expect(result.reason).toContain("503");
+    expect(result.reason).not.toContain("очередь");
   });
 
   it("Ollama недоступна (не отвечает даже на /api/tags) — тревога поднимается", async () => {

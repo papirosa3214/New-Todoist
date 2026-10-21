@@ -27,6 +27,18 @@
 //     первое тревоги не поднимает (пока модель не загрузилась несколько
 //     проб подряд), второе — поднимает;
 //   * «перебита очередью» (503 server busy) по-прежнему тревогу поднимает.
+//
+// Доработка 21.10.2026 (замечания критика к правке 70170a6f):
+//   * жёсткий потолок окна пробы (5 мин) был ниже максимально допустимого
+//     окна приборов (10 мин) — при таймауте приборов больше 4 минут проба
+//     снова становилась строже прибора, то есть возвращалась та же ложная
+//     тревога. Теперь окно пробы следует за прибором: окно приборов плюс
+//     запас на холодный старт, без отдельного потолка;
+//   * 503 у Ollama бывает двух разных видов: очередь запросов исчерпана
+//     («server busy: maximum pending requests exceeded») и не хватает памяти
+//     под модель («model requires more system memory…»). Считать все 503
+//     «очередью» — значит уводить разбор не туда: теперь эти состояния
+//     различаются, и подсказка в карточке тревоги соответствует причине.
 
 import { raiseIncident } from "./incidents.js";
 import { getSetting } from "./serverSettings.js";
@@ -46,8 +58,10 @@ const MIN_PROBE_WINDOW_MS = 30_000;
  *  минуты (21.10.2026 — примерно 60 с). Проба обязана это пережить. */
 const COLD_START_MARGIN_MS = 60_000;
 
-/** Потолок окна пробы: дольше ждать бессмысленно — приборы так не ждут. */
-const MAX_PROBE_WINDOW_MS = 5 * 60_000;
+/** Потолка окна пробы нет намеренно: жёсткий потолок (5 мин) был ниже
+ *  максимально допустимого окна приборов (10 мин) — при таймауте приборов
+ *  больше 4 минут проба снова сдавалась раньше прибора, и тревога снова
+ *  была ложной. Окно пробы = окно приборов + запас на холодный старт. */
 
 /** Сколько проб подряд модель не грузится, прежде чем это станет поломкой. */
 const LOADING_STREAK_ALARM = 3;
@@ -64,6 +78,7 @@ let probeWindowOverrideMs: number | null = null;
  *  ok         — эмбеддинг получен;
  *  loading    — модель выкачана, но ещё не в памяти (холодный старт);
  *  busy       — очередь запросов исчерпана (503 server busy);
+ *  memory     — под модель не хватает памяти (Ollama тоже отвечает 503);
  *  slow       — модель в памяти, но эмбеддинг не пришёл в окно;
  *  unavailable— Ollama не отвечает или ответила ошибкой;
  *  invalid    — ответ без массива эмбеддинга. */
@@ -71,6 +86,7 @@ export type OllamaProbeState =
   | "ok"
   | "loading"
   | "busy"
+  | "memory"
   | "slow"
   | "unavailable"
   | "invalid";
@@ -92,11 +108,28 @@ function instrumentTimeoutMs(): number {
   }
 }
 
-/** Окно пробы: не меньше окна приборов, плюс запас на холодный старт. */
+/**
+ * Окно пробы: не меньше окна приборов, плюс запас на холодный старт.
+ * Потолка нет — проба никогда не должна быть строже прибора (см. шапку
+ * файла): окно берётся из того же параметра, что и таймаут приборов.
+ */
 export function probeWindowMs(): number {
   if (probeWindowOverrideMs !== null) return probeWindowOverrideMs;
   const window = Math.max(instrumentTimeoutMs(), MIN_PROBE_WINDOW_MS);
-  return Math.min(window + COLD_START_MARGIN_MS, MAX_PROBE_WINDOW_MS);
+  return window + COLD_START_MARGIN_MS;
+}
+
+/**
+ * Разбор ошибки Ollama. 503 у неё бывает двух разных видов: очередь
+ * запросов исчерпана («server busy: maximum pending requests exceeded») и
+ * не хватает памяти под модель («model requires more system memory…»).
+ * Признак берём из текста ответа, а не из самого кода 503: считать все 503
+ * «очередью» — значит уводить разбор не туда.
+ */
+function classifyError(text: string): OllamaProbeState {
+  if (/busy|pending requests|maximum pending/i.test(text)) return "busy";
+  if (/memory|oom|out of memory/i.test(text)) return "memory";
+  return "unavailable";
 }
 
 function normalizeModelName(name: string): string {
@@ -228,19 +261,35 @@ export async function checkOllamaHealth(): Promise<CheckResult> {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      const busy = res.status === 503 || /busy|pending requests/i.test(text);
+      const state = classifyError(text);
+      const details = {
+        status: res.status,
+        base_url: OLLAMA_BASE_URL,
+        model: DEFAULT_EMBEDDING_MODEL,
+        probe_window_ms: windowMs,
+        ollama_error: text.slice(0, 200),
+      };
+      if (state === "busy") {
+        return {
+          ok: false,
+          state,
+          reason: `Ollama перебита: ответила ${res.status} «${text.slice(0, 120)}» — очередь запросов исчерпана`,
+          details,
+        };
+      }
+      if (state === "memory") {
+        return {
+          ok: false,
+          state,
+          reason: `Ollama ответила ${res.status}: не хватает памяти под модель «${text.slice(0, 120)}»`,
+          details,
+        };
+      }
       return {
         ok: false,
-        state: busy ? "busy" : "unavailable",
-        reason: busy
-          ? `Ollama перебита: ответила ${res.status} «${text.slice(0, 120)}» — очередь запросов исчерпана`
-          : `Ollama ответила ${res.status}: ${text.slice(0, 120)}`,
-        details: {
-          status: res.status,
-          base_url: OLLAMA_BASE_URL,
-          model: DEFAULT_EMBEDDING_MODEL,
-          probe_window_ms: windowMs,
-        },
+        state,
+        reason: `Ollama ответила ${res.status}: ${text.slice(0, 120) || "без текста"}`,
+        details,
       };
     }
     const data = (await res.json()) as { embedding?: unknown };
@@ -286,14 +335,41 @@ function raise(
   if (now - lastRaisedAt < DAY_MS) return;
   lastRaisedAt = now;
   const loading = state === "loading";
+  const busy = state === "busy";
+  const memory = state === "memory";
   const title = loading
     ? `Локальная модель (Ollama) не грузится: ${reason}`
-    : `Локальная модель (Ollama) недоступна: ${reason}`;
+    : busy
+      ? `Локальная модель (Ollama) перебита очередью: ${reason}`
+      : memory
+        ? `Локальная модель (Ollama) не помещается в память: ${reason}`
+        : `Локальная модель (Ollama) недоступна: ${reason}`;
+  const whatHappened = loading
+    ? "Сторож локальной модели несколько проб подряд не дождался эмбеддинга: модель выкачана, но в память не загружается."
+    : busy
+      ? "Сторож локальной модели получил от Ollama отказ: её очередь запросов исчерпана, приборы начнут отдавать 502."
+      : memory
+        ? "Сторож локальной модели получил от Ollama отказ: под модель не хватает памяти, приборы начнут отдавать 502."
+        : "Сторож локальной модели не смог получить эмбеддинг от Ollama.";
+  const whatToDo = [
+    "- `curl -X POST http://127.0.0.1:11434/api/embeddings -H 'Content-Type: application/json' -d '{\"model\":\"bge-m3-embed:latest\",\"prompt\":\"test\"}'` — должен вернуть массив embedding.",
+    "- Проверить, что модель `bge-m3-embed:latest` вообще выкачена: `ollama list`.",
+    busy
+      ? "- Очередь запросов исчерпана: найти, кто держит её открытым запросом, и снять его."
+      : "",
+    memory
+      ? "- Не хватает памяти под модель: `free -h` и `ollama ps` — освободить память (выгрузить лишние модели, уменьшить keep_alive)."
+      : "",
+    loading
+      ? "- Модель выкачана, но не в памяти: `ollama ps` покажет пусто. Проверить свободную память и место на диске — нехватка RAM выбрасывает модель, и она не влезает обратно."
+      : "",
+    !busy && !memory && !loading
+      ? "- Проверить, что сервис Ollama жив: `systemctl status ollama` и `journalctl -u ollama -n 50`."
+      : "",
+  ].filter(Boolean);
   const description = [
     "## Что случилось",
-    loading
-      ? "Сторож локальной модели несколько проб подряд не дождался эмбеддинга: модель выкачана, но в память не загружается."
-      : "Сторож локальной модели не смог получить эмбеддинг от Ollama.",
+    whatHappened,
     "",
     "## Причина",
     reason,
@@ -306,15 +382,8 @@ function raise(
     "падение TaskFlow, хотя сломалась только Ollama.",
     "",
     "## Что делать",
-    "- `curl -X POST http://127.0.0.1:11434/api/embeddings -H 'Content-Type: application/json' -d '{\"model\":\"bge-m3-embed:latest\",\"prompt\":\"test\"}'` — должен вернуть массив embedding.",
-    "- Если «server busy, maximum pending requests exceeded» — очередь исчерпана: найти, кто держит её открытым запросом, и снять его.",
-    "- Проверить, что модель `bge-m3-embed:latest` вообще выкачена: `ollama list`.",
-    loading
-      ? "- Модель выкачана, но не в памяти: `ollama ps` покажет пусто. Проверить свободную память и место на диске — нехватка RAM выбрасывает модель, и она не влезает обратно."
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    ...whatToDo,
+  ].join("\n");
   raiseIncident({ key: "ollama-health", title, description, priority: PRIORITY });
 }
 
