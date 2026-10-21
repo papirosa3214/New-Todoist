@@ -227,4 +227,31 @@ describe("рабочий ход роли с пустым ответом", () => 
     expect(attempt.outcome).not.toBe("failed");
     expect(String(attempt.reason)).not.toContain("пустой ответ");
   });
+
+  it("карточка без шага плана: попытка failed с причиной", async () => {
+    const taskId = `empty-task-${uid()}`;
+    db.prepare(
+      `INSERT INTO tasks (id, title, creator_id, assignee_id, status, dispatched_role, ready_for_pickup)
+       VALUES (?, ?, ?, 'role_builder', 'active', 'builder', 1)`,
+    ).run(taskId, "Пустой ответ без шага плана", ownerId);
+    const attemptId = uid();
+    db.prepare(
+      `INSERT INTO attempts (id, task_id, executor_id, runner, model, provider, started_at)
+       VALUES (?, ?, 'role_builder', 'pi', 'minimax/MiniMax-M3.1-Flash', 'minimax', datetime('now'))`,
+    ).run(attemptId, taskId);
+    db.prepare(
+      "UPDATE tasks SET current_attempt_id = ?, agent_state = 'in_progress' WHERE id = ?",
+    ).run(attemptId, taskId);
+    script.assistant = EMPTY_ANSWER;
+    try {
+      const run = await runRoleInProcess({ taskId, role: "builder", mode: "work" });
+      await run.completion.catch(() => {});
+    } finally {
+      script.assistant = null;
+    }
+    const attempt = db.prepare("SELECT outcome, reason FROM attempts WHERE id=?").get(attemptId) as
+      { outcome: string | null; reason: string | null };
+    expect(attempt.outcome).toBe("failed");
+    expect(String(attempt.reason)).toContain("пустой ответ");
+  });
 });

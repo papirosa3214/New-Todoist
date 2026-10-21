@@ -1682,14 +1682,37 @@ try {
         const emptyAnswer = lastAssistantEmptyAnswer(session);
         if (emptyAnswer) {
           runFailure = new Error(emptyAnswer);
-          if (input.subtaskId) {
-            const attemptRow = db
-              .prepare("SELECT current_attempt_id FROM subtasks WHERE id = ?")
-              .get(input.subtaskId) as { current_attempt_id: string | null } | undefined;
-            if (attemptRow?.current_attempt_id) {
-              db.prepare(
-                "UPDATE attempts SET ended_at = datetime('now'), outcome = 'failed', reason = ? WHERE id = ? AND ended_at IS NULL",
-              ).run(emptyAnswer, attemptRow.current_attempt_id);
+          // Попытку закрываем сами: пустой ответ — провал хода, а не тишина,
+          // которую потом добьёт сторож (21.10.2026).
+          const attemptId = input.subtaskId
+            ? (
+                db
+                  .prepare("SELECT current_attempt_id FROM subtasks WHERE id = ?")
+                  .get(input.subtaskId) as { current_attempt_id: string | null } | undefined
+              )?.current_attempt_id
+            : (
+                db
+                  .prepare("SELECT current_attempt_id FROM tasks WHERE id = ?")
+                  .get(taskId) as { current_attempt_id: string | null } | undefined
+              )?.current_attempt_id;
+          if (attemptId) {
+            db.prepare(
+              "UPDATE attempts SET ended_at = datetime('now'), outcome = 'failed', reason = ? WHERE id = ? AND ended_at IS NULL",
+            ).run(emptyAnswer, attemptId);
+          }
+          // Карточка без шага плана: блокировать нечего — гасим саму карточку
+          // с причиной, иначе ход висит как успешный (тот же путь, что при
+          // сорванном запуске).
+          if (!input.subtaskId) {
+            try {
+              await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
+                state: "blocked",
+                block_type: "transient",
+                comment: `Запуск прервался: ${emptyAnswer}`,
+                help_skip_reason: "провайдер вернул пустой ответ — другая роль его не повторит",
+              });
+            } catch {
+              // карточка могла и не быть взята — тогда блокировать нечего
             }
           }
         }
