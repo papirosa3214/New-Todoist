@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { ensureDirectRoom, ensurePersonalRoom } from "../lib/chatRooms.js";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import db from "../db.js";
@@ -8,6 +8,8 @@ import { COMMON_CHAT_ID, ensureCommonChat } from "../lib/chatCommon.js";
 import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolver.js";
 import { resolveTopicSlot } from "./slotSession.js";
 import { asRole, asText, ToolError, listActiveInProcessRuns } from "./inProcessRun.js";
+
+const ownerAccountId = () => (db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY id LIMIT 1").get() as {id:string}|undefined)?.id;
 
 type Context = { taskId?: string; subtaskId?: string; chatId?: string; messageId?:string };
 const optional = (description: string) => Type.Optional(Type.String({ description }));
@@ -28,18 +30,9 @@ export function agentMessagingTools(role: string, context: Context = {}) {
     sentCount++;
     return {id:result.message.id,chat_id:chatId,отправлено:result.message.text};
   };
-  const directChat = (recipientId: string) => db.transaction(() => {
-    const existing = db.prepare(`SELECT c.id FROM chats c WHERE c.kind='direct' AND c.parent_chat_id IS NULL AND c.branch_of_chat_id IS NULL
-      AND c.task_id IS NULL AND (SELECT count(*) FROM chat_members WHERE chat_id=c.id)=2
-      AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
-      AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?) ORDER BY c.created_at,c.id LIMIT 1`).get(senderId,recipientId) as {id:string}|undefined;
-    if (existing) return existing.id;
-    const id=crypto.randomUUID();
-    db.prepare("INSERT INTO chats(id,kind,created_by) VALUES(?,'direct',?)").run(id,senderId);
-    const insert=db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)");
-    insert.run(id,senderId);insert.run(id,recipientId);
-    return id;
-  })();
+  // Личка роль↔роль — постоянная переписка пары (21.10.2026). Владелец —
+  // в своей личной комнате с ролью; служебные чаты сюда не подбираются.
+  const directChat = (recipientId: string) => recipientId===ownerAccountId() ? (ensurePersonalRoom(senderId) ?? ensureDirectRoom(senderId,recipientId)) : ensureDirectRoom(senderId,recipientId);
   return [
     tool("taskflow_chat_send","Написать коллеге лично или в группу. to: имя, id или role_key; всем — контекст группы, без автоматического вызова всех. В личке @ не нужен; в группе адресный вызов добавляет @. Работающий коллега получает вопрос в свою сессию; свободный отвечает разговорным ходом. chat_id задаёт конкретную группу, task_id — контекст задачи; slot_key нужен при нескольких этапах адресата. Максимум 4 сообщения за ход.",Type.Object({to:Type.String(),text:Type.String(),chat_id:optional("Личный или групповой чат"),task_id:optional("Контекст задачи"),slot_key:optional("Конкретный этап адресата")}),async p=>{
       const raw=String(p.to??"").trim().toLowerCase();

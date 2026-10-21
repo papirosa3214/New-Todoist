@@ -29,7 +29,7 @@ export function enqueueIntegrationHandoff(reviewId:string):Handoff|null {
   if(previous)return {chatId:previous.chat_id,roleId:previous.role_id,deliveryId:previous.id,messageId:previous.message_id};
   // A single channel per integrator serializes accepted versions across cards.
   const chatId="integration:"+recipient.id, messageId=PREFIX+review.id;
-  db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES (?,'Передача принятых изменений','direct',?)").run(chatId,task.creator_id);
+  db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by,room_kind) VALUES (?,'Передача принятых изменений','direct',?,'handoff')").run(chatId,task.creator_id);
   for(const member of [task.creator_id,recipient.id])db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES (?,?)").run(chatId,member);
   const text=`Принят результат «${task.title}», версия ${version.id}. Вы назначены ответственным за интеграцию. Подтвердите получение, проверьте передачу коммитов и выполните интеграцию по действующим правилам. Результат и доказательства: ${version.result}\n${JSON.stringify(version.evidence)}`;
   db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,work_mode) VALUES (?,?,?,'chat',?,?,'work')").run(messageId,review.reviewer_id,text,chatId,task.id);

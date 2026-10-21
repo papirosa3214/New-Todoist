@@ -1,3 +1,4 @@
+import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
 import {registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
@@ -184,6 +185,9 @@ function isMember(chatId: string, userId: string): boolean {
     const teammate=db.prepare(`SELECT 1 FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id JOIN tasks t ON t.id=p.task_id JOIN users u ON u.role_key=n.role_key WHERE t.project_id=? AND p.status='approved' AND n.skipped_at IS NULL AND u.id=? AND u.type='ai'`).get(chat.project_id,userId);
     if(!teammate) return false;
   }
+  // Личку двух ролей владелец читает, не будучи её участником (21.10.2026):
+  // «нажал на Оркестратора — вижу, что к нему пришло от Помощника».
+  if (isOwner(userId) && isDirectRoom(chatId)) return true;
   return !!db
     .prepare("SELECT 1 FROM chat_members WHERE chat_id = ? AND member_id = ?")
     .get(chatId, userId);
@@ -294,21 +298,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     const roleId=typeof req.body?.role_id==="string"?req.body.role_id.trim():"";
     const active=db.prepare("SELECT 1 FROM users WHERE id=? AND COALESCE(archived,0)=0").get(roleId);
     if(!active || !roleFromUserId(roleId))return reply.code(400).send({error:"Нужна действующая роль"});
-    const id=db.transaction(()=>{
-      const existing=db.prepare(`SELECT c.id FROM chats c WHERE c.kind='direct'
-        AND c.parent_chat_id IS NULL AND c.closed_at IS NULL
-        AND c.branch_of_chat_id IS NULL
-        AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
-        AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
-        AND (SELECT COUNT(*) FROM chat_members WHERE chat_id=c.id)=2
-        ORDER BY c.created_at,c.id LIMIT 1`).get(req.userId,roleId) as {id:string}|undefined;
-      if(existing)return existing.id;
-      const id=uid();
-      db.prepare("INSERT INTO chats(id,kind,created_by) VALUES(?,'direct',?)").run(id,req.userId);
-      const member=db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)");
-      member.run(id,req.userId);member.run(id,roleId);
-      return id;
-    })();
+    // Личная комната роли — по назначению, а не «первый чат на двоих»:
+    // иначе подбиралась служебная «Передача принятых изменений» (21.10.2026).
+    const id=ensurePersonalRoom(roleId);
+    if(!id)return reply.code(400).send({error:"Нужна действующая роль"});
     return {chat:chatRow(id)};
   });
 
@@ -405,6 +398,12 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // LOCK-195). Сортировка — по `updated_at`: он обновляется на каждое
   // сообщение (см. POST /:id/messages), то есть чат с свежей перепиской
   // всегда наверху.
+  // Панель «Комнаты» (21.10.2026): Общая, личные комнаты ролей и их лички.
+  app.get("/api/chats/rooms", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "Комнаты видит владелец" });
+    return roomsSnapshot();
+  });
+
   app.get("/api/chats", { preHandler: authPre }, async (req: any) => {
     const includeClosed = String(req.query?.include_closed ?? "") === "1";
     const rows = db
@@ -557,6 +556,23 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       txn();
 
       return { chat: chatRow(req.params.id) };
+    },
+  );
+
+  // Закрыть или вернуть сессию (21.10.2026): закрытая уходит из списка в
+  // фильтр «Закрытые», история сохраняется. Постоянные комнаты не закрываются.
+  app.post<{ Params: { id: string }; Body: { closed?: unknown } }>(
+    "/api/chats/:id/close",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) return reply.code(403).send({ error: "Закрывает сессию владелец" });
+      const chat = db.prepare("SELECT id, room_kind FROM chats WHERE id=?").get(req.params.id) as { id: string; room_kind: string | null } | undefined;
+      if (!chat || !isMember(chat.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+      if (chat.room_kind === "personal" || chat.room_kind === "dm" || chat.room_kind === "common")
+        return reply.code(409).send({ error: "Постоянную комнату закрыть нельзя" });
+      const closed = req.body?.closed !== false;
+      db.prepare("UPDATE chats SET closed_at = CASE WHEN ? THEN COALESCE(closed_at, datetime('now')) ELSE NULL END WHERE id=?").run(closed ? 1 : 0, chat.id);
+      return { chat: chatRow(chat.id) };
     },
   );
 
@@ -765,6 +781,8 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     async (req: any, reply) => {
       if (!isMember(req.params.id, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
+      if (isDirectRoom(req.params.id) && !db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(req.params.id, req.userId))
+        return reply.code(403).send({ error: "Это личная переписка ролей: её можно читать, писать — в личной комнате роли" });
       let mode: ChatWorkMode;
       try { mode = parseChatWorkMode(req.body?.work_mode); }
       catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
