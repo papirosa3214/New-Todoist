@@ -176,6 +176,16 @@ export function mergeMode(): "off" | "dry" | "on" {
   return getSetting("auto_merge_mode");
 }
 
+/**
+ * Порог «слияние идёт подозрительно долго», минуты. Тесты при слиянии
+ * умеют идти до `auto_merge_test_timeout_min`; запас сверху нужен на
+ * пересборку копии и перенос в main.
+ */
+export function staleRunningMinutes(): number {
+  const testMinutes = Number(getSetting("auto_merge_test_timeout_min")) || 20;
+  return Math.max(30, testMinutes + 10);
+}
+
 function writeState(taskId: string, patch: Partial<MergeRow>): void {
   const map: Record<string, string> = {
     state: "state",
@@ -316,6 +326,10 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   const mainShaBefore = git(live, ["rev-parse", "main"]);
   outcome.main_sha_before = mainShaBefore;
   writeState(taskId, { state: "running", main_sha_before: mainShaBefore, error: null });
+  // Счётчик попыток: по нему видно, что слияние упирается в одно и то же
+  // (создание копии) и пора звать человека.
+  const attempts = Number(row.attempts ?? 0) + 1;
+  db.prepare("UPDATE worktree_merge_queue SET attempts = ? WHERE task_id = ?").run(attempts, taskId);
 
   const dir = scratchPath(taskId);
   const integrationBranch = `integration/${taskId}`;
@@ -326,11 +340,25 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
     gitOrNull(live, ["branch", "-D", integrationBranch]);
   }
   try {
-    git(live, ["worktree", "add", "-b", integrationBranch, dir, "main"]);
+    // Создание копии на большом репозитории умеет не уложиться в минуту
+    // (checkout 1759 файлов на холодном кэше) — это не конфликт кода, а
+    // техническая помеха, и её должен снять следующий проход.
+    git(live, ["worktree", "add", "-b", integrationBranch, dir, "main"], 300_000);
   } catch (error) {
-    outcome.state = "conflict";
-    outcome.error = `временная копия не создана: ${error instanceof GitError ? error.message : String(error)}`;
+    const message = error instanceof GitError ? error.message : String(error);
+    // Помеха повторяется — дальше крутить бессмысленно, отдаём человеку.
+    if (attempts >= 4) {
+      outcome.state = "conflict";
+      outcome.error = `временная копия не создана: ${message}`;
+      writeState(taskId, { state: outcome.state, error: outcome.error });
+      journal({ task_id: taskId, state: "conflict", main_sha_before: mainShaBefore, error: outcome.error });
+      return outcome;
+    }
+    outcome.state = "queued";
+    outcome.error = `временная копия не создана: ${message}`;
     writeState(taskId, { state: outcome.state, error: outcome.error });
+    journal({ task_id: taskId, state: "requeued", from: "running", reason: "scratch_not_created" });
+    safeLogEvent(taskId, "merge_unblocked", "running", "queued");
     return outcome;
   }
   linkNodeModules(dir, live);
@@ -401,6 +429,9 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   db.prepare(
     "UPDATE tasks SET merged_at = datetime('now'), merged_into_commit = ?, merged_into_branch = 'main' WHERE id = ?",
   ).run(mergedSha, taskId);
+  // Слияние состоялось — счётчик неудачных попыток обнуляем: он считает
+  // затыки, а не число слияний за всю жизнь карточки.
+  db.prepare("UPDATE worktree_merge_queue SET attempts = 0 WHERE task_id = ?").run(taskId);
   dropScratch(live, taskId);
 
   outcome.state = "merged";
@@ -471,6 +502,93 @@ export function retryClearedObstructions(limit = 20): string[] {
     safeLogEvent(row.task_id, "merge_unblocked", row.state, "queued");
   }
   return requeued;
+}
+
+/**
+ * Вернуть в очередку строки, застрявшие в `running`.
+ *
+ * `running` ставится перед слиянием и снимается в конце. Если сервер
+ * упал или был перезапущен посреди слияния, строка остаётся в `running`
+ * навсегда: её не берёт ни `drainMergeQueue` (берёт только `queued`), ни
+ * `requeueMerge` (не переоформляет `running`) — карточка висит часами,
+ * а сторож автослияния поднимает тревогу «слияние зависло в работе».
+ *
+ * Признак «слияния нет» — свежий файл блокировки: пока идёт слияние,
+ * держится `merge.lock`, и посторонний проход в очередь не лезет.
+ * Возраст строки сверяется с порогом из настроек: тесты при слиянии
+ * идут до `auto_merge_test_timeout_min`, запас даётся сверху.
+ */
+export function recoverStaleRunning(limit = 20): string[] {
+  if (worktreesDisabled() || mergeMode() === "off") return [];
+  const threshold = staleRunningMinutes();
+  // Живое слияние держит блокировку — не трогаем его строку.
+  try {
+    const lock = path.join(worktreesBase(), LOCK_FILE);
+    if (fs.existsSync(lock) && Date.now() - fs.statSync(lock).mtimeMs < LOCK_STALE_MS) return [];
+  } catch {
+    /* блокировку не прочитали — считаем, что её нет */
+  }
+  const rows = db
+    .prepare(
+      `SELECT task_id, attempts FROM worktree_merge_queue
+        WHERE state = 'running'
+          AND (julianday('now') - julianday(updated_at)) * 24 * 60 > ?
+        ORDER BY updated_at LIMIT ?`,
+    )
+    .all(threshold, limit) as Array<{ task_id: string; attempts: number }>;
+  const recovered: string[] = [];
+  for (const row of rows) {
+    const attempts = Number(row.attempts ?? 0);
+    if (attempts >= 5) {
+      // Пять попыток подряд — дальше крутить бессмысленно: это разбор
+      // человека, а не помеха, которая снимется сама.
+      db.prepare(
+        "UPDATE worktree_merge_queue SET state = 'conflict', error = ?, updated_at = datetime('now') WHERE task_id = ?",
+      ).run(`слияние не продвигается: ${attempts} попыток подряд`, row.task_id);
+      journal({ task_id: row.task_id, state: "conflict", error: `слияние не продвигается: ${attempts} попыток подряд` });
+      safeLogEvent(row.task_id, "merge_conflict", roleBranch(row.task_id), "слияние не продвигается");
+      continue;
+    }
+    db.prepare(
+      "UPDATE worktree_merge_queue SET state = 'queued', error = NULL, updated_at = datetime('now') WHERE task_id = ? AND state = 'running'",
+    ).run(row.task_id);
+    recovered.push(row.task_id);
+    journal({ task_id: row.task_id, state: "requeued", from: "running", reason: "stale_running" });
+    safeLogEvent(row.task_id, "merge_unblocked", "running", "queued");
+  }
+  return recovered;
+}
+
+/**
+ * Убрать временные копии слияния (`.merge-<taskId>`), оставшиеся от
+ * упавшего прохода: карточка не в `running` — значит слияния сейчас
+ * нет, и каталог никто не трогает. Иначе эти каталоги копятся на диске
+ * (живой случай: 21.10.2026 на сервере лежал `.merge-a001ff3d…`).
+ */
+export function sweepMergeScratch(limit = 20): number {
+  if (worktreesDisabled()) return 0;
+  const base = worktreesBase();
+  if (!fs.existsSync(base)) return 0;
+  const live = liveRepo();
+  let removed = 0;
+  for (const entry of fs.readdirSync(base).slice(0, limit)) {
+    if (!entry.startsWith(".merge-")) continue;
+    const taskId = entry.slice(".merge-".length);
+    const row = db.prepare("SELECT state FROM worktree_merge_queue WHERE task_id = ?").get(taskId) as
+      | { state: string }
+      | undefined;
+    if (row?.state === "running") continue;
+    const dir = path.join(base, entry);
+    try {
+      gitOrNull(live, ["worktree", "remove", "--force", dir]);
+      fs.rmSync(dir, { recursive: true, force: true });
+      gitOrNull(live, ["worktree", "prune"]);
+      removed += 1;
+    } catch {
+      /* занят кем-то — следующий проход */
+    }
+  }
+  return removed;
 }
 
 /**
@@ -560,7 +678,10 @@ export async function sweepMergedWorkspaces(limit = 20): Promise<number> {
     const taskId = entry;
     try {
       const state = inspectWorktree(taskId, "main", live);
-      if (!state.branch_exists || !state.merged_into_base || state.dirty.length > 0) continue;
+      // Ветки роли уже нет — сливать больше нечего, копия только занимает
+      // место. Ветка есть, но не слита — там может быть неслитая работа.
+      if (state.branch_exists && !state.merged_into_base) continue;
+      if (state.dirty.length > 0) continue;
       const row = db.prepare("SELECT merged_at FROM tasks WHERE id = ?").get(taskId) as
         | { merged_at: string | null }
         | undefined;
@@ -590,9 +711,12 @@ export async function worktreeMaintenancePass(): Promise<number> {
   // Возврат снятых помех — до разбора: вернувшаяся строка сразу же
   // разбирается тем же проходом, а не следующим через 5 минут.
   const unblocked = retryClearedObstructions().length;
+  // Зависшие в `running` строки (сервер упал посреди слияния) — тоже
+  // в очередь: иначе карточка висит до прихода человека.
+  const recovered = recoverStaleRunning().length;
   const merged = (await drainMergeQueue(1)).filter((row) => row.state === "merged").length;
   const queued = mergeMode() === "off" ? 0 : sweepUnmergedBranches();
   const cleaned = await sweepMergedWorkspaces();
-  const leftovers = sweepTestLeftovers();
-  return unblocked + merged + queued + cleaned + leftovers;
+  const leftovers = sweepTestLeftovers() + sweepMergeScratch();
+  return unblocked + recovered + merged + queued + cleaned + leftovers;
 }
