@@ -1,3 +1,5 @@
+import {reserveReviewRun,assertReviewRunAllowed,finishReviewRun} from "../src/runtime/reviewRunBudget.js";
+import {queuePlanFinalReview,markPlanFinalReviewerWaiting} from "../src/runtime/planReviewLifecycle.js";
 // 20.10.2026, карточка 1e8c05e2: проход критика кончился без вердикта,
 // шаг сбросили, а повторный запуск узла приёмки ничего не поставил в
 // очередь — ключ «план + узел + версия» уже был у отработавшего задания,
@@ -128,4 +130,16 @@ describe("повторная постановка итоговой приёмк�
       { status: "queued" },
     ]);
   });
+  it("три прохода без вердикта нельзя обойти новой очередью и сбросом шага", () => {
+    for(let i=0;i<3;i++){
+      const ticket=reserveReviewRun(task);
+      assertReviewRunAllowed(ticket);
+      expect(()=>finishReviewRun(ticket)).toThrow(/без сохранённого вердикта/);
+    }
+    expect(queuePlanFinalReview(critic,owner).ok).toBe(false);
+    markPlanFinalReviewerWaiting(task);
+    expect(db.prepare("SELECT agent_state FROM subtasks WHERE id=?").get(critic)).toEqual({agent_state:"blocked"});
+    expect(db.prepare("SELECT agent_state FROM tasks WHERE id=?").get(task)).toEqual({agent_state:"blocked"});
+  });
+
 });

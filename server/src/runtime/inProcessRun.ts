@@ -1,3 +1,4 @@
+import { reserveReviewRun, assertReviewRunAllowed, finishReviewRun } from "./reviewRunBudget.js";
 import { chatTools } from "./chatTools.js";
 import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
 import { teamReadTools } from "./teamReadTools.js";
@@ -76,7 +77,7 @@ import { resolveRoleHost } from "./roleHost.js";
 import { hostOperations } from "./hostOperations.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
-import { isProviderLimitText, lastAssistantEmptyAnswer, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
+import { isProviderLimitText, lastAssistantEmptyAnswer, lastAssistantLimitError, lastAssistantError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 import { logStepOutcome } from "./stepOutcome.js";
 import { withTestRunBudget } from "./testRunBudget.js";
 import { createCliAgentSession } from "./cliAgentSession.js";
@@ -1334,6 +1335,22 @@ async function askStopSummary(
  * заблокирована с причиной.
  */
 export async function runRoleInProcess(input:Parameters<typeof runRoleInProcessUnserialized>[0]):Promise<{runId:string;completion:Promise<void>}> {
+  const review=input.role==="critic_verifier" && (input.mode ?? "review")==="review";
+  if(!review)return runRoleInProcessSerialized(input);
+  if(activeInProcessRun(input.taskId,input.subtaskId))throw new Error("по этому окну агент уже работает");
+  const ticket=reserveReviewRun(input.taskId);
+  assertReviewRunAllowed(ticket);
+  let result: Awaited<ReturnType<typeof runRoleInProcessUnserialized>>;
+  try {result=await runRoleInProcessSerialized(input);}
+  catch(error){finishReviewRun(ticket,error);throw error;}
+  const completion=result.completion.then(
+    () => finishReviewRun(ticket),
+    error => {finishReviewRun(ticket,error);throw error;},
+  );
+  void completion.catch(()=>{});
+  return {...result,completion};
+}
+async function runRoleInProcessSerialized(input:Parameters<typeof runRoleInProcessUnserialized>[0]):Promise<{runId:string;completion:Promise<void>}> {
   if(!input.subtaskId)return runRoleInProcessUnserialized(input);
   const release=await acquireSlotSession(input.subtaskId,undefined,()=>!!activeInProcessRun(input.taskId,input.subtaskId));
   try {
@@ -1665,6 +1682,7 @@ try {
       // ответов подряд у critic_verifier). Ловим здесь: попытка закрывается
       // failed с причиной, шаг видно в ленте, сторож не списывает его потом
       // как auto_restarted.
+      if (!limitHit && lastAssistantError(session)) throw new Error(lastAssistantError(session)!);
       if (!limitHit) {
         const emptyAnswer = lastAssistantEmptyAnswer(session);
         if (emptyAnswer) {
@@ -1690,7 +1708,7 @@ try {
           // Карточка без шага плана: блокировать нечего — гасим саму карточку
           // с причиной, иначе ход висит как успешный (тот же путь, что при
           // сорванном запуске).
-          if (!input.subtaskId) {
+          if (!input.subtaskId && mode !== "review") {
             try {
               await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
                 state: "blocked",
@@ -1708,7 +1726,7 @@ try {
       const reason = error instanceof Error ? error.message : String(error);
       if (isProviderLimitText(reason)) limitHit = reason;
       else runFailure = error instanceof Error ? error : new Error(reason);
-      if (!limitHit && !runControl.replacementRequested) try {
+      if (mode !== "review" && !limitHit && !runControl.replacementRequested) try {
         await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
           state: "blocked",
           block_type: "transient",

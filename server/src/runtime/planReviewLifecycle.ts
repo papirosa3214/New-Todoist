@@ -1,3 +1,4 @@
+import { reviewBudgetExhausted, blockReviewRun } from "./reviewRunBudget.js";
 import {
   branchMembership,
   branchReworkRequest,
@@ -243,6 +244,11 @@ export function queuePlanFinalReview(subtaskId: string, actorId: string) {
   const step = db
     .prepare("SELECT * FROM subtasks WHERE id=?")
     .get(subtaskId) as ReviewStep;
+  if(reviewBudgetExhausted(step.task_id)) {
+    const error="Проверка заблокирована: 3 захода без вердикта; нужно решение владельца.";
+    blockReviewRun(step.task_id,error);
+    return {ok:false as const,error};
+  }
   return db.transaction(() => {
     const current = currentResultVersion(step.task_id);
     const reviewed =
@@ -759,7 +765,7 @@ export function hasPendingPlanFinalReview(taskId: string): boolean {
 }
 export function markPlanFinalReviewerWaiting(taskId: string) {
   db.prepare(
-    `UPDATE subtasks SET agent_state='todo',agent_heartbeat_at=NULL WHERE task_id=? AND done=0 AND EXISTS(SELECT 1 FROM task_collaboration_plan_nodes n WHERE n.plan_id=subtasks.collaboration_plan_id AND n.slot_key=subtasks.plan_node_key AND n.instructions LIKE ?)`,
+    `UPDATE subtasks SET agent_state='todo',agent_heartbeat_at=NULL WHERE task_id=? AND done=0 AND EXISTS(SELECT 1 FROM tasks t WHERE t.id=subtasks.task_id AND t.agent_state='review') AND EXISTS(SELECT 1 FROM task_collaboration_plan_nodes n WHERE n.plan_id=subtasks.collaboration_plan_id AND n.slot_key=subtasks.plan_node_key AND n.instructions LIKE ?)`,
   ).run(taskId, `${FINAL_REVIEW_MARKER}%`);
 }
 

@@ -112,3 +112,10 @@ export function pickFailoverModel(routing: RoleRouting, role: string, currentRef
     return p !== current.provider && providerAvailable(p);
   }) ?? null;
 }
+
+
+// SDK reports non-quota failures in state, without rejecting prompt().
+export function lastAssistantError(session: any): string | null {
+  const answer=[...(session?.state?.messages ?? [])].reverse().find((m:any)=>m?.role==="assistant");
+  return answer?.stopReason==="error" ? String(answer.errorMessage || "модель завершила ход с ошибкой") : null;
+}
