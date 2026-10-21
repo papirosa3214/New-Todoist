@@ -141,17 +141,68 @@ export function useRemoveChatMember(chatId: string) {
   });
 }
 
-// ───────── удаление чата ─────────
+// ───────── убрать чат (архивирование) ─────────
 
-/** DELETE /api/chats/:id. Создатель — единственный, кому сервер даст;
- *  экран сам прячет кнопку под «···», если current user != created_by. */
-export function useDeleteChat() {
+/** POST /api/chats/:id/archive. Убрать — значит архивировать: строка чата
+ *  и его сообщения остаются в базе, чат уходит из общего списка. Право
+ *  решает сервер: тему задачи убирает любой участник проекта, личные и
+ *  групповые переписки — только создатель. */
+export function useArchiveChat() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (chatId: string) =>
-      api.delete<{ ok: true }>(`/api/chats/${chatId}`),
+      api.post<{ ok: true; archived: true }>(
+        `/api/chats/${chatId}/archive`,
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["chats", "list"] });
+      qc.invalidateQueries({ queryKey: ["chats", "detail"] });
+    },
+  });
+}
+
+// ───────── уборка лишних чатов ─────────
+
+/** Кандидат на уборку — пустая тема задачи. Отбирает сервер: без
+ *  сообщений, без строк в очереди доставки, не тронутая два часа, без
+ *  живых попыток. */
+export interface ChatCleanupCandidate {
+  id: string;
+  title: string | null;
+  task_id: string | null;
+  task_title: string | null;
+  project_id: string | null;
+  updated_at: string;
+  messages: number;
+  queue: number;
+}
+
+/** GET /api/chats/cleanup/candidates — предпросмотр уборки: сколько чатов
+ *  и какие. Уборку запускает владелец. */
+export function useChatCleanupCandidates(enabled: boolean) {
+  return useQuery({
+    queryKey: ["chats", "cleanup", "candidates"],
+    queryFn: () =>
+      api.get<{ count: number; chats: ChatCleanupCandidate[] }>(
+        "/api/chats/cleanup/candidates",
+      ),
+    enabled,
+    retry: false,
+  });
+}
+
+/** POST /api/chats/cleanup — сама уборка, только после подтверждения
+ *  (confirm: true в теле запроса). */
+export function useRunChatCleanup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ archived: number; chats: string[] }>("/api/chats/cleanup", {
+        confirm: true,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["chats", "list"] });
+      qc.invalidateQueries({ queryKey: ["chats", "cleanup", "candidates"] });
     },
   });
 }

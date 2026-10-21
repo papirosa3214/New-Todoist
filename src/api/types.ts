@@ -390,8 +390,9 @@ export interface ApiChatLastMessage {
 
 /** Чат — отдельная сущность (POST /api/chats, GET /api/chats/:id).
  *  kind:direct — ровно один не-владелец участник, kind:group — больше
- *  одного. created_by — id создателя; только он может менять состав и
- *  удалить чат (сервер это проверяет). */
+ *  одного. created_by — id создателя; личные и групповые переписки убирает
+ *  только он, а тему задачи (task_id + parent_chat_id) — любой участник
+ *  проекта (сервер это проверяет, см. server/src/lib/chatArchive.ts). */
 export interface ApiChat {
   id: string;
   title: string | null;
@@ -400,6 +401,15 @@ export interface ApiChat {
   task_id: string | null;
   created_at: string;
   updated_at: string;
+  /** Родитель — комната проекта: вместе с task_id это системная тема
+   *  задачи (её заводит сервер, а не человек). */
+  parent_chat_id?: string | null;
+  /** Назначение комнаты: personal (владелец↔роль), dm (роль↔роль), common,
+   *  wake, handoff. */
+  room_kind?: string | null;
+  /** Чат убран в архив человеком: строки остались в базе, чат ушёл из
+   *  общего списка. */
+  archived_at?: string | null;
   /** Тема задачи закрыта вместе с задачей: read-only, скрыта из списка
    *  открытых (карточка ca816271). */
   closed_at?: string | null;
