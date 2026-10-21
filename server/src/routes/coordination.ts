@@ -376,6 +376,7 @@ const attemptRows = db
             COALESCE(NULLIF(a.routing_role, ''), u.role_key) AS routing_role,
             a.started_at, a.work_end AS ended_at, a.outcome, a.reason,
             t.title AS task_title,
+            t.created_at AS task_created_at,
             COALESCE(t.service_hidden, 0) AS service
        FROM work_intervals a
        LEFT JOIN users u ON u.id = a.executor_id
@@ -410,6 +411,7 @@ const attemptRows = db
     outcome: string | null;
     reason: string | null;
     task_title: string;
+    task_created_at: string;
     service: number;
   }>;
 
@@ -417,6 +419,7 @@ const attemptsOut = attemptRows.map((a) => ({
   id: a.id,
   task_id: a.task_id,
   task_title: a.task_title,
+  task_created_at: a.task_created_at,
   // Служебная карточка починки поломки (incidents.ts) — клиент красит её
   // на Ганте отдельным цветом.
   service: a.service === 1,
@@ -447,7 +450,8 @@ const activeRows = db
             (SELECT a.started_at FROM attempts a
               WHERE a.subtask_id = s.id AND a.ended_at IS NULL
               ORDER BY (a.id = s.current_attempt_id) DESC, a.started_at DESC, a.rowid DESC LIMIT 1) AS attempt_started_at,
-            t.title AS task_title
+            t.title AS task_title,
+            t.created_at AS task_created_at
        FROM subtasks s
        JOIN tasks t ON t.id = s.task_id
         AND t.archived_at IS NULL
@@ -466,13 +470,14 @@ const activeRows = db
     attempt_role: string | null;
     attempt_started_at: string | null;
     task_title: string;
+    task_created_at: string;
   }>;
 
 // Task-level: открытая карточка, назначенный агент работает.
 // Наличие записи запуска не является условием текущей занятости.
 const activeTaskRows = db
   .prepare(
-    `SELECT t.id, t.title AS task_title, t.assignee_id,
+    `SELECT t.id, t.title AS task_title, t.created_at AS task_created_at, t.assignee_id,
             (SELECT COALESCE(NULLIF(a.routing_role, ''), u.role_key)
                FROM attempts a LEFT JOIN users u ON u.id = a.executor_id
               WHERE a.task_id = t.id AND a.ended_at IS NULL
@@ -494,6 +499,7 @@ const activeTaskRows = db
   .all() as Array<{
     id: string;
     task_title: string;
+    task_created_at: string;
     assignee_id: string | null;
     attempt_role: string | null;
     attempt_started_at: string | null;
@@ -520,6 +526,7 @@ const activeNowOut: Array<{
   id: string;
   task_id: string;
   task_title: string;
+  task_created_at: string;
   role_key: string | null;
   started_at: string | null;
   heartbeat_at: string | null;
@@ -533,6 +540,7 @@ for (const s of activeRows) {
     id: s.id,
     task_id: s.task_id,
     task_title: s.task_title,
+    task_created_at: s.task_created_at,
     role_key: role,
     started_at: s.attempt_started_at
       ? toIsoString(s.attempt_started_at)
@@ -550,6 +558,7 @@ for (const t of activeTaskRows) {
     id: t.id,
     task_id: t.id,
     task_title: t.task_title,
+    task_created_at: t.task_created_at,
     role_key: role,
     started_at: t.attempt_started_at
       ? toIsoString(t.attempt_started_at)
@@ -567,7 +576,7 @@ for (const t of activeTaskRows) {
 // чтобы их не теряли с глаз.
 const openRows = db
   .prepare(
-    `SELECT id, title, agent_state,
+    `SELECT id, title, agent_state, created_at,
             COALESCE(ready_set_at, updated_at) AS since
        FROM tasks
       WHERE status = 'active'
@@ -580,12 +589,14 @@ const openRows = db
     id: string;
     title: string;
     agent_state: string;
+    created_at: string;
     since: string | null;
   }>;
 const openSlotsOut = openRows.map((t) => ({
   kind: "task",
   id: t.id,
   task_title: t.title,
+  task_created_at: t.created_at,
   // Без исполнителя — роль не знаем; клиент покажет «без роли»
   // общей строкой поверх, чтобы не терялись. assignee_id=NULL
   // означает, что карточка ВИСИТ в работе, но никем не занята.
