@@ -53,6 +53,27 @@ describe("рабочая копия роли", () => {
     expect(fs.readFileSync(path.join(dir, "server", "a.ts"), "utf8")).toBe("export const a = 2;\n");
   });
 
+  it("пустой остаток снятой копии — пересоздаётся, а не отдаётся мёртвым путём", () => {
+    // merge/cleanup оставляет пустой каталог без .git: роль получала его как cwd
+    // и вместо работы по карточке обходила хост.
+    const taskId = "t3";
+    const dir = path.join(base, taskId);
+    fs.mkdirSync(dir, { recursive: true });
+    expect(fs.existsSync(path.join(dir, ".git"))).toBe(false);
+
+    expect(roleWorkspace(taskId, live, live)).toBe(dir);
+    expect(fs.existsSync(path.join(dir, ".git"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, "server", "a.ts"))).toBe(true);
+  });
+
+  it("каталог без .git, но с файлами — внятная ошибка, а не тихий битый cwd", () => {
+    const taskId = "t4";
+    const dir = path.join(base, taskId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "чужое.txt"), "x");
+    expect(() => roleWorkspace(taskId, live, live)).toThrow(/не git-worktree/);
+  });
+
   it("выключатель off — без копий", () => {
     process.env.TASKFLOW_ROLE_WORKTREES = "off";
     try {

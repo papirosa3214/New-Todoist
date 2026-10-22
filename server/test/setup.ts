@@ -39,8 +39,8 @@ process.env.PI_CODING_AGENT_DIR = piAgentDir;
   const hooksDir = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-git-hooks");
   fs.mkdirSync(hooksDir, { recursive: true });
   const guard = `#!/bin/sh
-common=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
-live=$(cd "$(git -C '${liveRepo}' rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)
+common=$(cd "$(git rev-parse --absolute-git-dir 2>/dev/null)" 2>/dev/null && pwd -P)
+live=$(cd "$(git -C '${liveRepo}' rev-parse --absolute-git-dir 2>/dev/null)" 2>/dev/null && pwd -P)
 if [ -n "$live" ] && [ "$common" = "$live" ]; then
   echo "taskflow tests: commit into the live repository is forbidden" >&2
   exit 1
