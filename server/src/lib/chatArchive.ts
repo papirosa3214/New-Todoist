@@ -108,7 +108,7 @@ export function chatRoomRow(chatId: string): ChatRoomRow | undefined {
  * Тему такой карточки из уборки исключаем: её чат — рабочее место роли,
  * убирать его, пока карточка не отдана, нельзя.
  */
-export function taskIsInWork(taskId: string): boolean {
+export function taskIsInWork(taskId: string | null): boolean {
   return Boolean(
     taskId &&
       (db
@@ -200,7 +200,7 @@ export function runCleanup(limit = 500): string[] {
     for (const candidate of candidates) {
       // Повторная проверка в момент уборки: между предпросмотром и
       // подтверждением карточка могла начать работать.
-      if (taskIsInWork(candidate.id)) continue;
+      if (taskIsInWork(candidate.task_id)) continue;
       archiveChat(candidate.id);
       archived.push(candidate.id);
     }
