@@ -22,6 +22,7 @@ import { _resetChatQueueForTests } from "../src/runtime/chatQueue.js";
 import {
   _resetChatRoleLocksForTests,
   _resetChatRoleQueuesForTests,
+  acquireChatRoleLock,
 } from "../src/runtime/chatSession.js";
 import {
   sweepFailedDeliveries,
@@ -223,6 +224,25 @@ describe("chatDeliveryWatch: упавший ход", () => {
     expect(row.status).toBe("failed");
   });
 
+  it("доставка, упавшая давно, не поднимается заново", async () => {
+    const triggerId = "cmg_stale_trigger";
+    insertTrigger(triggerId, "старый вопрос, на который так и не ответили");
+    insertDelivery({
+      id: "cmq_stale_1",
+      messageId: triggerId,
+      status: "failed",
+      ageMinutes: 60 * 24 * 3,
+    });
+
+    const report = await sweepFailedDeliveries({ minAgeMinutes: 1 });
+
+    expect(report.retried).toBe(0);
+    const row = db
+      .prepare("SELECT status FROM chat_message_queue WHERE id=?")
+      .get("cmq_stale_1") as { status: string };
+    expect(row.status).toBe("failed");
+  });
+
   it("после исчерпания попыток владельцу уходит уведомление, и повтор его не дублирует", async () => {
     const triggerId = "cmg_exhausted_trigger";
     insertTrigger(triggerId, "вопрос, на который роль не ответила");
@@ -306,6 +326,42 @@ describe("chatDeliveryWatch: висящий вопрос", () => {
     insertDelivery({ id: "cmq_working_1", messageId: triggerId, status: "pending" });
 
     const report = sweepStalledDeliveries({ minAgeMinutes: 1 });
+
+    expect(report.stalled).toBe(0);
+    expect(report.notified).toBe(0);
+  });
+
+  it("вопрос в личной переписке, на который роль не ответила, уходит владельцу в уведомления", () => {
+    // Личная переписка: у чата нет карточки — вопрос всё равно висит.
+    db.prepare(
+      `INSERT OR REPLACE INTO chats (id, title, kind, created_by)
+       VALUES (?, 'Личная переписка', 'group', ?)`,
+    ).run(CHAT_ID, OWNER_USER);
+    const triggerId = "cmg_direct_trigger";
+    insertTrigger(triggerId, "Уточняющий вопрос без карточки");
+    insertDelivery({ id: "cmq_direct_1", messageId: triggerId, status: "pending", ageMinutes: 45 });
+
+    const report = sweepStalledDeliveries({ minAgeMinutes: 20 });
+
+    expect(report.stalled).toBe(1);
+    expect(report.notified).toBe(1);
+    const notice = db
+      .prepare("SELECT text FROM notifications WHERE type=? AND user_id=?")
+      .get(DELIVERY_STALLED_NOTICE_TYPE, OWNER_USER) as { text: string } | undefined;
+    expect(notice?.text).toContain("Уточняющий вопрос без карточки");
+  });
+
+  it("роль, занятая этой перепиской, не пинается", () => {
+    db.prepare(
+      `INSERT OR REPLACE INTO chats (id, title, kind, created_by)
+       VALUES (?, 'Личная переписка', 'group', ?)`,
+    ).run(CHAT_ID, OWNER_USER);
+    const triggerId = "cmg_direct_busy_trigger";
+    insertTrigger(triggerId, "Уточняющий вопрос, роль уже за ним");
+    insertDelivery({ id: "cmq_direct_busy_1", messageId: triggerId, status: "pending", ageMinutes: 45 });
+    acquireChatRoleLock(CHAT_ID, ROLE_USER);
+
+    const report = sweepStalledDeliveries({ minAgeMinutes: 20 });
 
     expect(report.stalled).toBe(0);
     expect(report.notified).toBe(0);
