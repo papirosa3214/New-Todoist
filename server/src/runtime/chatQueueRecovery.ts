@@ -32,6 +32,7 @@ import {
   getMessageDelivery,
 } from "./chatQueue.js";
 import { recoverAgentDelivery } from "../routes/chats.js";
+import { isChatRoleLocked } from "./chatSession.js";
 import { sweepFailedDeliveries, sweepStalledDeliveries } from "./chatDeliveryWatch.js";
 
 interface RecovererHandle {
@@ -125,19 +126,74 @@ export function chatDeliveryTtlMinutes(): number {
  * Перевести в терминальный статус доставки, которые старше порога.
  * Возвращает число закрытых доставок.
  */
-export function expireStaleDeliveries(ttlMinutes: number = chatDeliveryTtlMinutes()): number {
-  const changed = db
+/**
+ * Живой ли сейчас ход роли.
+ *
+ * Пока ход идёт, доставку нельзя считать мёртвой: она либо уже взята
+ * ролью в работу (`picked`), либо ждёт своей очереди (`pending`), и роль
+ * разберёт её, когда освободится. Прежний порог в 60 минут в этом случае
+ * помечал неуспешной сообщение легитимного долгого хода роли — замечание
+ * проверяющей к правке d2789497.
+ *
+ * Признаки живого хода:
+ *   • роль заняла пару (чат, роль) — ход роли идёт прямо сейчас;
+ *   • у роли есть живая попытка с недавним пульсом;
+ *   • у роли есть занятый слот карточки с недавним пульсом.
+ */
+export function roleIsBusyNow(roleId: string, chatId: string): boolean {
+  if (chatId && isChatRoleLocked(chatId, roleId)) return true;
+  const attempt = db
     .prepare(
-      `UPDATE chat_message_queue
-          SET status = 'failed',
-              finished_at = datetime('now'),
-              updated_at = datetime('now'),
-              payload_json = json_set(COALESCE(payload_json,'{}'),'$.expired',1)
+      `SELECT 1 FROM attempts
+        WHERE executor_id = ? AND ended_at IS NULL
+          AND heartbeat_at > datetime('now', '-10 minutes')
+        LIMIT 1`,
+    )
+    .get(roleId);
+  if (attempt) return true;
+  const slot = db
+    .prepare(
+      `SELECT 1 FROM subtasks
+        WHERE agent_id = ? AND done = 0
+          AND agent_state IN ('in_progress', 'review')
+          AND agent_heartbeat_at > datetime('now', '-10 minutes')
+        LIMIT 1`,
+    )
+    .get(roleId);
+  return Boolean(slot);
+}
+
+/**
+ * Перевести в терминальный статус доставки, которые старше порога.
+ * Возвращает число закрытых доставок.
+ *
+ * Доставки, за которыми сейчас работает роль (ход идёт), не трогаем:
+ * порог отсчитывается для действительно мёртвых доставок.
+ */
+export function expireStaleDeliveries(ttlMinutes: number = chatDeliveryTtlMinutes()): number {
+  const cutoff = `-${Math.max(1, Math.floor(ttlMinutes))} minutes`;
+  const candidates = db
+    .prepare(
+      `SELECT id, chat_id, role_id FROM chat_message_queue
         WHERE status IN ('pending', 'picked')
           AND julianday(updated_at) < julianday('now', ?)`,
     )
-    .run(`-${Math.max(1, Math.floor(ttlMinutes))} minutes`);
-  return changed.changes;
+    .all(cutoff) as Array<{ id: string; chat_id: string; role_id: string }>;
+  if (candidates.length === 0) return 0;
+  const close = db.prepare(
+    `UPDATE chat_message_queue
+        SET status = 'failed',
+            finished_at = datetime('now'),
+            updated_at = datetime('now'),
+            payload_json = json_set(COALESCE(payload_json,'{}'),'$.expired',1)
+      WHERE id = ? AND status IN ('pending', 'picked')`,
+  );
+  let closed = 0;
+  for (const row of candidates) {
+    if (roleIsBusyNow(row.role_id, row.chat_id)) continue;
+    closed += close.run(row.id).changes;
+  }
+  return closed;
 }
 
 /** Синхронизация раз в N секунд — ловит pending, оставшиеся

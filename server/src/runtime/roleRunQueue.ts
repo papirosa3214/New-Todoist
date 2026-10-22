@@ -408,16 +408,50 @@ export function retryRoleRunJob(id: string): RoleRunJob | undefined {
 
 /**
  * Группа задания: часть dedupe-ключа, которая отвечает за СМЫСЛ задания.
- * Ключи строятся как `<вид>:<объект>[:<подпись>]`:
- *   `stalled-restart:<subtaskId>` — автоперезапуск шага (ключ стабильный);
- *   `review:<taskId>:<token>`    — задача ушла на проверку;
- *   `ready:<taskId>:<token>`     — владелец поднял флаг готовности.
- * Подпись после второго двоеточия — переменная часть (id попытки, номер
- * захода), а группа — постоянная: «тот же шаг», «та же карточка».
+ *
+ * Ключи строятся как `<вид>:<объект>[:<подпись>]`. Подпись после объекта —
+ * переменная часть (идентификатор попытки, захода, комментария, номер
+ * повтора проверки), а группа — постоянная: «тот же шаг», «та же карточка»,
+ * «тот же узел плана».
+ *
+ * Виды, у которых объект лежит в самом ключе:
+ *   `stalled-restart:<subtaskId>` — автоперезапуск шага;
+ *   `review:<taskId>:<token>`     — задача ушла на проверку;
+ *   `ready:<taskId>:<token>`      — владелец поднял флаг готовности;
+ *   `manual-start:<taskId>:<uuid>` — ручной запуск карточки;
+ *   `plan-review:<planId>:<nodeKey>:<version>[:r<n>]` — проверка узла плана.
+ *
+ * Виды, у которых ключ несёт идентификатор СОБЫТИЯ, а смысл задаёт
+ * карточка (`after-run:<runId>`, `comment:<commentId>`): берём карточку
+ * задания из строки очереди — иначе такие задания оставались в очереди
+ * и копились (замечание проверяющей к правке d2789497).
+ *
+ * Неизвестный вид ключа не трогаем: склеивать задания с непонятным
+ * смыслом опаснее, чем оставить их в очереди.
  */
-export function roleRunJobGroup(dedupeKey: string): string | null {
-  const match = /^(stalled-restart|review|ready):([^:]+)(?::|$)/.exec(dedupeKey);
-  return match ? `${match[1]}:${match[2]}` : null;
+export function roleRunJobGroup(dedupeKey: string, taskId?: string | null): string | null {
+  const parts = dedupeKey.split(":");
+  const kind = parts[0] ?? "";
+  switch (kind) {
+    case "stalled-restart":
+    case "review":
+    case "ready":
+    case "manual-start": {
+      const subject = parts[1];
+      return subject ? `${kind}:${subject}` : null;
+    }
+    case "plan-review": {
+      const plan = parts[1];
+      const node = parts[2];
+      return plan && node ? `plan-review:${plan}:${node}` : null;
+    }
+    case "after-run":
+    case "comment": {
+      return taskId ? `${kind}:${taskId}` : null;
+    }
+    default:
+      return null;
+  }
 }
 
 /**
@@ -466,15 +500,15 @@ export function rearmRoleRunJob(dedupeKey: string): boolean {
 export function collapseDuplicateQueuedJobs(): number {
   const rows = db
     .prepare(
-      `SELECT id, dedupe_key FROM role_run_jobs
+      `SELECT id, task_id, dedupe_key FROM role_run_jobs
         WHERE status IN ('queued', 'retry_wait')
         ORDER BY created_at, rowid`,
     )
-    .all() as Array<{ id: string; dedupe_key: string }>;
+    .all() as Array<{ id: string; task_id: string; dedupe_key: string }>;
   const kept = new Map<string, string>();
   const duplicates: string[] = [];
   for (const row of rows) {
-    const group = roleRunJobGroup(row.dedupe_key);
+    const group = roleRunJobGroup(row.dedupe_key, row.task_id);
     if (!group) continue;
     const previous = kept.get(group);
     // Из группы выживает самое свежее задание (оно отражает последнее
