@@ -755,8 +755,16 @@ export function DueDateField({
     calCurrentXRef.current = 0;
     isHorizontalCalRef.current = null;
     isDraggingCalRef.current = true;
-    const target = e.currentTarget as HTMLElement;
-    target.setPointerCapture(e.pointerId);
+    // Захват указателя нужен только для касания: с мышью он перенаправляет
+    // click на сетку календаря, и кнопка дня перестаёт его получать
+    // (дефект живьём-проверки 22.10: кликом мыши дата не выбиралась).
+    // Для касания захват и так неявный (pointerType touch/pen).
+    if (e.pointerType !== "mouse") {
+      const target = e.currentTarget as HTMLElement;
+      try {
+        target.setPointerCapture(e.pointerId);
+      } catch {}
+    }
   };
 
   const handleCalPointerMove = (e: React.PointerEvent) => {

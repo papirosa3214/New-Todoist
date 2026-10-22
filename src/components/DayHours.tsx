@@ -20,6 +20,7 @@ import {
 } from "../lib/haptics";
 import { useTapGuard } from "../lib/useTapGuard";
 import { Icon, findScrollContainer } from "./UI";
+import { MarkdownInline } from "./MarkdownInline";
 
 // ═══════════ Календарная развёртка по часам — 1 или 3 дня ═══════════
 //

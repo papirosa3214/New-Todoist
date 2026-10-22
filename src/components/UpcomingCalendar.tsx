@@ -1,6 +1,7 @@
 import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ApiTask } from "../api/types";
 import { Icon, findScrollContainer } from "./UI";
+import { MarkdownInline } from "./MarkdownInline";
 import { formatTimeRange, todayStr } from "../lib/date";
 
 // ═══════════ Календарные виды раздела «Предстоящее» ═══════════
