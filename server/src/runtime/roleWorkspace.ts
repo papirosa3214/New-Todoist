@@ -158,6 +158,22 @@ export function roleWorkspace(taskId: string, repo: string, live: string = liveS
   const dir = path.join(worktreesBase(), taskId);
   if (fs.existsSync(path.join(dir, ".git"))) return dir;
 
+  // Остаток от снятой копии: merge/cleanup оставляет пустой каталог без .git.
+  // git worktree add в такой путь не работает, а роль получает мёртвый cwd и
+  // вместо работы по карточке начинает обход хоста. Пустой — убираем; непустой
+  // без .git — честная ошибка, а не тихая выдача битого пути.
+  if (fs.existsSync(dir)) {
+    const остаток = fs.readdirSync(dir);
+    if (остаток.length === 0) {
+      fs.rmdirSync(dir);
+    } else {
+      throw new Error(
+        `рабочая копия карточки ${taskId} есть, но это не git-worktree (${dir}): ` +
+          остаток.slice(0, 5).join(", "),
+      );
+    }
+  }
+
   fs.mkdirSync(worktreesBase(), { recursive: true });
   const branch = roleBranch(taskId);
   let hasBranch = true;
@@ -173,6 +189,10 @@ export function roleWorkspace(taskId: string, repo: string, live: string = liveS
     const reason = error instanceof Error ? error.message.split("\n")[0] : String(error);
     throw new Error(`не удалось завести отдельную копию репозитория для роли: ${reason}`);
   }
+  if (!fs.existsSync(path.join(dir, ".git"))) {
+    throw new Error(`git worktree add отчитался успешно, но ${dir} не содержит .git`);
+  }
+
   // Зависимости не ставим заново: ссылки на уже установленные в живой копии,
   // чтобы роль могла гонять тесты и typecheck.
   for (const rel of ["node_modules", path.join("server", "node_modules")]) {
