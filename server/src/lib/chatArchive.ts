@@ -98,6 +98,35 @@ export function chatRoomRow(chatId: string): ChatRoomRow | undefined {
     .get(chatId) as ChatRoomRow | undefined;
 }
 
+/**
+ * Карточка сейчас в работе.
+ *
+ * «В работе» — это не только живая попытка: попытка кончается ходом, а
+ * карточка между ходами остаётся работой роли. Признаки:
+ *   • своё agent_state in_progress / review / blocked;
+ *   • незакрытый шаг плана in_progress / blocked (роль ходит по слоту).
+ * Тему такой карточки из уборки исключаем: её чат — рабочее место роли,
+ * убирать его, пока карточка не отдана, нельзя.
+ */
+export function taskIsInWork(taskId: string): boolean {
+  return Boolean(
+    taskId &&
+      (db
+        .prepare(
+          `SELECT 1 FROM tasks
+            WHERE id = ? AND agent_state IN ('in_progress','review','blocked')`,
+        )
+        .get(taskId) ||
+        db
+          .prepare(
+            `SELECT 1 FROM subtasks
+              WHERE task_id = ? AND done = 0
+                AND agent_state IN ('in_progress','blocked')`,
+          )
+          .get(taskId)),
+  );
+}
+
 /** Кандидат на уборку — пустая тема задачи. */
 export interface CleanupCandidate {
   id: string;
@@ -121,6 +150,8 @@ export const CLEANUP_MIN_IDLE_HOURS = 2;
  *   • ни одного сообщения и ни одной строки в очереди доставки;
  *   • тема не тронута последние CLEANUP_MIN_IDLE_HOURS часов;
  *   • у задачи нет живой попытки (ended_at IS NULL) — ход не идёт;
+ *   • карточка не в работе (taskIsInWork): свой agent_state или
+ *     незакрытый шаг роли — убирать рабочее место роли нельзя;
  *   • тема ещё не убрана и не закрыта.
  *
  * Порядок — от самой старой: так уборка съедает именно залежавшееся.
@@ -143,6 +174,13 @@ export function cleanupCandidates(limit = 500): CleanupCandidate[] {
           AND NOT EXISTS (SELECT 1 FROM chat_message_queue q WHERE q.chat_id = c.id)
           AND NOT EXISTS (SELECT 1 FROM attempts a
                            WHERE a.task_id = c.task_id AND a.ended_at IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM tasks wt
+                           WHERE wt.id = c.task_id
+                             AND wt.agent_state IN
+                                 ('in_progress','review','blocked'))
+          AND NOT EXISTS (SELECT 1 FROM subtasks ws
+                           WHERE ws.task_id = c.task_id AND ws.done = 0
+                             AND ws.agent_state IN ('in_progress','blocked'))
         ORDER BY c.updated_at ASC, c.id ASC
         LIMIT ?`,
     )
@@ -160,10 +198,21 @@ export function runCleanup(limit = 500): string[] {
   const archived: string[] = [];
   const txn = db.transaction(() => {
     for (const candidate of candidates) {
+      // Повторная проверка в момент уборки: между предпросмотром и
+      // подтверждением карточка могла начать работать.
+      if (taskIsInWork(candidate.id)) continue;
       archiveChat(candidate.id);
       archived.push(candidate.id);
     }
   });
   txn();
   return archived;
+}
+
+/**
+ * Одиночная уборка темы задачи (POST /api/chats/:id/archive): тема карточки,
+ * которая сейчас в работе, не убирается — рабочее место роли.
+ */
+export function canArchiveTaskTopic(taskId: string | null): boolean {
+  return taskId ? !taskIsInWork(taskId) : true;
 }
