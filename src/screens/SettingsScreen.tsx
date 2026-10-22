@@ -948,6 +948,7 @@ export function SettingsScreen() {
             onClick={() => navigate("/settings/templates")}
           />
           <Row icon="tag" label="Метки" onClick={() => navigate("/labels")} />
+          <Row icon="clock" label="Мои рутины" onClick={() => navigate("/routines")} />
           <Row icon="bot" label="Команда" onClick={() => navigate("/agents")} />
           <Row
             icon="share"

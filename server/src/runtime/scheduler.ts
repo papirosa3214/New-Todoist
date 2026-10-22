@@ -33,6 +33,7 @@ import {
   type EscalationTask,
 } from "../lib/escalationEvaluator.js";
 import { channelsForStep } from "../routes/escalation.js";
+import { runSchedulesTick } from "./schedules/tick.js";
 
 let RETRY_LIMIT = getSetting("retry_limit");
 let RETRY_DELAY_MIN = getSetting("retry_delay_min");
@@ -495,7 +496,7 @@ function newId(): string {
   return (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36));
 }
 
-export type SchedulerCounts = { retry: number; dead: number; scheduled: number; repeat: number; deferred: number; questions: number; overdue: number; cleanup: number; merges: number };
+export type SchedulerCounts = { retry: number; dead: number; scheduled: number; repeat: number; deferred: number; questions: number; overdue: number; cleanup: number; merges: number; schedules: number };
 
 /** Один обход доски. Сбой ветки не валит остальные. */
 export async function runSchedulerPass(app: FastifyInstance, now: Date = new Date()): Promise<SchedulerCounts> {
@@ -524,6 +525,13 @@ export async function runSchedulerPass(app: FastifyInstance, now: Date = new Dat
     // пропускает, если `auto_merge_mode = off` — тогда живой остаётся
     // только уборка уже слитого.
     merges: await safe("ветка 10 (автослияние)", () => worktreeMaintenancePass()),
+    // Ветка 11 (рутины): в назначенное время из шаблона создаётся новая
+    // карточка и поднимается роль. Логика рутин — в своём модуле
+    // (runtime/schedules/), здесь только тик из общего обхода.
+    schedules: await safe("ветка 11 (рутины)", async () => {
+      const counts = await runSchedulesTick(app, { now });
+      return counts.created;
+    }),
   };
   try {
     const file = schedulerHeartbeatPath();

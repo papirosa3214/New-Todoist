@@ -1,0 +1,286 @@
+// Ручки рутин (крон-задач): /api/schedules.
+//
+// Контракт — из заметки «Рутины и расписание TaskFlow», раздел «6. API»:
+//   GET    /api/schedules          — список: правило, следующий запуск, последний, статус
+//   POST   /api/schedules          — создать рутину
+//   PATCH  /api/schedules/:id      — правка, пауза, возобновление
+//   DELETE /api/schedules/:id      — удалить
+//   POST   /api/schedules/:id/run-now — ручной запуск вне расписания
+//   GET    /api/schedules/:id/runs   — история запусков
+//
+// Авторизация (тот же раздел): создание и правка рутины — владелец;
+// запуск по расписанию — служебная учётка планировщика.
+
+import crypto from "node:crypto";
+import type { FastifyInstance } from "fastify";
+import db from "../db.js";
+import { authOrApiToken } from "../auth.js";
+import { isOwner } from "../access.js";
+import { SCHEDULER_USER_ID } from "../serviceUser.js";
+import { logEvent } from "../agentState.js";
+import {
+  SCHEDULE_RULE_KINDS,
+  nextRunAfter,
+  parseIntervalMinutes,
+  parseTimeLocal,
+  parseWeekdays,
+  type ScheduleRuleKind,
+} from "../runtime/schedules/rules.js";
+import {
+  anchorFromCreatedAt,
+  createSchedule,
+  deleteSchedule,
+  getSchedule,
+  listRuns,
+  listSchedules,
+  parsePayload,
+  parseUtc,
+  ruleOf,
+  updateSchedule,
+  type ScheduleRow,
+} from "../runtime/schedules/store.js";
+import { runSchedulesTick } from "../runtime/schedules/tick.js";
+
+const uid = () => crypto.randomUUID();
+
+function present(row: ScheduleRow) {
+  return {
+    id: row.id,
+    title: row.title,
+    task_payload: parsePayload(row),
+    rule_kind: row.rule_kind,
+    rule_expr: row.rule_expr,
+    time_local: row.time_local,
+    timezone: row.timezone,
+    next_run_at: row.next_run_at,
+    last_run_at: row.last_run_at,
+    status: row.status,
+    catch_up: row.catch_up === 1,
+    overlap_policy: row.overlap_policy,
+    current_task_id: row.current_task_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function isService(userId: string): boolean {
+  return userId === SCHEDULER_USER_ID;
+}
+
+export function registerScheduleRoutes(app: FastifyInstance) {
+  const authPre = authOrApiToken;
+
+  app.get("/api/schedules", { preHandler: authPre }, async (req: any) => {
+    return { schedules: listSchedules().map(present) };
+  });
+
+  app.get<{ Params: { id: string } }>(
+    "/api/schedules/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const row = getSchedule(req.params.id);
+      if (!row) return reply.code(404).send({ error: "Рутина не найдена" });
+      return { schedule: present(row), runs: listRuns(row.id) };
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/schedules/:id/runs",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const row = getSchedule(req.params.id);
+      if (!row) return reply.code(404).send({ error: "Рутина не найдена" });
+      return { runs: listRuns(row.id) };
+    },
+  );
+
+  app.post("/api/schedules", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isOwner(req.userId) && !isService(req.userId)) {
+      return reply.code(403).send({ error: "создавать рутины может владелец" });
+    }
+    const body = req.body ?? {};
+    const title = String(body.title ?? "").trim();
+    if (!title) return reply.code(400).send({ error: "название рутины не может быть пустым" });
+
+    const kind = String(body.rule_kind ?? "") as ScheduleRuleKind;
+    if (!SCHEDULE_RULE_KINDS.includes(kind)) {
+      return reply.code(400).send({
+        error: `правило должно быть одним из: ${SCHEDULE_RULE_KINDS.join(", ")}`,
+      });
+    }
+    const timeLocal = String(body.time_local ?? "").trim();
+    const time = parseTimeLocal(timeLocal);
+    if (!time && kind !== "interval") {
+      return reply.code(400).send({ error: "время должно быть в формате ЧЧ:ММ" });
+    }
+    const timezone = String(body.timezone ?? "Europe/Moscow").trim() || "Europe/Moscow";
+    try {
+      // Зона должна существовать — иначе расчёт запуска молча уедет.
+      new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date());
+    } catch {
+      return reply.code(400).send({ error: `неизвестная зона «${timezone}»` });
+    }
+    const ruleExpr = body.rule_expr == null ? null : String(body.rule_expr);
+    if (kind === "weekly_days" && !parseWeekdays(ruleExpr)) {
+      return reply.code(400).send({ error: "дни недели — списком 1..7, где 1=понедельник" });
+    }
+    if (kind === "interval" && !parseIntervalMinutes(ruleExpr)) {
+      return reply.code(400).send({ error: "интервал — например 15m или 2h, не меньше 5 минут" });
+    }
+
+    const payload = (body.task_payload ?? {}) as Record<string, unknown>;
+    if (!payload.title) payload.title = title;
+    if (payload.priority != null) {
+      const priority = Number(payload.priority);
+      if (!Number.isInteger(priority) || priority < 1 || priority > 4) {
+        return reply.code(400).send({ error: "priority должен быть от 1 до 4" });
+      }
+    }
+
+    const anchor = { year: 1970, month: 1, day: 1 };
+    const rule = {
+      kind,
+      expr: ruleExpr,
+      timeLocal: time ? timeLocal : "09:00",
+      timezone,
+      anchor,
+    };
+    const next = nextRunAfter(rule, new Date());
+    const created = createSchedule({
+      title,
+      taskPayload: payload as never,
+      rule,
+      nextRunAt: next,
+      catchUp: body.catch_up === false ? false : true,
+      overlapPolicy: body.overlap_policy === "allow" ? "allow" : "skip",
+      createdBy: req.userId,
+    });
+    return reply.code(201).send({ schedule: present(created) });
+  });
+
+  app.patch<{ Params: { id: string } }>(
+    "/api/schedules/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId) && !isService(req.userId)) {
+        return reply.code(403).send({ error: "править рутины может владелец" });
+      }
+      const existing = getSchedule(req.params.id);
+      if (!existing) return reply.code(404).send({ error: "Рутина не найдена" });
+      const body = req.body ?? {};
+
+      const kind = body.rule_kind ? (String(body.rule_kind) as ScheduleRuleKind) : existing.rule_kind;
+      if (!SCHEDULE_RULE_KINDS.includes(kind)) {
+        return reply.code(400).send({ error: `неизвестное правило «${kind}»` });
+      }
+      const timeLocal = body.time_local ? String(body.time_local) : existing.time_local;
+      const time = parseTimeLocal(timeLocal);
+      if (!time && kind !== "interval") {
+        return reply.code(400).send({ error: "время должно быть в формате ЧЧ:ММ" });
+      }
+      const timezone = body.timezone ? String(body.timezone) : existing.timezone;
+      try {
+        new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date());
+      } catch {
+        return reply.code(400).send({ error: `неизвестная зона «${timezone}»` });
+      }
+      const ruleExpr = body.rule_expr === undefined ? existing.rule_expr : body.rule_expr == null ? null : String(body.rule_expr);
+      if (kind === "weekly_days" && !parseWeekdays(ruleExpr)) {
+        return reply.code(400).send({ error: "дни недели — списком 1..7, где 1=понедельник" });
+      }
+      if (kind === "interval" && !parseIntervalMinutes(ruleExpr)) {
+        return reply.code(400).send({ error: "интервал — например 15m или 2h, не меньше 5 минут" });
+      }
+      const status = body.status
+        ? (String(body.status) as ScheduleRow["status"])
+        : existing.status;
+      if (!["active", "paused", "finished"].includes(status)) {
+        return reply.code(400).send({ error: "status: active | paused | finished" });
+      }
+
+      const ruleChanged =
+        kind !== existing.rule_kind ||
+        ruleExpr !== existing.rule_expr ||
+        timeLocal !== existing.time_local ||
+        timezone !== existing.timezone;
+      const rule = {
+        kind,
+        expr: ruleExpr,
+        timeLocal,
+        timezone,
+        anchor: anchorFromCreatedAt(existing),
+      };
+      // Пересчёт следующего запуска: правило изменилось или рутина
+      // возобновлена (после паузы следующий запуск надо посчитать заново).
+      const recompute =
+        ruleChanged || (status === "active" && existing.status !== "active");
+      const next = recompute ? nextRunAfter(rule, new Date()) : null;
+
+      const updated = updateSchedule(existing.id, {
+        title: body.title ? String(body.title).trim() : undefined,
+        taskPayload: body.task_payload
+          ? ({ ...parsePayload(existing), ...(body.task_payload as object) } as never)
+          : undefined,
+        rule,
+        nextRunAt: recompute ? next : undefined,
+        status,
+        catchUp:
+          body.catch_up === undefined ? undefined : body.catch_up === false ? false : true,
+        overlapPolicy:
+          body.overlap_policy === "allow"
+            ? "allow"
+            : body.overlap_policy === "skip"
+              ? "skip"
+              : undefined,
+      });
+      return { schedule: present(updated!) };
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    "/api/schedules/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId) && !isService(req.userId)) {
+        return reply.code(403).send({ error: "удалять рутины может владелец" });
+      }
+      const existing = getSchedule(req.params.id);
+      if (!existing) return reply.code(404).send({ error: "Рутина не найдена" });
+      // Удаление рутины не трогает уже созданные карточки (инвариант
+      // из заметки): чистим только запись рутины.
+      deleteSchedule(existing.id);
+      return { ok: true };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/schedules/:id/run-now",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId) && !isService(req.userId)) {
+        return reply.code(403).send({ error: "запускать рутину вручную может владелец" });
+      }
+      const row = getSchedule(req.params.id);
+      if (!row) return reply.code(404).send({ error: "Рутина не найдена" });
+      // Ручной запуск вне расписания: слот запуска — «сейчас», поэтому он не
+      // совпадает с расписанием и не съедает его.
+      const now = new Date();
+      const counts = await runSchedulesTick(app, { now, scheduleId: row.id, force: true });
+      return { ok: true, counts, schedule: present(getSchedule(row.id)!) };
+    },
+  );
+}
+
+/** Лент-лог создания рутины (для карточки-основания, если она есть). */
+export function logScheduleCreated(taskId: string | null, scheduleId: string, actorId: string) {
+  if (!taskId) return;
+  logEvent({
+    taskId,
+    actorId,
+    kind: "schedule_created",
+    field: "schedule",
+    toValue: scheduleId,
+  });
+}
+
+export { uid, db };
