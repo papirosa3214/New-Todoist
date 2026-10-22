@@ -1,3 +1,4 @@
+import { ROLE_TOOL_REQUEST_SCHEMA } from "./routes/role-tool-requests.js";
 import { OBSERVABILITY_SCHEMA } from "./lib/contextObservability.js";
 import { TOOL_REQUEST_SCHEMA } from "./runtime/toolRequestStore.js";
 import { TOOL_AUDIT_SCHEMA } from "./runtime/toolAuditStore.js";
@@ -4967,6 +4968,7 @@ const migrations: Migration[] = [
       if (!cols.some(c => c.name === "execution_mode")) db.exec(`ALTER TABLE ${table} ADD COLUMN execution_mode TEXT CHECK(execution_mode IN ('chat','card'))`);
     }
   } },
+  { id: "167_role_tool_gain_requests", description: "Заявки ролей на закрытые инструменты", up: () => db.exec(ROLE_TOOL_REQUEST_SCHEMA) },
 ];
 /**
  * Опции прогона миграций.

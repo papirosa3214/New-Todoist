@@ -926,7 +926,7 @@ export function createUniversalTaskflow(
           .split(/[\s._]+/)
           .filter(Boolean);
         const matches = [...registry.values()]
-          .filter((t) => (!context.authorize || context.authorize(t.name)) && !(context.executionMode === "chat" && CARD_WORK_OPERATIONS.has(t.name)))
+          .filter((t) => !(context.executionMode === "chat" && CARD_WORK_OPERATIONS.has(t.name)))
           .map((t) => ({
             tool: t,
             score: words.reduce(
@@ -957,10 +957,11 @@ export function createUniversalTaskflow(
                 available: !denied(t.name),
                 restriction: denied(t.name),
               })),
+            closed: matches.slice(offset, offset + limit).filter(({tool:t}) => Boolean(denied(t.name))).length,
             total: matches.length,
             next_offset:
               offset + limit < matches.length ? offset + limit : null,
-            hint: "Если ничего не найдено, повтори короче или запроси каталог без query. Статус запроса: operation requests.status, arguments {request_id}.",
+            hint: "available:false означает ограничение роли или контекста. Для запроса инструмента вызови taskflow_tool_request с именем и причиной. Если ничего не найдено, повтори короче или запроси каталог без query. Статус запроса: operation requests.status, arguments {request_id}.",
           },
         });
       }

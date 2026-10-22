@@ -718,6 +718,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         return { [done ? "шаг отмечен" : "отметка снята"]: p.id, ...(receipt ? {submission_receipt:receipt} : {}) };
       }),
     T("taskflow_rules", "Правила ведения учёта.", Type.Object({}), async () => ({ правила: effectiveRules(role) })),
+    T("taskflow_tool_request", "Попросить инструмент, закрытый твоей ролью. Нужен, когда discover показал нужное действие с available:false и без него работа невозможна: не обходи ограничение и не делай вид, что задача не в этом. tool — имя действия из каталога (например taskflow_subtask_add), why — зачем оно нужно в этой работе, attempted — что ты пыталась сделать вместо него. Заявку смотрит владелец; ответ придёт в карточку.",
+      Type.Object({ tool: Type.String({ minLength: 3, maxLength: 100 }), why: Type.String({ minLength: 10, maxLength: 1000 }), attempted: Type.Optional(Type.String({ maxLength: 1000 })) }),
+      async (p) => {
+        const resp = await asRole(role, "POST", "/api/role-tool-requests", {
+          tool: p.tool, why: p.why, attempted: p.attempted, task_id: taskId, subtask_id: subtaskId,
+        });
+        return { "заявка отправлена": short(unwrap(resp)) };
+      }),
     T("taskflow_projects", "Проекты.", Type.Object({}), async () => ({
       проекты: ((await asRole(role, "GET", "/api/projects")) as any[]).map((p) => ({
         id: p.id, название: p.name, документация: p.notes_folder_id ? "есть" : "не заведена",

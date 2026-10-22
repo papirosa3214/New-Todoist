@@ -29,6 +29,19 @@ describe("universal TaskFlow",()=>{
  it("rejects duplicate registrations instead of choosing a handler",()=>{
   const t=tool();expect(()=>createUniversalTaskflow([t,t],context)).toThrow(/duplicate/i);
  });
+ it("показывает закрытое ролью действие в каталоге с причиной (17.10.2026)",async()=>{
+  const t=tool();const api=createUniversalTaskflow([t],{...context,authorize:()=>false});
+  const found=decode(await api.execute("7",{action:"discover",query:"Комментарий"}));
+  const op=found.data.operations.find((o:any)=>o.operation===t.name);
+  expect(op).toBeTruthy();
+  expect(op.available).toBe(false);
+  expect(op.restriction.code).toBe("FORBIDDEN");
+  expect(found.data.closed).toBe(1);
+  const described=decode(await api.execute("8",{action:"describe",operation:t.name}));
+  expect(described.data.available).toBe(false);
+  expect(decode(await api.execute("9",{action:"invoke",operation:t.name,version:1,arguments:{id:"t",text:"x"},request_id:"closed"})).error.code).toBe("FORBIDDEN");
+  expect(t.execute).not.toHaveBeenCalled();
+ });
  it("preserves media content returned by underlying adapters",async()=>{
   const t=tool(vi.fn(async()=>({content:[{type:"image",data:"AA==",mimeType:"image/png"}]})) as any);
   const api=createUniversalTaskflow([t],context);

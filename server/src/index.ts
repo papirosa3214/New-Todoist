@@ -102,6 +102,7 @@ import { registerJournalFolderRoutes } from "./routes/journalFolders.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 import { registerTaskOutcomeRoutes } from "./routes/taskOutcome.js";
 import { registerNoteRoutes } from "./routes/notes.js";
+import { registerRoleToolRequestRoutes } from "./routes/role-tool-requests.js";
 import { registerLibraryRoutes } from "./routes/library.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerAgentInboxRoutes } from "./routes/agent-inbox.js";
@@ -549,6 +550,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerTaskOutcomeRoutes(app);
   registerNoteRoutes(app);
   registerLibraryRoutes(app);
+  registerRoleToolRequestRoutes(app);
   registerChatRoutes(app);
   await registerAgentInboxRoutes(app);
   await registerAgentRulesRoutes(app);
