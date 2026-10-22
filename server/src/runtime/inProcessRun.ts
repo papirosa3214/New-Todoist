@@ -1,3 +1,4 @@
+import {oneShotReviewInstruction} from "../lib/integrationResponsibility.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
 import {queueWorkCoordination,markDeliveredToWork,traceCoordination} from "./chatCoordination.js";
 import { reserveReviewRun, assertReviewRunAllowed, finishReviewRun } from "./reviewRunBudget.js";
@@ -585,7 +586,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
         return { "состояние изменено": short(unwrap(resp)) };
       }),
-    T("taskflow_review", "id — ID ВСЕЙ текущей задачи, не подзадачи. Единственный способ сдать работу критика: текст changes_requested в отчёте не оформляет возврат. Всегда вызови этот инструмент; не закрывай шаг через subtask_done или artifact. Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. report_markdown — отчёт для владельца с разделами ## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы; правила отчёта — в системной инструкции. " + SUBMISSION_POLICY,
+    T("taskflow_review", "id — ID ВСЕЙ текущей задачи, не подзадачи. Единственный способ сдать работу критика: текст changes_requested в отчёте не оформляет возврат. Всегда вызови этот инструмент; не закрывай шаг через subtask_done или artifact. Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. report_markdown — отчёт для владельца с разделами ## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы; исключение: result_review/code_review используют короткий разовый формат из инструкции шаблона, без автоматической доработки. " + SUBMISSION_POLICY,
       Type.Object({ id: Type.String(), verdict: Type.String(), report_markdown: Type.Optional(Type.String()), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
       async (p) => {
         const step = db.prepare("SELECT task_id, agent_id FROM subtasks WHERE id=?").get(p.id) as
@@ -1469,7 +1470,7 @@ async function runRoleInProcessUnserialized(input: {
     teamStructureText(role),
     clockLine(),
     UNIVERSAL_INSTRUCTION,
-    ROLE_REPORT_INSTRUCTION,
+    (role==="critic_verifier" ? oneShotReviewInstruction(taskId) : null) ?? ROLE_REPORT_INSTRUCTION,
     ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, SUBMISSION_POLICY] : []),
     // Срез знаний роли (шаг 4 схемы базы знаний, заметка cfa5cdcd): чтобы
     // роль не просыпалась в вакуум. Только заметки с постоянной категорией
@@ -1891,6 +1892,8 @@ try {
 export type KickReason = "assigned" | "commented" | "review" | "after_run";
 
 export function reviewPromptFor(taskId: string): string {
+  const once=oneShotReviewInstruction(taskId);
+  if(once)return once;
   const task = db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title?: string } | undefined;
   return renderInstruction("critic_verifier", "task.review", { roleTitle: roleTitle("critic_verifier"), taskId, title: task?.title ?? "", rules: effectiveRules("critic_verifier").map(r => `- ${r}`).join("\n") });
 }
@@ -2037,7 +2040,7 @@ async function kickRoleTaskStrictImpl(
       const run = await runRoleInProcess({
         taskId,
         role: "critic_verifier",
-        prompt: `${reviewPromptFor(taskId)}\n\n${planReviewRouteContext(taskId)}\n\nДля доработки плана передай rework_steps: slot_key первого дефектного рабочего этапа. Несколько slot_key разрешены только для независимых параллельных веток. Сервер повторит затронутую цепочку и итоговую проверку.`,
+        prompt: `${reviewPromptFor(taskId)}\n\n${planReviewRouteContext(taskId)}\n\n${oneShotReviewInstruction(taskId) ? "Разовая проверка: не передавай rework_steps; замечания завершают проверку." : "Для доработки плана передай rework_steps: slot_key первого дефектного рабочего этапа. Несколько slot_key разрешены только для независимых параллельных веток. Сервер повторит затронутую цепочку и итоговую проверку."}`,
         mode: "review",
       }).catch(error => { markPlanFinalReviewerWaiting(taskId); throw error; });
       logEvent({ taskId, actorId: null, kind: "reviewer_sent", toValue: roleTitle("critic_verifier") });

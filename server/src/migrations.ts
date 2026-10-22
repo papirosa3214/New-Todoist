@@ -230,10 +230,10 @@ function addBugRegressionProfile(): void {
  */
 /** Rebuild the closed profile CHECK using the existing migration pattern.
  * Keep all columns, rows, indexes and triggers; failures roll back before commit. */
-export function addTemplateProfiles(): void {
+export function addTemplateProfiles(profiles: readonly string[] = ["ux_concept","api_integration","audit"]): void {
   const ddl=(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='task_collaboration_plans'").get() as {sql:string}|undefined)?.sql;
   if (!ddl) throw new Error("task_collaboration_plans отсутствует");
-  const missing=["ux_concept","api_integration","audit"].filter(p=>!ddl.includes("'"+p+"'"));
+  const missing=profiles.filter(p=>!ddl.includes("'"+p+"'"));
   if (!missing.length) return;
   const next=ddl.replace(/CHECK\s*\(\s*profile\s+IN\s*\(([^)]*)\)\s*\)/i,(_m,list:string)=>`CHECK (profile IN (${list},${missing.map(p=>"'"+p+"'").join(",")}))`)
     .replace(/CREATE TABLE\s+"?task_collaboration_plans"?/i,'CREATE TABLE "task_collaboration_plans_new"');
@@ -4804,7 +4804,7 @@ const migrations: Migration[] = [
     const columns = new Set((db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>).map((column) => column.name));
     if (!columns.has("role_envelope_json")) db.exec("ALTER TABLE chat_messages ADD COLUMN role_envelope_json TEXT");
   } },
-  { id: "154_collaboration_template_packages", description: "UX-концепция, API-интеграция и аудит: профили командного плана", noTransaction: true, up: addTemplateProfiles },
+  { id: "154_collaboration_template_packages", description: "UX-концепция, API-интеграция и аудит: профили командного плана", noTransaction: true, up: () => addTemplateProfiles() },
   { id: "155_worktree_merge_queue", description: "Очередь автослияния веток ролей в main: состояние, SHA до/после, причина отказа (LOCK-WORKTREE-MANAGER-20261019)", up: () => db.exec(`
     CREATE TABLE IF NOT EXISTS worktree_merge_queue (
       task_id TEXT PRIMARY KEY,
@@ -4928,6 +4928,7 @@ const migrations: Migration[] = [
     db.exec("CREATE INDEX IF NOT EXISTS idx_chats_archived_at ON chats(archived_at)");
   } },
   { id: "163_context_observability", description: "Журнал вклада энричеров и JEV, расход по ключу", up: () => db.exec(OBSERVABILITY_SCHEMA) },
+  { id:"164_one_shot_review_templates",description:"Разовая проверка результата и ревью кода",noTransaction:true,up:()=>addTemplateProfiles(["result_review","code_review"]) },
 ];
 /**
  * Опции прогона миграций.

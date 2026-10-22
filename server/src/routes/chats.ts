@@ -1491,7 +1491,8 @@ export async function recoverAgentDelivery(input: {
   const recipientSlot=saved.subtaskId ?? trigger?.recipient_subtask_id ?? undefined;
   const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
   const slot=topic && trigger ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),recipientSlot) : null;
-  const activeDelivery=slot ? await deliverTopicToWork(slot.task_id,role,row.message_id,trigger!.text,slot.plan_node_key)
+  const chatOnly=row.message_id.startsWith("review-return:") && saved.chatOnly===true;
+  const activeDelivery=chatOnly ? "idle" : slot ? await deliverTopicToWork(slot.task_id,role,row.message_id,trigger!.text,slot.plan_node_key)
     : trigger ? await deliverChatToWork(role,chatId,row.message_id,integrationText ? integrationText+"\n"+trigger.text : trigger.text,recipientSlot) : "idle";
   if(activeDelivery!=="idle"){
     if(activeDelivery==="busy"){
@@ -1524,6 +1525,7 @@ export async function recoverAgentDelivery(input: {
         subtaskId:recipientSlot,
         hop: saved.hop ?? 0,
         mode: saved.mode,
+        chatOnly,
       }),
     );
     // Двойная проверка fence: пока готовили ответ, generation
@@ -2113,6 +2115,8 @@ async function deliverAgentReply(args: {
   subtaskId?: string;
   hop: number;
   mode?: ChatWorkMode;
+  /** Server-created one-shot result returns to its requesting conversation. */
+  chatOnly?: boolean;
 }): Promise<string | null> {
   const { chatId, role } = args;
   const roleUserId = roleAccountId(role);
@@ -2138,7 +2142,7 @@ async function deliverAgentReply(args: {
   const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;
   if(topic && !slot && (args.subtaskId || trigger.recipient_subtask_id || topicSlotKey(trigger.text))){slotChoiceNotice(chatId,topic.task_id,role,args.triggerMessageId);return null;}
   const fromOwner = isOwner(trigger.from_user_id);
-  const activeDelivery=topic && slot ? await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)
+  const activeDelivery=args.chatOnly ? "idle" : topic && slot ? await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)
     : !topic ? await deliverChatToWork(role,chatId,args.triggerMessageId,userText,args.subtaskId??trigger.recipient_subtask_id??undefined,undefined,fromOwner) : "idle";
   if(activeDelivery!=="idle"){
     traceCoordination(()=>updateCoordination(args.triggerMessageId,roleUserId,{status:activeDelivery==="busy"?"busy":"queued",activity:activeDelivery==="busy"?"Выбери рабочий этап адресата":"Ожидает завершения текущего действия",last_activity_at:new Date().toISOString()}));

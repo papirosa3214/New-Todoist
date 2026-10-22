@@ -1,3 +1,5 @@
+import {buildRoleToolCatalog} from "../src/runtime/roleToolCatalog.js";
+import {seedRoleAccounts} from "./helpers/seedOwner.js";
 import {vi as runtimeVi} from "vitest";
 runtimeVi.mock("../src/runtime/inProcessRun.js",async original=>({...await original<any>(),runRoleInProcess:runtimeVi.fn(async()=>({runId:"isolated-contract-test",completion:Promise.resolve()}))}));
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -27,6 +29,8 @@ describe("работа по разговору: чат запускает исп
   const madeUsers: string[] = [];
   beforeAll(async () => {
     app = await buildApp();
+    seedRoleAccounts(db);
+    db.prepare("UPDATE users SET reviewer=1 WHERE id='role_critic_verifier'").run();
     clean();
     for (const key of roles()) {
       const id = "role_" + key;
@@ -121,4 +125,66 @@ describe("работа по разговору: чат запускает исп
     expect((db.prepare("SELECT COUNT(*) AS n FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id = n.plan_id WHERE p.task_id = ? AND p.status = 'approved'").get(running.task_id) as any).n).toBe(4);
     expect((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE parent_id = ?").get(running.task_id) as any).n).toBe(0);
   });
+
+it("предложение проверки из чата использует шаблон и ждёт запуска владельцем",async()=>{
+ const a=roles()[0];
+ db.prepare("INSERT OR IGNORE INTO projects(id,name,owner_id) VALUES('review-project','Проверка',?)").run(owner());
+ const response=await proposeWork(a,CHAT,{title:"Проверить готовый документ",project_id:"review-project",profile:"result_review"} as any);
+ expect(response.started).toBe(false);
+ expect(db.prepare("SELECT profile FROM task_collaboration_plans WHERE id=(SELECT plan_id FROM chat_work_launches WHERE id=?)").get(response.launch_id)).toMatchObject({profile:"result_review"});
+ expect(db.prepare("SELECT count(*) n FROM role_run_jobs WHERE task_id=?").get(response.task_id)).toMatchObject({n:0});
+});
+
+it("предварительное разрешение владельца запускает проверку без повторной кнопки",async()=>{
+ const a=roles()[0];
+ db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES(?,'Проверка','direct',?)").run(CHAT,owner());
+ for(const member of [owner(),"role_"+a])db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES(?,?)").run(CHAT,member);
+ db.prepare("INSERT INTO chat_messages(id,chat_id,from_user_id,text,channel) VALUES('review-permission',?,?,'Если посчитаешь нужным, вызови критика.','chat')").run(CHAT,owner());
+ const res=await proposeWork(a,CHAT,{title:"Разовая проверка",project_id:"review-project",profile:"result_review",launch_mode:"authorized",authorization_message_id:"review-permission"} as any,"review-permission");
+ expect(res.started).toBe(true);
+ expect(db.prepare("SELECT status FROM chat_work_launches WHERE id=?").get(res.launch_id)).toEqual({status:"started"});
+});
+it("роль не может выдать себе предварительное разрешение",async()=>{
+ const a=roles()[0];
+ db.prepare("INSERT INTO chat_messages(id,chat_id,from_user_id,text,channel) VALUES('fake-permission',?,?,'Вызови критика','chat')").run(CHAT,"role_"+a);
+ const before=(db.prepare("SELECT count(*) n FROM tasks").get() as any).n;
+ await expect(proposeWork(a,CHAT,{title:"Недопустимый запуск",project_id:"review-project",profile:"result_review",launch_mode:"authorized",authorization_message_id:"fake-permission"} as any)).rejects.toThrow(/владел/);
+ expect((db.prepare("SELECT count(*) n FROM tasks").get() as any).n).toBe(before);
+});
+
+it("обе разовые проверки доступны ролям через настоящий универсальный шлюз",async()=>{
+ const a=roles()[0];
+ const source="gateway-review-request";
+ db.prepare("INSERT INTO chat_messages(id,chat_id,from_user_id,text,channel) VALUES(?,?,?,'Предложи разовую проверку','chat')").run(source,CHAT,owner());
+ const catalog=buildRoleToolCatalog({role:a,mode:"work",runId:"review-gateway",chatId:CHAT,messageId:source});
+ for(const name of ["taskflow_review_result","taskflow_review_code"]){
+  const operation=catalog.operations.find(t=>t.name===name)!;
+  expect(operation).toBeTruthy();expect(operation.description).toContain("Любой вердикт");expect(operation.description).toContain("authorized");
+ }
+ const universal=catalog.customTools.find(t=>t.name==="taskflow")!;
+ const result=JSON.parse((await universal.execute("review-call",{action:"invoke",operation:"taskflow_review_result",version:1,request_id:"review-tool-call",arguments:{title:"Проверить готовый результат",description:"Сравнить документ с поручением, не переписывать его.",project_id:"review-project"}}) as any).content[0].text);
+ expect(result.ok).toBe(true);
+ const data=JSON.parse(result.data.content[0].text);expect(data.started).toBe(false);
+ expect(db.prepare("SELECT profile FROM task_collaboration_plans WHERE task_id=? AND status='draft'").get(data.task_id)).toEqual({profile:"result_review"});
+});
+it.each(["Обсудим команду «вызови критика».","Можешь вызвать критика?", "Я не разрешаю запускать ревью.","Не вызывай критика.","Не нужно подключать критика.","Обсудим, нужен ли критик."])("не выдаёт запрет/обсуждение за предварительное разрешение: %s",async text=>{
+ const id="deny-"+Math.random();
+ db.prepare("INSERT INTO chat_messages(id,chat_id,from_user_id,text,channel) VALUES(?,?,?,?,'chat')").run(id,CHAT,owner(),text);
+ await expect(proposeWork(roles()[0],CHAT,{title:"Проверка",project_id:"review-project",profile:"result_review",launch_mode:"authorized",authorization_message_id:id} as any)).rejects.toThrow();
+});
+
+it("обычная работа не продолжает карточку разовой проверки",async()=>{
+ const review=db.prepare("SELECT l.* FROM chat_work_launches l JOIN task_collaboration_plans p ON p.id=l.plan_id WHERE p.profile='result_review' AND l.status='started' LIMIT 1").get() as any;
+ db.prepare("UPDATE chat_work_launches SET created_at='2099-01-01' WHERE id=?").run(review.id);
+ const res=await proposeWork(roles()[0],CHAT,{title:"Обычная работа",steps:[{key:"separate",role:roles()[0],result:"Самостоятельный результат"}]});
+ expect(res.task_id).not.toBe(review.task_id);
+});
+it("предложение проверки сохраняет незапущенную обычную работу",async()=>{
+ const chat="isolated-review-proposal";
+ const ordinary=await proposeWork(roles()[0],chat,{title:"Подготовленная работа",steps:[{role:roles()[0],result:"Результат"}]});
+ await proposeWork(roles()[0],chat,{title:"Проверка документа",project_id:"review-project",profile:"result_review"});
+ expect(db.prepare("SELECT id FROM tasks WHERE id=?").get(ordinary.task_id)).toBeTruthy();
+ expect(db.prepare("SELECT status FROM chat_work_launches WHERE id=?").get(ordinary.launch_id)).toEqual({status:"proposed"});
+});
+
 });

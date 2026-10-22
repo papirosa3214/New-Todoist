@@ -17,6 +17,14 @@ export function integrationResponsibility(taskId:string) {
  const scopeId=root(taskId);
  const task=db.prepare('SELECT id,integration_mode,integration_owner_id FROM tasks WHERE id=?').get(scopeId) as Stored|undefined;
  if(!task)throw new Error('Карточка не найдена');
+ const profile=(db.prepare("SELECT profile FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved') ORDER BY CASE status WHEN 'draft' THEN 0 ELSE 1 END,revision DESC LIMIT 1").get(scopeId) as {profile:string}|undefined)?.profile;
+ if(profile==="result_review")return {scope_task_id:scopeId,mode:"not_required" as const,owner_id:null,owner_title:null,candidates:[] as Choice[],suggested_owner_id:null,valid:true};
+ if(profile==="code_review"){
+  const architect=db.prepare("SELECT u.id,COALESCE(r.title,u.name) title FROM users u JOIN roles r ON r.key='architect' WHERE u.id='role_architect' AND COALESCE(u.archived,0)=0 AND r.enabled=1").get() as {id:string;title:string}|undefined;
+  const choice=architect?{...architect,role:"architect"}:null;
+  return {scope_task_id:scopeId,mode:"auto" as const,owner_id:choice?.id??null,owner_title:choice?.title??null,candidates:choice?[choice]:[],suggested_owner_id:choice?.id??null,valid:!!choice};
+ }
+
  const roles=db.prepare(`WITH RECURSIVE tree(id) AS (SELECT id FROM tasks WHERE id=? UNION SELECT t.id FROM tasks t JOIN tree ON t.parent_id=tree.id)
  SELECT DISTINCT n.role_key FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id JOIN tree ON tree.id=p.task_id
  WHERE p.id=(SELECT pp.id FROM task_collaboration_plans pp WHERE pp.task_id=p.task_id AND pp.status IN ('draft','approved') ORDER BY CASE pp.status WHEN 'draft' THEN 0 ELSE 1 END,pp.created_at DESC,pp.rowid DESC LIMIT 1) AND n.skipped_at IS NULL AND n.role_key<>'critic_verifier'`).all(scopeId) as {role_key:string}[];
@@ -75,4 +83,10 @@ export function registerIntegrationResponsibilityRoutes(app:FastifyInstance):voi
  broadcastTaskEvent([t.creator_id,t.assignee_id],{type:'task:updated',taskId:state.scope_task_id});
  return integrationResponsibility(req.params.id);
  });
+}
+
+export function oneShotReviewInstruction(taskId:string):string|null {
+ const plan=db.prepare("SELECT profile FROM task_collaboration_plans WHERE task_id=? AND status='approved' ORDER BY revision DESC LIMIT 1").get(taskId) as {profile:string}|undefined;
+ if(!plan || !["result_review","code_review"].includes(plan.profile))return null;
+ return `Это разовая проверка (${plan.profile}) готового результата по карточке ${taskId}. Сопоставь поручение, предоставленный материал и доказательства. Не выполняй работу заново; дополнительные проверки — только при конкретном сомнении. Сдай один вердикт taskflow_review: approved, changes_requested или blocked. report_markdown — короткий: Принято: что соответствует поручению; либо Проблема: что и где не работает. Исправить: кому и что. Ожидается: проверяемый результат. По 2–3 предложения на проблему; без пяти обязательных разделов общего отчёта. Не вызывай rework и не добавляй циклы доработки. Сервер сохранит любой вердикт и разбудит запросившую роль в исходном чате. Отрицательный вердикт завершает эту проверку. Положительный result_review не требует Git; положительный code_review передаёт принятые коммиты архитектору через существующую интеграцию.`;
 }

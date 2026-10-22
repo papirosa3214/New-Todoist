@@ -93,6 +93,8 @@ const CHAT_CONTEXT = new Set([
   "taskflow_chat_attach_file",
   "taskflow_slot_restart",
   "taskflow_work_start",
+  "taskflow_review_result",
+  "taskflow_review_code",
 ]);
 const TASK_CONTEXT = new Set([
   "taskflow_topic_send",

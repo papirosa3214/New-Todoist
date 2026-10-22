@@ -1,8 +1,10 @@
 /** Owner-approved workflow packages. Persist generated instructions in the plan, never
  * recompute running plans from a newer catalog. Skills are stage candidates, not proof of use. */
 export const TEMPLATE_VERSION = 1;
-export const TEMPLATE_PROFILES = ["single_executor", "research", "delivery", "full_cycle", "orchestrated", "product_feature", "bug_regression", "ux_concept", "api_integration", "audit"] as const;
+export const TEMPLATE_PROFILES = ["single_executor", "research", "delivery", "full_cycle", "orchestrated", "product_feature", "bug_regression", "ux_concept", "api_integration", "audit", "result_review", "code_review"] as const;
 const goals: Record<string, string> = {
+ result_review: "Разовая проверка уже готового результата по поручению. Дай вердикт и закончи: автоматических доработок и повторных проверок нет. Интеграция не требуется.",
+ code_review: "Разовое ревью готовых изменений кода. При положительном вердикте сервер подключит архитектора для интеграции; иначе проверка заканчивается замечаниями. Не создавай цикл доработок.",
  single_executor: "Выполни ограниченное поручение без формальных лишних этапов. Назови результат, доказательства и ограничения.",
  research: "Ответь на исследовательский вопрос. Вывод должен прослеживаться до первичных источников. Внедрение не входит.",
  delivery: "Доведи ясную задачу до реализации и независимой проверки исходного сценария владельца.",
@@ -75,7 +77,13 @@ export function templateInstructions(profile: string, node: TemplateNode, taskTe
    if (node.role_key === "architect" && profile !== "audit") skills.push("swift-concurrency");
    if (node.role_key === "qa") skills.push("ios-accessibility", "swift-testing-expert", "ios-simulator-ui-check");
  }
+ const once=["result_review","code_review"].includes(profile);
+ if(once && node.role_key==="critic_verifier"){
+  skills=profile==="code_review"?["review-changes"]:[];
+  focus="Проверь предоставленный результат на соответствие поручению и критериям, не выполняй работу заново. Дополнительную проверку делай только при конкретном сомнении. Не вызывай request_help/rework и не создавай новые этапы. Короткий report_markdown: Принято: что соответствует поручению; либо Проблема: что и где не работает. Исправить: кому и что. Ожидается: проверяемый результат. По 2–3 предложения на проблему, без повторения отчётов. Вердикт findings тоже короткий; ссылки на подробные доказательства отдельно. Наличие замечаний завершает разовую проверку, исправления выполняются отдельным поручением владельца.";
+ }
  return [
+   ...(once && node.role_key==="critic_verifier"?["[taskflow:final-review]"]:[]),
    `Шаблон: ${profile}@${TEMPLATE_VERSION}. Этап: ${node.slot_key}.`,
    goals[profile], focus,
    "Вход: цель, описание и границы текущей карточки; результаты предшествующих этапов из контекста плана. Сначала проверь их полноту, не выдумывай отсутствующие факты. Уточнение, требующее решения владельца, направляй через существующий механизм вопросов.",
@@ -95,6 +103,12 @@ const artifact = (key: string, required_fields: string[]) => ({ key, type: "repo
 const node = (slot_key: string, role_key: string, expected_result: string, key: string, fields: string[]) => ({slot_key, role_key, required: true, expected_result, output_artifact: artifact(key, fields), source_subtask_id: null});
 const edge = (from_slot_key: string, to_slot_key: string, artifact_key: string) => ({from_slot_key, to_slot_key, start_condition: "artifact_ready", artifact_key});
 export function additionalTemplate(profile: string) {
+ if(profile==="result_review" || profile==="code_review")return {
+  rationale:profile==="result_review"?"Разовая проверка результата критиком, без интеграции и циклов доработки.":"Разовое ревью кода; только положительный вердикт передаёт результат архитектору через существующую автоинтеграцию.",
+  nodes:[node("review","critic_verifier",profile==="result_review"?"Короткий вердикт о соответствии готового результата поручению":"Короткий вердикт по готовым изменениям кода и разрешение интеграции", "review_result",["verdict","findings","evidence"])],
+  edges:[],
+ };
+
  if (profile === "ux_concept") return {
    rationale: "UX-концепция: дизайнер → независимый критик; без реализации продукта.",
    nodes: [node("design", "designer", "UX-концепция: сценарии, состояния, доступность, прототип и спецификация поведения", "ux_concept", ["scenarios", "states", "accessibility", "prototype_refs", "limitations"]),

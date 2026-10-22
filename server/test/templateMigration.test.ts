@@ -15,7 +15,7 @@ it("template migration preserves plans, nodes, edges, indexes and is idempotent"
  expect(db.prepare("SELECT from_slot_key,to_slot_key FROM task_collaboration_plan_edges WHERE id='migration-edge'").get()).toEqual({from_slot_key:"research",to_slot_key:"analysis"});
  expect(db.prepare("SELECT name FROM sqlite_master WHERE name='migration_custom_plan_index'").get()).toBeTruthy();
  expect(db.pragma("foreign_key_check")).toEqual([]);
- for(const profile of ["ux_concept","api_integration","audit"])
+ for(const profile of ["ux_concept","api_integration","audit","result_review","code_review"])
    db.prepare("INSERT INTO task_collaboration_plans(id,task_id,revision,profile,rationale,created_by) VALUES(?, 'migration-card', ?, ?, 'new', 'u1')").run(profile,10+profile.length,profile);
  expect(db.pragma("foreign_keys",{simple:true})).toBe(1);
 });

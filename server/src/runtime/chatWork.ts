@@ -1,3 +1,4 @@
+import {additionalTemplate} from "../lib/collaborationTemplates.js";
 // Работа по разговору: связка чата и задач.
 //
 // Решение владельца 12.10.2026: пока он обсуждает дело с ролью в чате, роль
@@ -87,7 +88,7 @@ function runningWork(chatId: string): LaunchRow | undefined {
   return db
     .prepare(
       `SELECT l.* FROM chat_work_launches l JOIN tasks t ON t.id = l.task_id
-        WHERE l.chat_id = ? AND l.status = 'started' AND t.status = 'active' AND t.archived_at IS NULL
+        WHERE l.chat_id = ? AND l.status = 'started' AND NOT EXISTS (SELECT 1 FROM task_collaboration_plans p WHERE p.id=l.plan_id AND p.profile IN ('result_review','code_review')) AND t.status = 'active' AND t.archived_at IS NULL
         ORDER BY l.created_at DESC LIMIT 1`,
     )
     .get(chatId) as LaunchRow | undefined;
@@ -96,13 +97,33 @@ function runningWork(chatId: string): LaunchRow | undefined {
 export async function proposeWork(
   role: string,
   chatId: string,
-  input: { title?: string; description?: string; project_id?: string; steps?: WorkStepInput[] },
+  input: { title?: string; description?: string; project_id?: string; profile?: string; launch_mode?: string; authorization_message_id?: string; authorization_quote?: string; steps?: WorkStepInput[] },
   /** Сообщение владельца, на которое исполнитель ответит, если его об этом попросили. */
   messageId?: string,
 ): Promise<{ launch_id: string; task_id: string; started: boolean; note: string }> {
   const owner = ownerId();
-  const steps = normalizeSteps(input.steps ?? []).map((s) => (s.report && messageId ? { ...s, message_id: messageId } : s));
-  const running = runningWork(chatId);
+  const reviewProfile=input.profile;
+  if(reviewProfile && !["result_review","code_review"].includes(reviewProfile))throw new ToolError("profile: result_review | code_review");
+  if(reviewProfile && !db.prepare("SELECT 1 FROM projects WHERE id=? AND archived_at IS NULL").get(input.project_id??""))throw new ToolError("Укажи project_id существующего проекта до предложения проверки");
+  const launchMode=input.launch_mode??"propose";
+  if(!["propose","authorized"].includes(launchMode))throw new ToolError("launch_mode: propose | authorized");
+  let authorizationQuote:string|undefined;
+  if(launchMode==="authorized"){
+    if(!reviewProfile)throw new ToolError("Прямой согласованный вызов доступен для разовой проверки");
+    const grant=db.prepare("SELECT m.text FROM chat_messages m JOIN users u ON u.id=m.from_user_id WHERE m.id=? AND m.chat_id=? AND u.role='owner'").get(input.authorization_message_id??"",chatId) as {text:string}|undefined;
+    if(!grant)throw new ToolError("Нужно сообщение владельца с предварительным разрешением в этом чате");
+    const quoted=input.authorization_quote?.trim() || grant.text;
+    authorizationQuote=quoted;
+    if(/[?«»“”"`]/u.test(grant.text) || !grant.text.includes(quoted) || /(?:^|\s)не\s+(?:надо\s+)?(?:выз|вызыв|подключ|запуск)|не\s+разрешаю|не надо|не нужно|без критика|пока не/iu.test(grant.text) || !/(?:вызови|вызывай|подключи|подключай|запусти|запускай|разрешаю|можешь\s+(?:вызвать|подключить|запустить))/iu.test(quoted) || !/(?:критик|проверк|ревью|review)/iu.test(quoted))throw new ToolError("В сообщении владельца не подтверждён прямой вызов проверки; предложи её кнопкой");
+    if(reviewProfile==="code_review" && !/(?:ревью\s+кода|интеграц|интегратор|влив|main)/iu.test(quoted))throw new ToolError("Разрешение вызвать критика не разрешает интеграцию кода: используй result_review либо предложи code_review владельцу");
+  }
+  if(reviewProfile && messageId){
+    const prior=db.prepare("SELECT l.* FROM chat_work_launches l JOIN task_collaboration_plans p ON p.id=l.plan_id WHERE l.chat_id=? AND l.role_key=? AND p.profile=? AND l.status IN ('proposed','started') AND json_extract(l.steps_json,'$[0].message_id')=? ORDER BY l.rowid DESC LIMIT 1").get(chatId,role,reviewProfile,messageId) as LaunchRow|undefined;
+    if(prior)return {launch_id:prior.id,task_id:prior.task_id,started:prior.status==="started",note:"Эта разовая проверка уже предложена или запущена; второй экземпляр не создан."};
+  }
+  const packet=reviewProfile?additionalTemplate(reviewProfile):null;
+  const steps = normalizeSteps(packet?packet.nodes.map(n=>({key:n.slot_key,role:n.role_key,result:n.expected_result})):input.steps ?? []).map((s) => (s.report && messageId ? { ...s, message_id: messageId } : s));
+  const running = reviewProfile?undefined:runningWork(chatId);
 
   // Работа уже идёт — шаги добавляются в ту же карточку и стартуют сами.
   if (running && running.plan_id) {
@@ -146,14 +167,14 @@ export async function proposeWork(
 
   // Новая работа: прежнее незапущенное предложение этого разговора снимается
   // вместе со своей карточкой — она заведена этим же механизмом и не стартовала.
-  const stale = db.prepare("SELECT id, task_id FROM chat_work_launches WHERE chat_id = ? AND status = 'proposed'").all(chatId) as Array<{ id: string; task_id: string }>;
+  const stale = db.prepare("SELECT l.id, l.task_id FROM chat_work_launches l LEFT JOIN task_collaboration_plans p ON p.id=l.plan_id WHERE l.chat_id = ? AND l.status = 'proposed' AND COALESCE(p.profile,'manual') = ?").all(chatId,reviewProfile??"manual") as Array<{ id: string; task_id: string }>;
   for (const old of stale) {
     const used = db.prepare("SELECT 1 FROM chat_work_launches WHERE task_id = ? AND status = 'started'").get(old.task_id);
     if (!used) purgeTasks([old.task_id]);
     db.prepare("UPDATE chat_work_launches SET status = 'cancelled' WHERE id = ?").run(old.id);
   }
 
-  const stored: StoredStep[] = steps.map((s) => ({ ...s, slot: s.key }));
+  const stored: StoredStep[] = steps.map((s) => ({ ...s, slot: s.key, ...(reviewProfile && messageId?{message_id:messageId}: {}), ...(authorizationQuote?{authorization_message_id:input.authorization_message_id,authorization_quote:authorizationQuote}:{}) }));
 
   const projectId = input.project_id
     ? (db.prepare("SELECT id FROM projects WHERE id = ? AND archived_at IS NULL").get(String(input.project_id)) as { id: string } | undefined)?.id ?? null
@@ -173,7 +194,7 @@ export async function proposeWork(
   // запуска, а план при утверждении занимает эти же строки (source_subtask_id).
   const stepIds = new Map<string, string>();
   const addStep = db.prepare("INSERT INTO subtasks(id, task_id, title, done, position) VALUES(?, ?, ?, 0, ?)");
-  stored.forEach((s, i) => {
+  if(!reviewProfile)stored.forEach((s, i) => {
     const stepId = crypto.randomUUID();
     stepIds.set(s.slot, stepId);
     addStep.run(stepId, taskId, `${roleTitle(s.role_key)}: ${s.result}`.slice(0, 200), i);
@@ -191,7 +212,9 @@ export async function proposeWork(
 
   let planId: string;
   try {
-    const created = await asControlActor(owner, "POST", `/api/tasks/${taskId}/collaboration-plans`, {
+    const created = reviewProfile
+      ? await asControlActor(owner,"POST",`/api/tasks/${taskId}/collaboration-plans/propose`,{profile:reviewProfile})
+      : await asControlActor(owner, "POST", `/api/tasks/${taskId}/collaboration-plans`, {
       profile: "manual",
       rationale: `Работа по разговору с ролью ${roleTitle(role)}`,
       nodes: stored.map((s) => ({ slot_key: s.slot, role_key: s.role_key, expected_result: s.result, source_subtask_id: stepIds.get(s.slot) })),
@@ -211,6 +234,10 @@ export async function proposeWork(
     `INSERT INTO chat_work_launches(id, chat_id, task_id, plan_id, title, steps_json, status, role_key)
      VALUES(?, ?, ?, ?, ?, ?, 'proposed', ?)`,
   ).run(id, chatId, taskId, planId, title, JSON.stringify(stored), role);
+  if(reviewProfile && launchMode==="authorized"){
+    await startChatWorkCard(taskId,owner);
+    return {launch_id:id,task_id:taskId,started:true,note:"Разовая проверка запущена по предварительному разрешению владельца. Любой вердикт вернётся в исходный чат и разбудит тебя. Отрицательный вердикт не запускает автоматическую доработку."};
+  }
   // Карточка уходит в чат готовым сообщением — с шагами и кнопкой «Запустить».
   let shown = true;
   try {
