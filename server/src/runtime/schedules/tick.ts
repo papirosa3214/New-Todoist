@@ -20,6 +20,8 @@ import {
   nextRunAfter,
   type ScheduleRule,
 } from "./rules.js";
+import { resolveLabelIds } from "./labels.js";
+import { routinesEnabled, routinesTickEnabled } from "./feature.js";
 import {
   anchorFromCreatedAt,
   claimRun,
@@ -110,6 +112,12 @@ export async function runSchedulesTick(
   const now = options.now ?? new Date();
   const counts: ScheduleTickCounts = { created: 0, skipped: 0, failed: 0 };
 
+  // Выключатели рутин: общий гасит всё (создание, правка, запуск), а
+  // выключатель запуска по расписанию оставляет ручной запуск («Запустить
+  // сейчас»). Откат делается переменной окружения, без новой выкладки.
+  if (!routinesEnabled()) return counts;
+  if (!options.force && !routinesTickEnabled()) return counts;
+
   // Срабатывание по расписанию берёт только активные рутины: пауза
   // останавливает создание карточек (критерий приёмки 12 из спеки).
   const schedules = listSchedules().filter((row) => {
@@ -182,13 +190,18 @@ export async function runSchedulesTick(
       continue;
     }
 
+    // Метки в шаблоне заданы именами, а ручка создания карточки ждёт
+    // идентификаторы: переводим имена в метки владельца рутины. Метку,
+    // которую удалили после создания рутины, пропускаем и пишем в историю.
+    const labels = resolveLabelIds(payload.labels ?? [], row.created_by);
+
     const created = await makeApi(app, row.created_by)("POST", "/api/tasks", {
       title: payload.title || row.title,
       description: payload.description ?? undefined,
       project_id: payload.project_id ?? undefined,
       priority: payload.priority ?? undefined,
       duration_min: payload.duration_min ?? undefined,
-      label_ids: payload.labels ?? undefined,
+      label_ids: labels.ids.length ? labels.ids : undefined,
       requires_reviewer_review: payload.requires_reviewer_review ?? undefined,
       needs_research: payload.needs_research ?? undefined,
     });
@@ -253,7 +266,9 @@ export async function runSchedulesTick(
         scheduleId: row.id,
         runAt: decision.runAt,
         status: "created",
-        detail: "карточка создана",
+        detail: labels.unknown.length
+          ? `карточка создана; метки не найдены и пропущены: ${labels.unknown.join(", ")}`
+          : "карточка создана",
         taskId,
       });
       counts.created += 1;

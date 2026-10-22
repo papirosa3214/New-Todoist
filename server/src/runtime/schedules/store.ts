@@ -14,7 +14,7 @@
 import crypto from "node:crypto";
 import db from "../../db.js";
 import { logEvent } from "../../agentState.js";
-import type { ScheduleRule, ScheduleRuleKind } from "./rules.js";
+import { localDateParts, type ScheduleRule, type ScheduleRuleKind } from "./rules.js";
 
 export type ScheduleStatus = "active" | "paused" | "finished";
 export type RunStatus = "created" | "skipped" | "failed" | "error";
@@ -269,6 +269,9 @@ export function ruleOf(row: ScheduleRow, anchor: { year: number; month: number; 
     expr: row.rule_expr,
     timeLocal: row.time_local,
     timezone: row.timezone,
+    // Якорь — дата создания рутины в её зоне. Явный день правила (день
+    // недели или число месяца) главнее якоря — это учитывает
+    // ruleMatchesDate.
     anchor,
   };
 }
@@ -276,22 +279,7 @@ export function ruleOf(row: ScheduleRow, anchor: { year: number; month: number; 
 /** Дата-якорь для «раз в неделю»/«раз в месяц» — местная дата создания. */
 export function anchorFromCreatedAt(row: ScheduleRow): { year: number; month: number; day: number } {
   const created = parseUtc(row.created_at) ?? new Date();
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: row.timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  })
-    .formatToParts(created)
-    .reduce<Record<string, string>>((acc, p) => {
-      if (p.type !== "literal") acc[p.type] = p.value;
-      return acc;
-    }, {});
-  return {
-    year: Number(parts.year),
-    month: Number(parts.month),
-    day: Number(parts.day),
-  };
+  return localDateParts(created, row.timezone);
 }
 
 export function logScheduleEvent(

@@ -140,44 +140,6 @@ export function localDateParts(
   return { year: parts.year, month: parts.month, day: parts.day };
 }
 
-/**
- * Якорь правила «раз в неделю» / «раз в месяц».
- *
- * Явный выбор дня из правила (rule_expr) главнее даты создания рутины:
- * клиент выбирает день недели («Еженедельно») или число месяца
- * («Ежемесячно»), и следующий запуск обязан совпадать с этим выбором.
- * Если день не задан — берём дату создания рутины в её зоне.
- *
- * Раньше якорь при создании рутины был фиксированной датой 1970 года, а
- * тик считал от даты создания: рутина один раз срабатывала не в тот день.
- */
-export function anchorForRule(
-  kind: ScheduleRuleKind,
-  expr: string | null,
-  fallback: { year: number; month: number; day: number },
-): { year: number; month: number; day: number } {
-  const raw = String(expr ?? "").trim();
-  if (!raw) return fallback;
-  if (kind === "monthly") {
-    const day = Number(raw);
-    if (Number.isInteger(day) && day >= 1 && day <= 31) return { ...fallback, day };
-    return fallback;
-  }
-  if (kind === "weekly") {
-    // ISO-день недели: 1=Пн..7=Вс.
-    const weekday = Number(raw);
-    if (!Number.isInteger(weekday) || weekday < 1 || weekday > 7) return fallback;
-    // Дата с нужным днем недели — любой день этой недели: для «раз в
-    // неделю» важен именно день недели, а не число месяца.
-    for (let delta = 0; delta < 7; delta += 1) {
-      const candidate = addDays(fallback, delta);
-      if (weekdayOf(candidate) === weekday) return candidate;
-    }
-    return fallback;
-  }
-  return fallback;
-}
-
 /** «15m» / «2h» → минуты. Меньше пяти минут — нельзя. */
 export function parseIntervalMinutes(expr: string | null): number | null {
   const m = /^(\d+)\s*([mhd])$/i.exec(String(expr ?? "").trim());
@@ -325,8 +287,7 @@ export function parseMonthDay(expr: string | null): number | null {
 
 /** Местная дата якоря — «сегодня» в зоне рутины. */
 export function anchorForNow(now: Date, timezone: string): { year: number; month: number; day: number } {
-  const local = zonedParts(now, timezone);
-  return { year: local.year, month: local.month, day: local.day };
+  return localDateParts(now, timezone);
 }
 
 /** «1,3,5» → {1,3,5} (ISO: 1=Пн..7=Вс). */
