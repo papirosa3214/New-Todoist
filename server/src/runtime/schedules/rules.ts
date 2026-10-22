@@ -15,7 +15,8 @@ export type ScheduleRuleKind =
   | "weekly"
   | "monthly"
   | "weekly_days"
-  | "interval";
+  | "interval"
+  | "cron";
 
 export const SCHEDULE_RULE_KINDS: ScheduleRuleKind[] = [
   "daily",
@@ -24,6 +25,7 @@ export const SCHEDULE_RULE_KINDS: ScheduleRuleKind[] = [
   "monthly",
   "weekly_days",
   "interval",
+  "cron",
 ];
 
 /** Минимальный интервал — 5 минут (интервал обхода планировщика). */
@@ -133,6 +135,118 @@ export function parseIntervalMinutes(expr: string | null): number | null {
   return minutes;
 }
 
+// ─── cron ───
+//
+// Пять полей: минуты часы день-месяца месяц день-недели.
+// Поддерживаются «*», числа, списки («1,3»), диапазоны («1-5») и шаги («*/15»).
+
+export interface CronExpr {
+  minutes: Set<number>;
+  hours: Set<number>;
+  daysOfMonth: Set<number>;
+  months: Set<number>;
+  daysOfWeek: Set<number>;
+  /** «*» в поле дня месяца / дня недели — значит «без ограничения». */
+  domRestricted: boolean;
+  dowRestricted: boolean;
+}
+
+function parseCronField(
+  field: string,
+  min: number,
+  max: number,
+): Set<number> | null {
+  const raw = String(field ?? "").trim();
+  if (!raw) return null;
+  const out = new Set<number>();
+  for (const part of raw.split(",")) {
+    const piece = part.trim();
+    if (!piece) return null;
+    const stepMatch = /^(\*|\d+(?:-\d+)?)\/(\d+)$/.exec(piece);
+    const rangeExpr = stepMatch ? stepMatch[1] : piece;
+    const step = stepMatch ? Number(stepMatch[2]) : 1;
+    if (!Number.isInteger(step) || step < 1) return null;
+    let from = min;
+    let to = max;
+    if (rangeExpr !== "*") {
+      if (/^\d+$/.test(rangeExpr)) {
+        from = Number(rangeExpr);
+        to = stepMatch ? max : from;
+      } else if (/^\d+-\d+$/.test(rangeExpr)) {
+        const [a, b] = rangeExpr.split("-").map(Number);
+        from = a;
+        to = b;
+      } else {
+        return null;
+      }
+    }
+    if (from < min || to > max || from > to) return null;
+    for (let value = from; value <= to; value += step) out.add(value);
+  }
+  return out.size ? out : null;
+}
+
+/** Разобрать cron-выражение из пяти полей. Мусор — null. */
+export function parseCron(expr: string | null): CronExpr | null {
+  const fields = String(expr ?? "").trim().split(/\s+/);
+  if (fields.length !== 5) return null;
+  const minutes = parseCronField(fields[0], 0, 59);
+  const hours = parseCronField(fields[1], 0, 23);
+  const dom = parseCronField(fields[2], 1, 31);
+  const months = parseCronField(fields[3], 1, 12);
+  const dow = parseCronField(fields[4], 0, 7);
+  if (!minutes || !hours || !months) return null;
+  // «*» в поле дня — это «без ограничения», а не «каждый день из списка».
+  const domWild = fields[2].trim() === "*";
+  const dowWild = fields[4].trim() === "*";
+  // День недели 7 в cron означает воскресенье, а 0 — тоже воскресенье.
+  const daysOfWeek = new Set<number>();
+  for (const day of dow ?? []) daysOfWeek.add(day === 7 ? 0 : day);
+  return {
+    minutes,
+    hours,
+    daysOfMonth: dom ?? new Set(Array.from({ length: 31 }, (_, i) => i + 1)),
+    months,
+    daysOfWeek,
+    domRestricted: dom !== null && !domWild,
+    dowRestricted: dow !== null && !dowWild,
+  };
+}
+
+/** День подходит под cron? (дни недели cron: 0=вс..6=сб, 7=вс.) */
+function cronMatchesDate(cron: CronExpr, date: { year: number; month: number; day: number }): boolean {
+  if (!cron.months.has(date.month)) return false;
+  const domOk = cron.daysOfMonth.has(date.day);
+  const jsDow = new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay();
+  const dowOk = cron.daysOfWeek.has(jsDow);
+  // Как в cron: если оба поля дня ограничены — день подходит, когда
+  // подходит ЛИБО по числу месяца, ЛИБО по дню недели.
+  if (cron.domRestricted && cron.dowRestricted) return domOk || dowOk;
+  if (cron.domRestricted) return domOk;
+  if (cron.dowRestricted) return dowOk;
+  return true;
+}
+
+/** Ближайший момент запуска по cron-выражению (строго позже `from`). */
+export function nextCronRun(cron: CronExpr, timezone: string, from: Date): Date | null {
+  const local = zonedParts(from, timezone);
+  let date = { year: local.year, month: local.month, day: local.day };
+  const hours = [...cron.hours].sort((a, b) => a - b);
+  const minutes = [...cron.minutes].sort((a, b) => a - b);
+  for (let i = 0; i <= 400; i += 1) {
+    if (cronMatchesDate(cron, date)) {
+      for (const hour of hours) {
+        for (const minute of minutes) {
+          const candidate = zonedToUtc({ ...date, hour, minute }, timezone);
+          if (candidate.getTime() > from.getTime()) return candidate;
+        }
+      }
+    }
+    date = addDays(date, 1);
+  }
+  return null;
+}
+
 /** «1,3,5» → {1,3,5} (ISO: 1=Пн..7=Вс). */
 export function parseWeekdays(expr: string | null): Set<number> | null {
   const raw = String(expr ?? "").trim();
@@ -150,9 +264,16 @@ function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
+/**
+ * Сдвиг календарной даты на N дней.
+ *
+ * Считаем через Date.UTC с переполнением дня (Date.UTC сам разносит
+ * «32-е число» на следующий месяц), а НЕ через setUTCDate: в модуле
+ * запрещены вызовы Date.setUTC* — иначе при смене зоны арифметика
+ * «по календарю» съезжает на час (критерий приёмки 2 из спеки).
+ */
 function addDays(parts: { year: number; month: number; day: number }, days: number) {
-  const d = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
-  d.setUTCDate(d.getUTCDate() + days);
+  const d = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days));
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
 }
 
@@ -182,6 +303,9 @@ export function ruleMatchesDate(rule: ScheduleRule, date: { year: number; month:
     }
     case "interval":
       return true;
+    case "cron":
+      // cron считается отдельно (nextCronRun) — по календарю не отвечаем.
+      return false;
   }
 }
 
@@ -192,6 +316,11 @@ export function ruleMatchesDate(rule: ScheduleRule, date: { year: number; month:
  * Для interval правило не привязано к календарю: там шаг = база + интервал.
  */
 export function nextRunAfter(rule: ScheduleRule, from: Date): Date | null {
+  if (rule.kind === "cron") {
+    const cron = parseCron(rule.expr);
+    if (!cron) return null;
+    return nextCronRun(cron, rule.timezone, from);
+  }
   if (rule.kind === "interval") {
     const minutes = parseIntervalMinutes(rule.expr);
     if (!minutes) return null;
@@ -210,6 +339,49 @@ export function nextRunAfter(rule: ScheduleRule, from: Date): Date | null {
     date = addDays(date, 1);
   }
   return null;
+}
+
+const WEEKDAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+
+/**
+ * Подпись правила по-русски — сервер отдаёт её готовой (дизайн, п. 2.9):
+ * веб и iOS читают одно и то же поле, поэтому подписи не разойдутся.
+ */
+export function ruleLabel(rule: {
+  kind: ScheduleRuleKind;
+  expr?: string | null;
+}): string {
+  switch (rule.kind) {
+    case "daily":
+      return "Ежедневно";
+    case "weekdays":
+      return "По будням";
+    case "weekly":
+      return "Еженедельно";
+    case "monthly":
+      return "Ежемесячно";
+    case "weekly_days": {
+      const days = parseWeekdays(rule.expr ?? null);
+      if (!days) return "По выбранным дням";
+      const labels = [...days]
+        .sort((a, b) => a - b)
+        .map((d) => WEEKDAY_LABELS[d - 1] ?? String(d));
+      return `По дням: ${labels.join(", ")}`;
+    }
+    case "interval": {
+      const minutes = parseIntervalMinutes(rule.expr ?? null);
+      if (!minutes) return "Через интервал";
+      if (minutes % 60 === 0 && minutes >= 60) {
+        const hours = minutes / 60;
+        return `Каждые ${hours} ${hours === 1 ? "час" : hours < 5 ? "часа" : "часов"}`;
+      }
+      return `Каждые ${minutes} минут`;
+    }
+    case "cron":
+      return `По расписанию cron: ${String(rule.expr ?? "").trim()}`;
+    default:
+      return "По расписанию";
+  }
 }
 
 export type RunDecisionAction = "run" | "skip";

@@ -509,6 +509,15 @@ export async function runSchedulerPass(app: FastifyInstance, now: Date = new Dat
       return 0;
     }
   };
+  // Ветка 11 (рутины): в назначенное время из шаблона создаётся новая
+  // карточка и поднимается роль. Логика рутин — в своём модуле
+  // (runtime/schedules/), здесь только тик из общего обхода.
+  // Счётчики ветки уходят в last-run.json → лампа в «Состоянии системы»
+  // (критерий наблюдаемости 16 из спеки): создано / пропущено / ошибка.
+  const scheduleCounts = await safe("ветка 11 (рутины)", async () => {
+    const tick = await runSchedulesTick(app, { now });
+    return tick.created + tick.skipped + tick.failed;
+  });
   const counts: SchedulerCounts = {
     retry: await safe("ветка 1", () => retryTechnical(api)),
     dead: await safe("ветка 3", () => notifyDead(api)),
@@ -525,13 +534,9 @@ export async function runSchedulerPass(app: FastifyInstance, now: Date = new Dat
     // пропускает, если `auto_merge_mode = off` — тогда живой остаётся
     // только уборка уже слитого.
     merges: await safe("ветка 10 (автослияние)", () => worktreeMaintenancePass()),
-    // Ветка 11 (рутины): в назначенное время из шаблона создаётся новая
-    // карточка и поднимается роль. Логика рутин — в своём модуле
-    // (runtime/schedules/), здесь только тик из общего обхода.
-    schedules: await safe("ветка 11 (рутины)", async () => {
-      const counts = await runSchedulesTick(app, { now });
-      return counts.created;
-    }),
+    // Ветка 11 (рутины) — счётчик срабатываний рутин за проход (создано,
+    // пропущено и ошибки — вместе; подробно по рутине — в schedule_runs).
+    schedules: scheduleCounts,
   };
   try {
     const file = schedulerHeartbeatPath();

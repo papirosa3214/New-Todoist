@@ -326,6 +326,26 @@ export function OverviewScreen() {
           <Icon name="chevron" size={16} className="text-dim" />
         </button>
 
+        {/* Рутины (крон-задачи) — вход на экран «Мои рутины» (дизайн,
+            §2.4: вход — строка «Мои рутины» на «Обзоре»). */}
+        <button
+          onClick={() => navigate("/routines")}
+          className="tap-row w-full flex items-center justify-between bg-card rounded-2xl p-4"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-[32px] h-[32px] rounded-xl bg-red/15 flex items-center justify-center text-red">
+              <Icon name="clock" size={18} />
+            </div>
+            <div className="text-left">
+              <div className="tf-body text-text">Мои рутины</div>
+              <div className="tf-meta text-sub">
+                Задачи, которые создаются по расписанию
+              </div>
+            </div>
+          </div>
+          <Icon name="chevron" size={16} className="text-dim" />
+        </button>
+
         {/* Настройки — обычной строкой, а не шестерёнкой в углу шапки
             (Максим 26.08.2026: «не маленькую шестеренку, чтобы тянуться
             до нее далеко было, а просто кнопку такую же самую под

@@ -21,9 +21,11 @@ import { logEvent } from "../agentState.js";
 import {
   SCHEDULE_RULE_KINDS,
   nextRunAfter,
+  parseCron,
   parseIntervalMinutes,
   parseTimeLocal,
   parseWeekdays,
+  ruleLabel,
   type ScheduleRuleKind,
 } from "../runtime/schedules/rules.js";
 import {
@@ -50,6 +52,9 @@ function present(row: ScheduleRow) {
     task_payload: parsePayload(row),
     rule_kind: row.rule_kind,
     rule_expr: row.rule_expr,
+    // Подпись правила по-русски отдаёт сервер (дизайн, п. 2.9): веб и iOS
+    // берут одну и ту же строку, подписи не расходятся.
+    rule_label: ruleLabel({ kind: row.rule_kind, expr: row.rule_expr }),
     time_local: row.time_local,
     timezone: row.timezone,
     next_run_at: row.next_run_at,
@@ -84,6 +89,52 @@ export function registerScheduleRoutes(app: FastifyInstance) {
     },
   );
 
+  app.get("/api/schedules/preview", { preHandler: authPre }, async (req: any, reply) => {
+    const query = (req.query ?? {}) as Record<string, string | undefined>;
+    const kind = String(query.rule_kind ?? "") as ScheduleRuleKind;
+    if (!SCHEDULE_RULE_KINDS.includes(kind)) {
+      return reply.code(400).send({
+        error: `правило должно быть одним из: ${SCHEDULE_RULE_KINDS.join(", ")}`,
+      });
+    }
+    const timeLocal = String(query.time_local ?? "09:00").trim();
+    const time = parseTimeLocal(timeLocal);
+    if (!time && kind !== "interval" && kind !== "cron") {
+      return reply.code(400).send({ error: "время должно быть в формате ЧЧ:ММ" });
+    }
+    const timezone = String(query.timezone ?? "Europe/Moscow").trim() || "Europe/Moscow";
+    try {
+      new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date());
+    } catch {
+      return reply.code(400).send({ error: `неизвестная зона «${timezone}»` });
+    }
+    const expr = query.rule_expr == null || query.rule_expr === "" ? null : String(query.rule_expr);
+    if (kind === "weekly_days" && !parseWeekdays(expr)) {
+      return reply.code(400).send({ error: "дни недели — списком 1..7, где 1=понедельник" });
+    }
+    if (kind === "interval" && !parseIntervalMinutes(expr)) {
+      return reply.code(400).send({ error: "интервал — например 15m или 2h, не меньше 5 минут" });
+    }
+    if (kind === "cron" && !parseCron(expr)) {
+      return reply.code(400).send({ error: "cron — пять полей: минуты часы день месяц день-недели" });
+    }
+    const next = nextRunAfter(
+      {
+        kind,
+        expr,
+        timeLocal: time ? timeLocal : kind === "cron" ? "00:00" : "09:00",
+        timezone,
+        anchor: { year: 1970, month: 1, day: 1 },
+      },
+      new Date(),
+    );
+    return {
+      next_run_at: next ? next.toISOString() : null,
+      timezone,
+      rule_label: ruleLabel({ kind, expr }),
+    };
+  });
+
   app.get<{ Params: { id: string } }>(
     "/api/schedules/:id/runs",
     { preHandler: authPre },
@@ -110,7 +161,7 @@ export function registerScheduleRoutes(app: FastifyInstance) {
     }
     const timeLocal = String(body.time_local ?? "").trim();
     const time = parseTimeLocal(timeLocal);
-    if (!time && kind !== "interval") {
+    if (!time && kind !== "interval" && kind !== "cron") {
       return reply.code(400).send({ error: "время должно быть в формате ЧЧ:ММ" });
     }
     const timezone = String(body.timezone ?? "Europe/Moscow").trim() || "Europe/Moscow";
@@ -127,6 +178,9 @@ export function registerScheduleRoutes(app: FastifyInstance) {
     if (kind === "interval" && !parseIntervalMinutes(ruleExpr)) {
       return reply.code(400).send({ error: "интервал — например 15m или 2h, не меньше 5 минут" });
     }
+    if (kind === "cron" && !parseCron(ruleExpr)) {
+      return reply.code(400).send({ error: "cron — пять полей: минуты часы день месяц день-недели" });
+    }
 
     const payload = (body.task_payload ?? {}) as Record<string, unknown>;
     if (!payload.title) payload.title = title;
@@ -141,7 +195,7 @@ export function registerScheduleRoutes(app: FastifyInstance) {
     const rule = {
       kind,
       expr: ruleExpr,
-      timeLocal: time ? timeLocal : "09:00",
+      timeLocal: time ? timeLocal : kind === "cron" ? "00:00" : "09:00",
       timezone,
       anchor,
     };
@@ -175,7 +229,7 @@ export function registerScheduleRoutes(app: FastifyInstance) {
       }
       const timeLocal = body.time_local ? String(body.time_local) : existing.time_local;
       const time = parseTimeLocal(timeLocal);
-      if (!time && kind !== "interval") {
+      if (!time && kind !== "interval" && kind !== "cron") {
         return reply.code(400).send({ error: "время должно быть в формате ЧЧ:ММ" });
       }
       const timezone = body.timezone ? String(body.timezone) : existing.timezone;
@@ -190,6 +244,9 @@ export function registerScheduleRoutes(app: FastifyInstance) {
       }
       if (kind === "interval" && !parseIntervalMinutes(ruleExpr)) {
         return reply.code(400).send({ error: "интервал — например 15m или 2h, не меньше 5 минут" });
+      }
+      if (kind === "cron" && !parseCron(ruleExpr)) {
+        return reply.code(400).send({ error: "cron — пять полей: минуты часы день месяц день-недели" });
       }
       const status = body.status
         ? (String(body.status) as ScheduleRow["status"])
@@ -262,11 +319,29 @@ export function registerScheduleRoutes(app: FastifyInstance) {
       }
       const row = getSchedule(req.params.id);
       if (!row) return reply.code(404).send({ error: "Рутина не найдена" });
+      // Пауза останавливает создание карточек (критерий приёмки 12): ручной
+      // запуск приостановленной рутины — тоже создание карточки. Отвечаем
+      // прямо, а не молча: иначе владелец жмёт «Запустить сейчас» и не
+      // понимает, почему ничего не произошло.
+      if (row.status !== "active") {
+        return reply.code(409).send({
+          error: "Рутина на паузе — сначала возобновите её",
+        });
+      }
       // Ручной запуск вне расписания: слот запуска — «сейчас», поэтому он не
       // совпадает с расписанием и не съедает его.
       const now = new Date();
       const counts = await runSchedulesTick(app, { now, scheduleId: row.id, force: true });
-      return { ok: true, counts, schedule: present(getSchedule(row.id)!) };
+      // Последний запуск — чтобы веб показал ссылку на созданную карточку.
+      const run = listRuns(row.id)[0] ?? null;
+      return {
+        ok: true,
+        counts,
+        schedule: present(getSchedule(row.id)!),
+        run: run
+          ? { id: run.id, run_at: run.run_at, task_id: run.task_id, status: run.status }
+          : null,
+      };
     },
   );
 }

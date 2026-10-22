@@ -32,6 +32,8 @@ export interface ApiSchedule {
   task_payload: ApiSchedulePayload;
   rule_kind: ScheduleRuleKind;
   rule_expr: string | null;
+  /** Подпись правила по-русски приходит с сервера — веб и iOS берут одно и то же. */
+  rule_label: string;
   time_local: string;
   timezone: string;
   next_run_at: string | null;
@@ -58,6 +60,30 @@ export function useSchedules() {
   return useQuery({
     queryKey: ["schedules"],
     queryFn: () => api.get<{ schedules: ApiSchedule[] }>("/api/schedules"),
+  });
+}
+
+/** Превью правила: ближайший запуск и подпись — считает сервер. */
+export function useSchedulePreview(params: {
+  rule_kind: ScheduleRuleKind;
+  rule_expr?: string | null;
+  time_local?: string;
+  timezone?: string;
+  enabled: boolean;
+}) {
+  const { rule_kind, rule_expr, time_local, timezone, enabled } = params;
+  return useQuery({
+    queryKey: ["schedules", "preview", rule_kind, rule_expr ?? "", time_local ?? "", timezone ?? ""],
+    queryFn: () => {
+      const query = new URLSearchParams({ rule_kind });
+      if (rule_expr) query.set("rule_expr", rule_expr);
+      if (time_local) query.set("time_local", time_local);
+      if (timezone) query.set("timezone", timezone);
+      return api.get<{ next_run_at: string | null; timezone: string; rule_label: string }>(
+        `/api/schedules/preview?${query.toString()}`,
+      );
+    },
+    enabled,
   });
 }
 
@@ -113,7 +139,11 @@ export function useRunScheduleNow() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      api.post<{ ok: boolean; counts: { created: number } }>(`/api/schedules/${id}/run-now`),
+      api.post<{
+        ok: boolean;
+        counts: { created: number };
+        run: { id: string; run_at: string; task_id: string | null; status: string } | null;
+      }>(`/api/schedules/${id}/run-now`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schedules"] });
       qc.invalidateQueries({ queryKey: ["schedules", null, "runs"] });
