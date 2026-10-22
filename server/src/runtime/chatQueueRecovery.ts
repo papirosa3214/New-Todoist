@@ -32,6 +32,7 @@ import {
   getMessageDelivery,
 } from "./chatQueue.js";
 import { recoverAgentDelivery } from "../routes/chats.js";
+import { sweepFailedDeliveries, sweepStalledDeliveries } from "./chatDeliveryWatch.js";
 
 interface RecovererHandle {
   stop: () => void;
@@ -89,6 +90,11 @@ export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-pr
     // Восстановление НЕ должно ломать подъём сервера.
     console.warn("[chatQueueRecovery] sweep при старте не удался:", error);
   });
+  // Ходы, упавшие в прошлой сессии сервера, — поднимаем заново: после
+  // рестарта их больше некому поднять (владелец 23.10.2026).
+  void sweepFailedDeliveries().catch((error) => {
+    console.warn("[chatDeliveryWatch] повтор упавших ходов при старте не удался:", error);
+  });
   return {
     stop: () => {},
     recovered,
@@ -125,7 +131,8 @@ export function expireStaleDeliveries(ttlMinutes: number = chatDeliveryTtlMinute
       `UPDATE chat_message_queue
           SET status = 'failed',
               finished_at = datetime('now'),
-              updated_at = datetime('now')
+              updated_at = datetime('now'),
+              payload_json = json_set(COALESCE(payload_json,'{}'),'$.expired',1)
         WHERE status IN ('pending', 'picked')
           AND julianday(updated_at) < julianday('now', ?)`,
     )
@@ -143,6 +150,18 @@ export function expireStaleDeliveries(ttlMinutes: number = chatDeliveryTtlMinute
 export function scheduleChatQueueRecovery(intervalSeconds = 600): () => void {
   const ms = Math.max(60, intervalSeconds) * 1000;
   const timer = setInterval(() => {
+    // Пинг висящих вопросов — ДО просрочки: истёкшую доставку уже не
+    // поднять, а владельцу сказать надо (владелец 23.10.2026).
+    try {
+      const stalled = sweepStalledDeliveries();
+      if (stalled.notified > 0) {
+        console.log(
+          `[chatDeliveryWatch] висящих вопросов: ${stalled.stalled}, уведомлений владельцу: ${stalled.notified}`,
+        );
+      }
+    } catch (error) {
+      console.warn("[chatDeliveryWatch] пинг висящих вопросов не удался:", error);
+    }
     try {
       expireStaleDeliveries();
     } catch (error) {
@@ -150,6 +169,11 @@ export function scheduleChatQueueRecovery(intervalSeconds = 600): () => void {
     }
     void sweepRecoverableDeliveries().catch((error) => {
       console.warn("[chatQueueRecovery] periodic sweep не удался:", error);
+    });
+    // Упавший ход роли поднимаем заново: иначе вопрос остаётся без
+    // ответа навсегда (recovery на старте берёт только `pending`).
+    void sweepFailedDeliveries().catch((error) => {
+      console.warn("[chatDeliveryWatch] повтор упавших ходов не удался:", error);
     });
   }, ms);
   timer.unref?.();
