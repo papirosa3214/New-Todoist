@@ -100,6 +100,9 @@ export function sendToHost(machineId: string, message: ServerToHost): boolean {
     try {
       socket.send(payload);
       доставлено = true;
+      // Operations may have side effects: overlapping connections must not
+      // execute the same command twice. Control messages still broadcast.
+      if (message.type === "op") return true;
     } catch {
       // Сокет умер между проверкой и отправкой — следующий по списку.
     }
@@ -338,11 +341,11 @@ export function handleHostMessage(
       return true;
     }
     case "op_chunk": {
-      deliverChunk(сообщение);
+      deliverChunk(machineId, сообщение);
       return true;
     }
     case "op_result": {
-      deliverResult(сообщение);
+      deliverResult(machineId, сообщение);
       return true;
     }
     default:
@@ -350,9 +353,9 @@ export function handleHostMessage(
   }
 }
 
-function deliverChunk(chunk: OpChunkMessage) {
+function deliverChunk(machineId: string, chunk: OpChunkMessage) {
   const pending = pendingOps.get(chunk.opId);
-  if (!pending || pending.cancelled) return;
+  if (!pending || pending.machineId !== machineId || pending.cancelled) return;
   // Потолок держим здесь, а не на хосте: хост может быть старой версии и
   // про потолок не знать, а молчащий сервер из-за чужого `cat` — хуже отказа.
   const осталось = HOST_MAX_OUTPUT_BYTES - pending.bytes;
@@ -360,19 +363,24 @@ function deliverChunk(chunk: OpChunkMessage) {
     pending.truncated = true;
     return;
   }
-  const данные =
-    Buffer.byteLength(chunk.data, "utf8") > осталось
-      ? chunk.data.slice(0, Math.max(0, осталось))
-      : chunk.data;
-  if (данные.length < chunk.data.length) pending.truncated = true;
+  let данные = chunk.data;
+  if (Buffer.byteLength(данные, "utf8") > осталось) {
+    // Slice bytes, then drop an incomplete final UTF-8 code point rather
+    // than decoding it to a replacement character that exceeds the budget.
+    const bytes = Buffer.from(данные, "utf8");
+    let end = осталось;
+    while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+    данные = bytes.subarray(0, end).toString("utf8");
+    pending.truncated = true;
+  }
   if (!данные) return;
   pending.bytes += Buffer.byteLength(данные, "utf8");
   pending.onChunk?.({ stream: chunk.stream, data: данные });
 }
 
-function deliverResult(result: { opId: string } & Record<string, unknown>) {
+function deliverResult(machineId: string, result: { opId: string } & Record<string, unknown>) {
   const pending = pendingOps.get(result.opId);
-  if (!pending) return;
+  if (!pending || pending.machineId !== machineId) return;
   clearTimeout(pending.timer);
   pending.снятьAbort?.();
   pendingOps.delete(result.opId);

@@ -27,7 +27,6 @@ import db from "../db.js";
 // новые ещё не существуют. Это ок.
 
 import {
-  allPendingDeliveries,
   bumpChatGeneration,
   fenceMessageDelivery,
   getMessageDelivery,
@@ -48,16 +47,26 @@ interface RecovererHandle {
  *  startChatRun). */
 export async function sweepRecoverableDeliveries(now?: number): Promise<number> {
   void now;
-  const pending = allPendingDeliveries();
+  // Snapshot lightweight identities, not payloads. The UI reader defaults
+  // to 50 rows; recovery must cover every obligation accepted before boot.
+  const pending = db.prepare(`SELECT id, chat_id, role_id FROM chat_message_queue
+    WHERE status='pending' ORDER BY created_at, rowid`).all() as Array<{
+      id: string; chat_id: string; role_id: string;
+    }>;
   let recovered = 0;
   for (const row of pending) {
-    const result = await recoverAgentDelivery({
-      chatId: row.chat_id,
-      roleId: row.role_id,
-      deliveryId: row.id,
-    });
-    if (result.status === "fenced") continue;
-    if (result.status === "done") recovered += 1;
+    try {
+      const result = await recoverAgentDelivery({
+        chatId: row.chat_id,
+        roleId: row.role_id,
+        deliveryId: row.id,
+      });
+      if (result.status === "done") recovered += 1;
+    } catch (error) {
+      // One corrupt record must not strand unrelated chats at startup.
+      // Keep its durable state for diagnosis; never silently acknowledge it.
+      console.warn(`[chatQueueRecovery] delivery ${row.id} failed:`, error);
+    }
   }
   return recovered;
 }

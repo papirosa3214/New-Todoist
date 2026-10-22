@@ -510,6 +510,10 @@ export interface DeliveryPassResult {
   };
 }
 
+// Rotate through bounded pages, revisiting earlier pages for backoff retries.
+// This is only a scan cursor; durable delivery/attempt rows remain authoritative.
+let webhookScanAfterId = 0;
+
 export async function processWebhookDeliveryPass(
   fetchImpl: typeof fetch = fetch,
   now: () => Date = () => new Date(),
@@ -529,7 +533,7 @@ export async function processWebhookDeliveryPass(
   }
   // Подтянем события за последние сутки; слишком старые не доставляем
   // (как в orchestratorWebhook с MAX_AGE).
-  const events = db
+  const eventPage = db
     .prepare(
       `SELECT e.id AS id, e.kind AS kind, e.task_id AS task_id, e.field AS field, e.detail AS detail,
               t.title AS title, t.project_id AS project_id
@@ -537,10 +541,15 @@ export async function processWebhookDeliveryPass(
          LEFT JOIN tasks t ON t.id = e.task_id
         WHERE e.expired = 0
           AND e.created_at >= datetime('now', '-1 day')
+          AND e.id > ?
         ORDER BY e.id ASC
         LIMIT 200`,
-    )
-    .all() as OrchestratorEventRow[];
+    );
+  let events = eventPage.all(webhookScanAfterId) as OrchestratorEventRow[];
+  if (events.length === 0 && webhookScanAfterId !== 0) {
+    webhookScanAfterId = 0;
+    events = eventPage.all(0) as OrchestratorEventRow[];
+  }
 
   const result: DeliveryPassResult = {
     events_scanned: events.length,
@@ -554,7 +563,7 @@ export async function processWebhookDeliveryPass(
   if (events.length === 0) return result;
 
   const eventIdByRowId = new Map<number, string>();
-  events.forEach((e, idx) => eventIdByRowId.set(e.id, `orch:${e.id}:${idx}:${e.kind}`));
+  events.forEach((e) => eventIdByRowId.set(e.id, `orch:${e.id}:${e.kind}`));
 
   for (const sub of subs) {
     const subKinds = parseKinds(sub.event_kinds);
@@ -568,11 +577,17 @@ export async function processWebhookDeliveryPass(
         result.skips.no_match++;
         continue;
       }
-      const eventId = eventIdByRowId.get(ev.id)!;
+      let eventId = eventIdByRowId.get(ev.id)!;
+      // Older servers used a page-relative index in the key. Match those
+      // records too, or rollout itself would resend already delivered events.
+      const legacyPattern = `orch:${ev.id}:*:${ev.kind}`;
+      // Bound compatibility lookups to one event using the existing index.
+      const eventPrefix = `orch:${ev.id}:`;
+      const eventPrefixEnd = `orch:${ev.id};`;
       // Уже доставлено (dedupe).
       const dedupe = db
-        .prepare("SELECT 1 FROM webhook_deliveries WHERE event_id = ? AND subscription_id = ?")
-        .get(eventId, sub.id);
+        .prepare("SELECT 1 FROM webhook_deliveries WHERE event_id >= ? AND event_id < ? AND subscription_id = ? AND (event_id = ? OR event_id GLOB ?)")
+        .get(eventPrefix, eventPrefixEnd, sub.id, eventId, legacyPattern);
       if (dedupe) {
         result.skips.already_delivered++;
         continue;
@@ -580,13 +595,15 @@ export async function processWebhookDeliveryPass(
       // Backoff: если уже есть неуспешные попытки и время следующей не пришло — скип.
       const lastAttempt = db
         .prepare(
-          `SELECT attempt, success, next_retry_at FROM webhook_delivery_attempts
-            WHERE event_id = ? AND subscription_id = ?
+          `SELECT event_id, attempt, success, next_retry_at FROM webhook_delivery_attempts
+            WHERE event_id >= ? AND event_id < ? AND subscription_id = ? AND (event_id = ? OR event_id GLOB ?)
             ORDER BY attempt DESC LIMIT 1`,
         )
-        .get(eventId, sub.id) as
-        | { attempt: number; success: number; next_retry_at: string | null }
+        .get(eventPrefix, eventPrefixEnd, sub.id, eventId, legacyPattern) as
+        | { event_id: string; attempt: number; success: number; next_retry_at: string | null }
         | undefined;
+      // Retries keep the original receiver-visible id and its attempt budget.
+      if (lastAttempt) eventId = lastAttempt.event_id;
       if (lastAttempt && lastAttempt.success === 0) {
         if (lastAttempt.next_retry_at && (() => {
           const t = parseRetryAt(lastAttempt.next_retry_at);
@@ -707,6 +724,7 @@ export async function processWebhookDeliveryPass(
       }
     }
   }
+  webhookScanAfterId = events[events.length - 1].id;
   return result;
 }
 

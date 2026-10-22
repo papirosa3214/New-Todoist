@@ -69,7 +69,7 @@ export function resolveUserId(
       const row = db.prepare("SELECT archived FROM users WHERE id = ?").get(decoded.id) as
         | { archived: number | null }
         | undefined;
-      return row?.archived ? null : { userId: decoded.id, via: "jwt" };
+      return !row || row.archived ? null : { userId: decoded.id, via: "jwt" };
     }
   } catch {
     // Not a valid/current JWT — fall through and try it as an api_token.
