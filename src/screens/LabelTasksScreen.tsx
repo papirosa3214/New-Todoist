@@ -17,6 +17,7 @@ import {
   ErrorBanner,
   Loading,
 } from "../components/UI";
+import { MarkdownInline } from "../components/MarkdownInline";
 import { MONTHS_SHORT } from "../lib/date";
 import { PRIORITY_COLORS } from "../lib/priority";
 
