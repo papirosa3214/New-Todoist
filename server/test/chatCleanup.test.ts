@@ -464,6 +464,70 @@ describe("Уборка лишних чатов: отбор кандидатов"
     expect(ids).not.toContain(personal.id);
   });
 
+  it("тема карточки в работе (agent_state in_progress) не убирается и принимает сообщения", async () => {
+    const { taskId, topicId } = await topic("Карточка в работе");
+    db.prepare("UPDATE chats SET updated_at = datetime('now','-3 hours') WHERE id = ?").run(topicId);
+    db.prepare("UPDATE tasks SET agent_state = 'in_progress' WHERE id = ?").run(taskId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/chats/cleanup/candidates",
+      headers: ownerAuth,
+    });
+    const ids = (res.json().chats as Array<{ id: string }>).map((c) => c.id);
+    expect(ids).not.toContain(topicId);
+
+    // Тема остаётся рабочим местом: сообщения принимаются, уборка её не трогает.
+    const sent = await app.inject({
+      method: "POST",
+      url: `/api/chats/${topicId}/messages`,
+      headers: ownerAuth,
+      payload: { text: "Тема живая, не убирать" },
+    });
+    expect(sent.statusCode).toBe(200);
+
+    const clean = await app.inject({
+      method: "POST",
+      url: "/api/chats/cleanup",
+      headers: ownerAuth,
+      payload: { confirm: true },
+    });
+    expect(clean.statusCode).toBe(200);
+    expect(clean.json().chats as string[]).not.toContain(topicId);
+    const row = db.prepare("SELECT closed_at, archived_at FROM chats WHERE id = ?").get(topicId) as any;
+    expect(row.closed_at).toBeNull();
+    expect(row.archived_at).toBeNull();
+  });
+
+  it("карточка с незакрытым шагом роли в работе в кандидаты не попадает", async () => {
+    const { taskId, topicId } = await topic("Шаг роли в работе");
+    db.prepare("UPDATE chats SET updated_at = datetime('now','-3 hours') WHERE id = ?").run(topicId);
+    db.prepare(
+      "INSERT INTO subtasks(id, task_id, title, done, agent_state) VALUES (?, ?, 'Шаг', 0, 'in_progress')",
+    ).run(`sub-${topicId}`, taskId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/chats/cleanup/candidates",
+      headers: ownerAuth,
+    });
+    const ids = (res.json().chats as Array<{ id: string }>).map((c) => c.id);
+    expect(ids).not.toContain(topicId);
+  });
+
+  it("тему карточки в работе не убирают и одиночной архивацией (409)", async () => {
+    const { taskId, topicId } = await topic("Одиночная защита");
+    db.prepare("UPDATE tasks SET agent_state = 'in_progress' WHERE id = ?").run(taskId);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${topicId}/archive`,
+      headers: ownerAuth,
+    });
+    expect(res.statusCode).toBe(409);
+    const row = db.prepare("SELECT closed_at FROM chats WHERE id = ?").get(topicId) as any;
+    expect(row.closed_at).toBeNull();
+  });
+
   it("уборка без подтверждения ничего не делает, с подтверждением — архивирует кандидатов", async () => {
     const { topicId } = await topic("Убираем");
     db.prepare("UPDATE chats SET updated_at = datetime('now','-3 hours') WHERE id = ?").run(topicId);

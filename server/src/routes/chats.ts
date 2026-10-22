@@ -14,7 +14,9 @@ import {
   archiveChat,
   archiveRight,
   chatRoomRow,
+  canArchiveTaskTopic,
   cleanupCandidates,
+  isTaskTopic,
   runCleanup,
 } from "../lib/chatArchive.js";
 import { nudgeTaskPlan } from "../runtime/taskNudge.js";
@@ -1314,6 +1316,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: "Чат не найден" });
     const right = archiveRight(chat, req.userId);
     if (!right.allowed) return reply.code(403).send({ error: right.reason });
+    // Тема карточки, которая сейчас в работе, — рабочее место роли: её
+    // никто не убирает, пока карточка не отдана (дефект D1).
+    if (isTaskTopic(chat) && !canArchiveTaskTopic(chat.task_id))
+      return reply.code(409).send({ error: "Чат задачи в работе убрать нельзя" });
     archiveChat(chat.id);
     return { ok: true, archived: true, chat: chatRow(chat.id) };
   };
