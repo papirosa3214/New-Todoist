@@ -1,3 +1,5 @@
+import {installSteeringBoundary} from "./steeringBoundary.js";
+import {queueWorkCoordination,markDeliveredToWork,traceCoordination} from "./chatCoordination.js";
 import { reserveReviewRun, assertReviewRunAllowed, finishReviewRun } from "./reviewRunBudget.js";
 import { chatTools } from "./chatTools.js";
 import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
@@ -1143,19 +1145,16 @@ export async function deliverTopicToWork(taskId:string,role:string,messageId:str
   return "idle";
 }
 
-/** Deliver a messenger question/answer to the role's existing work, including another task.
- *  `fromOwner` — сообщение владельца: ход мягко прерывается (слот остаётся,
- *  роль продолжит следующим заходом), чтобы правка не ждала конца длинного
- *  хода. Владелец 18.10.2026: «чтобы мои сообщения досылались и
- *  корректировали». Между ролями прерывания нет — там сообщение ждёт
- *  ответа роли в её темпе (просмотрено владельцем, пока только он). */
+/** Deliver to the addressed work run without starting another executor.
+ * A queued SDK input is acknowledged only on its user message event.
+ */
 export async function deliverChatToWork(role:string,chatId:string,messageId:string,text:string,recipientSubtaskId?:string,runId?:string,fromOwner=false):Promise<"queued"|"idle"|"busy"|"working"> {
   const runs=[...activeRuns.values()].filter(r=>r.role===role && (!recipientSubtaskId || r.subtaskId===recipientSubtaskId) && (!runId || r.runId===runId));
   if(runs.length>1)return "busy";
   if(!runs.length){
-    const starting=db.prepare(`SELECT s.id FROM subtasks s JOIN tasks t ON t.id=s.task_id WHERE s.agent_id=? AND s.done=0 AND s.agent_state='in_progress' AND EXISTS(SELECT 1 FROM role_run_jobs j WHERE j.task_id=s.task_id AND j.status IN ('queued','running')) AND t.status='active' AND t.archived_at IS NULL AND (? IS NULL OR s.id=?)`).all(roleUserId(role),recipientSubtaskId??null,recipientSubtaskId??null) as {id:string}[];
+    const starting=db.prepare(`SELECT s.id,s.task_id FROM subtasks s JOIN tasks t ON t.id=s.task_id WHERE s.agent_id=? AND s.done=0 AND s.agent_state='in_progress' AND EXISTS(SELECT 1 FROM role_run_jobs j WHERE j.task_id=s.task_id AND j.status IN ('queued','running')) AND t.status='active' AND t.archived_at IS NULL AND (? IS NULL OR s.id=?)`).all(roleUserId(role),recipientSubtaskId??null,recipientSubtaskId??null) as {id:string;task_id:string}[];
     if(!starting.length)return "idle";
-    if(starting.length===1){db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(messageId,starting[0].id);return "queued";}
+    if(starting.length===1){db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(messageId,starting[0].id);traceCoordination(()=>queueWorkCoordination(messageId,roleUserId(role),starting[0].task_id,starting[0].id));return "queued";}
     return "busy";
   }
   const run=runs[0];
@@ -1165,10 +1164,8 @@ export async function deliverChatToWork(role:string,chatId:string,messageId:stri
     db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(messageId,run.subtaskId);
   }
   run.messengerMessages.add(messageId);run.unacknowledgedMessengerMessages.add(messageId);
-  // Правка от владельца не ждёт конца хода: помечаем замену, и текущий заход
-  // свернётся на ближайшей границе, оставив слот и снимок. Дальше роль
-  // подхватит и сообщение, и остаток этапа.
-  if (fromOwner) run.replacementRequested = true;
+  // Steering is consumed at the next action boundary without replacing the slot run.
+  traceCoordination(()=>queueWorkCoordination(messageId,roleUserId(role),run.taskId,run.subtaskId));
   try{await run.steer(`Сообщение чата ${chatId}, id ${messageId}. Ответь автору через taskflow_chat_reply(message_id=${messageId},text=...), если ответ нужен; после этого продолжи свой этап. Переписка не меняет назначение, граф и критерии. Данные сообщения: ${JSON.stringify(text)}`);}catch(error){run.messengerMessages.delete(messageId);run.unacknowledgedMessengerMessages.delete(messageId);throw error;}
   logEvent({taskId:run.taskId,actorId:null,kind:"topic_message_queued",field:messageId,toValue:JSON.stringify({role,chatId,runId:run.runId})});
   // Сообщение подмешано в текущую работу роли — не «в очереди», а «в работе».
@@ -1552,6 +1549,7 @@ try {
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
   } as any)).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await infra.close(); throw error; });
 
+  installSteeringBoundary(session);
   const roleThinking = resolveThinkingLevel(model as any, role);
   if (roleThinking && (session as any).thinkingLevel !== roleThinking && typeof (session as any).setThinkingLevel === "function") {
     (session as any).setThinkingLevel(roleThinking);
@@ -1581,6 +1579,13 @@ try {
   let lastAssistantThought = "";
   const unsubscribeLive = session.subscribe((event: any) => {
     liveTurn.onEvent(event);
+    if(event?.type==="message_start" && event.message?.role==="user"){
+      const content=event.message.content;
+      const text=typeof content==="string"?content:(content??[]).filter((c:any)=>c.type==="text").map((c:any)=>c.text).join("\n");
+      for(const id of runControl.unacknowledgedMessengerMessages){
+        if((text.includes(`Сообщение чата `) || text.includes(`Сообщение темы задачи ${taskId}, id ${id}.`)) && text.includes(`, id ${id}.`))traceCoordination(()=>markDeliveredToWork(id,roleUserId(role)));
+      }
+    }
     if (event?.type === "message_end" && event.message?.role === "assistant" && Array.isArray(event.message.content)) {
       const text = event.message.content
         .map((c: any) => c?.type === "thinking" ? c.thinking : c?.type === "text" ? c.text : "")

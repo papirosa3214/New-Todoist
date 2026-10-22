@@ -1,5 +1,11 @@
 # Реестр активных работ по серверу
 
+| LOCK-LIFECYCLE-DESIGN-20261022 | REVIEW | LIFECYCLE-DESIGN | Согласованная схема: типы работ, автокритик, автоинтегратор и работа из чата | `AGENT-WORK-SCOPES.md`, `docs/2026-10-22-task-and-chat-lifecycle-design.md` | Указания владельца 22.10.2026 | Codex | Документ направления; код цикла ещё не внедрён |
+
+
+| LOCK-CHAT-DELIVERY-20261022 | REVIEW | CHAT-DELIVERY | Разделить чат, рабочий слот и межагентное обращение; честные подтверждения; steering между действиями | `AGENT-WORK-SCOPES.md`, `server/src/runtime/chatCoordination.ts`, `server/src/runtime/chatSteering.ts`, `server/src/runtime/inProcessRun.ts`, `server/src/runtime/PiRuntimeAdapter.ts`, `server/src/routes/chats.ts`, `server/test/chat-session-runtime.test.ts`, `server/test/chatCoordination.test.ts`, `server/src/runtime/steeringBoundary.ts`, `server/test/steeringBoundary.test.ts`, `server/test/inProcessRun.test.ts`, `docs/2026-10-22-chat-delivery.md` | Владелец: исправить по разбору; только тесты логики, без UI | Codex | 61 logic + 7 HTTP PASS; tsc PASS; старые три падения каталога инструментов вне scope; без UI |
+
+
 > **Статус на 06.10.2026.** Строки ниже — записи о работах на момент их
 > выполнения (последняя датирована 02.10.2026); многие доведены до конца и
 > влиты в `main`. Это журнал, а не описание того, как система устроена сейчас:

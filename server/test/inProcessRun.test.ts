@@ -148,6 +148,30 @@ describe("агент роли внутри сервера", () => {
     finally {script.steps=null;}
   });
 
+  it("рабочая карточка подтверждает доставку только при включении сообщения в контекст",async()=>{
+    const {taskId}=builderTask("Занят на карточке");
+    const headers={authorization:`Bearer ${ownerToken}`};
+    const chat=(await app.inject({method:"POST",url:"/api/chats",headers,payload:{kind:"direct",title:"Уточнение работы",member_ids:["role_builder"]}})).json().chat;
+    let entered!:()=>void, release!:()=>void;
+    const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+    script.steering=[];script.steps=async()=>{entered();await gate;};
+    const run=await runRoleInProcess({taskId,role:"builder",mode:"reply"});await started;
+    try{
+      const sent=await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers,payload:{text:"Уточни результат"}});
+      expect(sent.statusCode).toBe(200);
+      const id=sent.json().message.id;
+      const card=()=>JSON.parse((db.prepare("SELECT steps FROM chat_messages WHERE json_valid(steps) AND json_extract(steps,'$.coordination.question_id')=?").get(id) as any).steps).coordination;
+      expect(card().status).toBe("queued");expect(card().task_id).toBe(taskId);
+      script.emit?.({type:"message_start",message:{role:"user",content:[{type:"text",text:"другое сообщение"}]}});
+      expect(card().status).toBe("queued");
+      script.emit?.({type:"message_start",message:{role:"user",content:[{type:"text",text:script.steering[0]}]}});
+      expect(card().status).toBe("delivered");expect(card().terminal).toBe(false);
+      db.prepare("UPDATE chat_messages SET steps=json_set(steps,'$.coordination.status','queued') WHERE json_valid(steps) AND json_extract(steps,'$.coordination.question_id')=?").run(id);
+      script.emit?.({type:"message_start",message:{role:"user",content:`Задание\nСообщение темы задачи ${taskId}, id ${id}. Ответь автору`}});
+      expect(card().status).toBe("delivered");
+    }finally{release();await run.completion;script.steps=null;}
+  });
+
   it("сообщение темы попадает в активную SDK сессию без второго запуска",async()=>{
     const {taskId}=builderTask("Обсудить текущую работу");
     let entered!:()=>void, release!:()=>void;

@@ -1,7 +1,7 @@
 import {offerChatSteering} from "../runtime/chatSteering.js";
 import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
 import { clearChatWorkPlan, isWorkPlanFinished, readChatWorkPlan, readChatWorkPlans, saveChatWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
-import {registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination,markDeliveredToWork,markCoordinationAnswered} from "../runtime/chatCoordination.js";
+import {hasCoordinationCard,registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination,markDeliveredToWork,markCoordinationAnswered} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
@@ -1913,8 +1913,7 @@ async function dispatchRoleReplies(args: {
       // Pending survives a process crash. The recipient's linked reply (or
       // persisted processing of an answer) completes the obligation.
       if(delivery==="busy") messengerAmbiguityNotice(chatId,accountId,args.messageId);
-      // Сообщение подмешано в текущую работу роли — служебная строка в чате.
-      else if(delivery==="working") traceCoordination(()=>markDeliveredToWork(args.messageId,accountId,args.fromUserId));
+      // Рабочий исполнитель сам подтверждает включение ввода в контекст.
       continue;
     }
     pickDurableDelivery(durableRecord.id);
@@ -1994,7 +1993,7 @@ async function dispatchRoleReplies(args: {
     void receiptPromise.then(receipt=>{
       if(!receipt)return;
       void receipt.delivered.then(taken=>{
-        if(taken)traceCoordination(()=>markDeliveredToWork(args.messageId,accountId,args.fromUserId));
+        if(taken)traceCoordination(()=>markDeliveredToWork(args.messageId,accountId));
       });
     });
     void enqueueChatReply(chatId,accountId,async () => {
@@ -2006,9 +2005,10 @@ async function dispatchRoleReplies(args: {
       if (!consumed) return replyWork();
       const ok=await receipt.outcome;
       if (!fenceDeliveryIfStale(durableRecord.id,durableRecord.generation)){
-        completeDurableDelivery(durableRecord.id,ok);
-        // Роль ответила — служебная строка закрывается.
-        if (ok) traceCoordination(()=>markCoordinationAnswered(args.messageId,accountId));
+        // A consumed input is not a linked answer to a cross-room question.
+        const answered=ok && markCoordinationAnswered(args.messageId,accountId);
+        if(ok && hasCoordinationCard(args.messageId,accountId) && !answered)retainForwardedDelivery(durableRecord.id);
+        else completeDurableDelivery(durableRecord.id,ok);
       }
     }).catch(error => {
       console.warn("[chats] clarification delivery failed",error);
@@ -2141,7 +2141,7 @@ async function deliverAgentReply(args: {
   const activeDelivery=topic && slot ? await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)
     : !topic ? await deliverChatToWork(role,chatId,args.triggerMessageId,userText,args.subtaskId??trigger.recipient_subtask_id??undefined,undefined,fromOwner) : "idle";
   if(activeDelivery!=="idle"){
-    traceCoordination(()=>updateCoordination(args.triggerMessageId,roleUserId,{status:activeDelivery==="busy"?"busy":"delivered",activity:activeDelivery==="busy"?"Адресат занят; вопрос ожидает доставки":"Вопрос доставлен в рабочую сессию; ответ ещё не получен",last_activity_at:new Date().toISOString()}));
+    traceCoordination(()=>updateCoordination(args.triggerMessageId,roleUserId,{status:activeDelivery==="busy"?"busy":"queued",activity:activeDelivery==="busy"?"Выбери рабочий этап адресата":"Ожидает завершения текущего действия",last_activity_at:new Date().toISOString()}));
     throw new MessageForwardedToWork(activeDelivery==="busy");
   }
   const roleTitle = titleOfRole(role);

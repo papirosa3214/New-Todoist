@@ -7,7 +7,7 @@ type Origin={chat_id:string;message_id:string;requester_id:string};
 export type Coordination={
  question_id:string;recipient_id:string;requester_name:string;recipient_name:string;question:string;
  child_chat_id:string;origin_message_id:string;status:string;activity:string;
- created_at:string;last_activity_at:string;answer?:string;terminal:boolean;
+ created_at:string;last_activity_at:string;answer?:string;terminal:boolean;task_id?:string;subtask_id?:string;
 };
 const parse=(raw:string|null)=>{try{return JSON.parse(raw??"{}");}catch{return {};}};
 const title=(id:string)=>(db.prepare("SELECT name FROM users WHERE id=?").get(id) as {name:string}|undefined)?.name??"Роль";
@@ -24,7 +24,7 @@ export function registerCoordinationOrigin(questionId:string,parentId:string,sen
  if(!parent || !member(parent.chat_id,senderId))return;
  const origin:Origin=parse(parent.steps).coordination_origin??{chat_id:parent.chat_id,message_id:parentId,requester_id:senderId};
  if(!member(origin.chat_id,origin.requester_id))return;
- const row=db.prepare("SELECT steps FROM chat_messages WHERE id=?").get(questionId) as {steps:string|null}|undefined;if(!row)return;
+ const row=db.prepare("SELECT chat_id,steps FROM chat_messages WHERE id=?").get(questionId) as {chat_id:string;steps:string|null}|undefined;if(!row || row.chat_id===parent.chat_id)return;
  const steps={duration_ms:0,items:[],...parse(row.steps),coordination_origin:origin};
  db.prepare("UPDATE chat_messages SET steps=? WHERE id=?").run(JSON.stringify(steps),questionId);
 }
@@ -52,6 +52,18 @@ export function registerCoordinationOriginSelf(questionId:string,requesterId:str
  db.prepare("UPDATE chat_messages SET steps=? WHERE id=?").run(JSON.stringify({duration_ms:0,items:[],...steps,coordination_origin:origin}),questionId);
 }
 
+/** Принято рабочим слотом, но ещё не подтверждено событием пользовательского ввода. */
+export function queueWorkCoordination(questionId:string,recipientId:string,taskId:string,subtaskId?:string){
+ const question=db.prepare("SELECT from_user_id,reply_to_message_id FROM chat_messages WHERE id=?").get(questionId) as {from_user_id:string;reply_to_message_id:string|null}|undefined;
+ if(!question)return;
+ // Возврат ответа коллеге не создаёт нового встречного обращения.
+ if(question.reply_to_message_id && card(question.reply_to_message_id,question.from_user_id))return;
+ registerCoordinationOriginSelf(questionId,question.from_user_id);
+ ensureCoordinationCard(questionId,recipientId);
+ const task=db.prepare("SELECT title FROM tasks WHERE id=?").get(taskId) as {title:string}|undefined;
+ updateCoordination(questionId,recipientId,{status:"queued",activity:`Ожидает завершения текущего действия · ${task?.title??taskId}`,task_id:taskId,subtask_id:subtaskId,last_activity_at:new Date().toISOString()});
+}
+
 /** Сообщение доставлено в текущую работу адресата: строка в чате показывает это. */
 export function markDeliveredToWork(questionId:string,recipientId:string,requesterId?:string){
  if(requesterId)registerCoordinationOriginSelf(questionId,requesterId);
@@ -61,8 +73,13 @@ export function markDeliveredToWork(questionId:string,recipientId:string,request
 
 /** Адресат ответил — служебная строка закрывается (клиент её прячет). */
 export function markCoordinationAnswered(questionId:string,recipientId:string){
- updateCoordination(questionId,recipientId,{status:"answered",activity:"Ответ получен",terminal:true,last_activity_at:new Date().toISOString()});
+ const answer=db.prepare("SELECT text FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=? AND COALESCE(message_type,'')!='system' ORDER BY rowid DESC LIMIT 1").get(questionId,recipientId) as {text:string}|undefined;
+ if(!answer)return false;
+ updateCoordination(questionId,recipientId,{status:"answered",activity:"Ответ получен",answer:answer.text,terminal:true,last_activity_at:new Date().toISOString()});
+ return true;
 }
+
+export function hasCoordinationCard(questionId:string,recipientId:string):boolean { return !!card(questionId,recipientId); }
 
 export function coordinationCardData(row:{steps?:string|null}):Coordination|undefined{
  const c:Coordination|undefined=parse(row.steps??null).coordination;

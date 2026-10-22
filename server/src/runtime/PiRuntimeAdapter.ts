@@ -1,3 +1,4 @@
+import {installSteeringBoundary} from "./steeringBoundary.js";
 import {registerChatSteering,_resetChatSteeringForTests} from "./chatSteering.js";
 import {
   buildRoleToolCatalog,
@@ -1529,6 +1530,7 @@ export async function startChatRun(
       throw error;
     }
 
+    installSteeringBoundary(session);
     // Role policy also replaces the level restored from an older session.
     const roleThinking = resolveThinkingLevel(piModel, role);
     if (roleThinking && session.thinkingLevel !== roleThinking && typeof session.setThinkingLevel === "function") {

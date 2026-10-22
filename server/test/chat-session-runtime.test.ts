@@ -560,7 +560,7 @@ it("HTTP: уточнение от коллеги-роли тоже подмеш�
  }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });
 
-it("HTTP: служебная строка — доставлено в работу, после ответа закрыта",async()=>{
+it("HTTP: уточнение в текущем чате не создаёт карточку координации",async()=>{
  const chatId="steering-service-row";
  makeChat(chatId,"Служебная строка");
  const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
@@ -574,15 +574,10 @@ it("HTTP: служебная строка — доставлено в работ
   await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
   const steered=fakeSessions[0].steer.mock.calls[0][0] as string;
   fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
-  await vi.waitFor(()=>{
-   const row=card();
-   expect(row).toBeTruthy();
-   expect(row.text.toLowerCase()).toContain("доставлено в работу");
-  });
+  await new Promise(r=>setTimeout(r,20));
+  expect(card()).toBeUndefined();
   releasePromptWaiter(0);
-  await vi.waitFor(()=>{
-   const row=card();
-   expect(JSON.parse(row.steps).coordination.status).toBe("answered");
-  });
+  await vi.waitFor(()=>expect(fakeSessions[0].dispose).toHaveBeenCalled());
+  expect(card()).toBeUndefined();
  }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });
