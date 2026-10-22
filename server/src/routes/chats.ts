@@ -7,6 +7,7 @@ import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
+import { shouldFanOutOwnerMessage, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { deliverTopicToWork, deliverChatToWork } from "../runtime/inProcessRun.js";
@@ -1005,6 +1006,35 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         message,
       });
 
+      // Свод ветки в основной чат (22.10.2026): ветка — отдельный поток, но
+      // владельцу не нужно заглядывать в каждую. Ответ роли в ветке одной
+      // строкой возвращается в комнату, из которой ветку открыли.
+      try {
+        if (senderRole) mirrorBranchResult(chatId, roleFromUserId(req.userId), storedText);
+      } catch (error) {
+        console.warn(`[chats] свод ветки в основной чат не удался:`, error instanceof Error ? error.message : error);
+      }
+
+      // Ветка на каждое сообщение владельца (22.10.2026): «принял — открыл
+      // ветку — работаю там». Основная комната остаётся разговором, каждая
+      // просьба живёт отдельным потоком и не ждёт конца чужого хода.
+      let handledByBranch = false;
+      try {
+        handledByBranch = await fanOutOwnerMessage({
+          chatId,
+          messageId: id,
+          text,
+          fromUserId: req.userId,
+          mode,
+          hop: coordinationHop,
+        });
+      } catch (error) {
+        console.warn(
+          `[chats] ветка по сообщению ${id} не создалась:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+
       // Этап 2: авто-ответ ролей. «Best effort»: ошибки НЕ откатывают уже
       // сохранённое сообщение и не роняют запрос — пользователь уже видит
       // своё сообщение в ленте.
@@ -1014,7 +1044,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // через очередь: раньше второе сообщение подряд попадало на занятый
       // лок и молча терялось.
       try {
-        await dispatchRoleReplies({
+        if (!handledByBranch) await dispatchRoleReplies({
           chatId,
           messageId: id,
           fromUserId: req.userId,
@@ -1838,6 +1868,101 @@ function messengerAmbiguityNotice(chatId:string,roleId:string,messageId:string):
 /** Модель из пилюли окна ввода: короткая строка или null («как у роли»). */
 function chatModelChoice(value: unknown): string | null {
   return typeof value === "string" && /^[\w.:\/-]{1,120}$/.test(value.trim()) ? value.trim() : null;
+}
+
+/** Ветка под сообщение владельца. Возвращает true, если просьбу забрала ветка
+ *  и в основной комнате отдельный ход уже не нужен.
+ *
+ *  Почему ветка, а не «подмешать в текущий ход»: подмешивание не даёт ни
+ *  видимой реакции, ни отдельного потока — владелец писал три сообщения и
+ *  получал тишину, пока роль копалась в первом. Ветка отвечает сразу и
+ *  работает параллельно. Ветки не ветвятся, на ответ роли ветки нет, темы
+ *  задач и общий чат не трогаем. */
+async function fanOutOwnerMessage(args: {
+  chatId: string;
+  messageId: string;
+  text: string;
+  fromUserId: string;
+  mode?: ChatWorkMode;
+  hop: number;
+}): Promise<boolean> {
+  const chat = db
+    .prepare("SELECT kind, task_id, parent_chat_id, branch_of_chat_id, room_kind FROM chats WHERE id = ?")
+    .get(args.chatId) as
+    | { kind: ChatKind; task_id: string | null; parent_chat_id: string | null; branch_of_chat_id: string | null; room_kind: string | null }
+    | undefined;
+  if (!chat) return false;
+  const roles = chatMemberRoles(args.chatId);
+  const source = db
+    .prepare("SELECT reply_to_message_id FROM chat_messages WHERE id = ? AND chat_id = ?")
+    .get(args.messageId, args.chatId) as { reply_to_message_id: string | null } | undefined;
+  const repliesToRole = Boolean(
+    source?.reply_to_message_id &&
+      db.prepare("SELECT 1 FROM chat_messages WHERE id = ? AND from_user_id LIKE 'role_%'").get(source.reply_to_message_id),
+  );
+  const allowed = shouldFanOutOwnerMessage({
+    fromOwner: isOwner(args.fromUserId),
+    direct: chat.kind === "direct",
+    roleMembers: roles.length,
+    isBranch: Boolean(chat.branch_of_chat_id),
+    isTaskTopic: Boolean(chat.task_id) || Boolean(chat.parent_chat_id),
+    isCommon: chat.room_kind === "common",
+    repliesToRole,
+  });
+  if (!allowed) return false;
+  const role = roles[0];
+  const roleId = roleAccountId(role);
+  if (!roleId) return false;
+  const busy = Boolean(
+    db.prepare("SELECT 1 FROM chat_message_queue WHERE chat_id = ? AND role_id = ? AND status IN ('pending','picked') LIMIT 1").get(args.chatId, roleId),
+  );
+  const branchId = uid();
+  const copyId = uid();
+  const branchAckId = uid();
+  const parentAckId = uid();
+  db.transaction(() => {
+    db.prepare("INSERT INTO chats (id, title, kind, created_by, branch_of_chat_id, branch_of_message_id) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(branchId, fanoutTitle(args.text), chat.kind, args.fromUserId, args.chatId, args.messageId);
+    db.prepare("INSERT INTO chat_members (chat_id, member_id) SELECT ?, member_id FROM chat_members WHERE chat_id = ?").run(branchId, args.chatId);
+    db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id) VALUES (?, ?, ?, 'chat', ?)").run(copyId, args.fromUserId, args.text, branchId);
+    db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id) VALUES (?, ?, ?, 'chat', ?, ?)").run(branchAckId, roleId, fanoutBranchAck(args.text, busy), branchId, copyId);
+    db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id) VALUES (?, ?, ?, 'chat', ?, ?)").run(parentAckId, roleId, fanoutParentAck(args.text), args.chatId, args.messageId);
+    db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id IN (?, ?)").run(args.chatId, branchId);
+  })();
+  broadcastToUsers(memberIds(branchId), { type: "chat:new", message: loadChatMessage(copyId) });
+  broadcastToUsers(memberIds(branchId), { type: "chat:new", message: loadChatMessage(branchAckId) });
+  broadcastToUsers(memberIds(args.chatId), { type: "chat:new", message: loadChatMessage(parentAckId) });
+  await dispatchRoleReplies({
+    chatId: branchId,
+    messageId: copyId,
+    fromUserId: args.fromUserId,
+    text: args.text,
+    hop: args.hop,
+    mode: args.mode,
+  });
+  return true;
+}
+
+/** Строка-свод из ветки в основной чат: одна, короткая, без пересказа. */
+function mirrorBranchResult(chatId: string, role: RoleName | null, text: string): void {
+  const branch = db
+    .prepare("SELECT branch_of_chat_id, title FROM chats WHERE id = ?")
+    .get(chatId) as { branch_of_chat_id: string | null; title: string | null } | undefined;
+  const parentId = branch?.branch_of_chat_id;
+  const roleId = roleAccountId(role ?? "builder");
+  if (!parentId || !roleId) return;
+  const firstLine =
+    text
+      .split("\n")
+      .map((line) => line.replace(/[#*`>_-]/g, "").trim())
+      .find(Boolean) ?? "";
+  const digest = firstLine.length > 120 ? firstLine.slice(0, 119) + "…" : firstLine;
+  const title = (branch?.title ?? "").replace(/^Ветка:\s*/, "");
+  const id = uid();
+  db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id) VALUES (?, ?, ?, 'chat', ?)")
+    .run(id, roleId, "Ветка «" + title + "» — готово. " + digest, parentId);
+  db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(parentId);
+  broadcastToUsers(memberIds(parentId), { type: "chat:new", message: loadChatMessage(id) });
 }
 
 async function dispatchRoleReplies(args: {
