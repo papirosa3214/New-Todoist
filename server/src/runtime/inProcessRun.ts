@@ -76,7 +76,7 @@ import { isolatedLocalOperations, roleIsolationEnabled } from "./localRoleOperat
 import { previousSessionDigest } from "./slotSession.js";
 import { remoteRoleWorkspace } from "./roleWorkspace.js";
 import { resolveRoleHost } from "./roleHost.js";
-import { hostOperations } from "./hostOperations.js";
+import { hostOperations, withHostToolExecution } from "./hostOperations.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
 import { isProviderLimitText, lastAssistantEmptyAnswer, lastAssistantLimitError, lastAssistantError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
@@ -1238,7 +1238,12 @@ export async function sweepStaleInProcessRuns(now = Date.now()): Promise<string[
 /** Для тестов: дождаться окончания всех фоновых запусков. */
 const pending = new Set<Promise<void>>();
 export async function _settleInProcessRunsForTests(): Promise<void> {
-  await Promise.all([...pending]);
+  // A completion can schedule a successor at the next action boundary.
+  // Drain that preparation too, not only the first snapshot of work promises.
+  do {
+    await Promise.all([...pending]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  } while (pending.size || preparingRuns.size);
 }
 
 /** Сколько ждём резюме роли при остановке хода. Остановка не должна зависать
@@ -1539,9 +1544,9 @@ try {
   const операции = host
     ? поИнструментам(hostOperations(host, cwd))
     : roleIsolationEnabled() ? поИнструментам(isolatedLocalOperations(cwd)) : undefined;
-  const builtinTools = (
+  const builtinTools = withHostToolExecution(host, cwd,
     [...createCodingTools(cwd, операции), ...createReadOnlyTools(cwd, операции)]
-  )
+  );
   // На удалённой машине встроенные инструменты CLI исполнялись бы на .110, а не там:
   // запуск внешнего агента через хост — отдельный этап (операция agent_spawn в host/).
   if (external && host) throw new Error("внешний агент пока запускается только на .110, не через хост");

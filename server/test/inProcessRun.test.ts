@@ -1,10 +1,11 @@
 // Агент роли внутри сервера (владелец 23.09.2026: «как у Гермеса, без
 // ключей»). Модель подменена: «агент» по заданию вызывает инструменты
 // трекера — проверяем, что всё записывается от имени роли и без ключей.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
+import { roleReport } from "./helpers/roleReport.js";
 import { ensureRoleHome } from "../src/runtime/roleHome.js";
 
 const script = vi.hoisted(() => ({
@@ -31,6 +32,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     ...actual,
     createAgentSession: async (options: any) => {
       script.sessions.push(options);
+      const steps = script.steps;
       const tools = new Map<string, any>((options.customTools ?? []).map((t: any) => [t.name, t]));
       script.systemPrompts.push(options.resourceLoader.getSystemPrompt());
       return {
@@ -38,7 +40,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
           get state() { return { messages: script.answer ? [script.answer] : [] }; },
           subscribe: (listener: (event: any) => void) => { script.emit=listener; return () => {}; },
           prompt: async (text: string) => {
-            if (script.steps) await script.steps(tools, text);
+            if (steps) await steps(tools, text);
           },
           steer: async (text:string) => {script.steering.push(text);},
           abort: async () => {},
@@ -92,6 +94,20 @@ describe("агент роли внутри сервера", () => {
     ownerId = reg.json().user.id;
     ownerToken = reg.json().token;
     db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(ownerId);
+  });
+
+  beforeEach(async () => {
+    await _settleInProcessRunsForTests();
+    script.steps = null;
+    script.answer = null;
+    // Finished mock sessions do not execute the real slot-settlement protocol.
+    // Clear their active states so leftover in_progress leases cannot make the
+    // next independent messenger test look like an ambiguous work target.
+    db.prepare("DELETE FROM chat_message_queue").run();
+    db.prepare("UPDATE tasks SET agent_state=NULL, current_attempt_id=NULL WHERE id LIKE 'inproc-%'").run();
+    db.prepare("UPDATE subtasks SET agent_state=NULL, current_attempt_id=NULL WHERE task_id LIKE 'inproc-%'").run();
+    // Automatic critic runs are enabled explicitly by review scenarios.
+    db.prepare("UPDATE users SET reviewer_first_default=0 WHERE role='owner'").run();
   });
 
   afterAll(async () => {
@@ -157,7 +173,7 @@ describe("агент роли внутри сервера", () => {
     script.steering=[];script.steps=async()=>{entered();await gate;};
     const run=await runRoleInProcess({taskId,role:"builder",mode:"reply"});await started;
     try{
-      const sent=await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers,payload:{text:"Уточни результат"}});
+      const sent=await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers,payload:{text:"Уточни результат",execution_mode:"card"}});
       expect(sent.statusCode).toBe(200);
       const id=sent.json().message.id;
       const card=()=>JSON.parse((db.prepare("SELECT steps FROM chat_messages WHERE json_valid(steps) AND json_extract(steps,'$.coordination.question_id')=?").get(id) as any).steps).coordination;
@@ -273,7 +289,7 @@ describe("агент роли внутри сервера", () => {
     const second=await runRoleInProcess({taskId:b.taskId,role:"architect",subtaskId:b.stepId,prompt:"Обсудить",mode:"reply"});
     await started;
     try{
-      const sent=await app.inject({method:"POST",url:`/api/chats/${chat}/messages`,headers,payload:{text:"@builder @architect Уточните формат"}});
+      const sent=await app.inject({method:"POST",url:`/api/chats/${chat}/messages`,headers,payload:{text:"@builder @architect Уточните формат",execution_mode:"card"}});
       expect(sent.statusCode).toBe(200);
       for(const [role,t] of [["builder",a],["architect",b]] as const){
         const tools=new Map(taskflowTools(role,null,t.taskId,t.stepId).map((x:any)=>[x.name,x]));
@@ -289,11 +305,11 @@ describe("агент роли внутри сервера", () => {
     const a=builderTask("Работа стартует после приёма сообщения");
     db.prepare("UPDATE subtasks SET agent_id='role_builder' WHERE id=?").run(a.stepId);
     const headers={authorization:`Bearer ${ownerToken}`};
-    const chat=(await app.inject({method:"POST",url:"/api/chats",headers,payload:{kind:"direct",member_ids:["role_builder"]}})).json().chat.id;
+    const chat=(await app.inject({method:"POST",url:"/api/chats",headers,payload:{kind:"group",member_ids:["role_builder"]}})).json().chat.id;
     let releaseQueue!:()=>void;
     const queueGate=new Promise<void>(r=>releaseQueue=r);
     const occupied=enqueueChatReply(chat,"role_builder",async()=>{await queueGate;return null;});
-    const sent=await app.inject({method:"POST",url:`/api/chats/${chat}/messages`,headers,payload:{text:"Вопрос перед запуском работы"}});
+    const sent=await app.inject({method:"POST",url:`/api/chats/${chat}/messages`,headers,payload:{text:"Вопрос перед запуском работы",execution_mode:"card"}});
     let entered!:()=>void,releaseWork!:()=>void;
     const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>releaseWork=r);
     script.steering=[];script.steps=async()=>{entered();await gate;};
@@ -406,7 +422,8 @@ describe("агент роли внутри сервера", () => {
       await call(tools, "taskflow_subtask_work", { id: stepId, state: "in_progress" });
       await call(tools, "taskflow_subtask_done", { id: stepId, result: "Сделано." });
       await call(tools, "taskflow_comment", { id: taskId, text: "Готово, проверьте." });
-      await call(tools, "taskflow_state", { id: taskId, state: "review", comment: "Итог: сделано." });
+      if ((db.prepare("SELECT agent_state FROM tasks WHERE id=?").get(taskId) as any).agent_state !== "review")
+        await call(tools,"taskflow_state",{id:taskId,state:"review",comment:"Итог: сделано."});
     };
     await runRoleInProcess({ taskId, role: "builder" });
     await _settleInProcessRunsForTests();
@@ -626,14 +643,14 @@ describe("агент роли внутри сервера", () => {
     db.prepare("UPDATE users SET reviewer = 1 WHERE id = 'role_critic_verifier'").run();
     const { taskId, stepId } = builderTask("Цепочка без будильника");
     script.steps = async (tools, prompt) => {
-      if (prompt.includes("Проверь сданную работу")) {
-        await call(tools, "taskflow_review", { id: taskId, verdict: "approved", findings: "Работа подтверждена." });
+      if (!tools.has("taskflow_claim") && tools.has("taskflow_review")) {
+        await call(tools, "taskflow_review", { id: taskId, verdict: "approved", findings: "Работа подтверждена.", report_markdown: roleReport });
         return;
       }
       await call(tools, "taskflow_claim", { id: taskId });
       await call(tools, "taskflow_subtask_work", { id: stepId, state: "in_progress" });
       await call(tools, "taskflow_subtask_done", { id: stepId, result: "Сделано." });
-      await call(tools, "taskflow_state", { id: taskId, state: "review", comment: "Итог: сделано." });
+
     };
     await kickRoleTask(taskId, "assigned");
     for (let i = 0; i < 20; i++) {
@@ -666,7 +683,7 @@ describe("агент роли внутри сервера", () => {
       }
       await call(tools, "taskflow_subtask_work", { id: step2, state: "in_progress" });
       await call(tools, "taskflow_subtask_done", { id: step2, result: "Вторая часть." });
-      await call(tools, "taskflow_state", { id: taskId, state: "review", comment: "Всё." });
+
     };
     await runRoleInProcess({ taskId, role: "builder" });
     for (let i = 0; i < 20; i++) {

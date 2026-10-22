@@ -10,7 +10,7 @@ import {roleUserId} from "../roleRouting.js";
 import {listMachines} from "../host/machines.js";
 import {resolveMachine,isMachineOnline,runOperation} from "../host/gateway.js";
 import {HOSTS_CONFIG} from "./roleWorkspace.js";
-import {hostOperations} from "./hostOperations.js";
+import {hostOperations,withHostToolExecution} from "./hostOperations.js";
 import type {Tool} from "./universalTaskflow.js";
 type Context={role:string;taskId?:string};
 const native=()=>[...new Map([...createCodingTools("/"),...createReadOnlyTools("/")].map(t=>[t.name,t])).values()];
@@ -62,7 +62,7 @@ export async function executeRoleHostTool(c:Context,p:any,signal?:AbortSignal,on
  }
  const o=hostOperations(machine.id,cwd);
  const options={bash:{operations:o.bash},read:{operations:o.read},write:{operations:o.write},edit:{operations:o.edit},grep:{operations:o.grep},find:{operations:o.find},ls:{operations:o.ls}};
- const tool=[...createCodingTools(cwd,options),...createReadOnlyTools(cwd,options)].find(t=>t.name===p.tool)!;
+ const tool=withHostToolExecution(machine.id,cwd,[...createCodingTools(cwd,options),...createReadOnlyTools(cwd,options)]).find(t=>t.name===p.tool)!;
  return tool.execute(crypto.randomUUID(),args,signal,onUpdate);
 }
 export function roleHostAccessTools(context:Context):Tool[]{

@@ -29,10 +29,11 @@ it("secretary chat keeps each Things 3 operation once alongside the rest of her 
  expect(work.operations.filter(t=>t.name==="things_complete")).toHaveLength(1);
  expect(work.operations.some(t=>t.name==="taskflow_things3")).toBe(false);
 });
-it("secretary cannot regain plan_request through chat additions",async()=>{
+it("secretary cannot start card work from chat execution mode",async()=>{
  const c=buildRoleToolCatalog({role:"secretary",mode:"work",runId:"test",chatId:"chat",messageId:"msg"});
  const result=decode(await c.customTools[0].execute("x",{action:"invoke",operation:"taskflow_plan_request",version:1,arguments:{}}));
- expect(result.error.code).toBe("FORBIDDEN");
+ expect(result.ok).toBe(false);
+ expect(result.error.code).toBe("EXECUTION_MODE_RESTRICTED");
 });
 it("missing message context is explained rather than silently removing attachment support",async()=>{
  const c=buildRoleToolCatalog({role:"builder",mode:"work",runId:"test",taskId:"task"});

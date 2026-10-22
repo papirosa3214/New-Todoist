@@ -21,7 +21,6 @@ describe("план сдан — карточка на проверку", () => {
     const task = await app.inject({ method: "POST", url: "/api/tasks", headers: ownerAuth, payload: { title } });
     const taskId = task.json().task.id as string;
     // Личный шаг роли — не узел плана; сдачу держать не должен.
-    await app.inject({ method: "POST", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth, payload: { title: "Личная заметка архитектора" } });
     const plan = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/collaboration-plans`,
@@ -37,7 +36,13 @@ describe("план сдан — карточка на проверку", () => {
       },
     });
     const planId = (plan.json().id ?? plan.json().plan?.id) as string;
-    await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: ownerAuth });
+    const approved = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: ownerAuth });
+    expect(approved.statusCode, approved.body).toBe(200);
+    // Existing subtasks are intentionally imported into a new plan. Create
+    // the unrelated note after approval so it is genuinely outside the plan.
+    const note=await app.inject({ method: "POST", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth, payload: { title: "Личная заметка архитектора" } });
+    expect(note.statusCode,note.body).toBeLessThan(300);
+    expect(db.prepare("SELECT collaboration_plan_id FROM subtasks WHERE task_id=? AND title=?").get(taskId,"Личная заметка архитектора")).toEqual({collaboration_plan_id:null});
     return { taskId, planId };
   }
 
