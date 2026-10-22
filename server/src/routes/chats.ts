@@ -1011,6 +1011,11 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // строкой возвращается в комнату, из которой ветку открыли.
       try {
         if (senderRole) mirrorBranchResult(chatId, roleFromUserId(req.userId), storedText);
+        if (senderRole) {
+          const parentBranch = db.prepare("SELECT branch_of_chat_id FROM chats WHERE id = ?").get(chatId) as { branch_of_chat_id: string | null } | undefined;
+          const roleId = roleAccountId(roleFromUserId(req.userId) ?? "builder");
+          if (parentBranch?.branch_of_chat_id && roleId) postRoomSummaryIfAllBranchesAnswered(parentBranch.branch_of_chat_id, roleId);
+        }
       } catch (error) {
         console.warn(`[chats] свод ветки в основной чат не удался:`, error instanceof Error ? error.message : error);
       }
@@ -1941,6 +1946,53 @@ async function fanOutOwnerMessage(args: {
     mode: args.mode,
   });
   return true;
+}
+
+/** Итог по всем веткам комнаты: одна карточка «что сделано» вместо
+ *  десятка строк. Появляется, когда ответила КАЖДАЯ ветка комнаты, и только
+ *  один раз на волну: новая ветка (created_at новее свода) снова включит свод. */
+function postRoomSummaryIfAllBranchesAnswered(parentId: string, roleId: string): void {
+  const branches = db
+    .prepare("SELECT id, title, created_at FROM chats WHERE branch_of_chat_id = ? ORDER BY created_at")
+    .all(parentId) as Array<{ id: string; title: string; created_at: string }>;
+  if (!branches.length) return;
+  const newestBranch = branches[branches.length - 1].created_at;
+  const existing = db
+    .prepare("SELECT created_at FROM chat_messages WHERE chat_id = ? AND text LIKE 'Всё сведено:%' ORDER BY created_at DESC LIMIT 1")
+    .get(parentId) as { created_at: string } | undefined;
+  if (existing && existing.created_at > newestBranch) return;
+
+  const lines: string[] = [];
+  let open = 0;
+  branches.forEach((branch, index) => {
+    const firstMessage = db
+      .prepare("SELECT id FROM chat_messages WHERE chat_id = ? ORDER BY created_at, rowid LIMIT 1")
+      .get(branch.id) as { id: string } | undefined;
+    const answer = db
+      .prepare("SELECT text FROM chat_messages WHERE chat_id = ? AND from_user_id LIKE 'role_%' AND NOT (reply_to_message_id = ? AND text LIKE 'Принял: «%') ORDER BY created_at DESC, rowid DESC LIMIT 1")
+      .get(branch.id, firstMessage?.id ?? "") as { text: string } | undefined;
+    const title = branch.title.replace(/^Ветка:\s*/, "");
+    if (!answer) {
+      open += 1;
+      lines.push(index + 1 + ". «" + title + "» — в работе");
+      return;
+    }
+    const firstLine =
+      unwrapRoleEnvelope(answer.text)
+        .split("\n")
+        .map((line) => line.replace(/[#*`>_-]/g, "").trim())
+        .find(Boolean) ?? "готово";
+    const digest = firstLine.length > 100 ? firstLine.slice(0, 99) + "…" : firstLine;
+    lines.push(index + 1 + ". «" + title + "» — " + digest);
+  });
+  if (open) return;
+
+  const id = uid();
+  const text = "Всё сведено: " + branches.length + " " + (branches.length === 1 ? "ветка" : "веток") + ".\n" + lines.join("\n");
+  db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id) VALUES (?, ?, ?, 'chat', ?)")
+    .run(id, roleId, text, parentId);
+  db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(parentId);
+  broadcastToUsers(memberIds(parentId), { type: "chat:new", message: loadChatMessage(id) });
 }
 
 /** Строка-свод из ветки в основной чат: одна, короткая, без пересказа. */

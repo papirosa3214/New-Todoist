@@ -153,4 +153,35 @@ describe("ветка на сообщение владельца: живые да
     expect(mirror?.text).toContain("— готово.");
     expect(mirror?.text).toContain("Готово");
   });
+
+  it("свод появляется только когда ответили все ветки комнаты", async () => {
+    // До сих пор ответила одна ветка из трёх — свода быть не должно.
+    const before = db
+      .prepare("SELECT text FROM chat_messages WHERE chat_id=? AND text LIKE 'Всё сведено:%'")
+      .all(chatId) as Array<{ text: string }>;
+    expect(before).toHaveLength(0);
+
+    const token = app.jwt.sign({ id: roleId }, { expiresIn: "5m" });
+    const openBranches = db
+      .prepare(
+        "SELECT id FROM chats WHERE branch_of_chat_id=? AND id NOT IN (SELECT DISTINCT chat_id FROM chat_messages WHERE from_user_id LIKE 'role_%' AND text NOT LIKE 'Принял: «%')",
+      )
+      .all(chatId) as Array<{ id: string }>;
+    expect(openBranches.length).toBeGreaterThan(0);
+    for (const branch of openBranches) {
+      await app.inject({
+        method: "POST",
+        url: `/api/chats/${branch.id}/messages`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { text: "## Готово\nСделал свою часть." },
+      });
+    }
+
+    const summary = db
+      .prepare("SELECT text FROM chat_messages WHERE chat_id=? AND text LIKE 'Всё сведено:%' ORDER BY created_at DESC")
+      .get(chatId) as { text: string } | undefined;
+    expect(summary).toBeTruthy();
+    expect(summary!.text).toContain("Всё сведено:");
+    expect(summary!.text).toContain("«");
+  });
 });
