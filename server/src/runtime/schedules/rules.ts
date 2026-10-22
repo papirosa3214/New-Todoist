@@ -25,8 +25,15 @@ export const SCHEDULE_RULE_KINDS: ScheduleRuleKind[] = [
   "monthly",
   "weekly_days",
   "interval",
-  "cron",
 ];
+
+/**
+ * cron в первой версии не поддерживается: произвольное расписание —
+ * решение владельца, которое ещё не принято (заметка «Рутины и расписание
+ * TaskFlow», развилка B). Разбор выражения в модуле есть, но ручки его не
+ * принимают и отказывают явной ошибкой.
+ */
+export const CRON_RULE_KIND: ScheduleRuleKind = "cron";
 
 /** Минимальный интервал — 5 минут (интервал обхода планировщика). */
 export const MIN_INTERVAL_MINUTES = 5;
@@ -122,6 +129,53 @@ export function parseTimeLocal(value: string): { hour: number; minute: number } 
   const minute = Number(m[2]);
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
   return { hour, minute };
+}
+
+/** Местная календарная дата момента в зоне рутины. */
+export function localDateParts(
+  instant: Date,
+  timezone: string,
+): { year: number; month: number; day: number } {
+  const parts = zonedParts(instant, timezone);
+  return { year: parts.year, month: parts.month, day: parts.day };
+}
+
+/**
+ * Якорь правила «раз в неделю» / «раз в месяц».
+ *
+ * Явный выбор дня из правила (rule_expr) главнее даты создания рутины:
+ * клиент выбирает день недели («Еженедельно») или число месяца
+ * («Ежемесячно»), и следующий запуск обязан совпадать с этим выбором.
+ * Если день не задан — берём дату создания рутины в её зоне.
+ *
+ * Раньше якорь при создании рутины был фиксированной датой 1970 года, а
+ * тик считал от даты создания: рутина один раз срабатывала не в тот день.
+ */
+export function anchorForRule(
+  kind: ScheduleRuleKind,
+  expr: string | null,
+  fallback: { year: number; month: number; day: number },
+): { year: number; month: number; day: number } {
+  const raw = String(expr ?? "").trim();
+  if (!raw) return fallback;
+  if (kind === "monthly") {
+    const day = Number(raw);
+    if (Number.isInteger(day) && day >= 1 && day <= 31) return { ...fallback, day };
+    return fallback;
+  }
+  if (kind === "weekly") {
+    // ISO-день недели: 1=Пн..7=Вс.
+    const weekday = Number(raw);
+    if (!Number.isInteger(weekday) || weekday < 1 || weekday > 7) return fallback;
+    // Дата с нужным днем недели — любой день этой недели: для «раз в
+    // неделю» важен именно день недели, а не число месяца.
+    for (let delta = 0; delta < 7; delta += 1) {
+      const candidate = addDays(fallback, delta);
+      if (weekdayOf(candidate) === weekday) return candidate;
+    }
+    return fallback;
+  }
+  return fallback;
 }
 
 /** «15m» / «2h» → минуты. Меньше пяти минут — нельзя. */
@@ -247,6 +301,34 @@ export function nextCronRun(cron: CronExpr, timezone: string, from: Date): Date 
   return null;
 }
 
+/**
+ * День недели для правила «Еженедельно»: «3» → 3 (ISO: 1=Пн..7=Вс).
+ * Если день не задан — берётся якорь рутины (день создания).
+ */
+export function parseWeekday(expr: string | null): number | null {
+  const raw = String(expr ?? "").trim();
+  if (!/^\d{1,2}$/.test(raw)) return null;
+  const n = Number(raw);
+  return n >= 1 && n <= 7 ? n : null;
+}
+
+/**
+ * День месяца для правила «Ежемесячно»: «15» → 15.
+ * Если день не задан — берётся якорь рутины (день создания).
+ */
+export function parseMonthDay(expr: string | null): number | null {
+  const raw = String(expr ?? "").trim();
+  if (!/^\d{1,2}$/.test(raw)) return null;
+  const n = Number(raw);
+  return n >= 1 && n <= 31 ? n : null;
+}
+
+/** Местная дата якоря — «сегодня» в зоне рутины. */
+export function anchorForNow(now: Date, timezone: string): { year: number; month: number; day: number } {
+  const local = zonedParts(now, timezone);
+  return { year: local.year, month: local.month, day: local.day };
+}
+
 /** «1,3,5» → {1,3,5} (ISO: 1=Пн..7=Вс). */
 export function parseWeekdays(expr: string | null): Set<number> | null {
   const raw = String(expr ?? "").trim();
@@ -291,10 +373,15 @@ export function ruleMatchesDate(rule: ScheduleRule, date: { year: number; month:
       return true;
     case "weekdays":
       return weekday <= 5;
-    case "weekly":
-      return weekday === weekdayOf(rule.anchor);
+    case "weekly": {
+      // Явный день в правиле важнее якоря: он задаёт день недели раз и
+      // навсегда (иначе якорь «день создания» меняет день запуска).
+      const wanted = parseWeekday(rule.expr) ?? weekdayOf(rule.anchor);
+      return weekday === wanted;
+    }
     case "monthly": {
-      const anchorDay = Math.min(rule.anchor.day, daysInMonth(date.year, date.month));
+      const wanted = parseMonthDay(rule.expr) ?? rule.anchor.day;
+      const anchorDay = Math.min(wanted, daysInMonth(date.year, date.month));
       return date.day === anchorDay;
     }
     case "weekly_days": {
@@ -342,6 +429,15 @@ export function nextRunAfter(rule: ScheduleRule, from: Date): Date | null {
 }
 
 const WEEKDAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+const WEEKDAY_FULL_LABELS = [
+  "понедельник",
+  "вторник",
+  "среда",
+  "четверг",
+  "пятница",
+  "суббота",
+  "воскресенье",
+];
 
 /**
  * Подпись правила по-русски — сервер отдаёт её готовой (дизайн, п. 2.9):
@@ -356,10 +452,16 @@ export function ruleLabel(rule: {
       return "Ежедневно";
     case "weekdays":
       return "По будням";
-    case "weekly":
-      return "Еженедельно";
-    case "monthly":
-      return "Ежемесячно";
+    case "weekly": {
+      const day = parseWeekday(rule.expr ?? null);
+      if (!day) return "Еженедельно";
+      return `Еженедельно: ${WEEKDAY_FULL_LABELS[day - 1]}`;
+    }
+    case "monthly": {
+      const day = parseMonthDay(rule.expr ?? null);
+      if (!day) return "Ежемесячно";
+      return `Ежемесячно: ${day}-е число`;
+    }
     case "weekly_days": {
       const days = parseWeekdays(rule.expr ?? null);
       if (!days) return "По выбранным дням";

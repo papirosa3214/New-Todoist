@@ -4,7 +4,7 @@
 // Проверяется без поднятия DOM: достаточно чистых функций экрана.
 
 import { describe, it, expect } from "vitest";
-import { formatWhen, ruleSummary } from "./routinesFormat";
+import { formatNextRun, formatWhen, ruleSummary, runStatusLabel } from "./routinesFormat";
 import type { ApiSchedule } from "../api/schedules";
 
 function makeSchedule(over: Partial<ApiSchedule> = {}): ApiSchedule {
@@ -56,5 +56,23 @@ describe("экран «Мои рутины»", () => {
   it("пустое значение показывается прочерком, а не «Invalid Date»", () => {
     expect(formatWhen(null, "Europe/Moscow")).toBe("—");
     expect(formatWhen("не дата", "Europe/Moscow")).toBe("—");
+  });
+
+  it("ближайший запуск читается словами: сегодня, завтра, в понедельник", () => {
+    const now = new Date("2026-10-22T06:00:00.000Z"); // четверг 09:00 МСК
+    expect(formatNextRun("2026-10-22T06:00:00.000Z", "Europe/Moscow", now)).toBe("сегодня в 09:00");
+    expect(formatNextRun("2026-10-23T06:00:00.000Z", "Europe/Moscow", now)).toBe("завтра в 09:00");
+    expect(formatNextRun("2026-10-26T06:00:00.000Z", "Europe/Moscow", now)).toBe("в понедельник в 09:00");
+    // Дальше недели — абсолютная дата.
+    const far = formatNextRun("2026-11-02T06:00:00.000Z", "Europe/Moscow", now);
+    expect(far).toContain("09:00");
+    expect(far).not.toContain("в ");
+  });
+
+  it("результат запуска читается по-русски", () => {
+    expect(runStatusLabel("created")).toBe("задача создана");
+    expect(runStatusLabel("skipped")).toBe("пропущено");
+    expect(runStatusLabel("failed")).toBe("не создана");
+    expect(runStatusLabel("error")).toBe("ошибка");
   });
 });
