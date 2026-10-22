@@ -290,6 +290,53 @@ describe("stalledStepWatcher", () => {
     expect(last.text).toMatch(/перезапускаю попытку/);
   });
 
+  // Карточка 568a2b93: лавина заданий очереди ролей. Ключ дедупликации
+  // автоперезапуска стабилен на шаг, поэтому две остановки подряд дают
+  // ОДНО задание в очереди, а не два.
+  it("две остановки подряд — одно задание в очереди ролей, ключ дедупликации стабильный", async () => {
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
+    const first = await runStalledStepWatch();
+    expect(first.restarted).toBe(1);
+    // Роль не поднялась (журнал молчит) — второй тик сторожа.
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
+    const second = await runStalledStepWatch();
+    expect(second.restarted).toBe(1);
+
+    const jobs = db
+      .prepare(
+        "SELECT dedupe_key FROM role_run_jobs WHERE task_id = ? AND dedupe_key LIKE 'stalled-restart:%'",
+      )
+      .all(fixture.task.id) as Array<{ dedupe_key: string }>;
+    expect(jobs.length).toBe(1);
+    expect(jobs[0].dedupe_key).toBe(`stalled-restart:${fixture.subtaskId}`);
+  });
+
+  // Лимит автоперезапусков обязан считать САМИ перезапуски. Раньше счётчик
+  // смотрел только на закрытые попытки: если попытки не было, лимит не
+  // достигался НИКОГДА и сторож плодил задания (лава очереди ролей).
+  it("лимит автоперезапуска считается по факту перезапусков, даже без закрытых попыток", async () => {
+    // Два прошлых автоперезапуска — только события ленты, без попыток.
+    const ins = db.prepare(
+      `INSERT INTO task_events(id, task_id, kind, field, from_value, to_value, created_at)
+       VALUES(?, ?, 'stalled_step_auto_restart', 'executor', NULL, 'setup', datetime('now', ?))`,
+    );
+    ins.run(`te_setup_a_${Date.now()}`, fixture.task.id, "-30 minutes");
+    ins.run(`te_setup_b_${Date.now()}_b`, fixture.task.id, "-20 minutes");
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 30);
+
+    const report = await runStalledStepWatch();
+
+    expect(report.blocked).toBe(1);
+    expect(report.restarted).toBe(0);
+    expect(subtask(fixture.subtaskId).agent_state).toBe("blocked");
+    const jobs = db
+      .prepare(
+        "SELECT count(*) AS n FROM role_run_jobs WHERE task_id = ? AND dedupe_key LIKE 'stalled-restart:%'",
+      )
+      .get(fixture.task.id) as { n: number };
+    expect(jobs.n).toBe(0);
+  });
+
   it("2 автоперезапуска уже были — третий обход ставит узел в blocked и уведомляет владельца", async () => {
     seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 30);
     // Имитируем два предыдущих перезапуска в окне.

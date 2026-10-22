@@ -406,6 +406,113 @@ export function retryRoleRunJob(id: string): RoleRunJob | undefined {
   return changed.changes === 1 ? getRoleRunJob(id) : undefined;
 }
 
+/**
+ * Группа задания: часть dedupe-ключа, которая отвечает за СМЫСЛ задания.
+ * Ключи строятся как `<вид>:<объект>[:<подпись>]`:
+ *   `stalled-restart:<subtaskId>` — автоперезапуск шага (ключ стабильный);
+ *   `review:<taskId>:<token>`    — задача ушла на проверку;
+ *   `ready:<taskId>:<token>`     — владелец поднял флаг готовности.
+ * Подпись после второго двоеточия — переменная часть (id попытки, номер
+ * захода), а группа — постоянная: «тот же шаг», «та же карточка».
+ */
+export function roleRunJobGroup(dedupeKey: string): string | null {
+  const match = /^(stalled-restart|review|ready):([^:]+)(?::|$)/.exec(dedupeKey);
+  return match ? `${match[1]}:${match[2]}` : null;
+}
+
+/**
+ * Вернуть существующее задание в очередь.
+ *
+ * Нужно для автоперезапуска зависшего шага: ключ дедупликации стабилен
+ * (одна строка на шаг), поэтому следующий заход роли должен ПЕРЕИСПОЛЬЗОВАТЬ
+ * то же задание. Без этого «стабильный ключ» означал бы «задание выполнится
+ * один раз и больше никогда» (Г1-к, 06.10.2026: worker возвращал прежнее
+ * задание в состоянии `succeeded`).
+ *
+ * Задание в работе (`running`) или уже стоящее в очереди не трогаем.
+ */
+export function rearmRoleRunJob(dedupeKey: string): boolean {
+  const changed = db
+    .prepare(
+      `UPDATE role_run_jobs
+          SET status = 'queued',
+              attempts = 0,
+              available_at = datetime('now'),
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              last_error = NULL,
+              started_at = NULL,
+              finished_at = NULL,
+              updated_at = datetime('now')
+        WHERE dedupe_key = ?
+          AND status IN ('succeeded', 'dead', 'cancelled', 'skipped')`,
+    )
+    .run(dedupeKey);
+  return changed.changes === 1;
+}
+
+/**
+ * Сверка лавины в очереди ролей (карточка 568a2b93).
+ *
+ * Накопившиеся дубли одного и того же намерения (например, 438 заданий
+ * `after_run` на две карточки) занимают очередь и не дают ролям стартовать.
+ * При старте сервера оставляем по ОДНОМУ заданию на группу (самое свежее —
+ * оно отражает последнее намерение), остальные переводим в `cancelled`.
+ * Задания без понятной группы (прочие причины) не трогаем: их склеивать
+ * не с чем.
+ *
+ * Возвращает число свёрнутых дублей.
+ */
+export function collapseDuplicateQueuedJobs(): number {
+  const rows = db
+    .prepare(
+      `SELECT id, dedupe_key FROM role_run_jobs
+        WHERE status IN ('queued', 'retry_wait')
+        ORDER BY created_at, rowid`,
+    )
+    .all() as Array<{ id: string; dedupe_key: string }>;
+  const kept = new Map<string, string>();
+  const duplicates: string[] = [];
+  for (const row of rows) {
+    const group = roleRunJobGroup(row.dedupe_key);
+    if (!group) continue;
+    const previous = kept.get(group);
+    // Из группы выживает самое свежее задание (оно отражает последнее
+    // намерение), все предыдущие уходят в cancelled.
+    if (previous) duplicates.push(previous);
+    kept.set(group, row.id);
+  }
+  if (duplicates.length === 0) return 0;
+  const cancel = db.prepare(
+    `UPDATE role_run_jobs
+        SET status = 'cancelled',
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            finished_at = datetime('now'),
+            updated_at = datetime('now'),
+            last_error = 'дубль задания свёрнут при старте сервера'
+      WHERE id = ? AND status IN ('queued', 'retry_wait')`,
+  );
+  const apply = db.transaction((ids: string[]) => {
+    let changed = 0;
+    for (const id of ids) changed += cancel.run(id).changes;
+    return changed;
+  });
+  const changed = apply(duplicates);
+  if (changed > 0) {
+    logServerEvent({
+      scope: "queue",
+      kind: "queue_duplicates_collapsed",
+      taskId: null,
+      actorId: null,
+      subtype: "startup",
+      message: `дублей заданий очереди ролей свёрнуто: ${changed}`,
+      data: { collapsed: changed },
+    });
+  }
+  return changed;
+}
+
 /** Running job здесь намеренно не отменяется: для него нужен подтверждённый
  * abort протокол конкретной Pi-сессии. API возвращает conflict вместо лжи. */
 export function cancelPendingRoleRunJob(id: string): RoleRunJob | undefined {

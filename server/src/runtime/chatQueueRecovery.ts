@@ -78,6 +78,10 @@ export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-pr
   // Only leases from before this process. Fresh pickups are never stolen.
   const cutoff=new Date(Math.floor(processStartedAt.getTime()/1000)*1000-1000).toISOString();
   db.prepare("UPDATE chat_message_queue SET status='pending',picked_at=NULL,updated_at=datetime('now') WHERE status='picked' AND julianday(updated_at)<julianday(?)").run(cutoff);
+  // Мёртвые доставки (старше порога) — в терминальный статус: иначе они
+  // держат сторож выкладки и правка в main не доезжает до живого сервера.
+  const expired = expireStaleDeliveries();
+  if (expired > 0) console.log(`[chatQueueRecovery] закрыто мёртвых доставок: ${expired}`);
   let recovered = 0;
   void sweepRecoverableDeliveries().then((n) => {
     recovered = n;
@@ -91,16 +95,59 @@ export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-pr
   };
 }
 
+/**
+ * Срок жизни доставки в очереди чата (минуты).
+ *
+ * Доставка, которую никто не забрал (или ход которой умер вместе с
+ * процессом), остаётся в статусе `pending`/`picked` НАВСЕГДА: возврат в
+ * очередь есть только при старте сервера. Такая «мёртвая» доставка
+ * считалась сторожем выкладки занятой системой — правка в `main` лежала
+ * часами (карточка 568a2b93, 21.10.2026: очередь чата держала выкладку
+ * 31,6 часа).
+ *
+ * Теперь у доставки есть срок жизни: не взятая за порог доставка
+ * переводится в терминальный статус `failed` и больше не держит выкладку.
+ * Порог по умолчанию — 60 минут; меняется переменной окружения
+ * `TASKFLOW_CHAT_DELIVERY_TTL_MIN` (сторож выкладки читает ту же).
+ */
+export function chatDeliveryTtlMinutes(): number {
+  const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_TTL_MIN ?? 60);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60;
+}
+
+/**
+ * Перевести в терминальный статус доставки, которые старше порога.
+ * Возвращает число закрытых доставок.
+ */
+export function expireStaleDeliveries(ttlMinutes: number = chatDeliveryTtlMinutes()): number {
+  const changed = db
+    .prepare(
+      `UPDATE chat_message_queue
+          SET status = 'failed',
+              finished_at = datetime('now'),
+              updated_at = datetime('now')
+        WHERE status IN ('pending', 'picked')
+          AND julianday(updated_at) < julianday('now', ?)`,
+    )
+    .run(`-${Math.max(1, Math.floor(ttlMinutes))} minutes`);
+  return changed.changes;
+}
+
 /** Синхронизация раз в N секунд — ловит pending, оставшиеся
  *  в БД после часов простоя, когда /messages не заходило.
- *  Прямо сейчас мы НЕ планируем периодический вызов (см.
- *  ограничения в документе карточки): текущий sweep делается
- *  раз в старт процесса, а сам факт «запоздалый ход»
- *  распознаётся любым следующим /messages для этой пары.
- *  Функция оставлена как точка расширения. */
+ *  Проход вызывается сервером (index.ts): сперва закрываются доставки
+ *  старше порога (их уже никто не заберёт), потом поднимаются живые
+ *  pending. До 22.10.2026 функция была написана, но не вызывалась —
+ *  поэтому мёртвая доставка жила вечно и держала выкладку сервера
+ *  (карточка 568a2b93). */
 export function scheduleChatQueueRecovery(intervalSeconds = 600): () => void {
   const ms = Math.max(60, intervalSeconds) * 1000;
   const timer = setInterval(() => {
+    try {
+      expireStaleDeliveries();
+    } catch (error) {
+      console.warn("[chatQueueRecovery] просрочка доставок не удалась:", error);
+    }
     void sweepRecoverableDeliveries().catch((error) => {
       console.warn("[chatQueueRecovery] periodic sweep не удался:", error);
     });
