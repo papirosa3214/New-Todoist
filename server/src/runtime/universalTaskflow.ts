@@ -90,7 +90,7 @@ const READ = new Set([
   "local_model",
 ]);
 const CHAT_CONTEXT = new Set([
-  "taskflow_chat_attach_file",
+  "taskflow_chat_attach_file", "taskflow_chat_share_material",
   "taskflow_slot_restart",
   "taskflow_work_start",
   "taskflow_review_result",

@@ -751,7 +751,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           const merged = `${String(cur.markdown ?? "").trimEnd()}\n\n${p.markdown}`.trim();
           const n = await asRole(role, "PATCH", `/api/notes/${p.id}`, { markdown: merged });
           if (taskId) recordTaskDocument(taskId, n.id, roleUserId(role));
-          return { готово: "заметка обновлена", id: n.id };
+          return { готово: "заметка обновлена", id: n.id, material: {kind:"document",title:n.title || "Документ",ref:`note://${n.id}`}, подсказка:"Для чтения в чате отправь через taskflow_chat_share_material. В materials/artifacts используй material, не голый ID." };
         }
         let folderId: number;
         if(taskId) folderId=ensureTaskArtifactFolder(taskId);
@@ -769,7 +769,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         }
         const n = await asRole(role, "POST", "/api/notes", { markdown: p.markdown, folder_id: folderId });
         if (taskId) recordTaskDocument(taskId, n.id, roleUserId(role));
-        return { готово: "заметка создана", id: n.id };
+        return { готово: "заметка создана", id: n.id, material: {kind:"document",title:n.title || "Документ",ref:`note://${n.id}`}, подсказка:"Для чтения в чате отправь через taskflow_chat_share_material. В materials/artifacts используй material, не голый ID." };
       }),
     T("taskflow_kb_search", "Поиск по внутренней базе знаний TaskFlow: заметки и документация всех проектов. Отвечает отрывками с id заметки; целиком заметку читает taskflow_doc_read. Не нашлось — повтори короче, ключевыми словами.",
       Type.Object({ query: Type.String(), top_k: Type.Optional(Type.Number()) }),

@@ -143,9 +143,21 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           "гаснет через": resp?.["печатает"] ? `${Math.floor((resp?.["гаснет_через_мс"] ?? 0) / 1000)} с` : "—",
         };
       }),
+    ...(ownerContext ? [T("taskflow_chat_share_material",
+      "Отправить владельцу документ Библиотеки/базы знаний для чтения ВНУТРИ TaskFlow, без системного просмотрщика iPhone. note_id — существующая заметка (taskflow_doc_write/taskflow_kb_search/taskflow_docs). Сначала сохрани готовый материал через taskflow_doc_write, если заметки ещё нет. Инструмент проверит документ и сам отправит в текущий чат карточку «Открыть в TaskFlow». Не копирует заметку и не прикладывает файл. Для скачивания отдельного файла используй taskflow_chat_attach_file. В итоговом artifacts/sections.materials используй возвращённый material целиком; не подставляй пути сервера или голый ID вместо ссылки.",
+      Type.Object({note_id:Type.String(),caption:S("краткое пояснение к материалу")}),
+      async p=>{
+        const note=await asRole(role,"GET",`/api/notes/${encodeURIComponent(p.note_id)}?format=markdown`);
+        const material={kind:"document",title:note.title || "Документ",ref:`note://${note.id}`};
+        const card={type:"card",title:material.title,subtitle:String(p.caption??"Документ Библиотеки TaskFlow"),link:{title:"Открыть в TaskFlow",url:material.ref}};
+        const response=await asRole(role,"POST",`/api/chats/${ownerContext.chatId}/messages`,{
+          text:"```widget\n"+JSON.stringify(card)+"\n```",reply_to_message_id:ownerContext.messageId,work_mode:"work",
+        });
+        return {material,message_id:response?.message?.id??response?.id,итог:"Карточка документа уже отправлена в этот чат. Открывается оригинал внутри TaskFlow; файл не создавался."};
+      })] : []),
     // Файл в чат — настоящим вложением, а не ссылкой (владелец 14.10.2026).
     ...(ownerContext ? [T("taskflow_chat_attach_file",
-      "Приложить файл к ответу в этом чате — владелец скачает его из сообщения. Единственный способ дать файл: ссылки на файлы не выдумывай. format: md, txt, csv, json, html — содержимое как есть; pdf, docx, odt — content пишешь в Markdown, сервер соберёт документ; xlsx, ods — content в CSV (запятая, первая строка — заголовки). caption — подпись к файлу, по желанию.",
+      "Приложить файл к ответу в этом чате — владелец скачает его из сообщения. Для чтения документа внутри TaskFlow используй taskflow_chat_share_material; этот инструмент — для скачивания файла. Ссылки на файлы не выдумывай. format: md, txt, csv, json, html — содержимое как есть; pdf, docx, odt — content пишешь в Markdown, сервер соберёт документ; xlsx, ods — content в CSV (запятая, первая строка — заголовки). caption — подпись к файлу, по желанию.",
       Type.Object({ file_name: Type.String(), format: Type.String({ enum: [...CHAT_FILE_FORMATS] }), content: Type.String(), caption: S("подпись к файлу") }),
       async (p) => {
         const format = String(p.format).toLowerCase().replace(/^\./, "") as any;
