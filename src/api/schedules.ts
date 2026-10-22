@@ -142,7 +142,14 @@ export function useRunScheduleNow() {
       api.post<{
         ok: boolean;
         counts: { created: number };
-        run: { id: string; run_at: string; task_id: string | null; status: string } | null;
+        run: {
+          id: string;
+          run_at: string;
+          task_id: string | null;
+          status: string;
+          /** Причина пропуска или ошибки — её показываем пользователю. */
+          detail: string | null;
+        } | null;
       }>(`/api/schedules/${id}/run-now`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schedules"] });

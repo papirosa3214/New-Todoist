@@ -20,10 +20,14 @@ import { SCHEDULER_USER_ID } from "../serviceUser.js";
 import { logEvent } from "../agentState.js";
 import {
   SCHEDULE_RULE_KINDS,
+  CRON_RULE_KIND,
+  anchorForNow,
   nextRunAfter,
   parseCron,
   parseIntervalMinutes,
+  parseMonthDay,
   parseTimeLocal,
+  parseWeekday,
   parseWeekdays,
   ruleLabel,
   type ScheduleRuleKind,
@@ -42,6 +46,8 @@ import {
   type ScheduleRow,
 } from "../runtime/schedules/store.js";
 import { runSchedulesTick } from "../runtime/schedules/tick.js";
+import { resolveLabelIds } from "../runtime/schedules/labels.js";
+import { routinesEnabled } from "../runtime/schedules/feature.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -92,6 +98,13 @@ export function registerScheduleRoutes(app: FastifyInstance) {
   app.get("/api/schedules/preview", { preHandler: authPre }, async (req: any, reply) => {
     const query = (req.query ?? {}) as Record<string, string | undefined>;
     const kind = String(query.rule_kind ?? "") as ScheduleRuleKind;
+    // cron в первой версии не поддерживается (развилка B не решена):
+    // отказываем явно, а не молча считаем другой вид расписания.
+    if (kind === CRON_RULE_KIND) {
+      return reply.code(400).send({
+        error: "произвольное расписание по cron в первой версии не поддерживается",
+      });
+    }
     if (!SCHEDULE_RULE_KINDS.includes(kind)) {
       return reply.code(400).send({
         error: `правило должно быть одним из: ${SCHEDULE_RULE_KINDS.join(", ")}`,
@@ -112,6 +125,12 @@ export function registerScheduleRoutes(app: FastifyInstance) {
     if (kind === "weekly_days" && !parseWeekdays(expr)) {
       return reply.code(400).send({ error: "дни недели — списком 1..7, где 1=понедельник" });
     }
+    if (kind === "weekly" && expr && !parseWeekday(expr)) {
+      return reply.code(400).send({ error: "день недели — от 1 (понедельник) до 7 (воскресенье)" });
+    }
+    if (kind === "monthly" && expr && !parseMonthDay(expr)) {
+      return reply.code(400).send({ error: "день месяца — от 1 до 31" });
+    }
     if (kind === "interval" && !parseIntervalMinutes(expr)) {
       return reply.code(400).send({ error: "интервал — например 15m или 2h, не меньше 5 минут" });
     }
@@ -124,7 +143,9 @@ export function registerScheduleRoutes(app: FastifyInstance) {
         expr,
         timeLocal: time ? timeLocal : kind === "cron" ? "00:00" : "09:00",
         timezone,
-        anchor: { year: 1970, month: 1, day: 1 },
+        // Якорь — «сегодня» в зоне рутины: первый показанный запуск и
+        // запуск, посчитанный планировщиком по той же формуле, совпадают.
+        anchor: anchorForNow(new Date(), timezone),
       },
       new Date(),
     );
@@ -149,11 +170,20 @@ export function registerScheduleRoutes(app: FastifyInstance) {
     if (!isOwner(req.userId) && !isService(req.userId)) {
       return reply.code(403).send({ error: "создавать рутины может владелец" });
     }
+    // Выключатель рутин: пока механизм выключен, рутины не создаются.
+    if (!routinesEnabled()) {
+      return reply.code(503).send({ error: "рутины временно выключены" });
+    }
     const body = req.body ?? {};
     const title = String(body.title ?? "").trim();
     if (!title) return reply.code(400).send({ error: "название рутины не может быть пустым" });
 
     const kind = String(body.rule_kind ?? "") as ScheduleRuleKind;
+    if (kind === CRON_RULE_KIND) {
+      return reply.code(400).send({
+        error: "произвольное расписание по cron в первой версии не поддерживается",
+      });
+    }
     if (!SCHEDULE_RULE_KINDS.includes(kind)) {
       return reply.code(400).send({
         error: `правило должно быть одним из: ${SCHEDULE_RULE_KINDS.join(", ")}`,
@@ -175,6 +205,12 @@ export function registerScheduleRoutes(app: FastifyInstance) {
     if (kind === "weekly_days" && !parseWeekdays(ruleExpr)) {
       return reply.code(400).send({ error: "дни недели — списком 1..7, где 1=понедельник" });
     }
+    if (kind === "weekly" && ruleExpr && !parseWeekday(ruleExpr)) {
+      return reply.code(400).send({ error: "день недели — от 1 (понедельник) до 7 (воскресенье)" });
+    }
+    if (kind === "monthly" && ruleExpr && !parseMonthDay(ruleExpr)) {
+      return reply.code(400).send({ error: "день месяца — от 1 до 31" });
+    }
     if (kind === "interval" && !parseIntervalMinutes(ruleExpr)) {
       return reply.code(400).send({ error: "интервал — например 15m или 2h, не меньше 5 минут" });
     }
@@ -190,8 +226,20 @@ export function registerScheduleRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "priority должен быть от 1 до 4" });
       }
     }
+    // Метки в шаблоне задаются именами — проверяем, что такие метки есть:
+    // иначе рутина падала бы только в момент запуска, с ошибкой «карточка
+    // не создана».
+    const labelCheck = resolveLabelIds(
+      (payload.labels as string[] | null | undefined) ?? [],
+      req.userId,
+    );
+    if (labelCheck.unknown.length) {
+      return reply.code(400).send({
+        error: `метка не найдена: ${labelCheck.unknown.join(", ")}`,
+      });
+    }
 
-    const anchor = { year: 1970, month: 1, day: 1 };
+    const anchor = anchorForNow(new Date(), timezone);
     const rule = {
       kind,
       expr: ruleExpr,
@@ -221,9 +269,18 @@ export function registerScheduleRoutes(app: FastifyInstance) {
       }
       const existing = getSchedule(req.params.id);
       if (!existing) return reply.code(404).send({ error: "Рутина не найдена" });
+      // Выключатель рутин: пока механизм выключен, рутины не правятся.
+      if (!routinesEnabled()) {
+        return reply.code(503).send({ error: "рутины временно выключены" });
+      }
       const body = req.body ?? {};
 
       const kind = body.rule_kind ? (String(body.rule_kind) as ScheduleRuleKind) : existing.rule_kind;
+      if (kind === CRON_RULE_KIND) {
+        return reply.code(400).send({
+          error: "произвольное расписание по cron в первой версии не поддерживается",
+        });
+      }
       if (!SCHEDULE_RULE_KINDS.includes(kind)) {
         return reply.code(400).send({ error: `неизвестное правило «${kind}»` });
       }
@@ -242,6 +299,12 @@ export function registerScheduleRoutes(app: FastifyInstance) {
       if (kind === "weekly_days" && !parseWeekdays(ruleExpr)) {
         return reply.code(400).send({ error: "дни недели — списком 1..7, где 1=понедельник" });
       }
+      if (kind === "weekly" && ruleExpr && !parseWeekday(ruleExpr)) {
+        return reply.code(400).send({ error: "день недели — от 1 (понедельник) до 7 (воскресенье)" });
+      }
+      if (kind === "monthly" && ruleExpr && !parseMonthDay(ruleExpr)) {
+        return reply.code(400).send({ error: "день месяца — от 1 до 31" });
+      }
       if (kind === "interval" && !parseIntervalMinutes(ruleExpr)) {
         return reply.code(400).send({ error: "интервал — например 15m или 2h, не меньше 5 минут" });
       }
@@ -253,6 +316,21 @@ export function registerScheduleRoutes(app: FastifyInstance) {
         : existing.status;
       if (!["active", "paused", "finished"].includes(status)) {
         return reply.code(400).send({ error: "status: active | paused | finished" });
+      }
+
+      // Метки в шаблоне задаются именами — проверяем, что такие метки есть
+      // (иначе запуск упал бы позже, с ошибкой «карточка не создана»).
+      const mergedPayload = body.task_payload
+        ? ({ ...parsePayload(existing), ...(body.task_payload as object) } as Record<string, unknown>)
+        : (parsePayload(existing) as unknown as Record<string, unknown>);
+      const labelCheck = resolveLabelIds(
+        (mergedPayload.labels as string[] | null | undefined) ?? [],
+        existing.created_by,
+      );
+      if (labelCheck.unknown.length) {
+        return reply.code(400).send({
+          error: `метка не найдена: ${labelCheck.unknown.join(", ")}`,
+        });
       }
 
       const ruleChanged =
@@ -339,7 +417,14 @@ export function registerScheduleRoutes(app: FastifyInstance) {
         counts,
         schedule: present(getSchedule(row.id)!),
         run: run
-          ? { id: run.id, run_at: run.run_at, task_id: run.task_id, status: run.status }
+          ? {
+              id: run.id,
+              run_at: run.run_at,
+              task_id: run.task_id,
+              status: run.status,
+              // Причина пропуска или ошибки — клиенту нужно показать её.
+              detail: run.detail ?? null,
+            }
           : null,
       };
     },

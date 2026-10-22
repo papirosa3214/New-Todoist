@@ -24,6 +24,7 @@ import { buildApp } from "../src/index.js";
 import { resolveUserIdFromToken } from "../src/auth.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 import {
+  anchorForNow,
   decideRun,
   nextRunAfter,
   parseCron,
@@ -174,6 +175,26 @@ describe("расчёт следующего запуска рутины", () => 
     expect(ruleLabel({ kind: "interval", expr: "15m" })).toBe("Каждые 15 минут");
     expect(ruleLabel({ kind: "interval", expr: "2h" })).toBe("Каждые 2 часа");
     expect(ruleLabel({ kind: "weekly_days", expr: "1,5" })).toBe("По дням: Пн, Пт");
+  });
+
+  it("еженедельно: явный день недели важнее якоря", () => {
+    // Якорь правила — четверг 22.10.2026, а правило просит понедельник.
+    const next = nextRunAfter(rule({ kind: "weekly", expr: "1" }), new Date("2026-10-22T06:00:00.000Z"))!;
+    expect(next.toISOString()).toBe("2026-10-26T06:00:00.000Z");
+    // Без явного дня — по якорю (четверг), как раньше.
+    const byAnchor = nextRunAfter(rule({ kind: "weekly" }), new Date("2026-10-22T06:00:00.000Z"))!;
+    expect(byAnchor.toISOString()).toBe("2026-10-29T06:00:00.000Z");
+  });
+
+  it("ежемесячно: явный день месяца важнее якоря", () => {
+    const next = nextRunAfter(rule({ kind: "monthly", expr: "15" }), new Date("2026-10-22T06:00:00.000Z"))!;
+    expect(next.toISOString()).toBe("2026-11-15T06:00:00.000Z");
+  });
+
+  it("подпись правила с днём: еженедельно и ежемесячно", () => {
+    expect(ruleLabel({ kind: "weekly", expr: "1" })).toBe("Еженедельно: понедельник");
+    expect(ruleLabel({ kind: "weekly", expr: "6" })).toBe("Еженедельно: суббота");
+    expect(ruleLabel({ kind: "monthly", expr: "15" })).toBe("Ежемесячно: 15-е число");
   });
 });
 
@@ -422,7 +443,70 @@ describe("рутины в базе и тик планировщика", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("cron-правило принимается и считает следующий запуск", async () => {
+  it("неверный день недели или месяца отклоняется на входе", async () => {
+    const week = await app.inject({
+      method: "POST",
+      url: "/api/schedules",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        title: "Неделя",
+        rule_kind: "weekly",
+        rule_expr: "9",
+        task_payload: { title: "Неделя" },
+      },
+    });
+    expect(week.statusCode).toBe(400);
+    const month = await app.inject({
+      method: "POST",
+      url: "/api/schedules",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        title: "Месяц",
+        rule_kind: "monthly",
+        rule_expr: "32",
+        task_payload: { title: "Месяц" },
+      },
+    });
+    expect(month.statusCode).toBe(400);
+  });
+
+  it("рутина с явным днём недели: следующий запуск в этот день, подпись с днём", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/schedules",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        title: "Понедельный отчёт",
+        rule_kind: "weekly",
+        rule_expr: "1",
+        time_local: "09:00",
+        timezone: MSK,
+        task_payload: { title: "Понедельный отчёт" },
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const schedule = res.json().schedule;
+    expect(schedule.rule_label).toBe("Еженедельно: понедельник");
+    // День запуска — понедельник (в зоне рутины).
+    const local = zonedParts(new Date(schedule.next_run_at), MSK);
+    expect(local.weekday).toBe(1);
+    // Показанный запуск и запуск, посчитанный планировщиком по той же
+    // формуле, совпадают (якорь один и тот же).
+    const stored = getSchedule(schedule.id)!;
+    const recomputed = nextRunAfter(
+      {
+        kind: stored.rule_kind,
+        expr: stored.rule_expr,
+        timeLocal: stored.time_local,
+        timezone: stored.timezone,
+        anchor: anchorForNow(new Date(), MSK),
+      },
+      new Date(),
+    );
+    expect(recomputed!.toISOString()).toBe(new Date(schedule.next_run_at).toISOString());
+  });
+
+  it("cron-правило не в первой версии: отказ на входе", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/schedules",
@@ -434,10 +518,10 @@ describe("рутины в базе и тик планировщика", () => {
         task_payload: { title: "По cron" },
       },
     });
-    expect(res.statusCode).toBe(201);
-    const body = res.json();
-    expect(body.schedule.next_run_at).toBeTruthy();
-    expect(body.schedule.rule_label).toContain("cron");
+    // Произвольное расписание — нерешённая развилка владельца: ручки его
+    // не принимают (решение архитектора, 22.10.2026).
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain("cron");
   });
 
   it("посторонний пользователь не может создать рутину", async () => {

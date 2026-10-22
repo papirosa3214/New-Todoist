@@ -33,13 +33,12 @@ import {
   ErrorBanner,
   Icon,
   IconButton,
-  ListRow,
   ScreenHeader,
   Switch,
 } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
-import { formatWhen, ruleSummary } from "./routinesFormat";
+import { formatNextRun, formatWhen, ruleSummary, runStatusLabel } from "./routinesFormat";
 
 /** Правила в форме (дизайн, §2.5): шесть вариантов. */
 const RULE_OPTIONS: Array<{ value: ScheduleRuleKind; label: string }> = [
@@ -54,13 +53,54 @@ const RULE_OPTIONS: Array<{ value: ScheduleRuleKind; label: string }> = [
 const WEEKDAY_TITLES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 /** Интервалы от 5 минут (минимальный интервал планировщика). */
-const INTERVAL_OPTIONS = ["5m", "10m", "15m", "30m", "1h", "2h", "4h"];
+const INTERVAL_OPTIONS = [
+  { value: "5m", label: "Каждые 5 минут" },
+  { value: "10m", label: "Каждые 10 минут" },
+  { value: "15m", label: "Каждые 15 минут" },
+  { value: "30m", label: "Каждые 30 минут" },
+  { value: "1h", label: "Каждый час" },
+  { value: "2h", label: "Каждые 2 часа" },
+  { value: "4h", label: "Каждые 4 часа" },
+];
+
+/** День недели по умолчанию — сегодняшний (ISO: 1=Пн..7=Вс). */
+function todayWeekday(timezone: string): string {
+  try {
+    const part = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, weekday: "short" })
+      .formatToParts(new Date())
+      .find((p) => p.type === "weekday")?.value;
+    const map: Record<string, string> = {
+      Mon: "1",
+      Tue: "2",
+      Wed: "3",
+      Thu: "4",
+      Fri: "5",
+      Sat: "6",
+      Sun: "7",
+    };
+    return part ? (map[part] ?? "1") : "1";
+  } catch {
+    return "1";
+  }
+}
+
+/** День месяца по умолчанию — сегодняшний. */
+function todayMonthDay(timezone: string): string {
+  try {
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, day: "2-digit" })
+      .formatToParts(new Date())
+      .find((p) => p.type === "day")?.value;
+    return day ? String(Number(day)) : "1";
+  } catch {
+    return "1";
+  }
+}
 
 function SkeletonList() {
   return (
     <div className="space-y-[2px]" aria-hidden>
       {[0, 1, 2].map((i) => (
-        <div key={i} className="bg-card rounded-xl px-4 py-3.5">
+        <div key={i} className="bg-card r-surface px-4 py-3.5">
           <div className="h-4 w-1/2 rounded bg-card2 mb-2" />
           <div className="h-3 w-2/3 rounded bg-card2" />
         </div>
@@ -77,6 +117,7 @@ function RunHistory({
   onOpenTask: (taskId: string) => void;
 }) {
   const { data, isLoading, isError } = useScheduleRuns(schedule.id);
+  const [showAll, setShowAll] = useState(false);
   const runs: ApiScheduleRun[] = data?.runs ?? [];
   if (isLoading) return <p className="tf-action text-dim">Загружаем историю…</p>;
   if (isError) {
@@ -85,34 +126,49 @@ function RunHistory({
   if (runs.length === 0) {
     return <p className="tf-action text-sub">Запусков ещё не было.</p>;
   }
+  const visible = showAll ? runs : runs.slice(0, 10);
   return (
     <div>
-      {runs.slice(0, 10).map((run) => (
-        <div key={run.id} className="flex items-center justify-between gap-3 py-1.5">
-          <span className="tf-action text-sub">
-            {formatWhen(run.run_at, schedule.timezone)}
-          </span>
-          {run.task_id ? (
-            <button
-              type="button"
-              onClick={() => onOpenTask(run.task_id!)}
-              className="tf-action text-blue"
-            >
-              {run.status === "created" ? "задача запуска" : run.status}
-            </button>
-          ) : (
-            <span
-              className={
-                run.status === "skipped"
-                  ? "tf-action text-dim"
-                  : "tf-action text-coral"
-              }
-            >
-              {run.status === "skipped" ? "пропуск" : run.status === "error" ? "ошибка" : "не создана"}
+      {visible.map((run) => (
+        <div key={run.id} className="py-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <span className="tf-action text-sub">
+              {formatWhen(run.run_at, schedule.timezone)}
             </span>
+            {run.task_id ? (
+              <button
+                type="button"
+                onClick={() => onOpenTask(run.task_id!)}
+                className="tf-action text-blue"
+              >
+                {run.status === "created" ? "задача запуска" : runStatusLabel(run.status)}
+              </button>
+            ) : (
+              <span
+                className={
+                  run.status === "skipped"
+                    ? "tf-action text-dim"
+                    : "tf-action text-coral"
+                }
+              >
+                {runStatusLabel(run.status)}
+              </span>
+            )}
+          </div>
+          {run.detail && run.status !== "created" && (
+            <p className="tf-action text-dim">{run.detail}</p>
           )}
         </div>
       ))}
+      {runs.length > 10 && !showAll && (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="tf-action text-blue mt-1"
+        >
+          Показать все запуски ({runs.length})
+        </button>
+      )}
     </div>
   );
 }
@@ -137,13 +193,20 @@ export function RoutinesScreen() {
   const [timeLocal, setTimeLocal] = useState("09:00");
   const [timezone, setTimezone] = useState("Europe/Moscow");
   const [weekdays, setWeekdays] = useState<string[]>(["1"]);
+  const [weeklyDay, setWeeklyDay] = useState(() => todayWeekday("Europe/Moscow"));
+  const [monthlyDay, setMonthlyDay] = useState(() => todayMonthDay("Europe/Moscow"));
   const [interval, setInterval] = useState("15m");
   const [assignee, setAssignee] = useState("");
   const [projectId, setProjectId] = useState("");
   const [skipOverlap, setSkipOverlap] = useState(true);
   const [catchUp, setCatchUp] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [lastRunTaskId, setLastRunTaskId] = useState<string | null>(null);
+  const [createdNotice, setCreatedNotice] = useState(false);
+  const [runNotice, setRunNotice] = useState<{
+    status: string;
+    taskId: string | null;
+    detail: string | null;
+  } | null>(null);
 
   // Роли-исполнители: из списка агентов берём тех, у кого есть role_key.
   const roleAgents = agents.filter((a) => (a as { role_key?: string | null }).role_key);
@@ -156,7 +219,15 @@ export function RoutinesScreen() {
   };
 
   const ruleExpr =
-    kind === "weekly_days" ? weekdays.join(",") : kind === "interval" ? interval : null;
+    kind === "weekly_days"
+      ? weekdays.join(",")
+      : kind === "weekly"
+        ? weeklyDay
+        : kind === "monthly"
+          ? monthlyDay
+          : kind === "interval"
+            ? interval
+            : null;
 
   // Превью правила: ближайший запуск считает сервер (дизайн, критерий 6).
   const preview = useSchedulePreview({
@@ -188,6 +259,7 @@ export function RoutinesScreen() {
     setTitle("");
     setTaskTitle("");
     setShowCreate(false);
+    setCreatedNotice(true);
   });
 
   const handleDelete = async (schedule: ApiSchedule) => {
@@ -212,7 +284,13 @@ export function RoutinesScreen() {
 
   const runNowAndReport = async (schedule: ApiSchedule) => {
     const result = await runNow.mutateAsync(schedule.id);
-    setLastRunTaskId(result?.run?.task_id ?? null);
+    const run = result?.run ?? null;
+    setRunNotice({
+      status: run?.status ?? "error",
+      // Пропуск из-за незакрытого прошлого запуска — ссылка на него.
+      taskId: run?.task_id ?? schedule.current_task_id ?? null,
+      detail: run?.detail ?? null,
+    });
     await qc.invalidateQueries({ queryKey: ["schedules"] });
   };
 
@@ -244,34 +322,48 @@ export function RoutinesScreen() {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Ежедневный отчёт продаж"
-            className="tf-input w-full bg-card2 rounded-xl px-3 h-control-lg text-text placeholder:text-dim outline-none mb-3"
+            className="tf-input w-full bg-card2 r-control-md px-3 h-control-lg text-text placeholder:text-dim outline-none mb-3"
           />
 
-          <span className="tf-action text-sub block mb-1">Правило</span>
-          <div className="r-surface overflow-hidden mb-3">
-            {RULE_OPTIONS.map((option) => (
-              <ListRow
-                key={option.value}
-                label={option.label}
-                onClick={() => setKind(option.value)}
-                trailing={
+          <span className="tf-action text-sub block mb-1" id="routine-rule-label">
+            Правило
+          </span>
+          <div
+            role="radiogroup"
+            aria-labelledby="routine-rule-label"
+            className="r-surface overflow-hidden mb-3"
+          >
+            {RULE_OPTIONS.map((option) => {
+              const selected = kind === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setKind(option.value)}
+                  className="w-full flex items-center gap-3 px-4 h-control-lg bg-card text-left tap-row"
+                >
+                  <span className="flex-1 min-w-0 tf-body text-text">{option.label}</span>
                   <span
                     aria-hidden
                     className={
-                      kind === option.value
+                      selected
                         ? "w-[18px] h-[18px] rounded-full border-2 border-red"
                         : "w-[18px] h-[18px] rounded-full border-2 border-stroke"
                     }
                   />
-                }
-              />
-            ))}
+                </button>
+              );
+            })}
           </div>
 
           {kind === "weekly_days" && (
             <div className="mb-3">
-              <span className="tf-action text-sub block mb-1">Дни недели</span>
-              <div className="flex gap-1">
+              <span className="tf-action text-sub block mb-1" id="routine-weekdays-label">
+                Дни недели
+              </span>
+              <div role="group" aria-labelledby="routine-weekdays-label" className="flex gap-1">
                 {WEEKDAY_TITLES.map((day, index) => {
                   const value = String(index + 1);
                   const active = weekdays.includes(value);
@@ -288,7 +380,7 @@ export function RoutinesScreen() {
                             : [...prev, value],
                         )
                       }
-                      className={`tf-action w-11 h-11 rounded-lg ${
+                      className={`tf-action w-11 h-11 r-control-md ${
                         active ? "bg-red text-white" : "bg-card2 text-sub"
                       }`}
                     >
@@ -305,6 +397,58 @@ export function RoutinesScreen() {
             </div>
           )}
 
+          {kind === "weekly" && (
+            <div className="mb-3">
+              <span className="tf-action text-sub block mb-1" id="routine-weeklyday-label">
+                День недели
+              </span>
+              <div
+                role="radiogroup"
+                aria-labelledby="routine-weeklyday-label"
+                className="flex gap-1"
+              >
+                {WEEKDAY_TITLES.map((day, index) => {
+                  const value = String(index + 1);
+                  const active = weeklyDay === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setWeeklyDay(value)}
+                      className={`tf-action w-11 h-11 r-control-md ${
+                        active ? "bg-red text-white" : "bg-card2 text-sub"
+                      }`}
+                    >
+                      {day}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {kind === "monthly" && (
+            <div className="mb-3">
+              <label className="tf-action text-sub block mb-1" htmlFor="routine-monthday">
+                День месяца
+              </label>
+              <select
+                id="routine-monthday"
+                value={monthlyDay}
+                onChange={(e) => setMonthlyDay(e.target.value)}
+                className="tf-input w-full bg-card2 r-control-md px-3 h-control-lg text-text outline-none"
+              >
+                {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
+                  <option key={day} value={String(day)}>
+                    {day}-е число
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {kind === "interval" ? (
             <div className="mb-3">
               <label className="tf-action text-sub block mb-1" htmlFor="routine-interval">
@@ -314,11 +458,11 @@ export function RoutinesScreen() {
                 id="routine-interval"
                 value={interval}
                 onChange={(e) => setInterval(e.target.value)}
-                className="tf-input w-full bg-card2 rounded-xl px-3 h-control-lg text-text outline-none"
+                className="tf-input w-full bg-card2 r-control-md px-3 h-control-lg text-text outline-none"
               >
-                {INTERVAL_OPTIONS.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
+                {INTERVAL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
               </select>
@@ -333,7 +477,7 @@ export function RoutinesScreen() {
                 value={timeLocal}
                 onChange={(e) => setTimeLocal(e.target.value)}
                 placeholder="ЧЧ:ММ"
-                className="tf-input w-full bg-card2 rounded-xl px-3 h-control-lg text-text placeholder:text-dim outline-none"
+                className="tf-input w-full bg-card2 r-control-md px-3 h-control-lg text-text placeholder:text-dim outline-none"
               />
             </div>
           )}
@@ -347,23 +491,23 @@ export function RoutinesScreen() {
               value={timezone}
               onChange={(e) => setTimezone(e.target.value)}
               placeholder="Europe/Moscow"
-              className="tf-input w-full bg-card2 rounded-xl px-3 h-control-lg text-text placeholder:text-dim outline-none"
+              className="tf-input w-full bg-card2 r-control-md px-3 h-control-lg text-text placeholder:text-dim outline-none"
             />
           </div>
 
-          <div className="bg-card2 rounded-xl p-3 mb-3">
+          <div className="bg-card2 r-control-md p-3 mb-3">
             <span className="tf-action text-sub block mb-2">Что создаст задачу</span>
             <input
               value={taskTitle}
               onChange={(e) => setTaskTitle(e.target.value)}
               placeholder={`Название задачи (по умолчанию — ${title.trim() || "название рутины"})`}
-              className="tf-input w-full bg-card rounded-xl px-3 h-control-lg text-text placeholder:text-dim outline-none mb-2"
+              className="tf-input w-full bg-card r-control-md px-3 h-control-lg text-text placeholder:text-dim outline-none mb-2"
             />
             <select
               value={assignee}
               onChange={(e) => setAssignee(e.target.value)}
               aria-label="Роль-исполнитель"
-              className="tf-input w-full bg-card rounded-xl px-3 h-control-lg text-text outline-none mb-2"
+              className="tf-input w-full bg-card r-control-md px-3 h-control-lg text-text outline-none mb-2"
             >
               <option value="">— без роли —</option>
               {roleAgents.map((a) => (
@@ -376,7 +520,7 @@ export function RoutinesScreen() {
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
               aria-label="Проект"
-              className="tf-input w-full bg-card rounded-xl px-3 h-control-lg text-text outline-none"
+              className="tf-input w-full bg-card r-control-md px-3 h-control-lg text-text outline-none"
             >
               <option value="">— без проекта —</option>
               {projects.map((p) => (
@@ -411,14 +555,23 @@ export function RoutinesScreen() {
             </div>
           </div>
 
+          {preview.isError && (
+            <div className="bg-card2 r-control-md p-3 mb-3">
+              <p className="tf-action text-sub leading-relaxed">
+                Не удалось посчитать ближайший запуск — проверьте правило, время и
+                часовой пояс.
+              </p>
+            </div>
+          )}
+
           {preview.data && (
-            <div className="bg-card2 rounded-xl p-3 mb-3">
+            <div className="bg-card2 r-control-md p-3 mb-3">
               <p className="tf-action text-sub leading-relaxed">
                 Создаст задачу «{taskTitle.trim() || title.trim() || "…"}»{" "}
                 {preview.data.rule_label}
                 {kind === "interval" ? "" : ` в ${timeLocal}`}. Ближайший запуск —{" "}
                 {preview.data.next_run_at
-                  ? formatWhen(preview.data.next_run_at, preview.data.timezone)
+                  ? formatNextRun(preview.data.next_run_at, preview.data.timezone)
                   : "не удалось посчитать"}
                 .
               </p>
@@ -431,34 +584,65 @@ export function RoutinesScreen() {
             variant="block"
             className="mb-3"
           />
-          <Button
-            type="submit"
-            disabled={
-              !title.trim() ||
-              (kind === "weekly_days" && weekdays.length === 0) ||
-              createSchedule.isPending
-            }
-          >
-            {createSchedule.isPending ? "Создаём…" : "Создать рутину"}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setShowCreate(false)}
+              className="flex-1"
+            >
+              Отмена
+            </Button>
+            <Button
+              type="submit"
+              className="flex-1"
+              disabled={
+                !title.trim() ||
+                (kind === "weekly_days" && weekdays.length === 0) ||
+                createSchedule.isPending
+              }
+            >
+              {createSchedule.isPending ? "Создаём…" : "Создать рутину"}
+            </Button>
+          </div>
         </form>
       )}
 
-      {lastRunTaskId && (
-        <div className="bg-card2 rounded-xl px-3 py-2.5 mb-3 flex items-center gap-2">
-          <span className="tf-action text-sub flex-1">Запуск создан</span>
-          <button
-            type="button"
-            onClick={() => openTask(lastRunTaskId)}
-            className="tf-action text-blue"
-          >
-            Открыть задачу
-          </button>
+      {createdNotice && (
+        <div className="bg-card2 r-control-md px-3 py-2.5 mb-3 flex items-center gap-2">
+          <span className="tf-action text-sub flex-1">Рутина создана</span>
           <IconButton
             icon="close"
             label="Скрыть"
             size={14}
-            onClick={() => setLastRunTaskId(null)}
+            onClick={() => setCreatedNotice(false)}
+          />
+        </div>
+      )}
+
+      {runNotice && (
+        <div className="bg-card2 r-control-md px-3 py-2.5 mb-3 flex items-center gap-2">
+          <span className="tf-action text-sub flex-1">
+            {runNotice.status === "created"
+              ? "Запуск создан"
+              : runNotice.status === "skipped"
+                ? `Пропущено: ${runNotice.detail ?? "прошлый запуск ещё не закрыт"}`
+                : `Не удалось запустить: ${runNotice.detail ?? runStatusLabel(runNotice.status)}`}
+          </span>
+          {runNotice.taskId && (
+            <button
+              type="button"
+              onClick={() => openTask(runNotice.taskId!)}
+              className="tf-action text-blue"
+            >
+              Открыть задачу
+            </button>
+          )}
+          <IconButton
+            icon="close"
+            label="Скрыть"
+            size={14}
+            onClick={() => setRunNotice(null)}
           />
         </div>
       )}
@@ -500,7 +684,7 @@ export function RoutinesScreen() {
           {schedules.map((s) => {
             const role = roleTitle(s.task_payload?.assignee_id);
             return (
-              <div key={s.id} className="bg-card rounded-xl mb-[2px]">
+              <div key={s.id} className="bg-card r-surface mb-[2px]">
                 <button
                   type="button"
                   onClick={() => setExpanded(expanded === s.id ? null : s.id)}
@@ -516,8 +700,10 @@ export function RoutinesScreen() {
                     </div>
                     <div className="tf-action text-dim truncate">
                       {s.status === "paused"
-                        ? `Последний запуск: ${formatWhen(s.last_run_at, s.timezone)}`
-                        : `Следующий запуск: ${formatWhen(s.next_run_at, s.timezone)}`}
+                        ? s.last_run_at
+                          ? `Последний запуск: ${formatWhen(s.last_run_at, s.timezone)}`
+                          : "Запусков ещё не было"
+                        : `Следующий запуск: ${formatNextRun(s.next_run_at, s.timezone)}`}
                     </div>
                   </div>
                   {s.status === "paused" && (
@@ -543,7 +729,7 @@ export function RoutinesScreen() {
                       <button
                         type="button"
                         onClick={() => togglePause(s)}
-                        className="tf-action flex-1 h-11 rounded-xl bg-card2 text-sub tap-row"
+                        className="tf-action flex-1 h-11 r-control-md bg-card2 text-sub tap-row"
                       >
                         {s.status === "paused" ? "Возобновить" : "Пауза"}
                       </button>
@@ -551,7 +737,7 @@ export function RoutinesScreen() {
                         type="button"
                         onClick={() => runNowAndReport(s)}
                         disabled={runNow.isPending || s.status !== "active"}
-                        className="tf-action flex-1 h-11 rounded-xl bg-card2 text-sub disabled:opacity-50 tap-row"
+                        className="tf-action flex-1 h-11 r-control-md bg-card2 text-sub disabled:opacity-50 tap-row"
                       >
                         Запустить сейчас
                       </button>
@@ -573,7 +759,7 @@ export function RoutinesScreen() {
         <button
           type="button"
           onClick={() => setShowCreate(true)}
-          className="w-full flex items-center gap-3 py-3 px-4 mt-4 border border-dashed border-stroke rounded-xl tap-row"
+          className="w-full flex items-center gap-3 py-3 px-4 mt-4 border border-dashed border-stroke r-control-md tap-row"
         >
           <Icon name="plus" size={18} className="text-dim" />
           <span className="tf-action text-sub">Создать рутину</span>
