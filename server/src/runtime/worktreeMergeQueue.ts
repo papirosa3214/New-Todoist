@@ -673,7 +673,11 @@ export async function sweepMergedWorkspaces(limit = 20): Promise<number> {
   let cleaned = 0;
   const base = worktreesBase();
   if (!fs.existsSync(base)) return 0;
-  for (const entry of fs.readdirSync(base).slice(0, limit)) {
+  // Смотреть надо на ВСЕ копии, а не на первые `limit` по алфавиту:
+  // иначе хвост из копий, чьи названия начинаются после двадцатого,
+  // не убирался никогда — а именно его и жаловались.
+  for (const entry of fs.readdirSync(base)) {
+    if (cleaned >= limit) break;
     if (entry.startsWith(".merge-") || entry.startsWith("iso-test-")) continue;
     const taskId = entry;
     try {
