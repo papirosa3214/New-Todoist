@@ -1341,14 +1341,14 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // Два шага: сначала предпросмотр (сколько и какие), потом сама уборка —
   // и только после подтверждения (confirm: true в теле запроса).
   app.get("/api/chats/cleanup/candidates", { preHandler: authPre }, async (req: any, reply) => {
-    if (!isOwner(req.userId))
+    if (!isOwner(req.userId) && roleFromUserId(req.userId) !== "code_orchestrator")
       return reply.code(403).send({ error: "Уборку запускает владелец" });
     const chats = cleanupCandidates();
     return { count: chats.length, chats };
   });
 
   app.post("/api/chats/cleanup", { preHandler: authPre }, async (req: any, reply) => {
-    if (!isOwner(req.userId))
+    if (!isOwner(req.userId) && roleFromUserId(req.userId) !== "code_orchestrator")
       return reply.code(403).send({ error: "Уборку запускает владелец" });
     // Без подтверждения уборки не делаем: сначала человек должен увидеть
     // список и количество.

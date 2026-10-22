@@ -81,13 +81,13 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       if(original.from_user_id===senderId) throw new ToolError("Не отвечай сам себе");
       return write(original.chat_id,{text:String(p.text),task_id:original.task_id,subtask_id:context.subtaskId,recipient_subtask_id:original.subtask_id,reply_to_message_id:original.id});
     }),
-    tool("taskflow_chat_read","Прочитать личный или групповой чат. chat_id — конкретная переписка; без него список доступных чатов. task_id фильтрует контекст задачи. Возвращает id сообщений для taskflow_chat_reply.",Type.Object({chat_id:optional("Чат"),task_id:optional("Задача"),limit:Type.Optional(Type.Integer({minimum:1,maximum:100}))}),async p=>{
+    tool("taskflow_chat_read","Прочитать личный или групповой чат. chat_id — конкретная переписка; без него список доступных чатов. task_id фильтрует контекст задачи. Возвращает id сообщений для taskflow_chat_reply.",Type.Object({chat_id:optional("Чат"),task_id:optional("Задача"),include_closed:Type.Optional(Type.Boolean({description:"Показать и закрытые сессии"})),limit:Type.Optional(Type.Integer({minimum:1,maximum:100}))}),async p=>{
       const chatId=p.chat_id??context.chatId;
       if(chatId){
         const history=await asRole(role,"GET",`/api/chats/${chatId}/messages`);
         return {messages:history.messages.slice(-Math.max(1,Math.min(100,p.limit??20)))};
       }
-      const list=await asRole(role,"GET","/api/chats");
+      const list=await asRole(role,"GET",p.include_closed?"/api/chats?include_closed=1":"/api/chats");
       return p.task_id ? {chats:list.chats.filter((c:any)=>c.task_id===p.task_id)} : list;
     }),
     tool("taskflow_checklist_state","Что владелец отметил в виджетах checklist этого чата: подпись пункта, ключ и done. chat_id — переписка (без него текущий чат хода); only_done — только отмеченные. Отвечай по подписям пунктов: они соответствуют задачам, которые владелец закрывает.",Type.Object({chat_id:optional("Чат"),only_done:Type.Optional(Type.Boolean({description:"Только отмеченные пункты"}))}),async p=>{
@@ -99,6 +99,25 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       const list=messages.map(m=>({message_id:m.message_id,task_id:m.task_id,widgets:m.widgets.map((w:any)=>({widget_key:w.widget_key,title:w.title,items:w.items.map((i:any)=>{total++;if(i.done)done++;return {item_key:i.key,label:i.label,done:Boolean(i.done)};})}))}));
       if(!messages.length) return {отмечено:0,всего:0,пункты:[],подсказка:"В этом чате пока никто не отмечал пункты checklist-виджетов"};
       return {отмечено:done,всего:total,сообщения:list};
+    }),
+    // Уборка чатов и тем задач (владелец 22.10.2026): «согласуй инструменты
+    // у сервера и в каталоге, чтобы они все там были». До этого сервер умел
+    // закрывать и убирать чат, а роли видели в каталоге только чтение и ответ —
+    // и лезли в taskflow.db руками.
+    tool("taskflow_chat_archive","Убрать чат-сессию или тему задачи в архив: из списка уходит, история остаётся, statistics целы. Только чаты, где у тебя есть право уборки; постоянные комнаты (личная, группа, общая) не убираются. Это штатный путь уборки — в базу данных не ходи.",Type.Object({chat_id:Type.String({description:"Чат или тема задачи"}),reason:optional("Коротко, почему убираем")}),async p=>{
+      const data=await asRole(role,"POST",`/api/chats/${p.chat_id}/archive`) as any;
+      return {archived:true,chat_id:p.chat_id,reason:p.reason??null,chat:data.chat};
+    }),
+    tool("taskflow_chats_cleanup_preview","Предпросмотр уборки: сколько пустых тем задач сервер считает мусором и какие именно (без сообщений, без очереди доставки, не тронуты два часа). Ничего не меняет — покажи список владельцу и дождись его «давай».",Type.Object({}),async()=>{
+      return await asRole(role,"GET","/api/chats/cleanup/candidates");
+    }),
+    tool("taskflow_chats_cleanup","Уборка пустых тем задач: архивирует ровно то, что показал предпросмотр. Только после явного подтверждения владельца в этом ходе; без него не вызывай.",Type.Object({confirm:Type.Optional(Type.Boolean({description:"Подтверждение владельца"})),}),async p=>{
+      if(p.confirm!==true) throw new ToolError("Сначала taskflow_chats_cleanup_preview, покажи список владельцу и дождись подтверждения");
+      return await asRole(role,"POST","/api/chats/cleanup",{confirm:true});
+    }),
+    tool("taskflow_chat_close","Закрыть или вернуть сессию чата: закрытая уходит из списка в «Закрытые», история остаётся. Постоянные комнаты не закрываются. Закрывает владелец — если сервер отказал, так и скажи владельцу и предложи taskflow_chat_archive.",Type.Object({chat_id:Type.String(),closed:Type.Optional(Type.Boolean({description:"false — вернуть из закрытых"}))}),async p=>{
+      const data=await asRole(role,"POST",`/api/chats/${p.chat_id}/close`,{closed:p.closed!==false}) as any;
+      return {chat:data.chat};
     }),
   ];
 }

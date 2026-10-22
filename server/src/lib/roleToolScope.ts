@@ -21,7 +21,11 @@ const ONLY: Record<string, string[]> = {
   apple_reminders_delete: ["secretary"],
   apple_calendar_agenda: ["secretary"],
   apple_calendar_create: ["secretary"],
-  apple_calendar_update: ["secretary"],
+  apple_calendar_update: ["secretary"],  // Уборка чатов и тем задач (22.10.2026): сервер умел, роли не видели.
+  taskflow_chat_archive: ["code_orchestrator", "secretary"],
+  taskflow_chat_close: ["code_orchestrator", "secretary"],
+  taskflow_chats_cleanup_preview: ["code_orchestrator"],
+  taskflow_chats_cleanup: ["code_orchestrator"],
 };
 
 const DENY: Record<string, string[]> = {
