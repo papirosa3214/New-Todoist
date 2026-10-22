@@ -506,7 +506,7 @@ describe("рутины в базе и тик планировщика", () => {
     expect(recomputed!.toISOString()).toBe(new Date(schedule.next_run_at).toISOString());
   });
 
-  it("cron-правило принимается и считает следующий запуск", async () => {
+  it("cron-правило не в первой версии: отказ на входе", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/schedules",
@@ -518,10 +518,10 @@ describe("рутины в базе и тик планировщика", () => {
         task_payload: { title: "По cron" },
       },
     });
-    expect(res.statusCode).toBe(201);
-    const body = res.json();
-    expect(body.schedule.next_run_at).toBeTruthy();
-    expect(body.schedule.rule_label).toContain("cron");
+    // Произвольное расписание — нерешённая развилка владельца: ручки его
+    // не принимают (решение архитектора, 22.10.2026).
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain("cron");
   });
 
   it("посторонний пользователь не может создать рутину", async () => {
