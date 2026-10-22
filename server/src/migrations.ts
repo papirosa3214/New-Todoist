@@ -4929,6 +4929,38 @@ const migrations: Migration[] = [
   } },
   { id: "163_context_observability", description: "Журнал вклада энричеров и JEV, расход по ключу", up: () => db.exec(OBSERVABILITY_SCHEMA) },
   { id:"164_one_shot_review_templates",description:"Разовая проверка результата и ревью кода",noTransaction:true,up:()=>addTemplateProfiles(["result_review","code_review"]) },
+  { id: "165_task_schedules", description: "Рутины (крон-задачи): task_schedules и schedule_runs", up: () => db.exec(`
+    CREATE TABLE IF NOT EXISTS task_schedules (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      task_payload TEXT NOT NULL DEFAULT '{}',
+      rule_kind TEXT NOT NULL,
+      rule_expr TEXT,
+      time_local TEXT NOT NULL,
+      timezone TEXT NOT NULL DEFAULT 'Europe/Moscow',
+      next_run_at TEXT,
+      last_run_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','finished')),
+      catch_up INTEGER NOT NULL DEFAULT 1 CHECK(catch_up IN (0,1)),
+      overlap_policy TEXT NOT NULL DEFAULT 'skip' CHECK(overlap_policy IN ('skip','allow')),
+      current_task_id TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS schedule_runs (
+      id TEXT PRIMARY KEY,
+      schedule_id TEXT NOT NULL REFERENCES task_schedules(id) ON DELETE CASCADE,
+      run_at TEXT NOT NULL,
+      task_id TEXT,
+      status TEXT NOT NULL CHECK(status IN ('created','skipped','failed','error')),
+      detail TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(schedule_id, run_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_schedules_next_run ON task_schedules(status, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_schedule_runs_schedule ON schedule_runs(schedule_id, run_at DESC);
+  `) },
 ];
 /**
  * Опции прогона миграций.

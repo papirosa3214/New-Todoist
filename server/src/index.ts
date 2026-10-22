@@ -62,6 +62,7 @@ import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerHostRoutes } from "./routes/hosts.js";
 import { startDeviceEventCleanup } from "./lib/deviceEvents.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
+import { registerScheduleRoutes } from "./routes/schedules.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
 import { registerManualRunRoutes } from "./routes/manual-run.js";
 import { registerControlRoutes } from "./routes/control.js";
@@ -478,6 +479,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     app.addHook("onClose", async () => stopDeviceEventCleanup());
   }
   registerTaskRoutes(app);
+  // Рутины (крон-задачи): /api/schedules — CRUD и история запусков.
+  registerScheduleRoutes(app);
   registerAgentStateRoutes(app);
   await registerManualRunRoutes(app);
   registerRetryRoutes(app);

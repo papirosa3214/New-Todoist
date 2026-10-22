@@ -33,6 +33,7 @@ import { ProjectsScreen } from "./screens/ProjectsScreen";
 import { ProjectArchiveScreen } from "./screens/ProjectArchiveScreen";
 import { TaskArchiveScreen } from "./screens/TaskArchiveScreen";
 import { LabelsScreen } from "./screens/LabelsScreen";
+import { RoutinesScreen } from "./screens/RoutinesScreen";
 import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
 import { LabelTasksScreen } from "./screens/LabelTasksScreen";
 import { SearchScreen } from "./screens/SearchScreen";
@@ -180,6 +181,7 @@ export default function App() {
               (через серверный DELETE). Доступ — только владельцу. */}
             <Route path="/tasks/archive" element={<TaskArchiveScreen />} />
             <Route path="/labels" element={<LabelsScreen />} />
+            <Route path="/routines" element={<RoutinesScreen />} />
             <Route path="/labels/:id" element={<LabelTasksScreen />} />
             <Route path="/search" element={<SearchScreen />} />
             {/* Drill-down из «Ежедневника» (пункт «Дневник» под тремя

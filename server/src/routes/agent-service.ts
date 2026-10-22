@@ -8,6 +8,7 @@ import { join } from "path";
 import { authOrApiToken } from "../auth.js";
 import db from "../db.js";
 import { kbTriageState } from "../lib/kbTriageWatcher.js";
+import { schedulesState } from "../runtime/schedules/tick.js";
 import { isOwner, isOrchestrator } from "../access.js";
 
 const run = promisify(execFile);
@@ -93,6 +94,10 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
       // системы» показывает его лампу и последнюю проверку (владелец
       // 12.10.2026: «точно так же организуй»).
       kb_triage: kbTriageState(),
+      // Рутины (крон-задачи): сколько рутин, сколько из них живых, были
+      // ли ошибки запуска и когда ближайший запуск. Ошибка запуска рутины
+      // видна здесь — отдельной лампы не заводим (своя подсистема).
+      schedules: schedulesState(),
     }),
   );
 
