@@ -83,6 +83,20 @@ export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-pr
   // Only leases from before this process. Fresh pickups are never stolen.
   const cutoff=new Date(Math.floor(processStartedAt.getTime()/1000)*1000-1000).toISOString();
   db.prepare("UPDATE chat_message_queue SET status='pending',picked_at=NULL,updated_at=datetime('now') WHERE status='picked' AND julianday(updated_at)<julianday(?)").run(cutoff);
+  // Пинг висящих вопросов — ДО просрочки, в том числе на старте сервера.
+  // Иначе вопрос, который пережил перезапуск (сервер стоял, роль не забрала),
+  // тихо умирал в `failed` по TTL, и владелец так и не узнавал, что на
+  // него ждут. Пинг — последнее окно, когда ещё можно вмешаться.
+  try {
+    const stalled = sweepStalledDeliveries();
+    if (stalled.notified > 0) {
+      console.log(
+        `[chatDeliveryWatch] висящих вопросов на старте: ${stalled.stalled}, уведомлений владельцу: ${stalled.notified}`,
+      );
+    }
+  } catch (error) {
+    console.warn("[chatDeliveryWatch] пинг висящих вопросов на старте не удался:", error);
+  }
   // Мёртвые доставки (старше порога) — в терминальный статус: иначе они
   // держат сторож выкладки и правка в main не доезжает до живого сервера.
   const expired = expireStaleDeliveries();

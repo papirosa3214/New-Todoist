@@ -31,6 +31,7 @@ import {
   DELIVERY_STALLED_NOTICE_TYPE,
 } from "../src/runtime/chatDeliveryWatch.js";
 import { _resetActiveChatRunsForTests } from "../src/runtime/PiRuntimeAdapter.js";
+import { startChatQueueRecovery } from "../src/runtime/chatQueueRecovery.js";
 import { _resetChatRolePickerForTests } from "../src/routes/chats.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 import { liveCatalogEntryOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
@@ -365,5 +366,36 @@ describe("chatDeliveryWatch: висящий вопрос", () => {
 
     expect(report.stalled).toBe(0);
     expect(report.notified).toBe(0);
+  });
+});
+
+describe("chatDeliveryWatch: порядок на старте сервера", () => {
+  it("висящий вопрос получает пинг до того, как истечёт TTL", () => {
+    // Свой чат: тесты выше переключают карточку у CHAT_ID.
+    const chatId = "chat_delivery_watch_startup";
+    db.prepare(
+      `INSERT OR REPLACE INTO chats (id, title, kind, created_by)
+       VALUES (?, 'Личная переписка', 'group', ?)`,
+    ).run(chatId, OWNER_USER);
+    db.prepare(
+      `INSERT OR REPLACE INTO chat_members (chat_id, member_id, added_at)
+       VALUES (?, ?, datetime('now')), (?, ?, datetime('now'))`,
+    ).run(chatId, OWNER_USER, chatId, ROLE_USER);
+    db.prepare(
+      `INSERT OR REPLACE INTO chat_messages (id, from_user_id, text, channel, chat_id)
+       VALUES (?, ?, ?, 'chat', ?)`,
+    ).run("cmg_startup_trigger", OWNER_USER, "вопрос, который висит на старте сервера", chatId);
+    db.prepare(
+      `INSERT OR REPLACE INTO chat_message_queue
+         (id, chat_id, role_id, delivery_id, message_id, session_generation, payload_json, status, finished_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 1, '{}', 'pending', NULL, datetime('now', '-45 minutes'))`,
+    ).run("cmq_startup_1", chatId, ROLE_USER, "cmq_startup_1", "cmg_startup_trigger");
+
+    startChatQueueRecovery();
+
+    const notice = db
+      .prepare("SELECT text FROM notifications WHERE type=? AND user_id=?")
+      .get(DELIVERY_STALLED_NOTICE_TYPE, OWNER_USER) as { text: string } | undefined;
+    expect(notice?.text).toContain("вопрос, который висит на старте сервера");
   });
 });
