@@ -1,5 +1,6 @@
 import {chatExecutionMode,type ChatExecutionMode} from "./chatExecutionMode.js";
 import {roleHostAccessTools} from "./roleHostAccess.js";
+import {createHostRoleTools} from "./hostRoleTools.js";
 import {taskflowTools} from "./inProcessRun.js";
 import {roleToolAllowed} from "../lib/roleToolScope.js";
 import {roleUserId} from "../roleRouting.js";
@@ -16,7 +17,8 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  // pass its chat-aware adapter; prefer that adapter and keep every other
  // duplicate operation visible as an error.
  const adapterNames=new Set(adapters.map(tool=>tool.name));
- const operations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...adapters];
+ const hostTools=createHostRoleTools(input.role,input.taskId,input.subtaskId);
+ const operations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...hostTools,...adapters];
  const universal=createUniversalTaskflow(operations,context,toolRequestStore);
  // Aliases remain registered for SDK/history compatibility, but only taskflow is active.
  const aliases=operations.filter(t=>!operationRestriction(t.name,context)).map(tool=>({...tool,execute:async(id:string,args:any,signal?:AbortSignal,onUpdate?:any)=>{

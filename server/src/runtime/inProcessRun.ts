@@ -73,7 +73,6 @@ import { buildDependencyContext } from "./dependencyContext.js";
 import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
 import { isolatedLocalOperations, roleIsolationEnabled } from "./localRoleOperations.js";
-import { createHostRoleTools } from "./hostRoleTools.js";
 import { previousSessionDigest } from "./slotSession.js";
 import { remoteRoleWorkspace } from "./roleWorkspace.js";
 import { resolveRoleHost } from "./roleHost.js";
@@ -1506,7 +1505,7 @@ try {
   if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
   const infra = await connectRoleMcp(role, cwd).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
-  const toolCatalog = buildRoleToolCatalog({role,model:model.id??modelId,taskId,subtaskId:input.subtaskId,mode:"work",runId:manager.getSessionId()}, [...composio.tools,...infra.tools,...(host?createHostRoleTools(host,taskId,role):[])]);
+  const toolCatalog = buildRoleToolCatalog({role,model:model.id??modelId,taskId,subtaskId:input.subtaskId,mode:"work",runId:manager.getSessionId()}, [...composio.tools,...infra.tools]);
   const customTools = toolCatalog.customTools;
   // На удалённой машине инструменты те же, но исполняются через шлюз:
   // у каждого в pi подключаемые операции (createCodingTools принимает
