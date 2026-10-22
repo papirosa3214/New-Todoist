@@ -120,3 +120,16 @@ Test Files  1 passed (1)
 - `server/src/runtime/chatQueueRecovery.ts` (метка `expired` + вызовы проходов)
 - `server/test/chatDeliveryWatch.test.ts` (новый, 6 тестов)
 - `docs/2026-10-23-delivery-watch.md`
+
+## Как запускать тесты на .110
+
+Дефолтный node на .110 — v18.19.1, vitest на нём падает на старте
+(`node:util` не отдаёт `styleText`). Нужен nvm-node 22:
+
+```bash
+cd ~/Проекты/New-Todoist/server && \
+  PATH=/home/maksim/.nvm/versions/node/v22.23.1/bin:$PATH npx vitest run test/chatDeliveryWatch.test.ts
+```
+
+Базовая линия полного прогона на чистом дереве — 28 падающих файлов /
+91 тест: сверять результат с базой, а не с нулём.
