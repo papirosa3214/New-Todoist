@@ -1,3 +1,4 @@
+import { CARD_WORK_OPERATIONS, type ChatExecutionMode } from "./chatExecutionMode.js";
 import crypto from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "typebox";
@@ -18,6 +19,7 @@ export type Tool = {
 };
 export type Context = {
   actor: string;
+  executionMode?: ChatExecutionMode;
   role: string;
   mode: string;
   runId: string;
@@ -130,8 +132,8 @@ export function operationRestriction(
       code: "MODE_RESTRICTED",
       message: "Для изменения нужен режим Работа",
     };
-  // «Обсуждение» в чате — то же, что работа по задаче: владелец поручает в
-  // нём работу и заводит карточки, поэтому ограничений нет (20.10.2026).
+  if (c.executionMode === "chat" && CARD_WORK_OPERATIONS.has(name))
+    return {code:"EXECUTION_MODE_RESTRICTED", message:"Выбран режим «В чате»: выполни поручение здесь без карточки. Только владелец может выбрать «По карточке» или явно поручить «Оформить как карточку»."};
   if (CHAT_CONTEXT.has(name) && (!c.chatId || !c.messageId))
     return {
       code: "CONTEXT_REQUIRED",
@@ -924,7 +926,7 @@ export function createUniversalTaskflow(
           .split(/[\s._]+/)
           .filter(Boolean);
         const matches = [...registry.values()]
-          .filter((t) => !context.authorize || context.authorize(t.name))
+          .filter((t) => (!context.authorize || context.authorize(t.name)) && !(context.executionMode === "chat" && CARD_WORK_OPERATIONS.has(t.name)))
           .map((t) => ({
             tool: t,
             score: words.reduce(

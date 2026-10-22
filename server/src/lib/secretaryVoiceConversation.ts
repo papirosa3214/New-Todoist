@@ -1,3 +1,4 @@
+import {chatExecutionMode,isCardHandoffCommand} from "../runtime/chatExecutionMode.js";
 import { createHash } from "node:crypto";
 import db from "../db.js";
 import { isOwner } from "../access.js";
@@ -34,7 +35,7 @@ export function saveVoiceMessage(owner: string, chatId: string, eventId: string,
   }
   const id = "voice-"+createHash("sha256").update(JSON.stringify([owner,chatId,eventId])).digest("hex");
   const inserted = db.transaction(()=>{
-    const result = db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES (?,?,?,'chat',?)").run(id,role==="user" ? owner : SECRETARY,text,chatId);
+    const result = db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id,execution_mode) VALUES (?,?,?,'chat',?,?)").run(id,role==="user" ? owner : SECRETARY,text,chatId,role==="user" && isCardHandoffCommand(text) ? "card" : chatExecutionMode(chatId));
     if (result.changes) db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(chatId);
     return result.changes>0;
   })();

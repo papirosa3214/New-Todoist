@@ -4961,6 +4961,12 @@ const migrations: Migration[] = [
     CREATE INDEX IF NOT EXISTS idx_task_schedules_next_run ON task_schedules(status, next_run_at);
     CREATE INDEX IF NOT EXISTS idx_schedule_runs_schedule ON schedule_runs(schedule_id, run_at DESC);
   `) },
+  { id: "166_chat_execution_mode", description: "Выбор В чате / По карточке и снимок режима принятого сообщения", up: () => {
+    for (const table of ["chats", "chat_messages"]) {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[];
+      if (!cols.some(c => c.name === "execution_mode")) db.exec(`ALTER TABLE ${table} ADD COLUMN execution_mode TEXT CHECK(execution_mode IN ('chat','card'))`);
+    }
+  } },
 ];
 /**
  * Опции прогона миграций.

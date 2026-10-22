@@ -1,3 +1,4 @@
+import {chatExecutionMode,parseChatExecutionMode,isCardHandoffCommand} from "../runtime/chatExecutionMode.js";
 import {offerChatSteering} from "../runtime/chatSteering.js";
 import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
 import { clearChatWorkPlan, isWorkPlanFinished, readChatWorkPlan, readChatWorkPlans, saveChatWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
@@ -239,6 +240,7 @@ function chatRow(chatId: string) {
     : undefined;
   return {
     ...chat,
+    execution_mode: chatExecutionMode(chatId),
     members,
     closed_at: taskTopicClosedAt(chat as any),
     pinned_message_id: pinnedMessageId ?? null,
@@ -797,9 +799,18 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // сообщение сразу, а ответ роли придёт отдельным событием chat:new
   // (broadcast внутри try/catch не роняет запрос, даже если Пи упал —
   // пользовательский текст уже в ленте и не потеряется).
+  app.post<{Params:{id:string};Body:{execution_mode:unknown}}>("/api/chats/:id/execution-mode", {preHandler:authPre}, async(req:any,reply)=>{
+    if (!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
+    if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({error:"Способ выполнения выбирает владелец"});
+    let mode;
+    try {mode=parseChatExecutionMode(req.body?.execution_mode);} catch(error) {return reply.code(400).send({error:(error as Error).message});}
+    db.prepare("UPDATE chats SET execution_mode=?,updated_at=datetime('now') WHERE id=?").run(mode,req.params.id);
+    return {chat:chatRow(req.params.id)};
+  });
+
   app.post<{
     Params: { id: string };
-    Body: { text?: string; attachment_ids?: string[]; task_id?: string; kind?: string; reply_to_message_id?: string; subtask_id?: string; recipient_subtask_id?: string; work_mode?: ChatWorkMode; model?: string };
+    Body: { execution_mode?: unknown; text?: string; attachment_ids?: string[]; task_id?: string; kind?: string; reply_to_message_id?: string; subtask_id?: string; recipient_subtask_id?: string; work_mode?: ChatWorkMode; model?: string };
   }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
@@ -812,6 +823,11 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       try { mode = parseChatWorkMode(req.body?.work_mode); }
       catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
       if (mode !== "work" && roleFromUserId(req.userId)) return reply.code(403).send({error: "Режим выбирает человек"});
+      let requestedExecutionMode;
+      if (req.body?.execution_mode !== undefined) {
+        if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({error:"Способ выполнения выбирает владелец"});
+        try {requestedExecutionMode=parseChatExecutionMode(req.body.execution_mode);} catch {return reply.code(400).send({error:"Неизвестный способ выполнения"});}
+      }
       const text = String(req.body?.text || "").trim();
       // MAK-98 и гейт формата ниже используют отправителя — считаем один раз.
       const senderRole = roleFromUserId(req.userId);
@@ -914,11 +930,16 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if(outstanding && addressedSlot && sourceSlot && addressedSlot!==sourceSlot)return reply.code(403).send({error:"Ответ должен исходить из адресованного этапа"});
       if(outstanding && (outstanding.status==="superseded" || fenceDeliveryIfStale(outstanding.id,outstanding.session_generation)))return reply.code(409).send({error:"Вопрос относится к предыдущему поколению сессии"});
       const id = uid();
+      const sourceMessage = senderRole && parentMessage ? db.prepare("SELECT chat_id FROM chat_messages WHERE id=?").get(parentMessage) as {chat_id:string}|undefined : undefined;
+      const executionMode = senderRole
+        ? sourceSlot ? "card" : sourceMessage && isMember(sourceMessage.chat_id,req.userId) ? chatExecutionMode(sourceMessage.chat_id,parentMessage) : "chat"
+        : isOwner(req.userId) && isCardHandoffCommand(text) ? "card" : requestedExecutionMode ?? chatExecutionMode(chatId);
       db.transaction(()=>{
       db.prepare(
         `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id)
          VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(id, req.userId, storedText, chatId, taskId, mode === "goal" ? "work" : mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
+      db.prepare("UPDATE chat_messages SET execution_mode=? WHERE id=?").run(executionMode,id);
       if(outstanding && ["pending","picked"].includes(outstanding.status)){
         pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
         db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);
@@ -948,7 +969,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const message = loadChatMessage(id);
       // Владелец написал в чат задачи — будим её план: готовые шаги стартуют, замолчавшие
       // перезапускаются той же ролью (runtime/taskNudge.ts). Ответ на сообщение этим не задерживаем.
-      if (chatTaskId && chat.parent_chat_id && isOwner(req.userId)) {
+      if (executionMode === "card" && chatTaskId && chat.parent_chat_id && isOwner(req.userId)) {
         void nudgeTaskPlan(chatTaskId, req.userId).catch((error) => req.log?.warn?.({ err: error, taskId: chatTaskId }, "не удалось разбудить план задачи"));
       }
 
@@ -1495,10 +1516,10 @@ export async function recoverAgentDelivery(input: {
   const saved=JSON.parse(row.payload_json);
   const integrationText=integrationHandoffContext(row.message_id,roleId);
   const recipientSlot=saved.subtaskId ?? trigger?.recipient_subtask_id ?? undefined;
-  const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
+  const topic=chatExecutionMode(chatId,row.message_id) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
   const slot=topic && trigger ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),recipientSlot) : null;
   const chatOnly=row.message_id.startsWith("review-return:") && saved.chatOnly===true;
-  const activeDelivery=chatOnly ? "idle" : slot ? await deliverTopicToWork(slot.task_id,role,row.message_id,trigger!.text,slot.plan_node_key)
+  const activeDelivery=chatOnly || chatExecutionMode(chatId,row.message_id) === "chat" ? "idle" : slot ? await deliverTopicToWork(slot.task_id,role,row.message_id,trigger!.text,slot.plan_node_key)
     : trigger ? await deliverChatToWork(role,chatId,row.message_id,integrationText ? integrationText+"\n"+trigger.text : trigger.text,recipientSlot) : "idle";
   if(activeDelivery!=="idle"){
     if(activeDelivery==="busy"){
@@ -1866,7 +1887,7 @@ async function dispatchRoleReplies(args: {
     targets = [];
   }
 
-  const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
+  const topic=chatExecutionMode(chatId,args.messageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
   for (const role of targets) {
     let selectedSlot:string|undefined;
     if(topic){
@@ -1915,7 +1936,7 @@ async function dispatchRoleReplies(args: {
     if (!durableRecord.created) continue;
     if(fenceDeliveryIfStale(durableRecord.id,durableRecord.generation))continue;
     const selected=selectedSlot ? resolveTopicSlot(topic!.task_id,role,undefined,selectedSlot) : null;
-    const delivery=selected ? await deliverTopicToWork(selected.task_id,role,args.messageId,text,selected.plan_node_key)
+    const delivery=chatExecutionMode(chatId,args.messageId) === "chat" ? "idle" : selected ? await deliverTopicToWork(selected.task_id,role,args.messageId,text,selected.plan_node_key)
       : await deliverChatToWork(role,chatId,args.messageId,text,message?.recipient_subtask_id ?? undefined);
     if(delivery!=="idle"){
       // Pending survives a process crash. The recipient's linked reply (or
@@ -1993,7 +2014,7 @@ async function dispatchRoleReplies(args: {
       : {from:"владелец",chatId,chatTitle:chatTitleOf(chatId),body:text};
     // Reserve FIFO position synchronously, before awaiting SDK/CLI acceptance.
     const receiptPromise = !selectedSlot && !topic
-      ? offerChatSteering(chatId,accountId,args.messageId,steeringSource)
+      ? offerChatSteering(chatId,accountId,args.messageId,{...steeringSource,executionMode:chatExecutionMode(chatId,args.messageId),workMode:args.mode ?? "work"})
       : Promise.resolve(null);
     // Служебная строка появляется сразу, как только SDK взял ввод: сообщение
     // в работе роли. Ждать конца хода нельзя — строка должна быть видна
@@ -2144,11 +2165,11 @@ async function deliverAgentReply(args: {
   const triggerFiles = trigger.attachments ? `\n[вложения: ${trigger.attachments}]` : "";
   const userText = `${integrationContext ? integrationContext+"\n" : ""}${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}`;
 
-  const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
+  const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
   const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;
   if(topic && !slot && (args.subtaskId || trigger.recipient_subtask_id || topicSlotKey(trigger.text))){slotChoiceNotice(chatId,topic.task_id,role,args.triggerMessageId);return null;}
   const fromOwner = isOwner(trigger.from_user_id);
-  const activeDelivery=args.chatOnly ? "idle" : topic && slot ? await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)
+  const activeDelivery=args.chatOnly || chatExecutionMode(chatId,args.triggerMessageId) === "chat" ? "idle" : topic && slot ? await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)
     : !topic ? await deliverChatToWork(role,chatId,args.triggerMessageId,userText,args.subtaskId??trigger.recipient_subtask_id??undefined,undefined,fromOwner) : "idle";
   if(activeDelivery!=="idle"){
     traceCoordination(()=>updateCoordination(args.triggerMessageId,roleUserId,{status:activeDelivery==="busy"?"busy":"queued",activity:activeDelivery==="busy"?"Выбери рабочий этап адресата":"Ожидает завершения текущего действия",last_activity_at:new Date().toISOString()}));
@@ -2230,7 +2251,7 @@ async function deliverAgentReply(args: {
     : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null, projectId: topic ? null : chatProject });
   if (snapshots) prompt = `${prompt}\n\n${snapshots}`;
   prompt += `\nОтвечаешь на сообщение ${trigger.id}; сервер свяжет итоговый текст с этим вопросом. Не отправляй тот же ответ повторно инструментом. Для отдельного нового вопроса коллеге используй taskflow_chat_send.`;
-  prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Отчёты сохраняй инструментом doc_write в документах задачи, здесь дай ссылку. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
+  prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Материалы сохраняй инструментом doc_write в документах проекта или прикладывай файлом к этому разговору; для этого не нужна карточка задачи. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
   if(topic) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 
   if(integrationContext) prompt = integrationContext+"\n\n"+prompt;

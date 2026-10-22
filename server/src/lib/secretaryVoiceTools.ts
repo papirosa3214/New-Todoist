@@ -1,3 +1,4 @@
+import {chatExecutionMode} from "../runtime/chatExecutionMode.js";
 // Инструменты голосового Помощника владельца: одна задача целиком и загрузка ролей.
 // Только чтение фактической БД; формулировки готовы к озвучиванию.
 import db from "../db.js";
@@ -121,7 +122,7 @@ export function roleLoadNow(ownerId: string) {
 function voiceCatalog(ownerId: string, context: {chatId?:string;messageId?:string} = {}) {
   const adapters = secretaryThings3Tools({ role: "secretary", ...context });
   return buildRoleToolCatalog(
-    { role: "secretary", mode: "work", runId: `secretary-voice:${ownerId}`, ...context },
+    { role: "secretary", mode: "work", runId: `secretary-voice:${ownerId}`, executionMode:chatExecutionMode(context.chatId,context.messageId), ...context },
     adapters,
   );
 }

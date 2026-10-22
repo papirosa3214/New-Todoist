@@ -368,10 +368,10 @@ async def shared_tools_via_api(socket_path: str, owner_id: str, runner: Backgrou
     return [build(spec) for spec in specs]
 
 
-async def instructions_via_api(socket_path: str) -> dict:
+async def instructions_via_api(socket_path: str, owner_id: str | None = None, chat_id: str | None = None) -> dict:
     connector = aiohttp.UnixConnector(path=socket_path)
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
-        async with http.get("http://localhost/secretary/instructions") as response:
+        async with http.get("http://localhost/secretary/instructions", params={"owner_id": owner_id, "chat_id": chat_id} if owner_id and chat_id else {}) as response:
             if response.status != 200:
                 raise RuntimeError("Не удалось получить инструкции Помощника владельца")
             body = await response.json()
@@ -503,7 +503,7 @@ async def entrypoint(ctx: JobContext) -> None:
     def on_conversation_item(event):
         recorder.record(event.item)
 
-    snapshot = await instructions_via_api(cfg.taskflow_socket_path)
+    snapshot = await instructions_via_api(cfg.taskflow_socket_path, owner.identity, chat_id)
     runner = BackgroundRunner()
     runner.session = session
     ctx.add_shutdown_callback(runner.close)

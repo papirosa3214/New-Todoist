@@ -1,3 +1,4 @@
+import type { ChatExecutionMode } from "./chatExecutionMode.js";
 /** Active chat input, separate from the FIFO of complete model runs.
  * Acceptance by the SDK is not delivery: acknowledge only after a user message
  * event and after the enclosing reply has been persisted. Unconsumed input
@@ -20,6 +21,8 @@ export interface SteeringReceipt {
 }
 /** Что подмешивается в ход: от кого, откуда и что написано. */
 export interface SteeringOffer {
+  executionMode?: ChatExecutionMode;
+  workMode?: string;
   /** Отправитель — имя или id. */
   from: string;
   /** Чат, где сообщение написано: оттуда оно и пришло в ход. */
@@ -38,6 +41,8 @@ interface Pending {
   ready: Promise<boolean>;
 }
 interface Input {
+  executionMode?: ChatExecutionMode;
+  workMode?: string;
   chatId: string;
   roleId: string;
   steer: (text: string) => Promise<void>;
@@ -57,6 +62,7 @@ export function registerChatSteering(input: Input) {
     chatId: input.chatId,
     async offer(id: string, source: SteeringOffer): Promise<SteeringReceipt | null> {
       if (closed) return null;
+      if ((source.executionMode ?? "chat") !== (input.executionMode ?? "chat") || (source.workMode ?? "work") !== (input.workMode ?? "work")) return null;
       const previous = entries.get(id);
       if (previous) return await previous.ready ? previous.receipt : null;
       let resolve!: (ok: boolean) => void;

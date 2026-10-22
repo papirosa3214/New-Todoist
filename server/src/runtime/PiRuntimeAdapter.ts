@@ -1,3 +1,4 @@
+import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
 import {registerChatSteering,_resetChatSteeringForTests} from "./chatSteering.js";
 import {
@@ -1439,7 +1440,7 @@ export async function startChatRun(
     if (!piModel) throw new ModelNotAvailableError(model, provider);
 
     const systemPrompt =
-      (await chatSystemPrompt(role, mode, cwd)) +
+      (await chatSystemPrompt(role, mode, cwd)) + "\n\n" + chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)) +
       "\n\n" +
       UNIVERSAL_INSTRUCTION;
     const resourceLoader = await createTaskResourceLoader(
@@ -1548,7 +1549,7 @@ export async function startChatRun(
     };
     activeChatRuns.set(runId, run);
     const steering = input.deliveryOutcome
-      ? registerChatSteering({chatId:input.chatId,roleId:input.roleId,steer:text=>session.steer(text),outcome:input.deliveryOutcome})
+      ? registerChatSteering({chatId:input.chatId,roleId:input.roleId,executionMode:chatExecutionMode(input.chatId,input.messageId),workMode:mode,steer:text=>session.steer(text),outcome:input.deliveryOutcome})
       : null;
 
     // Сторож тишины: каждое событие рантайма — признак жизни. Пока идёт
@@ -1761,7 +1762,7 @@ async function runExternalChat(
       );
     },
     // Только буст: правила внутренних ролей (песочница, назначение, host-инструменты) внешнему агенту не передаются.
-    systemPrompt: externalAgentBoost(roleTitle(role), operations, "chat"),
+    systemPrompt: externalAgentBoost(roleTitle(role), operations, "chat") + "\n\n" + chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)),
     onTurnEnd: actionTurnHandler(operations, runId),
   });
   const run: ActiveChatRun = {
@@ -1775,7 +1776,7 @@ async function runExternalChat(
   };
   activeChatRuns.set(runId, run);
   const steering=input.deliveryOutcome
-    ? registerChatSteering({chatId:input.chatId,roleId:input.roleId,steer:text=>session.steer(text),outcome:input.deliveryOutcome})
+    ? registerChatSteering({chatId:input.chatId,roleId:input.roleId,executionMode:chatExecutionMode(input.chatId,input.messageId),workMode:mode,steer:text=>session.steer(text),outcome:input.deliveryOutcome})
     : null;
   const unsubscribe = session.subscribe((event: any) => {
     steering?.observe(event);

@@ -1,3 +1,4 @@
+import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import { assertVoiceChat, voiceChatContext, saveVoiceMessage, voiceSummaryText } from "../lib/secretaryVoiceConversation.js";
 import { randomUUID } from "node:crypto";
 import { NonTaskInputError } from "../lib/taskPreparation.js";
@@ -31,8 +32,11 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
     };
-    if (req.method === "GET" && req.url === "/secretary/instructions") {
-      send(200,{instructions:composeLayer("secretary","secretary.voice")!.effective+"\n\n"+VOICE_TOOLS_GUIDE,greeting:composeLayer("secretary","secretary.greeting")!.effective,manifest:instructionManifest("secretary","voice")}); return;
+    if (req.method === "GET" && new URL(req.url || "/","http://localhost").pathname === "/secretary/instructions") {
+      const query = new URL(req.url!,"http://localhost").searchParams;
+      const chatId = query.get("chat_id"), ownerId=query.get("owner_id");
+      if (chatId) {try {assertVoiceChat(ownerId || "",chatId);} catch {send(403,{error:"нет доступа к исходному чату"});return;}}
+      send(200,{instructions:composeLayer("secretary","secretary.voice")!.effective+"\n\n"+VOICE_TOOLS_GUIDE+"\n\n"+chatExecutionInstruction(chatExecutionMode(chatId ?? undefined)),greeting:composeLayer("secretary","secretary.greeting")!.effective,manifest:instructionManifest("secretary","voice")}); return;
     }
     if (req.method === "GET" && req.url === "/secretary/tools") {
       try { send(200,{tools:await voiceToolManifest()}); } catch (error) { app.log.error({err:error},"не собран список инструментов голосового Помощника владельца"); send(500,{error:"сбой списка инструментов"}); }
@@ -58,7 +62,7 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
         try { assertVoiceChat(owner.id,body.chat_id); chatId=body.chat_id; }
         catch { send(403,{error:"нет доступа к исходному чату"}); return; }
       }
-      if (req.url === "/secretary/conversation") { send(200,{messages:voiceChatContext(owner.id,chatId!)}); return; }
+      if (req.url === "/secretary/conversation") { send(200,{messages:voiceChatContext(owner.id,chatId!),execution_mode:chatExecutionMode(chatId),instructions:chatExecutionInstruction(chatExecutionMode(chatId))}); return; }
       if (req.url === "/secretary/transcript") {
         if (!["user","assistant"].includes(body.role) || typeof body.event_id!=="string" || !body.event_id || typeof body.text!=="string" || !body.text.trim() || body.text.length>100000) {
           send(400,{error:"неверная расшифровка"}); return;
@@ -92,6 +96,7 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
         }
         send(200,result); return;
       }
+      if (chatExecutionMode(chatId) === "chat") {send(403,{error:"В режиме «В чате» карточки не создаются. Владелец может выбрать «По карточке»."});return;}
       const mode = (db.prepare("SELECT task_intake_mode FROM users WHERE id=?").get(owner.id) as any).task_intake_mode;
       const intake = await submitOwnerTaskText(text,owner.id,mode);
       const row = db.prepare("SELECT t.id,t.title,t.creator_id,t.due_date,t.start_time,t.priority,t.assignee_id,t.ready_for_pickup,u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.id=?").get(intake.parentId) as Record<string,unknown>;

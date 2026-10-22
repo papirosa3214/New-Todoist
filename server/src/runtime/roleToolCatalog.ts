@@ -1,3 +1,4 @@
+import {chatExecutionMode,type ChatExecutionMode} from "./chatExecutionMode.js";
 import {roleHostAccessTools} from "./roleHostAccess.js";
 import {taskflowTools} from "./inProcessRun.js";
 import {roleToolAllowed} from "../lib/roleToolScope.js";
@@ -5,9 +6,9 @@ import {roleUserId} from "../roleRouting.js";
 import {createUniversalTaskflow,operationRestriction,UNIVERSAL_INSTRUCTION,type Tool,type Context} from "./universalTaskflow.js";
 import {toolRequestStore} from "./toolRequestStore.js";
 export {UNIVERSAL_INSTRUCTION};
-export type CatalogContext={role:string;model?:string|null;mode:string;runId:string;taskId?:string;subtaskId?:string;chatId?:string;messageId?:string};
+export type CatalogContext={role:string;model?:string|null;mode:string;runId:string;taskId?:string;subtaskId?:string;chatId?:string;messageId?:string;executionMode?:ChatExecutionMode};
 export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
- const context:Context={...input,actor:roleUserId(input.role),authorize:(name)=>
+ const context:Context={...input,executionMode:input.taskId ? "card" : input.executionMode ?? (input.chatId ? chatExecutionMode(input.chatId,input.messageId) : undefined),actor:roleUserId(input.role),authorize:(name)=>
   roleToolAllowed(input.role,name) && (!input.subtaskId || name!=="taskflow_claim") &&
   (input.role!=="critic_verifier" || name!=="taskflow_subtask_done")};
  const taskflowOperations=taskflowTools(input.role,input.model??null,input.taskId,input.subtaskId,true,{chatId:input.chatId??"",messageId:input.messageId??""});
