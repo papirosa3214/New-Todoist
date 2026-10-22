@@ -26,9 +26,11 @@ import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 import {
   decideRun,
   nextRunAfter,
+  parseCron,
   parseIntervalMinutes,
   parseTimeLocal,
   parseWeekdays,
+  ruleLabel,
   zonedParts,
   zonedToUtc,
   type ScheduleRule,
@@ -131,6 +133,47 @@ describe("расчёт следующего запуска рутины", () => 
     expect(parseTimeLocal("9:0")).toBeNull();
     expect(parseTimeLocal("24:00")).toBeNull();
     expect(parseWeekdays("1,3,9")).toBeNull();
+  });
+
+  it("месяц с 28/29/30/31 днём: «раз в месяц» не теряет 31-е", () => {
+    // Якорь — 31-е число. В коротком месяце дата сдвигается на последний
+    // день месяца, дальше снова идёт по 31-му.
+    const monthly = () => rule({ kind: "monthly", anchor: { year: 2026, month: 1, day: 31 } });
+    // 31.01.2026 12:00 МСК → 28.02.2026 09:00 (февраль 2026 — 28 дней).
+    const afterJan = nextRunAfter(monthly(), new Date("2026-01-31T09:00:00.000Z"))!;
+    expect(afterJan.toISOString()).toBe("2026-02-28T06:00:00.000Z");
+    // 28.02.2026 12:00 МСК → 31.03.2026 09:00.
+    const afterFeb = nextRunAfter(monthly(), new Date("2026-02-28T09:00:00.000Z"))!;
+    expect(afterFeb.toISOString()).toBe("2026-03-31T06:00:00.000Z");
+    // 30.04.2026 12:00 МСК → 31.05.2026 09:00 (апрель — 30 дней).
+    const afterApr = nextRunAfter(monthly(), new Date("2026-04-30T09:00:00.000Z"))!;
+    expect(afterApr.toISOString()).toBe("2026-05-31T06:00:00.000Z");
+    // Високосный год: 29 февраля существует (2028) — запуск в этот день.
+    const leap = rule({ kind: "monthly", anchor: { year: 2028, month: 1, day: 29 } });
+    const leapNext = nextRunAfter(leap, new Date("2028-01-29T09:00:00.000Z"))!;
+    expect(leapNext.toISOString()).toBe("2028-02-29T06:00:00.000Z");
+  });
+
+  it("cron: разбор выражения и ближайший запуск", () => {
+    expect(parseCron("0 9 * * 1-5")).toBeTruthy();
+    expect(parseCron("*/15 * * * *")).toBeTruthy();
+    expect(parseCron("0 9 * *")).toBeNull();
+    expect(parseCron("60 9 * * *")).toBeNull();
+    // По будням в 09:00 МСК: пятница 23.10 12:00 → понедельник 26.10 09:00.
+    const from = new Date("2026-10-23T09:00:00.000Z");
+    const next = nextRunAfter(rule({ kind: "cron", expr: "0 9 * * 1-5" }), from)!;
+    expect(next.toISOString()).toBe("2026-10-26T06:00:00.000Z");
+    // Каждые 15 минут — от базы.
+    const step = nextRunAfter(rule({ kind: "cron", expr: "*/15 * * * *" }), from)!;
+    expect(step.toISOString()).toBe("2026-10-23T09:15:00.000Z");
+  });
+
+  it("подпись правила приходит по-русски и одинаково для веба и iOS", () => {
+    expect(ruleLabel({ kind: "weekdays" })).toBe("По будням");
+    expect(ruleLabel({ kind: "daily" })).toBe("Ежедневно");
+    expect(ruleLabel({ kind: "interval", expr: "15m" })).toBe("Каждые 15 минут");
+    expect(ruleLabel({ kind: "interval", expr: "2h" })).toBe("Каждые 2 часа");
+    expect(ruleLabel({ kind: "weekly_days", expr: "1,5" })).toBe("По дням: Пн, Пт");
   });
 });
 
@@ -346,5 +389,126 @@ describe("рутины в базе и тик планировщика", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().counts.created).toBe(1);
     expect(getSchedule(schedule.id)!.next_run_at).toBe(nextBefore);
+    // Ручной запуск отдаёт ссылку на созданную карточку (веб показывает её).
+    expect(res.json().run?.task_id).toBeTruthy();
+  });
+
+  it("список отдаёт подпись правила и ссылку на текущий экземпляр", async () => {
+    const schedule = createDaily({ payload: { assignee_id: "builder" } });
+    await runSchedulesTick(app, { now: new Date() });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/schedules",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const row = res.json().schedules.find((s: { id: string }) => s.id === schedule.id);
+    expect(row.rule_label).toBe("Ежедневно");
+    // current_task_id — чтобы веб и iOS показали «прошлый запуск не закрыт».
+    expect(row.current_task_id).toBeTruthy();
+  });
+
+  it("интервал меньше 5 минут отклоняется на входе", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/schedules",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        title: "Слишком часто",
+        rule_kind: "interval",
+        rule_expr: "1m",
+        task_payload: { title: "Слишком часто" },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("cron-правило принимается и считает следующий запуск", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/schedules",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        title: "По cron",
+        rule_kind: "cron",
+        rule_expr: "0 9 * * 1-5",
+        task_payload: { title: "По cron" },
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.schedule.next_run_at).toBeTruthy();
+    expect(body.schedule.rule_label).toContain("cron");
+  });
+
+  it("посторонний пользователь не может создать рутину", async () => {
+    const reg = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        name: "Чужой",
+        email: `schedules-other-${Date.now()}@test`,
+        password: "password123",
+      },
+    });
+    const otherToken = app.jwt.sign({ id: reg.json().user.id }, { expiresIn: "5m" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/schedules",
+      headers: { authorization: `Bearer ${otherToken}` },
+      payload: {
+        title: "Чужая рутина",
+        rule_kind: "daily",
+        time_local: "09:00",
+        task_payload: { title: "Чужая рутина" },
+      },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("после пропущенного запуска следующий запуск всё равно в будущем", async () => {
+    const schedule = createDaily({ payload: { assignee_id: "builder" } });
+    // Просрочка больше окна догона (24 ч) — запуск пропускается.
+    markScheduleRun(schedule.id, { nextRunAt: new Date(Date.now() - 48 * 3_600_000) });
+    const counts = await runSchedulesTick(app, { now: new Date() });
+    expect(counts.created).toBe(0);
+    const next = parseUtc(getSchedule(schedule.id)!.next_run_at)!;
+    expect(next.getTime()).toBeGreaterThan(Date.now());
+    // В истории виден пропуск с причиной.
+    const run = listRuns(schedule.id)[0];
+    expect(run.status).toBe("skipped");
+  });
+
+  it("карточка рутины ложится в заданный проект", async () => {
+    const projectId = "proj-routine-test";
+    db.prepare(
+      "INSERT OR REPLACE INTO projects (id, name, owner_id, created_at) VALUES (?, ?, ?, datetime('now'))",
+    ).run(projectId, "Проект рутин", ownerId);
+    const schedule = createDaily({
+      payload: { assignee_id: "builder", project_id: projectId },
+    });
+    const counts = await runSchedulesTick(app, { now: new Date() });
+    expect(counts.created).toBeGreaterThanOrEqual(1);
+    const run = listRuns(schedule.id)[0];
+    const task = db
+      .prepare("SELECT project_id, status FROM tasks WHERE id = ?")
+      .get(run.task_id ?? "") as { project_id: string | null; status: string } | undefined;
+    expect(task?.project_id).toBe(projectId);
+  });
+
+  it("ручной запуск приостановленной рутины отклоняется с понятной причиной", async () => {
+    const schedule = createDaily({ payload: { assignee_id: "builder" } });
+    await app.inject({
+      method: "PATCH",
+      url: `/api/schedules/${schedule.id}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { status: "paused" },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/schedules/${schedule.id}/run-now`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toContain("паузе");
   });
 });

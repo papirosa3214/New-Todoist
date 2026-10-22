@@ -36,11 +36,19 @@ import {
 
 type Api = (method: "GET" | "POST" | "PATCH", url: string, body?: unknown) => Promise<any>;
 
-/** Тот же внутренний вход, что у планировщика: служебный JWT на 5 минут. */
-function makeApi(app: FastifyInstance): Api {
+/**
+ * Внутренний вход с JWT на 5 минут.
+ *
+ * userId — от чьего имени идёт вызов. Для создания карточки это владелец
+ * рутины (created_by): служебная учётка «Система» не имеет права класть
+ * задачу в проект владельца (ручка /api/tasks проверяет права по проекту),
+ * и карточка рутины с проектом просто не создалась бы. Подъём роли идёт
+ * от служебной учётки планировщика — как и требует спека.
+ */
+function makeApi(app: FastifyInstance, userId: string = SCHEDULER_USER_ID): Api {
   return async (method, url, body) => {
     const token = app.jwt.sign(
-      { id: SCHEDULER_USER_ID, internalService: "scheduler" },
+      { id: userId, internalService: "scheduler" },
       { expiresIn: "5m" },
     );
     const res = await app.inject({
@@ -100,14 +108,14 @@ export async function runSchedulesTick(
   options: ScheduleTickOptions = {},
 ): Promise<ScheduleTickCounts> {
   const now = options.now ?? new Date();
-  const api = makeApi(app);
   const counts: ScheduleTickCounts = { created: 0, skipped: 0, failed: 0 };
 
-  const schedules = listSchedules().filter(
-    (row) =>
-      row.status === "active" &&
-      (!options.scheduleId || row.id === options.scheduleId),
-  );
+  // Срабатывание по расписанию берёт только активные рутины: пауза
+  // останавливает создание карточек (критерий приёмки 12 из спеки).
+  const schedules = listSchedules().filter((row) => {
+    if (options.scheduleId && row.id !== options.scheduleId) return false;
+    return row.status === "active";
+  });
 
   for (const row of schedules) {
     const nextRunAt = parseUtc(row.next_run_at);
@@ -124,7 +132,11 @@ export async function runSchedulesTick(
           overlapOpen,
         });
     if (decision.action === "skip") {
-      counts.skipped += 1;
+      // «Ещё не время» — это не пропуск: рутина просто ждёт своего часа.
+      // В счётчик попадают только реально закрытые слоты (наложение,
+      // окно догона) — иначе лампа в «Состоянии системы» горела бы
+      // постоянно.
+      if (decision.reason !== "ещё не время") counts.skipped += 1;
       // Пропуск из-за догона или наложения — слот всё равно закрываем:
       // иначе рутина застрянет на этом же запуске навсегда.
       if (decision.reason !== "ещё не время") {
@@ -137,6 +149,10 @@ export async function runSchedulesTick(
             detail: decision.reason ?? null,
           });
         }
+        // Следующий запуск считаем ОТ ТЕПЕРЬШНЕГО МОМЕНТА: если бы мы
+        // считали от старого next_run_at, рутина цепляла бы тот же
+        // просроченный слот снова и снова (критерий приёмки 5 из спеки:
+        // next_run_at после пересчёта всегда в будущем).
         const next = nextRunAfter(rule, now);
         markScheduleRun(row.id, { nextRunAt: next });
       }
@@ -166,7 +182,7 @@ export async function runSchedulesTick(
       continue;
     }
 
-    const created = await api("POST", "/api/tasks", {
+    const created = await makeApi(app, row.created_by)("POST", "/api/tasks", {
       title: payload.title || row.title,
       description: payload.description ?? undefined,
       project_id: payload.project_id ?? undefined,
@@ -249,6 +265,8 @@ export async function runSchedulesTick(
       nextRunAt: next === null ? undefined : next,
       currentTaskId: taskId,
     });
+    // Ручной запуск не двигает расписание (nextRunAt остаётся прежним) —
+    // иначе «запустить сейчас» съедал бы будущий слот.
   }
 
   return counts;
