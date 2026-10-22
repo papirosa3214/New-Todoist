@@ -158,20 +158,16 @@ export function roleWorkspace(taskId: string, repo: string, live: string = liveS
   const dir = path.join(worktreesBase(), taskId);
   if (fs.existsSync(path.join(dir, ".git"))) return dir;
 
-  // Остаток от снятой копии: merge/cleanup оставляет пустой каталог без .git.
-  // git worktree add в такой путь не работает, а роль получает мёртвый cwd и
-  // вместо работы по карточке начинает обход хоста. Пустой — убираем; непустой
-  // без .git — честная ошибка, а не тихая выдача битого пути.
+  // Остаток от снятой копии: merge/cleanup оставляет каталог без .git, а роли
+  // успевают положить туда свои маркеры (.keep, .qa-workdir-keep и т.п.).
+  // git worktree add в занятый путь не работает, а роль получает мёртвый cwd и
+  // вместо работы по карточке обходит хост. Поэтому остаток не удаляем и не
+  // считаем ошибкой — отодвигаем рядом (<dir>.orphan-<время>) и заводим копию
+  // заново: ничего не теряется, роль работает.
   if (fs.existsSync(dir)) {
-    const остаток = fs.readdirSync(dir);
-    if (остаток.length === 0) {
-      fs.rmdirSync(dir);
-    } else {
-      throw new Error(
-        `рабочая копия карточки ${taskId} есть, но это не git-worktree (${dir}): ` +
-          остаток.slice(0, 5).join(", "),
-      );
-    }
+    const orphan = `${dir}.orphan-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    fs.renameSync(dir, orphan);
+    console.warn(`role workspace: остаток ${dir} отодвинут в ${orphan}`);
   }
 
   fs.mkdirSync(worktreesBase(), { recursive: true });

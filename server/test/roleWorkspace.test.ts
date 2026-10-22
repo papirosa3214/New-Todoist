@@ -2,7 +2,7 @@
 // 01.10.2026, T05): правка файла роли не должна трогать живую копию, из
 // которой запущен сервер.
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
+import fs, { globSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -66,12 +66,19 @@ describe("рабочая копия роли", () => {
     expect(fs.existsSync(path.join(dir, "server", "a.ts"))).toBe(true);
   });
 
-  it("каталог без .git, но с файлами — внятная ошибка, а не тихий битый cwd", () => {
+  it("каталог без .git, но с маркерами роли — отодвигается, копия заводится заново", () => {
     const taskId = "t4";
     const dir = path.join(base, taskId);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "чужое.txt"), "x");
-    expect(() => roleWorkspace(taskId, live, live)).toThrow(/не git-worktree/);
+    fs.writeFileSync(path.join(dir, ".qa-workdir-keep"), "x");
+
+    expect(roleWorkspace(taskId, live, live)).toBe(dir);
+    expect(fs.existsSync(path.join(dir, ".git"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, "server", "a.ts"))).toBe(true);
+
+    const orphans = globSync(path.join(base, `${taskId}.orphan-*`));
+    expect(orphans.length).toBe(1);
+    expect(fs.readFileSync(path.join(orphans[0], ".qa-workdir-keep"), "utf8")).toBe("x");
   });
 
   it("выключатель off — без копий", () => {
