@@ -1905,6 +1905,29 @@ async function fanOutOwnerMessage(args: {
     source?.reply_to_message_id &&
       db.prepare("SELECT 1 FROM chat_messages WHERE id = ? AND from_user_id LIKE 'role_%'").get(source.reply_to_message_id),
   );
+  const roleId = roles.length === 1 ? roleAccountId(roles[0]) : null;
+  if (!roleId) return false;
+  // Занятость роли — не про этот чат, а про саму роль: пока у неё идёт ход
+  // или ждёт сообщение в очереди (в любом чате), владельцу ответить некому и
+  // ветка оправдана. Свободная роль отвечает обычным ходом в комнате.
+  const busy = Boolean(
+    db.prepare("SELECT 1 FROM chat_message_queue WHERE role_id = ? AND status IN ('pending','picked') LIMIT 1").get(roleId),
+  ) || liveTurnsOfChat(args.chatId).some((turn) => turn.user_id === roleId);
+  // Открытая ветка комнаты — та, где роль ещё не ответила по делу (одна
+  // отбивка «Принял» ответом не считается). Второе сообщение под ту же
+  // работу получит свою ветку только после закрытия этой.
+  const openBranch = Boolean(
+    db.prepare(
+      `SELECT 1 FROM chats b
+        WHERE b.branch_of_chat_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM chat_messages m
+             WHERE m.chat_id = b.id AND m.from_user_id LIKE 'role_%'
+               AND m.text NOT LIKE 'Принял: «%'
+          )
+        LIMIT 1`,
+    ).get(args.chatId),
+  );
   const allowed = shouldFanOutOwnerMessage({
     fromOwner: isOwner(args.fromUserId),
     direct: chat.kind === "direct",
@@ -1913,14 +1936,10 @@ async function fanOutOwnerMessage(args: {
     isTaskTopic: Boolean(chat.task_id) || Boolean(chat.parent_chat_id),
     isCommon: chat.room_kind === "common",
     repliesToRole,
+    roleBusy: busy,
+    openBranch,
   });
   if (!allowed) return false;
-  const role = roles[0];
-  const roleId = roleAccountId(role);
-  if (!roleId) return false;
-  const busy = Boolean(
-    db.prepare("SELECT 1 FROM chat_message_queue WHERE chat_id = ? AND role_id = ? AND status IN ('pending','picked') LIMIT 1").get(args.chatId, roleId),
-  );
   const branchId = uid();
   const copyId = uid();
   const branchAckId = uid();

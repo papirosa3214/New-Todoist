@@ -16,11 +16,19 @@ const baseFacts = {
   isTaskTopic: false,
   isCommon: false,
   repliesToRole: false,
+  roleBusy: true,
+  openBranch: false,
 };
 
 describe("ветка на сообщение владельца: правила", () => {
-  it("ветвит личную комнату с одной ролью", () => {
+  it("ветвит личную комнату с одной ролью, когда роль занята", () => {
     expect(shouldFanOutOwnerMessage(baseFacts)).toBe(true);
+  });
+  it("не ветвит, когда роль свободна или ветка уже открыта", () => {
+    // Владелец 22.10.2026: «не на каждое же сообщение новая ветка» —
+    // свободная роль отвечает обычным ходом.
+    expect(shouldFanOutOwnerMessage({ ...baseFacts, roleBusy: false })).toBe(false);
+    expect(shouldFanOutOwnerMessage({ ...baseFacts, openBranch: true })).toBe(false);
   });
   it("не ветвит сообщения роли, ветки, темы задач и общий чат", () => {
     expect(shouldFanOutOwnerMessage({ ...baseFacts, fromOwner: false })).toBe(false);
@@ -45,8 +53,33 @@ describe("ветка на сообщение владельца: живые да
   let owner: any;
   let chatId: string;
   const roleId = "role_builder";
+  let queueSeq = 0;
 
   const auth = () => ({ authorization: `Bearer ${owner.token}` });
+  const branchesOf = (id: string) =>
+    db.prepare("SELECT id, branch_of_message_id FROM chats WHERE branch_of_chat_id=?").all(id) as Array<{
+      id: string;
+      branch_of_message_id: string;
+    }>;
+
+  /** Роль занята: её сообщение ждёт в очереди (так выглядит идущий ход). */
+  const occupyRole = () => {
+    queueSeq += 1;
+    const chat = db.prepare("SELECT id FROM chats WHERE id<>? LIMIT 1").get(chatId) as { id: string } | undefined;
+    db.prepare(
+      "INSERT INTO chat_message_queue(id,chat_id,role_id,delivery_id,payload_json,status) VALUES(?,?,?,?,'{}','picked')",
+    ).run(`q-${queueSeq}`, chat?.id ?? chatId, roleId, `d-${queueSeq}`);
+  };
+  const freeRole = () => {
+    db.prepare("DELETE FROM chat_message_queue WHERE role_id=?").run(roleId);
+  };
+  const post = async (text: string) =>
+    (await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: auth(),
+      payload: { text },
+    })).json().message;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -73,22 +106,28 @@ describe("ветка на сообщение владельца: живые да
     await app?.close();
   });
 
-  it("на сообщение владельца появляется ветка с отбивкой", async () => {
-    const posted = (await app.inject({
-      method: "POST",
-      url: `/api/chats/${chatId}/messages`,
-      headers: auth(),
-      payload: { text: "Поправь кнопку на экране задач" },
-    })).json().message;
-
+  it("свободная роль: ветки нет, сообщение обрабатывается в комнате", async () => {
+    freeRole();
+    const posted = await post("Поправь кнопку на экране задач");
     const branch = db
-      .prepare("SELECT id, title, branch_of_message_id FROM chats WHERE branch_of_chat_id=? AND branch_of_message_id=?")
-      .get(chatId, posted.id) as { id: string; title: string; branch_of_message_id: string } | undefined;
+      .prepare("SELECT id FROM chats WHERE branch_of_chat_id=? AND branch_of_message_id=?")
+      .get(chatId, posted.id);
+    expect(branch).toBeUndefined();
+  });
+
+  it("занятая роль: сообщение получает свою ветку с отбивкой", async () => {
+    occupyRole();
+    const posted = await post("И ещё: поправь заголовок");
+    const branch = db
+      .prepare("SELECT id, title FROM chats WHERE branch_of_chat_id=? AND branch_of_message_id=?")
+      .get(chatId, posted.id) as { id: string; title: string } | undefined;
     expect(branch).toBeTruthy();
     expect(branch!.title).toContain("Ветка:");
 
-    const branchTexts = (db.prepare("SELECT from_user_id, text FROM chat_messages WHERE chat_id=? ORDER BY created_at").all(branch!.id) as Array<{ from_user_id: string; text: string }>);
-    expect(branchTexts[0].text).toBe("Поправь кнопку на экране задач");
+    const branchTexts = db
+      .prepare("SELECT from_user_id, text FROM chat_messages WHERE chat_id=? ORDER BY created_at")
+      .all(branch!.id) as Array<{ from_user_id: string; text: string }>;
+    expect(branchTexts[0].text).toBe("И ещё: поправь заголовок");
     expect(branchTexts[1].from_user_id).toBe(roleId);
     expect(branchTexts[1].text).toContain("Принял:");
 
@@ -98,31 +137,34 @@ describe("ветка на сообщение владельца: живые да
     expect(parentAck?.text).toContain("открыл ветку");
   });
 
-  it("второе сообщение получает свою ветку, а не чужую", async () => {
-    const first = (await app.inject({
+  it("пока ветка открыта, второе сообщение новую ветку не заводит", async () => {
+    occupyRole();
+    const before = branchesOf(chatId).length;
+    const posted = await post("Третье: добавь отступ");
+    const after = branchesOf(chatId);
+    expect(after.length).toBe(before);
+    expect(after.map((row) => row.branch_of_message_id)).not.toContain(posted.id);
+  });
+
+  it("после ответа роли в ветке следующее сообщение снова получает ветку", async () => {
+    const openBranch = branchesOf(chatId)[0];
+    const token = app.jwt.sign({ id: roleId }, { expiresIn: "5m" });
+    await app.inject({
       method: "POST",
-      url: `/api/chats/${chatId}/messages`,
-      headers: auth(),
-      payload: { text: "И ещё: поправь заголовок" },
-    })).json().message;
-    const second = (await app.inject({
-      method: "POST",
-      url: `/api/chats/${chatId}/messages`,
-      headers: auth(),
-      payload: { text: "Третье: добавь отступ" },
-    })).json().message;
-    const branches = db
-      .prepare("SELECT branch_of_message_id FROM chats WHERE branch_of_chat_id=? ORDER BY created_at")
-      .all(chatId) as Array<{ branch_of_message_id: string }>;
-    const ids = branches.map((row) => row.branch_of_message_id);
-    expect(ids).toContain(first.id);
-    expect(ids).toContain(second.id);
+      url: `/api/chats/${openBranch.id}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { text: "## Готово\nПоправил кнопку, проверил на симуляторе." },
+    });
+
+    occupyRole();
+    const before = branchesOf(chatId).length;
+    await post("Четвёртое: поправь подвал");
+    expect(branchesOf(chatId).length).toBe(before + 1);
   });
 
   it("в самой ветке новые ветки не плодятся", async () => {
-    const branch = db
-      .prepare("SELECT id FROM chats WHERE branch_of_chat_id=? LIMIT 1")
-      .get(chatId) as { id: string };
+    occupyRole();
+    const branch = branchesOf(chatId)[0];
     const posted = (await app.inject({
       method: "POST",
       url: `/api/chats/${branch.id}/messages`,
@@ -136,9 +178,7 @@ describe("ветка на сообщение владельца: живые да
   });
 
   it("ответ роли в ветке возвращается в комнату одной строкой", async () => {
-    const branch = db
-      .prepare("SELECT id FROM chats WHERE branch_of_chat_id=? ORDER BY created_at LIMIT 1")
-      .get(chatId) as { id: string };
+    const branch = branchesOf(chatId)[0];
     const token = app.jwt.sign({ id: roleId }, { expiresIn: "5m" });
     const answer = await app.inject({
       method: "POST",
@@ -152,36 +192,5 @@ describe("ветка на сообщение владельца: живые да
       .get(chatId) as { text: string } | undefined;
     expect(mirror?.text).toContain("— готово.");
     expect(mirror?.text).toContain("Готово");
-  });
-
-  it("свод появляется только когда ответили все ветки комнаты", async () => {
-    // До сих пор ответила одна ветка из трёх — свода быть не должно.
-    const before = db
-      .prepare("SELECT text FROM chat_messages WHERE chat_id=? AND text LIKE 'Всё сведено:%'")
-      .all(chatId) as Array<{ text: string }>;
-    expect(before).toHaveLength(0);
-
-    const token = app.jwt.sign({ id: roleId }, { expiresIn: "5m" });
-    const openBranches = db
-      .prepare(
-        "SELECT id FROM chats WHERE branch_of_chat_id=? AND id NOT IN (SELECT DISTINCT chat_id FROM chat_messages WHERE from_user_id LIKE 'role_%' AND text NOT LIKE 'Принял: «%')",
-      )
-      .all(chatId) as Array<{ id: string }>;
-    expect(openBranches.length).toBeGreaterThan(0);
-    for (const branch of openBranches) {
-      await app.inject({
-        method: "POST",
-        url: `/api/chats/${branch.id}/messages`,
-        headers: { authorization: `Bearer ${token}` },
-        payload: { text: "## Готово\nСделал свою часть." },
-      });
-    }
-
-    const summary = db
-      .prepare("SELECT text FROM chat_messages WHERE chat_id=? AND text LIKE 'Всё сведено:%' ORDER BY created_at DESC")
-      .get(chatId) as { text: string } | undefined;
-    expect(summary).toBeTruthy();
-    expect(summary!.text).toContain("Всё сведено:");
-    expect(summary!.text).toContain("«");
   });
 });
