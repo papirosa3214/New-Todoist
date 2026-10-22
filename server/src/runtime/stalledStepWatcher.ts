@@ -23,7 +23,7 @@ import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { logStepAbandoned } from "./abandonedStep.js";
-import { enqueueRoleRunJob } from "./roleRunQueue.js";
+import { enqueueRoleRunJob, rearmRoleRunJob } from "./roleRunQueue.js";
 import { startPlanSubtaskRun } from "./planSubtaskAdmission.js";
 import { wakeAndDeliverStalled } from "./orchestratorWake.js";
 import { activeInProcessRun } from "./inProcessRun.js";
@@ -74,13 +74,42 @@ function loadStalledSteps(): StalledSubtask[] {
   ).all(PLAN_STEP_ONLY ? 1 : 0) as StalledSubtask[];
 }
 
-function restartCount(subtaskId: string): number {
-  const row = db.prepare(
+/**
+ * Сколько автоперезапусков уже сделано по слоту за окно.
+ *
+ * Считаем ТРИ источника и берём больший:
+ *  1) события `stalled_step_auto_restart` в ленте карточки — это и есть
+ *     реальные автоперезапуски, записанные самим сторожем;
+ *  2) закрытые попытки с `outcome='auto_restarted'` — исторический счётчик;
+ *  3) поставленные в очередь задания автоперезапуска.
+ *
+ * Раньше считались только закрытые попытки. Если попытки у слота не было
+ * (ход умер до её создания) или она уже была закрыта, счётчик не рос — и
+ * лимит автоперезапусков не достигался НИКОГДА: сторож плодил задание за
+ * заданием, а очередь ролей росла лавиной (карточка 568a2b93, 723 задания
+ * на двух карточках). Теперь лимит ограничен по факту перезапусков.
+ */
+function restartCount(subtask: StalledSubtask): number {
+  const events = db.prepare(
+    `SELECT COUNT(*) AS n FROM task_events
+      WHERE task_id = ? AND kind = 'stalled_step_auto_restart'
+        AND field = ? AND created_at >= datetime('now', ?)`,
+  ).get(subtask.task_id, subtask.plan_node_key ?? subtask.id, RESTART_WINDOW) as { n: number };
+  const attempts = db.prepare(
     `SELECT COUNT(*) AS n FROM attempts
       WHERE subtask_id = ? AND outcome = 'auto_restarted'
         AND started_at >= datetime('now', ?)`,
-  ).get(subtaskId, RESTART_WINDOW) as { n: number };
-  return row.n;
+  ).get(subtask.id, RESTART_WINDOW) as { n: number };
+  const enqueued = db.prepare(
+    `SELECT COUNT(*) AS n FROM role_run_jobs
+      WHERE (dedupe_key = ? OR dedupe_key LIKE ?)
+        AND created_at >= datetime('now', ?)`,
+  ).get(
+    `stalled-restart:${subtask.id}`,
+    `stalled-restart:${subtask.id}:%`,
+    RESTART_WINDOW,
+  ) as { n: number };
+  return Math.max(events.n, attempts.n, enqueued.n);
 }
 
 function roleOf(subtask: StalledSubtask): string | null {
@@ -187,18 +216,28 @@ function markRestartedAndEnqueue(subtask: StalledSubtask, role: string, reason: 
     : false;
   db.prepare("UPDATE subtasks SET agent_state = NULL, agent_id = NULL, current_attempt_id = NULL, agent_heartbeat_at = NULL WHERE id = ?")
     .run(subtask.id);
-  // Новый dedupe_key обязателен: иначе worker вернёт прежнее задание,
-  // которое уже `succeeded` (Г1-к, 06.10.2026).
-  enqueueRoleRunJob({
+  // Ключ дедупликации СТАБИЛЬНЫЙ на шаг: именно на этом держится защита
+  // `ON CONFLICT(dedupe_key) DO NOTHING` в `enqueueRoleRunJob`. Раньше сюда
+  // подставлялся `crypto.randomUUID()` — тогда защита не срабатывала
+  // никогда, и каждый тик сторожа ставил новое задание (лавина очереди
+  // ролей, карточка 568a2b93).
+  //
+  // Следующий заход роли (новая попытка, новый цикл допуска) должен
+  // получить задание снова — поэтому при повторном ключе существующее
+  // задание ПЕРЕИСПОЛЬЗУЕТСЯ (возвращается в очередь), а не заводится
+  // второе. Так на шаг остаётся ровно одна строка задания.
+  const dedupeKey = `stalled-restart:${subtask.id}`;
+  const enqueued = enqueueRoleRunJob({
     taskId: subtask.task_id,
     reason: "after_run",
     actorId: null,
-    dedupeKey: `stalled-restart:${subtask.id}:${crypto.randomUUID()}`,
+    dedupeKey,
   });
+  if (!enqueued.created) rearmRoleRunJob(dedupeKey);
   postRoleNote(
     subtask.task_id,
     role,
-    `«${subtask.title}»: поток событий остановился — перезапускаю попытку (${restartCount(subtask.id) + 1} из ${MAX_RESTARTS_PER_WINDOW}).`,
+    `«${subtask.title}»: поток событий остановился — перезапускаю попытку (${restartCount(subtask) + 1} из ${MAX_RESTARTS_PER_WINDOW}).`,
   );
   logEvent({ taskId: subtask.task_id, actorId: null, kind: "stalled_step_auto_restart", field: subtask.plan_node_key ?? subtask.id, toValue: reason.slice(0, 160) });
   return { closed, attemptKey };
@@ -307,7 +346,7 @@ async function restartAttempt(subtask: StalledSubtask, role: string, sinceMin: n
     : subtask.current_attempt_id
       ? `Попытка ${attemptKey} была закрыта ранее, текущей у шага нет`
       : `У шага не было текущей попытки (${attemptKey})`;
-  const fact = `Поток событий молчал ${sinceMin} минут (порог ${STALL_AFTER_MIN}). Роль: ${roleTitle(role)}. ${closedFact}, снял шаг с умершего запуска и запустил перезапуск ${restartCount(subtask.id)} из ${MAX_RESTARTS_PER_WINDOW}: новая попытка поставлена в очередь.`;
+  const fact = `Поток событий молчал ${sinceMin} минут (порог ${STALL_AFTER_MIN}). Роль: ${roleTitle(role)}. ${closedFact}, снял шаг с умершего запуска и запустил перезапуск ${restartCount(subtask)} из ${MAX_RESTARTS_PER_WINDOW}: новая попытка поставлена в очередь.`;
   // Уведомление уходит ЗДЕСЬ, до старта, и не зависит от его исхода:
   // при умершем держателе слота старт не разрешится никогда, а раньше
   // в этом случае не уходило ничего и тик замирал (D1). Формулировка
@@ -389,7 +428,7 @@ export async function runStalledStepWatch(now: Date = new Date()): Promise<Stall
     const sinceMin = lastMs === null
       ? Math.max(STALL_AFTER_MIN, Math.floor((now.getTime() - (subtask.agent_heartbeat_at ? new Date(`${subtask.agent_heartbeat_at}Z`).getTime() : now.getTime())) / 60_000))
       : Math.floor((now.getTime() - lastMs) / 60_000);
-    const restarts = restartCount(subtask.id);
+    const restarts = restartCount(subtask);
     if (restarts >= MAX_RESTARTS_PER_WINDOW) {
       blockAsStalled(subtask, role, `лимит автоперезапуска ${MAX_RESTARTS_PER_WINDOW} за ${RESTART_WINDOW} исчерпан`);
       report.blocked += 1;

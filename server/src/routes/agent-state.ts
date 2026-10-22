@@ -69,6 +69,41 @@ import { signalBlock } from "../runtime/blockSignals.js";
 const uid = () => crypto.randomUUID();
 
 /**
+ * Стабильный признак «этого захода на проверку» — часть ключа дедупликации
+ * задания в очереди ролей.
+ *
+ * Раньше здесь стоял случайный `uid()`: `ON CONFLICT(dedupe_key) DO NOTHING`
+ * в `enqueueRoleRunJob` не срабатывал никогда, и каждая отправка карточки на
+ * проверку плодила ещё одно задание (лава в очереди ролей, карточка
+ * 568a2b93).
+ *
+ * Теперь признак выводится из состояния карточки:
+ *  • id попытки, которую только что закрыли с исходом «review» — уникален
+ *    для захода на проверку;
+ *  • если попытки не было — порядковый номер захода на проверку по ленте
+ *    событий (`state_changed` → `review`). Он тоже уникален для захода.
+ */
+function stableReviewToken(taskId: string): string {
+  const attempt = db
+    .prepare(
+      `SELECT id FROM attempts
+        WHERE task_id = ? AND outcome = 'review'
+        ORDER BY ended_at DESC, rowid DESC
+        LIMIT 1`,
+    )
+    .get(taskId) as { id: string } | undefined;
+  if (attempt) return `attempt:${attempt.id}`;
+  const seq = db
+    .prepare(
+      `SELECT count(*) AS n FROM task_events
+        WHERE task_id = ? AND kind = 'state_changed'
+          AND field = 'agent_state' AND to_value = 'review'`,
+    )
+    .get(taskId) as { n: number };
+  return `seq:${seq.n}`;
+}
+
+/**
  * Сервисные учётки, которым разрешено ставить state='blocked' на ЛЮБУЮ
  * задачу через этот endpoint — для фиксации технических падений
  * claim/launch_agent со стороны системной автоматики (см.
@@ -1290,7 +1325,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             taskId: task.id,
             reason: "review",
             actorId: req.userId,
-            dedupeKey: `review:${task.id}:${(task as any).current_attempt_id ?? uid()}`,
+            dedupeKey: `review:${task.id}:${stableReviewToken(task.id)}`,
           });
         }
       });

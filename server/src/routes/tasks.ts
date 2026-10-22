@@ -51,6 +51,28 @@ import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
 
+/**
+ * Стабильный признак «этого подъёма флага готовности» — часть ключа
+ * дедупликации задания в очереди ролей.
+ *
+ * Раньше стоял случайный `uid()` — защита `ON CONFLICT(dedupe_key)` от
+ * повторов не срабатывала (лава в очереди ролей, карточка 568a2b93).
+ * Теперь это порядковый номер подъёма флага: повтор того же значения
+ * идемпотентен и событие не пишет, поэтому номер меняется только на
+ * НОВОМ подъёме — и каждое намерение «запустить исполнителя» получает
+ * своё задание, а повторы склеиваются.
+ */
+function readyArmToken(taskId: string): string {
+  const seq = db
+    .prepare(
+      `SELECT count(*) AS n FROM task_events
+        WHERE task_id = ? AND kind = 'ready_flag_changed'
+          AND field = 'ready_for_pickup' AND to_value = '1'`,
+    )
+    .get(taskId) as { n: number };
+  return `arm${seq.n}`;
+}
+
 /** Событие запуска роли хранит весь манифест инструкций (≈25 КБ). В карточку
  *  отдаём только суть — режим и «продолжение»; полный текст остаётся в базе. */
 function briefInstructionSnapshot(raw: unknown): string | null {
@@ -1854,7 +1876,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
                 taskId: id,
                 reason: "assigned",
                 actorId: req.userId,
-                dedupeKey: `ready:${id}:${uid()}`,
+                dedupeKey: `ready:${id}:${readyArmToken(id)}`,
                 manualStart: true,
               });
             }

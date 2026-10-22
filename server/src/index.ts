@@ -16,7 +16,8 @@ import fastifyJwt from "@fastify/jwt";
 import { setRoleTokenSigner } from "./runtime/roleRunAccess.js";
 import { setInProcessApp } from "./runtime/inProcessRun.js";
 import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
-import { startChatQueueRecovery } from "./runtime/chatQueueRecovery.js";
+import { collapseDuplicateQueuedJobs } from "./runtime/roleRunQueue.js";
+import { startChatQueueRecovery, scheduleChatQueueRecovery } from "./runtime/chatQueueRecovery.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
@@ -911,6 +912,7 @@ if (isMain) {
     let stopWebhookDelivery: (() => void) | null = null;
     let stopWakeDelivery: (() => void) | null = null;
     let stopEventsRetention: ServerEventsRetentionHandle | null = null;
+    let stopChatQueueSweep: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
@@ -920,6 +922,7 @@ if (isMain) {
       stopLinearSync?.();
       stopWebhookDelivery?.();
       stopWakeDelivery?.();
+      stopChatQueueSweep?.();
       stopEventsRetention?.stop();
       if (stopPreparation) await stopPreparation();
       if (stopRoleRuns) await stopRoleRuns();
@@ -961,6 +964,23 @@ if (isMain) {
       const queueRecovery = startChatQueueRecovery();
       if (queueRecovery.recovered > 0) {
         console.log(`[chatQueue] recovered ${queueRecovery.recovered} pending deliveries`);
+      }
+      // Периодический проход: раньше функция была написана, но не
+      // вызывалась — мёртвая доставка в очереди чата жила вечно и держала
+      // выкладку сервера (карточка 568a2b93). Теперь доставки старше
+      // порога закрываются в терминальный статус, а живые поднимаются.
+      stopChatQueueSweep = scheduleChatQueueRecovery(
+        Number(process.env.TASKFLOW_QUEUE_RECOVERY_INTERVAL_SEC ?? 600),
+      );
+    }
+    // Лавина в очереди ролей: оставляем по одному заданию на намерение
+    // (шаг/карточка), остальные — в cancelled. Без этого накопившиеся
+    // 723 задания держали очередь и не давали ролям стартовать
+    // (карточка 568a2b93).
+    if (!sandbox) {
+      const collapsed = collapseDuplicateQueuedJobs();
+      if (collapsed > 0) {
+        console.log(`[roleRunQueue] свёрнуто дублей заданий очереди ролей: ${collapsed}`);
       }
     }
     if(process.env.TASKFLOW_AUTO_PREPARATION!=="0") stopPreparation=startPreparationWorker();
