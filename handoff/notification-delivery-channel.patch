@@ -1,0 +1,198 @@
+--- a/alert_send.py
++++ b/alert_send.py
+@@ -37,6 +37,13 @@
+ WEBHOOK = os.environ.get("ALERT_WEBHOOK", "http://127.0.0.1:5678/webhook/alert")
+ UNDELIVERED = os.path.expanduser("~/.claude/alert-undelivered.log")
+ 
++# 22.10.2026. Посредник tg-relay — тот самый, куда n8n отдаёт тревогу, но без n8n
++# посередине. Нужен потому, что 21.10 база n8n (SQLite) подвисла: соединение
++# зависало, вебхук тревог не отвечал, и за 36 часов десять тревог не дошли до
++# Telegram, хотя посредник был жив и просто ждал. Отдаём тревогу посреднику
++# напрямую — тогда поломка базы n8n больше не отнимает у владельца тревоги.
++RELAY = os.environ.get("ALERT_RELAY", "http://127.0.0.1:8099/send")
++
+ # Запасная дорога: свой скрипт, свой процесс, прямой Bot API. Токен он берёт у
+ # посредника vault-get.py сам — здесь секретов нет и в аргументы они не попадают.
+ RESERVE = os.path.expanduser("~/kb/notify_monitor_bot.sh")
+@@ -111,6 +118,54 @@
+         return False
+ 
+ 
++# 22.10.2026. Тот же текст, что собирает для тревоги n8n, — своими руками: иначе
++# сообщения от резервной дороги выглядели бы иначе, чем все остальные.
++_ICONS = {"info": "ℹ️", "warn": "⚠️", "warning": "⚠️", "error": "🔴",
++          "critical": "🚨", "ok": "✅", "success": "✅"}
++_HUMAN_NAMES = {
++    "backup": "Ночной бэкап",
++    "sync-transcripts": "Архив наших переписок",
++    "kb-add": "Пополнение базы знаний",
++    "capture": "Ночной сбор уроков",
++    "capture-session": "Ночной сбор уроков",
++    "robocop": "Ночной сбор уроков",
++    "crm-agent-kb": "Обновление базы агента CRM",
++    "repo-hygiene": "Порядок в проектах",
++    "rag-bos": "Здоровье сервисов Бизнес-ОС",
++    "service-monitor": "Присмотр за сервисами",
++    "lead-daily": "Лиды за сутки",
++}
++
++
++def _telegram_text(source: str, level: str, title: str, text: str) -> str:
++    """Как n8n собирает тревогу: значок, отправитель, заголовок, текст."""
++    icon = _ICONS.get(str(level or "info").lower(), "ℹ️")
++    raw = str(source or "")
++    human = _HUMAN_NAMES.get(raw.lower(), raw)
++    src = f"<b>{human}</b> — " if human else ""
++    head = f"<b>{title}</b>\n" if title else ""
++    return f"{icon} {src}{head}{text}"
++
++
++def send_via_relay(source: str, level: str, title: str, text: str,
++                   timeout: int = 30) -> bool:
++    """Отдать тревогу посреднику напрямую, мимо n8n.
++
++    Посредник сам повторяет отправку и пишет в свой журнал; нам важен только факт
++    доставки. Отказ посредника — не повод ронять отправителя: тревога уходит дальше,
++    запасной дорогой.
++    """
++    body = json.dumps({"text": _telegram_text(source, level, title, text)}).encode()
++    req = urllib.request.Request(
++        RELAY, data=body, method="POST",
++        headers={"Content-Type": "application/json"})
++    try:
++        with OPENER.open(req, timeout=timeout) as resp:
++            return resp.status == 200
++    except Exception:  # noqa: BLE001 — резервный путь не имеет права ронять отправителя
++        return False
++
++
+ def _journal(source: str, title: str, error: str, reserve: str,
+              rendezvous: dict | None = None) -> None:
+     try:
+@@ -177,6 +232,13 @@
+             last = str(exc)
+             if attempt == 1:
+                 time.sleep(5)
++    # 22.10.2026. Третий путь, мимо n8n: посредник tg-relay. 21.10 база n8n
++    # подвисла (SQLite отдавал таймауты), вебхук не отвечал — тревоги не доходили
++    # до Telegram. Посредник при этом был жив, так что идём к нему напрямую.
++    if send_via_relay(source, level, title, text):
++        _journal(source, title, last, "дошёл (через посредника)",
++                 rendezvous=rendezvous_result)
++        return True
+     # Доклад идёт первым только чтобы записать в журнал ЕГО судьбу тоже: утром важно
+     # не только «не дошло», но и «дошло ли хотя бы предупреждение». Упасть доклад не
+     # может — report_failure исключений не бросает, поэтому запись в журнал не потеряем.
+--- a/autonomy-report.py
++++ b/autonomy-report.py
+@@ -225,6 +225,25 @@
+ RELAY_JOURNAL = pathlib.Path.home() / ".claude/alerts/relay-undelivered.log"
+ 
+ 
++def _rec_ts(r: dict) -> float:
++    """Время записи журнала в секундах. Как в _recent, но для одной записи."""
++    try:
++        return time.mktime(time.strptime(r["ts"], "%Y-%m-%dT%H:%M:%S"))
++    except Exception:
++        return 0.0
++
++
++def _дошла_в_приложение(r: dict) -> bool:
++    """Записалась ли тревога в папку уведомлений.
++
++    22.10.2026: это главное, что должен знать владелец про «потерю». Тревога,
++    не дошедшая до Telegram, всё равно ложится в папку уведомлений — и он видит
++    её в приложении. Потеря — это молчание, а не отсутствие записи.
++    """
++    rzv = r.get("rendezvous") or {}
++    return bool(rzv.get("path"))
++
++
+ def _recent(path, hours: int) -> list:
+     """Записи журнала за последние часы. Журнала нет — значит, и терять было нечего."""
+     if not pathlib.Path(path).is_file():
+@@ -298,10 +317,27 @@
+     relay = _recent(RELAY_JOURNAL, hours)
+     lost_relay = [r for r in relay if r.get("status") == "lost"]
+     shaky = [r for r in relay if r.get("status") == "recovered"]
++    доставлено = len([r for r in _all_sends if _доставлена(r)])
++
++    # 22.10.2026. Какие потери владельцу уже показывали, а какие нет.
++    # Сводка смотрит 36 часов подряд, поэтому сбой, о котором уже сказали, каждое
++    # утро снова ронял карточку на диагностику: 21.10 и 22.10 — две карточки на
++    # один и тот же сбой 21.10. «Сказали» = владелец получил сводку; последняя
++    # отправка сводки видна в этом же журнале (источник autonomy-110).
++    доложили = max([_rec_ts(r) for r in _all_sends
++                    if r.get("source") == "autonomy-110"] or [0])
++    новые = [r for r in senders if _rec_ts(r) > доложили]
++    последняя_потеря = max([_rec_ts(r) for r in senders] or [0])
++    последняя_доставка = max([_rec_ts(r) for r in _all_sends
++                               if _доставлена(r)] or [0])
++    канал_жив = последняя_доставка > последняя_потеря
++    # Тревога — когда сбой новый (о нём ещё не говорили) ИЛИ когда канал до сих пор
++    # мёртв. Разобранный и оживший сбой — это история, а не повод для новой
++    # карточки: одна поломка — одна карточка (правило владельца).
++    тревога = bool(senders) and (bool(новые) or not канал_жив)
+ 
+     if not senders and not lost_relay:
+         tail = f", посредник вытянул повтором: {len(shaky)}" if shaky else ""
+-        доставлено = len([r for r in _all_sends if _доставлена(r)])
+         return (f"доставка тревог: потерь за {hours} ч нет"
+                 f"{tail} (доставлено {доставлено})")
+ 
+@@ -319,11 +355,24 @@
+                     if str(r.get("reserve") or "").startswith("не дошёл")
+                     or not str(r.get("reserve") or "").strip())
+         молчали = sum(1 for r in senders if r.get("reserve") == "промолчал")
+-        parts.append(f"у отправителей НЕ УШЛО {len(senders)} ({кто})")
+-        if немых:
+-            parts.append(f"из них без предупреждения даже запасной дорогой: {немых}")
+-        if молчали:
+-            parts.append(f"из них запасная дорога промолчала из-за своей частоты: {молчали}")
++        if тревога:
++            parts.append(f"у отправителей НЕ УШЛО {len(senders)} ({кто})")
++            if немых:
++                parts.append(f"из них без предупреждения даже запасной дорогой: {немых}")
++            if молчали:
++                parts.append(f"из них запасная дорога промолчала из-за своей частоты: {молчали}")
++            в_приложение = sum(1 for r in senders if _дошла_в_приложение(r))
++            if в_приложение:
++                parts.append(f"в приложение дошло {в_приложение}")
++        else:
++            # История: сбой был, о нём уже сказали, канал ожил. Владельцу это не
++            # «всё в порядке» — но и не новая поломка, поэтому тревогу не поднимаем.
++            в_приложение = sum(1 for r in senders if _дошла_в_приложение(r))
++            когда = time.strftime("%d.%m %H:%M", time.localtime(последняя_потеря))
++            parts.append(f"БЫЛ СБОЙ КАНАЛА — в Telegram не дошло {len(senders)} "
++                         f"за {hours} ч (последняя потеря {когда}), в приложение "
++                         f"дошло {в_приложение}; с тех пор канал жив "
++                         f"(доставлено {доставлено})")
+     if lost_relay:
+         parts.append(f"сорвалось у посредника: {len(lost_relay)}")
+         причина = (lost_relay[-1].get("error") or "").strip()
+@@ -527,8 +576,9 @@
+     # заметок и правок, база знаний, установка на телефон. Маркер delivery_watch
+     # поправлен: функция пишет "НЕ УШЛО", старый маркер "НЕ ДОШЛО" никогда не
+     # совпадал — доставка тревог могла молча не поднимать общий "уровень".
++    delivery_line = delivery_watch()
+     owner_checks = [
+-        (delivery_watch(), ["НЕ УШЛО"],
++        (delivery_line, ["НЕ УШЛО"],
+          "Доставка уведомлений: всё доходит без потерь.",
+          "Доставка уведомлений: часть тревог за сутки не дошла до вас — есть проблема с каналом, детали смотрит агент."),
+         (truncation_watch(), ["ПОТЕРЯН ХВОСТ"],
+@@ -544,6 +594,14 @@
+          "VPN/прокси TaskFlow↔Linear: цепочка работает штатно.",
+          "VPN/прокси TaskFlow↔Linear: цепочка под угрозой — детали в уведомлении стража."),
+     ]
++    # 22.10.2026. Третье состояние доставки: сбой был, но о нём уже сказали, а
++    # канал ожил. Владельцу это не «всё в порядке» и не «сломалось» — это «был
++    # сбой, его уже разбирают». Строка без маркера тревоги, поэтому новая карточка
++    # не заводится: одна поломка — одна карточка.
++    if "БЫЛ СБОЙ" in delivery_line:
++        owner_checks[0] = (delivery_line, ["НЕ УШЛО"],
++                           "Доставка уведомлений: был сбой канала, о нём уже сообщали; сейчас тревоги доходят.",
++                           "Доставка уведомлений: часть тревог за сутки не дошла до вас — есть проблема с каналом, детали смотрит агент.")
+     unit_lines = []
+     unit_broken = []
+     for unit, human in UNITS.items():
