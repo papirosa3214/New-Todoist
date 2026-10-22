@@ -1054,6 +1054,7 @@ export function createUniversalTaskflow(
         });
       }
       if (restriction) return fail(restriction.code, restriction.message);
+      if (signal?.aborted) return fail("CANCELLED", "Вызов отменён до исполнения; операция не выполнялась.");
       const write = !isReadOperation(tool.name);
       // request_id приходит и внутри arguments. Рантайм агента вырезает поля, которых
       // нет в схеме операции, а в схемах host-операций (`roleHostAccess.ts`) его нет —

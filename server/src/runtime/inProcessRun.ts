@@ -398,8 +398,8 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           if(subtaskId && ["taskflow_state","taskflow_heartbeat"].includes(name) && params.id!==taskId)throw new ToolError("Состояние относится только к текущему слоту");
           return asText(await run(params));
         } catch (e) {
-          const msg = e instanceof ToolError ? e.message : `сбой инструмента ${name}: ${String(e)}`;
-          throw new Error(msg);
+          if (e instanceof ToolError) throw e;
+          throw new Error(`сбой инструмента ${name}: ${String(e)}`);
         }
       },
     } as any);
@@ -1339,10 +1339,28 @@ async function askStopSummary(
  * инструментов (чтение, правка, команды) видны в карточке. Сбой — карточка
  * заблокирована с причиной.
  */
+// activeRuns is populated only after asynchronous preparation. Reserve the
+// same window while preparing, so concurrent entrypoints cannot create two
+// sessions or treat a legitimate slow preparation as a lost slot lease.
+function assertRunTaskAvailable(taskId: string): void {
+  if (!db.prepare("SELECT 1 FROM tasks WHERE id=? AND archived_at IS NULL").get(taskId))
+    throw new Error("Карточка удалена или архивирована — запуск отменён");
+}
+const preparingRuns = new Set<string>();
+const preparationKey = (input: { taskId: string; subtaskId?: string }) =>
+  JSON.stringify([input.taskId, input.subtaskId ?? null]);
+async function prepareInProcessRun(input: Parameters<typeof runRoleInProcessUnserialized>[0]) {
+  const key = preparationKey(input);
+  if (preparingRuns.has(key) || activeInProcessRun(input.taskId, input.subtaskId))
+    throw new Error("по этому окну агент уже работает");
+  preparingRuns.add(key);
+  try { assertRunTaskAvailable(input.taskId); return await runRoleInProcessUnserialized(input); }
+  finally { preparingRuns.delete(key); }
+}
 export async function runRoleInProcess(input:Parameters<typeof runRoleInProcessUnserialized>[0]):Promise<{runId:string;completion:Promise<void>}> {
   const review=input.role==="critic_verifier" && (input.mode ?? "review")==="review";
   if(!review)return runRoleInProcessSerialized(input);
-  if(activeInProcessRun(input.taskId,input.subtaskId))throw new Error("по этому окну агент уже работает");
+  if(preparingRuns.has(preparationKey(input)) || activeInProcessRun(input.taskId,input.subtaskId))throw new Error("по этому окну агент уже работает");
   const ticket=reserveReviewRun(input.taskId);
   assertReviewRunAllowed(ticket);
   let result: Awaited<ReturnType<typeof runRoleInProcessUnserialized>>;
@@ -1356,10 +1374,10 @@ export async function runRoleInProcess(input:Parameters<typeof runRoleInProcessU
   return {...result,completion};
 }
 async function runRoleInProcessSerialized(input:Parameters<typeof runRoleInProcessUnserialized>[0]):Promise<{runId:string;completion:Promise<void>}> {
-  if(!input.subtaskId)return runRoleInProcessUnserialized(input);
-  const release=await acquireSlotSession(input.subtaskId,undefined,()=>!!activeInProcessRun(input.taskId,input.subtaskId));
+  if(!input.subtaskId)return prepareInProcessRun(input);
+  const release=await acquireSlotSession(input.subtaskId,undefined,()=>preparingRuns.has(preparationKey(input)) || !!activeInProcessRun(input.taskId,input.subtaskId));
   try {
-    const result=await runRoleInProcessUnserialized(input);
+    const result=await prepareInProcessRun(input);
     void result.completion.then(release,release);
     return result;
   } catch(error){release();throw error;}
@@ -1459,6 +1477,7 @@ async function runRoleInProcessUnserialized(input: {
     // ходов собирается сервером без модели и входит в задание каждого шага.
     task_history: buildTaskHistory({ taskId, subtaskId: input.subtaskId ?? null }),
   });
+  assertRunTaskAvailable(taskId);
   if (mode === "work" && !resumed) {
     try {
       await asRole(role, "POST", `/api/tasks/${taskId}/comments`, { text: launchContext.summary });
@@ -1686,6 +1705,7 @@ try {
       // уже увлечена задачей и 89% плановых слотов оставались без плана.
       // Перед постановкой — первое, что агент читает, поэтому и заполняет.
       const workPlanPrompt = input.subtaskId ? "\n\n" + (composeLayer(role, "tool.runtime.taskflow_work_plan")?.effective ?? WORK_PLAN_INSTRUCTION) : "";
+      assertRunTaskAvailable(taskId);
       await session.prompt(workPlanPrompt + (mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt));
       // Лимит провайдера библиотека не бросает: ход молча кончается ответом с ошибкой 429
       // (находка А36). Ловим здесь и уходим на запасную модель.

@@ -935,11 +935,23 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           .send({ error: "Над подзадачей уже работает другой исполнитель" });
       }
 
+      // Validate the optional block snapshot before changing state or actor.
+      // A 400 response must leave the previous run and attempt intact.
+      let blockSnapshot: ReturnType<typeof readSnapshotBody> = null;
+      if (state === "blocked" && subtask.collaboration_plan_id && subtask.current_attempt_id) {
+        try { blockSnapshot = readSnapshotBody(req.body); }
+        catch (error) { return reply.code(400).send({error: error instanceof Error ? error.message : String(error)}); }
+      }
       if (state !== undefined) {
         if (state === null) {
-          db.prepare(
-            "UPDATE subtasks SET agent_state = NULL, agent_id = NULL, agent_heartbeat_at = NULL, block_type = NULL, blocked_at = NULL WHERE id = ?",
-          ).run(req.params.id);
+          db.transaction(() => {
+            if (subtask.current_attempt_id) db.prepare(
+              "UPDATE attempts SET ended_at=datetime('now'),outcome='released',reason=? WHERE id=? AND ended_at IS NULL",
+            ).run(result ?? null, subtask.current_attempt_id);
+            db.prepare(
+              "UPDATE subtasks SET agent_state = NULL, agent_id = NULL, agent_heartbeat_at = NULL, current_attempt_id = NULL, block_type = NULL, blocked_at = NULL WHERE id = ?",
+            ).run(req.params.id);
+          })();
         } else {
           // Вместе с состоянием запоминаем СЕССИЮ, которая физически ведёт
           // этот шаг. Учётка агента одна на все сессии и на всех агентов,
@@ -996,12 +1008,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             // попытка живая, поэтому снимок привязывается к ней, а причина
             // блока (result) известна серверу даже когда роль её не сдала.
             if (state === 'blocked' && subtask.collaboration_plan_id) {
-              let body: ReturnType<typeof readSnapshotBody>;
-              try {
-                body = readSnapshotBody(req.body);
-              } catch (error) {
-                return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
-              }
+              const body = blockSnapshot;
               if (body) {
                 saveSlotSnapshot({
                   subtaskId: subtask.id,

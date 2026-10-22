@@ -1,0 +1,46 @@
+{
+  "baseline": "f97d0022",
+  "new_regressions": {
+    "passed": 13,
+    "failed": 0,
+    "confirmed_defects": 11
+  },
+  "related": {
+    "files": 30,
+    "passed": 249,
+    "failed": 9,
+    "failures": [
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > рабочая карточка подтверждает доставку только при включении сообщения в контекст",
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > групповой вопрос двум работающим ролям сохраняет отдельный адрес каждого ответа",
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > работа начавшаяся во время ожидания чата получает вопрос без ложного failed",
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > вышел посреди работы, но продвинулся — сервер зовёт снова, и агент доделывает (C3)",
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > без продвижения повторно не зовёт",
+      "FAIL  test/planComplete.test.ts > план сдан — карточка на проверку > все узлы сданы — review, версия результата, проверяющий в очереди; второй раз — ничего",
+      "FAIL  test/planComplete.test.ts > план сдан — карточка на проверку > при старте сервера подбирается уже сданный план",
+      "FAIL  test/planComplete.test.ts > план сдан — карточка на проверку > закрытие последнего узла через API сдаёт карточку",
+      "FAIL  test/roleToolCatalog.test.ts > secretary cannot regain plan_request through chat additions"
+    ]
+  },
+  "baseline_suspect_files": {
+    "files": 4,
+    "passed": 42,
+    "failed": 9,
+    "failures": [
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > рабочая карточка подтверждает доставку только при включении сообщения в контекст",
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > групповой вопрос двум работающим ролям сохраняет отдельный адрес каждого ответа",
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > работа начавшаяся во время ожидания чата получает вопрос без ложного failed",
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > сервер сам будит роль, а после сдачи — Критика (этап C2)",
+      "FAIL  test/inProcessRun.test.ts > агент роли внутри сервера > вышел посреди работы, но продвинулся — сервер зовёт снова, и агент доделывает (C3)",
+      "FAIL  test/planComplete.test.ts > план сдан — карточка на проверку > все узлы сданы — review, версия результата, проверяющий в очереди; второй раз — ничего",
+      "FAIL  test/planComplete.test.ts > план сдан — карточка на проверку > при старте сервера подбирается уже сданный план",
+      "FAIL  test/planComplete.test.ts > план сдан — карточка на проверку > закрытие последнего узла через API сдаёт карточку",
+      "FAIL  test/roleToolCatalog.test.ts > secretary cannot regain plan_request through chat additions"
+    ]
+  },
+  "isolated_no_progress": {
+    "baseline": "pass",
+    "current": "pass"
+  },
+  "typecheck": "pass",
+  "deployment": "not performed"
+}

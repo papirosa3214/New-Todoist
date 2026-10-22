@@ -1130,7 +1130,7 @@ export function finishPlanIfComplete(
     return false;
   const task = db
     .prepare(
-      "SELECT id, title, status, agent_state, creator_id, assignee_id, current_attempt_id FROM tasks WHERE id = ?",
+      "SELECT id, title, status, agent_state, creator_id, assignee_id, current_attempt_id FROM tasks WHERE id = ? AND archived_at IS NULL",
     )
     .get(taskId) as
     | {
@@ -1292,7 +1292,7 @@ export function finishCompletedPlans(): number {
     .prepare(
       `SELECT p.id, p.task_id FROM task_collaboration_plans p
        JOIN tasks t ON t.id = p.task_id
-      WHERE p.status = 'approved' AND t.status = 'active' AND COALESCE(t.agent_state, '') <> 'review'`,
+      WHERE p.status = 'approved' AND t.status = 'active' AND t.archived_at IS NULL AND COALESCE(t.agent_state, '') <> 'review'`,
     )
     .all() as Array<{ id: string; task_id: string }>;
   let finished = recoverSubmittedIncidentReviews();

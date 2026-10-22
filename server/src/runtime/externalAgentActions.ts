@@ -12,6 +12,8 @@
 // (права, лента, правила — от учётки участника), и возвращает итоги агенту
 // следующим сообщением той же сессии.
 
+import crypto from "node:crypto";
+
 export interface ExternalAction {
   operation: string;
   arguments: Record<string, unknown>;
@@ -76,7 +78,7 @@ export function actionTurnHandler(tools: OperationTool[], runId: string): (text:
   return async (text) => {
     const { actions, errors } = parseActions(text);
     if (!actions.length && !errors.length) return null;
-    const lines = [...errors, ...(await runActions(actions, tools, runId))];
+    const lines = [...errors, ...(await runActions(actions, tools, `${runId}:turn:${crypto.randomUUID()}`))];
     return `Итоги действий TaskFlow:\n${lines.map((l) => `- ${l}`).join("\n")}\n\nЕсли что-то не прошло — исправь и пришли новый блок taskflow-actions. Если всё сделано — ответь коротко без блока.`;
   };
 }

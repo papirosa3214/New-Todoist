@@ -71,6 +71,7 @@ export function hostBashOperations(machineId: string, defaultCwd: string): BashO
         { command, cwd: cwd || defaultCwd, timeoutMs },
         {
           timeoutMs: timeoutMs + 30_000,
+          signal: options.signal,
           onChunk: (chunk: { data: string }) => {
             былВывод = true;
             options.onData(Buffer.from(chunk.data));

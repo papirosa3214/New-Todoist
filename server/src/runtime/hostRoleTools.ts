@@ -61,13 +61,17 @@ export function createHostRoleTools(role: string, taskId?: string, subtaskId?: s
         const target = taskForRole(context, p.task_id, p.subtask_id);
         const { machineId, repo } = hostForTask(context, target.taskId, target.subtaskId);
         const out: string[] = [];
+        let failed = false;
         for (const remote of ["gitea", "origin"]) {
           const r = (await runOperation(machineId, "git_push", {
             repo, taskId: target.taskId, branch: roleBranch(target.taskId), remote,
           })) as any;
+          if (!r?.ok) failed = true;
           out.push(r?.ok ? remote + ": отправлено" : remote + ": не отправлено — " + String(r?.error ?? "host не вернул причину") + ". Проверь подключение host и доступ к репозиторию; если повторится, передай владельцу эту ошибку");
         }
-        return text(roleBranch(target.taskId) + "\n" + out.join("\n"));
+        const summary = roleBranch(target.taskId) + "\n" + out.join("\n");
+        if (failed) throw new Error(summary);
+        return text(summary);
       },
     },
     {
