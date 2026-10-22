@@ -134,6 +134,34 @@ function отказУстройства(ошибка: { code: string; message: s
 
 // ── Форматирование ответа устройства ─────────────────────────────────────
 
+// Зона владельца: даты в ответах показываем в местном времени, без «UTC»
+// и без мусорного хвоста вида «:00Z» (дефект QA 22.10).
+const ЗОНА_ВЛАДЕЛЬЦА = process.env.TASKFLOW_TIMEZONE || "Europe/Moscow";
+
+const ФОРМАТ_ЗОНЫ = new Intl.DateTimeFormat("en-GB", {
+  timeZone: ЗОНА_ВЛАДЕЛЬЦА,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/** Дата и время момента в зоне владельца: «24.10.2026 10:00». */
+function вЗонеВладельца(момент: Date): string {
+  const части = new Map<string, string>();
+  for (const часть of ФОРМАТ_ЗОНЫ.formatToParts(момент)) {
+    if (часть.type !== "literal") части.set(часть.type, часть.value);
+  }
+  const год = части.get("year") ?? "";
+  const месяц = части.get("month") ?? "";
+  const день = части.get("day") ?? "";
+  const час = части.get("hour") ?? "";
+  const минута = части.get("minute") ?? "";
+  return `${день}.${месяц}.${год} ${час}:${минута}`;
+}
+
 function дата(значение: unknown): string {
   const s = String(значение ?? "").trim();
   if (!s) return "без срока";
@@ -141,9 +169,13 @@ function дата(значение: unknown): string {
   if (!разбор) return s;
   const [, год, месяц, день, час, минута, хвост] = разбор;
   const когда = `${день}.${месяц}.${год}`;
-  const время = час ? ` ${час}:${минута}` : "";
-  const зона = !хвост ? "" : хвост === "Z" ? " UTC" : ` ${хвост}`;
-  return `${когда}${время}${зона}`;
+  if (!час) return когда; // дата без времени (весь день) — время не выдумываем
+  // Время без явной зоны не переводим: иначе сдвинем момент на час назад.
+  const зонаЯвная = /(?:Z|[+-]\d{2}:?\d{2})$/.test(хвост);
+  if (!зонаЯвная) return `${когда} ${час}:${минута}`;
+  const момент = new Date(s);
+  if (Number.isNaN(момент.getTime())) return `${когда} ${час}:${минута}`;
+  return вЗонеВладельца(момент);
 }
 
 function названиеСписка(списки: any[], id: unknown): string {

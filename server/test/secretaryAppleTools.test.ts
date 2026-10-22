@@ -201,7 +201,9 @@ describe("Права роли", () => {
     expect(ответ.error.code).toBe("FORBIDDEN");
   });
 
-  it("поиск по каталогу не выдаёт удаление, а остальные операции находит", async () => {
+  it("поиск по каталогу находит удаление, но помечает его недоступным", async () => {
+    // Решение владельца: удаление видно в поиске с available:false — чтобы
+    // модель предупредила, что стереть нельзя, а не обещала удаление.
     const каталог = buildRoleToolCatalog({
       role: "secretary",
       mode: "work",
@@ -216,9 +218,16 @@ describe("Права роли", () => {
         })
       ).content[0].text,
     );
-    const операции = ответ.data.operations.map((о: any) => о.operation);
-    expect(операции).toContain("apple_reminders_list");
-    expect(операции).not.toContain("apple_reminders_delete");
+    const операции = ответ.data.operations as {
+      operation: string;
+      available: boolean;
+      restriction?: { code: string };
+    }[];
+    expect(операции.map((о) => о.operation)).toContain("apple_reminders_list");
+    const удаление = операции.find((о) => о.operation === "apple_reminders_delete");
+    expect(удаление, "удаление должно быть видно в поиске по каталогу").toBeTruthy();
+    expect(удаление!.available).toBe(false);
+    expect(удаление!.restriction?.code).toBe("FORBIDDEN");
   });
 
   it("у других ролей операций apple_* нет вообще", () => {
@@ -302,6 +311,42 @@ describe("Канал команд устройству", () => {
       expect(ответ).toContain("r1");
       expect(ответ).toContain("Позвонить в сервис");
       expect(ответ).toContain("22.10.2026 09:00");
+    } finally {
+      removeClient(владелецId(), socket as any);
+    }
+  });
+
+  it("дата в ответе — в зоне владельца, без хвоста «:00Z» (дефект QA 22.10)", async () => {
+    const { socket, кадры } = фейковыйСокет();
+    addClient(владелецId(), socket as any, DEVICE_ID);
+    try {
+      const обещание = инструментПо("apple_reminders_list").execute("1", {
+        includeCompleted: true,
+      });
+      await подождать(20);
+      const кадр = кадры.at(-1);
+      handleDeviceOpResult({
+        type: "device_op_result",
+        opId: кадр.opId,
+        ok: true,
+        data: {
+          lists: [{ id: "l1", title: "Семья" }],
+          reminders: [
+            {
+              id: "r-utc",
+              title: "Налоговая",
+              dueDate: "2026-10-24T07:00:00Z",
+              listId: "l1",
+              isCompleted: false,
+            },
+          ],
+        },
+      });
+      const ответ = JSON.stringify(await обещание);
+      // 07:00Z — это 10:00 по Москве.
+      expect(ответ).toContain("24.10.2026 10:00");
+      expect(ответ).not.toContain(":00Z");
+      expect(ответ).not.toContain("UTC");
     } finally {
       removeClient(владелецId(), socket as any);
     }
