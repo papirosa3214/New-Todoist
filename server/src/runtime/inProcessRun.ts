@@ -37,6 +37,7 @@ import { ensurePlanTopic, topicContext } from "../lib/projectTopics.js";
 import { markPlanFinalReviewerStarted, markPlanFinalReviewerWaiting, hasPendingPlanFinalReview, planReviewRouteContext } from "./planReviewLifecycle.js";
 import { instructionResources, createTaskResourceLoader } from "./instructionResources.js";
 import { ensureRoleHome, renderPromptAddendum } from "./roleHome.js";
+import { ThrashGuard, stepDigest } from "./thrashGuard.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { roleProjectContext,roleProjectSnapshot } from "./roleProjectContext.js";
 import { saveSlotSnapshot, slotSnapshotBlock, technicalSlotSnapshot } from "./slotWorkSnapshot.js";
@@ -1594,6 +1595,7 @@ try {
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
   logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
+  const thrash = new ThrashGuard();
   const runControl: ActiveInProcessRun = { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now(), activityCount: 0, messengerMessages:new Set(),unacknowledgedMessengerMessages:new Set() };
   activeRuns.set(runId, runControl);
   const liveTurn = beginTaskLiveTurn({
@@ -1646,6 +1648,12 @@ try {
       });
     }
     if (event?.type !== "tool_execution_start") return;
+    // Сторож топтания (владелец 23.10.2026): повторы и серии чтений без
+    // изменений получают указание прямо в текущий заход.
+    {
+      const nudge = thrash.observe({ tool: String(event.toolName ?? ""), argsDigest: stepDigest((event as any).args) });
+      if (nudge) void runControl.steer(nudge).catch(() => {});
+    }
     // Журнал нехватки (14.10.2026): роль позвала инструмент, которого у неё
     // нет, — по этим записям возвращаем убранное точечно.
     if (event.toolName && !availableToolNames.has(event.toolName) && !missingLogged.has(event.toolName)) {

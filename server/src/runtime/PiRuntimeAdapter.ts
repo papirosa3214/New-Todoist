@@ -1,5 +1,6 @@
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
+import {ThrashGuard, stepDigest} from "./thrashGuard.js";
 import {registerChatSteering,_resetChatSteeringForTests} from "./chatSteering.js";
 import {
   buildRoleToolCatalog,
@@ -1555,6 +1556,7 @@ export async function startChatRun(
     // Сторож тишины: каждое событие рантайма — признак жизни. Пока идёт
     // вызов инструмента, тишина не копится (команда может честно работать
     // минуты), ход держит только общий потолок.
+    const thrash = new ThrashGuard();
     const idleMs = resolveChatRunIdle(input.idleMs);
     const runningTools = new Set<string>();
     let lastActivity = Date.now();
@@ -1589,6 +1591,12 @@ export async function startChatRun(
       }
       if (event?.type === "tool_execution_start" && event.toolCallId)
         runningTools.add(event.toolCallId);
+      // Сторож топтания: повторы одного вызова и длинные серии чтений без
+      // изменений — указание в тот же ход (владелец 23.10.2026).
+      if (event?.type === "tool_execution_start") {
+        const nudge = thrash.observe({ tool: String(event.toolName ?? ""), argsDigest: stepDigest((event as any).args) });
+        if (nudge) void session.steer(nudge).catch(() => {});
+      }
       else if (event?.type === "tool_execution_end" && event.toolCallId)
         runningTools.delete(event.toolCallId);
       if (
