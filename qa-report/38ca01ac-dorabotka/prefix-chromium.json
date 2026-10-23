@@ -1,0 +1,39 @@
+{
+  "engine": "chromium",
+  "base": "http://127.0.0.1:4109",
+  "steps": [
+    {
+      "name": "open-form",
+      "status": "passed",
+      "value": "форма задачи открыта, поле «Срок» есть"
+    },
+    {
+      "name": "open-calendar",
+      "status": "passed",
+      "value": {
+        "rowValueBefore": "Срок и времяНе установлен"
+      }
+    },
+    {
+      "name": "click-day-with-mouse",
+      "status": "failed",
+      "error": "Error: клик мышью по дню 15 не выбрал дату: «Срок и времяНе установлен»"
+    },
+    {
+      "name": "screen-upcoming",
+      "status": "passed",
+      "value": " ПланированиеСентябрьОкт. 2026 г.ПНВТСРЧТПТСБВС282930Окт.12345678910111213141516171819202122232425262728293031Нояб.1"
+    },
+    {
+      "name": "screen-today",
+      "status": "passed",
+      "value": " Пятница, 23 окт.Ждут васQA-проверка срока задачи 1792706699заблокировано3 из 5Очередь ролей лавинит заданиями, а за"
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "ok": false
+}

@@ -1,0 +1,34 @@
+[
+ {
+  "name": "due_before",
+  "val": "Срок и время Не установлен"
+ },
+ {
+  "name": "due_after_mouse_click",
+  "val": "Срок и время 25 окт."
+ },
+ {
+  "name": "mouse_click_selects_date",
+  "val": "ПАС"
+ },
+ {
+  "name": "upcoming_has_error_screen",
+  "val": "нет"
+ },
+ {
+  "name": "upcoming_pageerrors",
+  "val": "нет"
+ },
+ {
+  "name": "upcoming_shows_calendar",
+  "val": "да"
+ },
+ {
+  "name": "today_has_error_screen",
+  "val": "нет"
+ },
+ {
+  "name": "today_pageerrors",
+  "val": "нет"
+ }
+]
