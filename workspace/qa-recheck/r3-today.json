@@ -1,0 +1,7 @@
+[
+  { "goto": "/today" },
+  { "wait": 2500 },
+  { "snap": "segodnya" },
+  { "expect_no_text": "Экран не смог отрисоваться" },
+  { "expect_text": "QA-проверка" }
+]
