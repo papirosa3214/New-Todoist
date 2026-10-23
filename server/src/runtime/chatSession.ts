@@ -11,6 +11,8 @@ import {
   finishMessageDelivery,
   fenceMessageDelivery,
   pendingMessageDeliveries,
+  startDeliveryHeartbeat,
+  failPendingMessageDelivery,
   bumpChatGeneration,
   type MessageDelivery,
 } from "./chatQueue.js";
@@ -179,6 +181,8 @@ interface QueueTail {
 }
 
 const chatRoleQueues = new Map<string, QueueTail>();
+const scheduledDeliveries = new Map<string,Promise<void>>();
+export function isChatDeliveryScheduled(id:string):boolean { return scheduledDeliveries.has(id); }
 
 /** Ключ очереди на пару (chat, role). Тот же формат, что у локов, чтобы
  *  связь была видна: всё, что относится к одной паре, сидит под одним
@@ -253,33 +257,51 @@ export function enqueueChatReply<T>(
   chatId: string,
   roleId: string,
   fn: () => Promise<T>,
+  options: {deliveryId?:string;waitMs?:number} = {},
 ): Promise<T> {
+  const deliveryId = options.deliveryId;
+  if (deliveryId && scheduledDeliveries.has(deliveryId))
+    return Promise.reject(Object.assign(new Error("Доставка уже ожидает выполнения"), {code:"CHAT_DELIVERY_ALREADY_SCHEDULED"}));
   const key = queueKey(chatId, roleId);
-  const prev = chatRoleQueues.get(key);
-  // «Хвост» = промис, на котором мы будем ждать. Если очереди ещё нет,
-  // стартуем с уже-резолвнутого, чтобы первая постановка не ждала
-  // ничего лишнего.
-  const prevDone: Promise<void> = prev ? prev.done : Promise.resolve();
-  let release!: () => void;
-  const nextDone = new Promise<void>((resolve) => {
-    release = resolve;
+  const prevDone = chatRoleQueues.get(key)?.done ?? Promise.resolve();
+  let releaseGate!: () => void;
+  const nextDone = new Promise<void>(resolve => { releaseGate = resolve; });
+  chatRoleQueues.set(key, {done:nextDone});
+  if (deliveryId) scheduledDeliveries.set(deliveryId,nextDone);
+  const release = () => {
+    if (deliveryId && scheduledDeliveries.get(deliveryId) === nextDone) scheduledDeliveries.delete(deliveryId);
+    releaseGate();
+    if (chatRoleQueues.get(key)?.done === nextDone) chatRoleQueues.delete(key);
+  };
+  const configured = Number(options.waitMs ?? process.env.TASKFLOW_CHAT_QUEUE_WAIT_MS ?? 300_000);
+  const waitMs = Number.isFinite(configured) && configured > 0 ? configured : 300_000;
+  let expired = false;
+  return new Promise<T>((resolve,reject) => {
+    const timer = setTimeout(() => {
+      expired = true;
+      if (deliveryId) {
+        if (scheduledDeliveries.get(deliveryId) === nextDone) scheduledDeliveries.delete(deliveryId);
+        failPendingMessageDelivery(deliveryId, "queue_wait_timeout");
+      }
+      reject(Object.assign(new Error("Истёк срок ожидания очереди чата"), {code:"CHAT_QUEUE_WAIT_TIMEOUT"}));
+      // Keep FIFO reserved until the previous writer exits. Never steal a live session.
+    },waitMs);
+    timer.unref?.();
+    void prevDone.then(async () => {
+      clearTimeout(timer);
+      if (expired) { release(); return; }
+      let stopHeartbeat = () => {};
+      try {
+        if (deliveryId) {
+          if (!claimMessageDelivery(deliveryId))
+            throw Object.assign(new Error("Доставка уже обработана или отменена"), {code:"CHAT_DELIVERY_NOT_PENDING"});
+          stopHeartbeat = startDeliveryHeartbeat(deliveryId);
+        }
+        resolve(await fn());
+      } catch (error) { reject(error); }
+      finally { stopHeartbeat(); release(); }
+    });
   });
-  chatRoleQueues.set(key, { done: nextDone });
-
-  const run = prevDone.then(() => fn());
-
-  // Снимаем хвост сразу, как только ОЧЕРЕДЬ дошла до нашего хода
-  // (не дожидаясь его завершения): параллельные постановки в эту же
-  // пару должны встать ЗА нами, а не перед. Если наш fn бросит —
-  // release всё равно вызовется, иначе очередь навсегда зависнет.
-  run.finally(() => {
-    release();
-    // Чистим map, если это был последний ход и больше ничего не ждёт.
-    const cur = chatRoleQueues.get(key);
-    if (cur && cur.done === nextDone) chatRoleQueues.delete(key);
-  });
-
-  return run;
 }
 
 /** Снимок состояния очередей — для админки/отладки. Возвращаем только
@@ -295,4 +317,5 @@ export function chatReplyQueueDepth(chatId: string, roleId: string): number {
  *  рестарта процесса карта и так пуста. */
 export function _resetChatRoleQueuesForTests(): void {
   chatRoleQueues.clear();
+  scheduledDeliveries.clear();
 }

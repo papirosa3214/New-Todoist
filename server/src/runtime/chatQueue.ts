@@ -257,17 +257,55 @@ export function heartbeatMessageDelivery(id: string): boolean {
   );
 }
 
-/** Держать аренду хода живой, пока идёт работа. Возвращает остановку. */
+interface DeliveryActivity {
+  id:string;
+  lastActivity:number;
+  modelActive:boolean;
+  tools:Set<string>;
+}
+const deliveryActivity = new Map<string,DeliveryActivity>();
+const activityKey = (chatId:string,roleId:string) => JSON.stringify([chatId,roleId]);
+
+/** Runtime events, rather than a waiting promise, describe useful execution. */
+export function observeDeliveryActivity(chatId:string,roleId:string,event:unknown):void {
+  const activity = deliveryActivity.get(activityKey(chatId,roleId));
+  if (!activity) return;
+  const e = event as {type?:string;toolCallId?:string;message?:{role?:string}};
+  activity.lastActivity = Date.now();
+  if (e.type === "agent_start" || (e.type === "message_start" && e.message?.role === "assistant"))
+    activity.modelActive = true;
+  if (e.type === "agent_end" || e.type === "message_end") activity.modelActive = false;
+  if (e.type === "tool_execution_start" && e.toolCallId) activity.tools.add(e.toolCallId);
+  if (e.type === "tool_execution_end" && e.toolCallId) activity.tools.delete(e.toolCallId);
+}
+
+/** Called only after FIFO admission. Long model/tool calls retain their lease;
+ * silent preparation does not renew forever. Runtime ceiling/abort stays in Pi. */
 export function startDeliveryHeartbeat(id: string, everyMs = 60_000): () => void {
+  const row = getMessageDelivery(id);
+  if (!row || row.status !== "picked") return () => {};
+  const key = activityKey(row.chat_id,row.role_id);
+  const activity: DeliveryActivity = {id,lastActivity:Date.now(),modelActive:false,tools:new Set()};
+  deliveryActivity.set(key,activity);
+  const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_LEASE_MIN ?? 5);
+  const leaseMs = (Number.isFinite(raw) && raw > 0 ? raw : 5) * 60_000;
   const timer = setInterval(() => {
-    try {
-      heartbeatMessageDelivery(id);
-    } catch {
-      // Аренда — не повод ронять ход: следующий тик попробует снова.
-    }
+    if (!activity.modelActive && activity.tools.size === 0 && Date.now()-activity.lastActivity >= leaseMs) return;
+    try { heartbeatMessageDelivery(id); }
+    catch { /* A transient database error must not crash the executing turn. */ }
   }, everyMs);
   timer.unref?.();
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    if (deliveryActivity.get(key) === activity) deliveryActivity.delete(key);
+  };
+}
+
+/** A queue deadline is a failure, not an acknowledgement of the user's message. */
+export function failPendingMessageDelivery(id:string,reason:string):boolean {
+  return db.prepare(`UPDATE chat_message_queue SET status='failed',finished_at=datetime('now'),
+    updated_at=datetime('now'),payload_json=json_set(COALESCE(payload_json,'{}'),'$.failureReason',?)
+    WHERE id=? AND status='pending'`).run(reason,id).changes === 1;
 }
 
 /** Применить fence: пометить ход `superseded` независимо от того,

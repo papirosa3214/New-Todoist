@@ -1,3 +1,4 @@
+import { prepareChatValue } from "../runtime/chatPreparationDeadline.js";
 import {chatExecutionMode,parseChatExecutionMode,isCardHandoffCommand} from "../runtime/chatExecutionMode.js";
 import {offerChatSteering} from "../runtime/chatSteering.js";
 import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
@@ -95,7 +96,7 @@ import {
 import {
   currentChatGeneration,
   fenceMessageDelivery,
-  startDeliveryHeartbeat,
+  observeDeliveryActivity,
 } from "../runtime/chatQueue.js";
 import {
   cancelChatRunsFor,
@@ -1525,7 +1526,7 @@ export function fenceDeliveryIfStale(deliveryId: string, expectedGeneration: num
 }
 
 /** Восстановление pending хода после рестарта процесса. Делает ТО ЖЕ,
- *  что живой маршрут: pick до очереди, fence если поколение уже не то,
+ *  что живой маршрут: FIFO admission, fence если поколение уже не то,
  *  реальный Pi-вызов через deliverAgentReply, finally-close с разделением
  *  success/failure. Возвращает `replyId` сохранённого ответа либо null,
  *  если ход был fenced, Pi не выполнился, или роль дала сбой. */
@@ -1536,7 +1537,18 @@ function retainForwardedDelivery(deliveryId:string):void {
   db.prepare("UPDATE chat_message_queue SET status='pending',picked_at=NULL,updated_at=datetime('now') WHERE id=? AND status='picked'").run(deliveryId);
 }
 
-export async function recoverAgentDelivery(input: {
+const recoveringDeliveries = new Set<string>();
+export async function recoverAgentDelivery(
+  input: Parameters<typeof recoverAgentDeliveryOnce>[0],
+): ReturnType<typeof recoverAgentDeliveryOnce> {
+  if (recoveringDeliveries.has(input.deliveryId)) return {status:"skipped",replyId:null};
+  // Reserve before any await without claiming that a queued delivery is executing.
+  recoveringDeliveries.add(input.deliveryId);
+  try { return await recoverAgentDeliveryOnce(input); }
+  finally { recoveringDeliveries.delete(input.deliveryId); }
+}
+
+async function recoverAgentDeliveryOnce(input: {
   chatId: string;
   roleId: string;
   deliveryId: string;
@@ -1568,12 +1580,6 @@ export async function recoverAgentDelivery(input: {
   }
   if(isIntegrationHandoff(row.message_id) && !integrationHandoffContext(row.message_id,roleId)){
     fenceMessageDelivery(deliveryId);return {status:"fenced",replyId:null};
-  }
-  // Compare-and-set before the first await: two recoverers cannot run the
-  // same accepted-version continuation. Existing forwarded work acknowledges it.
-  if(isIntegrationHandoff(row.message_id)){
-    const claimed=db.prepare("UPDATE chat_message_queue SET status='picked',picked_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status='pending'").run(deliveryId);
-    if(!claimed.changes)return {status:"skipped",replyId:null};
   }
   const role = roleFromUserId(roleId);
   if (!role) {
@@ -1609,11 +1615,7 @@ export async function recoverAgentDelivery(input: {
   if (row.status === "picked") {
     return { status: "skipped", replyId: null };
   }
-  // pick ДО постановки в очередь: так БД честно показывает,
-  // что ход в работе, а значит — рестарт в этот момент не
-  // приведёт к двойному Pi-вызову.
-  pickDurableDelivery(deliveryId);
-  const stopHeartbeat = startDeliveryHeartbeat(deliveryId);
+  // FIFO owns admission: pending while waiting, picked only during execution.
   let replyId: string | null = null;
   try {
     replyId = await enqueueChatReply(chatId, roleId, () =>
@@ -1626,6 +1628,7 @@ export async function recoverAgentDelivery(input: {
         mode: saved.mode,
         chatOnly,
       }),
+      {deliveryId},
     );
     // Двойная проверка fence: пока готовили ответ, generation
     // могла уехать. Тогда закрываем как superseded и не светится
@@ -1646,8 +1649,6 @@ export async function recoverAgentDelivery(input: {
     );
     completeDurableDelivery(deliveryId, false);
     return { status: "failed", replyId: null };
-  } finally {
-    stopHeartbeat();
   }
 }
 
@@ -2242,10 +2243,6 @@ async function dispatchRoleReplies(args: {
       // Рабочий исполнитель сам подтверждает включение ввода в контекст.
       continue;
     }
-    pickDurableDelivery(durableRecord.id);
-    // Аренда: пока ход идёт, он подтверждает, что живой. Мёртвый picked
-    // (оборванный ход) по аренде вернётся в очередь, а живой — не тронут.
-    const stopHeartbeat = startDeliveryHeartbeat(durableRecord.id);
     // Перед постановкой в очередь проверяем generation fence: ход
     // мог устареть, пока ждал durable-записи (например, пришёл
     // `/new-session` ровно в этот момент). Если generation уже
@@ -2339,10 +2336,10 @@ async function dispatchRoleReplies(args: {
         if(ok && hasCoordinationCard(args.messageId,accountId) && !answered)retainForwardedDelivery(durableRecord.id);
         else completeDurableDelivery(durableRecord.id,ok);
       }
-    }).catch(error => {
+    }, {deliveryId:durableRecord.id}).catch(error => {
       console.warn("[chats] clarification delivery failed",error);
       completeDurableDelivery(durableRecord.id,false);
-    }).finally(stopHeartbeat);
+    });
   }
 }
 
@@ -2539,7 +2536,7 @@ async function deliverAgentReply(args: {
   ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
   // Чат задачи: первым блоком — сама задача и место роли в ней (lib/taskChatBrief.ts).
   if (topic) { const brief = taskChatBrief(topic.task_id, role); if (brief) prompt = `${brief}\n\n${prompt}`; }
-  const memory = await roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text });
+  const memory = await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text }));
   if (memory) prompt = `${prompt}\n\n${memory}`;
   // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
   // последний снимок в общий контекст роли — и для чата, и для работы»).
@@ -2592,7 +2589,7 @@ async function deliverAgentReply(args: {
   try {
     typing(true);
   try {
-    reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:live.onEvent}) : await startChatRun({
+    reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:(event)=>{observeDeliveryActivity(chatId,roleUserId,event);live.onEvent(event);}}) : await startChatRun({
       mode: integrationContext ? "work" : roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
       messageId: trigger.id,
       deliveryOutcome,
@@ -2603,7 +2600,7 @@ async function deliverAgentReply(args: {
       model: (db.prepare("SELECT model FROM chat_messages WHERE id = ?").get(trigger.id) as { model: string | null } | undefined)?.model ?? undefined,
       sessionId: previousSessionId,
       onStep: (tool) => typing(true, tool),
-      onEvent: live.onEvent,
+      onEvent: (event) => { observeDeliveryActivity(chatId,roleUserId,event); live.onEvent(event); },
       // «Цель»: промежуточный итог роли сразу ложится в чат отдельным
       // сообщением (владелец 20.10.2026). Без reply_to — иначе клиент
       // принял бы его за конец живого хода.

@@ -1,3 +1,4 @@
+import { ChatPreparationDeadline } from "./chatPreparationDeadline.js";
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
 import {ThrashGuard, stepDigest} from "./thrashGuard.js";
@@ -1359,6 +1360,7 @@ export async function startChatRun(
     }
   }
 
+  const preparation = new ChatPreparationDeadline();
   try {
     // Модель/провайдер берём из routing роли — ровно как в startRun.
     // Различие: input.provider/model не предусмотрены, чат ходит всегда
@@ -1367,7 +1369,7 @@ export async function startChatRun(
     const model = routing.models[role];
     const provider = providerOfModel(model);
 
-    const catalog = await loadModelCatalog();
+    const catalog = await preparation.wait(loadModelCatalog());
     // «opencode-go/deepseek-…» в каталоге Pi лежит как id «deepseek-…» +
     // provider «opencode-go»: без разбора ссылки модели с префиксом в чате
     // не находились никогда — ни основная, ни запасные (20.10.2026).
@@ -1412,13 +1414,13 @@ export async function startChatRun(
     const home = ensureRoleHome(role);
     const cwd = home.workspace;
     const mode: ChatWorkMode = input.mode ?? "work";
-    const sessionDirectory = await prepareChatSessionDirectory(
+    const sessionDirectory = await preparation.wait(prepareChatSessionDirectory(
       role,
       input.chatId,
       input.sessionId,
-    );
+    ));
     const known = input.sessionId
-      ? (await SessionManager.list(cwd, sessionDirectory)).find(
+      ? (await preparation.wait(SessionManager.list(cwd, sessionDirectory))).find(
           (s) => s.id === input.sessionId,
         )
       : undefined;
@@ -1432,29 +1434,29 @@ export async function startChatRun(
           input.sessionId ? { id: input.sessionId } : undefined,
         );
 
-    const runtime: any = await getModelRuntime();
+    const runtime: any = await preparation.wait(getModelRuntime());
     const piModel =
       runtime.getModel?.(resolvedProvider, resolvedModel) ??
-      ((await runtime.getAvailable?.()) ?? []).find(
+      ((await preparation.wait(runtime.getAvailable?.() ?? [])) ?? []).find(
         (m: any) => m.id === resolvedModel,
       );
     if (!piModel) throw new ModelNotAvailableError(model, provider);
 
     const systemPrompt =
-      (await chatSystemPrompt(role, mode, cwd)) + "\n\n" + chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)) +
+      (await preparation.wait(chatSystemPrompt(role, mode, cwd))) + "\n\n" + chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)) +
       "\n\n" +
       UNIVERSAL_INSTRUCTION;
-    const resourceLoader = await createTaskResourceLoader(
+    const resourceLoader = await preparation.wait(createTaskResourceLoader(
       role,
       cwd,
       systemPrompt,
-    );
-    const composio = await connectRoleComposio(role, mode, input.chatId).catch(
+    ), resource => resource.disposeResources());
+    const composio = await preparation.wait(connectRoleComposio(role, mode, input.chatId).catch(
       (error) => {
         console.warn(`[chats] Composio для ${role} не подключился:`, error);
         return { tools: [] as any[], close: async () => {} };
       },
-    );
+    ), resource => resource.close());
     // «Обсуждение» — как «Работа» (владелец 20.10.2026); ограничен только «План».
     const allowed = (name: string) =>
       mode !== "plan" ||
@@ -1479,10 +1481,10 @@ export async function startChatRun(
           composeLayer(role, "tool.builtin." + t.name)?.effective ??
           t.description,
       }));
-    const infra = await connectRoleMcp(role, cwd).catch(() => ({
+    const infra = await preparation.wait(connectRoleMcp(role, cwd).catch(() => ({
       tools: [] as any[],
       close: async () => {},
-    }));
+    })), resource => resource.close());
     // Дела владельца в комнате чата: у Помощника это один из каналов, где с ним
     // говорят, поэтому инструмент должен быть и здесь.
     const secretary =
@@ -1507,7 +1509,7 @@ export async function startChatRun(
 
     let session: any;
     try {
-      ({ session } = await createAgentSession({
+      ({ session } = await preparation.wait(createAgentSession({
         cwd,
         model: piModel,
         thinkingLevel: resolveThinkingLevel(piModel, role) ?? undefined,
@@ -1524,13 +1526,12 @@ export async function startChatRun(
           compaction: { enabled: true },
           retry: { enabled: true, maxRetries: 2 },
         }),
-      } as any));
+      } as any), resource => resource.session.dispose()));
     } catch (error) {
-      resourceLoader.disposeResources();
-      await composio.close().catch(() => {});
-      await infra.close().catch(() => {});
+      preparation.dispose();
       throw error;
     }
+    preparation.transfer();
 
     installSteeringBoundary(session);
     // Role policy also replaces the level restored from an older session.
@@ -1718,6 +1719,7 @@ export async function startChatRun(
 
     return { runId, sessionId: finalSessionId, text: finalText };
   } finally {
+    preparation.dispose();
     releaseChatRoleLock(input.chatId, input.roleId);
   }
 }
@@ -1757,7 +1759,10 @@ async function runExternalChat(
     (t: any) => t.name !== "taskflow" && allowed(t.name),
   );
   const token = roleRunToken(role);
-  const session = await createCliAgentSession({
+  const preparation = new ChatPreparationDeadline();
+  let session: Awaited<ReturnType<typeof createCliAgentSession>>;
+  try {
+  session = await preparation.wait(createCliAgentSession({
     cwd,
     command,
     env: token ? { TASKFLOW_TOKEN: token } : undefined,
@@ -1772,7 +1777,9 @@ async function runExternalChat(
     // Только буст: правила внутренних ролей (песочница, назначение, host-инструменты) внешнему агенту не передаются.
     systemPrompt: externalAgentBoost(roleTitle(role), operations, "chat") + "\n\n" + chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)),
     onTurnEnd: actionTurnHandler(operations, runId),
-  });
+  }), resource => resource.dispose());
+  preparation.transfer();
+  } finally { preparation.dispose(); }
   const run: ActiveChatRun = {
     runId,
     chatId: input.chatId,

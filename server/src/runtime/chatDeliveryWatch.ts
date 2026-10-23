@@ -1,3 +1,5 @@
+import { restartDelivery, chatDeliveryMaxRestarts } from "./chatDeliveryRetryBudget.js";
+import { dispatchRecoveryRows } from "./chatRecoveryDispatch.js";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { recoverAgentDelivery } from "../routes/chats.js";
@@ -41,8 +43,7 @@ export function chatDeliveryRetryMinutes(): number {
 
 /** Сколько попыток на одну доставку. Дальше — уведомление владельцу. */
 export function chatDeliveryMaxAttempts(): number {
-  const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_MAX_ATTEMPTS ?? 3);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3;
+  return chatDeliveryMaxRestarts();
 }
 
 /** Сколько минут вопрос может висеть, прежде чем владельцу уйдёт пинг. */
@@ -161,35 +162,10 @@ export async function sweepFailedDeliveries(options?: {
     ) as QueueRow[];
 
   const report: FailedDeliverySweepReport = { retried: 0, exhausted: 0 };
-  for (const row of rows) {
-    const payload = parsePayload(row.payload_json);
-    let attempts = Number(payload.retryCount ?? 0);
-    if (!Number.isFinite(attempts) || attempts < 0) attempts = 0;
-    if (attempts >= maxAttempts) {
-      if (!payload.retryExhausted) {
-        db.prepare(
-          "UPDATE chat_message_queue SET payload_json=json_set(COALESCE(payload_json,'{}'),'$.retryExhausted',1) WHERE id=?",
-        ).run(row.id);
-        notifyOwner(
-          DELIVERY_RETRY_EXHAUSTED_NOTICE_TYPE,
-          exhaustedText(row),
-          taskIdOfDelivery(row),
-        );
-        report.exhausted += 1;
-      }
-      continue;
-    }
-    // CAS failed → pending: две копии стража не поднимут один ход дважды.
-    const claimed = db
-      .prepare(
-        `UPDATE chat_message_queue
-            SET status='pending', picked_at=NULL, finished_at=NULL,
-                updated_at=datetime('now'),
-                payload_json=json_set(COALESCE(payload_json,'{}'),'$.retryCount',?)
-          WHERE id=? AND status='failed'`,
-      )
-      .run(attempts + 1, row.id);
-    if (!claimed.changes) continue;
+  await dispatchRecoveryRows(rows, async (row) => {
+    const admission = restartDelivery(row.id, "execution_failed", "failed", maxAttempts);
+    if (admission === "exhausted") { report.exhausted++; return; }
+    if (admission !== "restarted") return;
     try {
       await recoverAgentDelivery({
         chatId: row.chat_id,
@@ -203,7 +179,7 @@ export async function sweepFailedDeliveries(options?: {
         error instanceof Error ? error.message : error,
       );
     }
-  }
+  });
   return report;
 }
 
@@ -380,17 +356,6 @@ function stalledText(item: StalledDelivery): string {
       : "Роль не занята этой перепиской — ответь в чате сам или запусти роль.",
   ];
   return parts.filter(Boolean).join(". ");
-}
-
-function exhaustedText(row: QueueRow): string {
-  const payload = parsePayload(row.payload_json);
-  const attempts = Number(payload.retryCount ?? 0);
-  const taskId = taskIdOfDelivery(row);
-  return [
-    `Роль не смогла ответить: ход упал ${attempts} раз(а).`,
-    `Чат ${row.chat_id}${taskId ? `, карточка ${taskId}` : ""}.`,
-    "Вопрос остался без ответа — ответь сам или перезапусти роль.",
-  ].join(" ");
 }
 
 /**

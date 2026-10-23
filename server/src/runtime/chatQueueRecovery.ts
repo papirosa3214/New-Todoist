@@ -1,3 +1,6 @@
+import { restartDelivery, chatDeliveryMaxRestarts } from "./chatDeliveryRetryBudget.js";
+import { dispatchRecoveryRows } from "./chatRecoveryDispatch.js";
+import { isChatDeliveryScheduled } from "./chatSession.js";
 import db from "../db.js";
 // Recovery worker для durable-очереди сообщений роли.
 //
@@ -59,7 +62,8 @@ export async function sweepRecoverableDeliveries(now?: number): Promise<number> 
       id: string; chat_id: string; role_id: string;
     }>;
   let recovered = 0;
-  for (const row of pending) {
+  await dispatchRecoveryRows(pending, async (row) => {
+    if (isChatDeliveryScheduled(row.id)) return;
     try {
       const result = await recoverAgentDelivery({
         chatId: row.chat_id,
@@ -72,7 +76,7 @@ export async function sweepRecoverableDeliveries(now?: number): Promise<number> 
       // Keep its durable state for diagnosis; never silently acknowledge it.
       console.warn(`[chatQueueRecovery] delivery ${row.id} failed:`, error);
     }
-  }
+  });
   return recovered;
 }
 
@@ -82,7 +86,8 @@ export async function sweepRecoverableDeliveries(now?: number): Promise<number> 
 export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-process.uptime()*1000)): RecovererHandle {
   // Only leases from before this process. Fresh pickups are never stolen.
   const cutoff=new Date(Math.floor(processStartedAt.getTime()/1000)*1000-1000).toISOString();
-  db.prepare("UPDATE chat_message_queue SET status='pending',picked_at=NULL,updated_at=datetime('now') WHERE status='picked' AND julianday(updated_at)<julianday(?)").run(cutoff);
+  const interrupted = db.prepare("SELECT id FROM chat_message_queue WHERE status='picked' AND julianday(updated_at)<julianday(?)").all(cutoff) as {id:string}[];
+  for (const row of interrupted) restartDelivery(row.id, "server_restarted", "picked");
   // Пинг висящих вопросов — ДО просрочки, в том числе на старте сервера.
   // Иначе вопрос, который пережил перезапуск (сервер стоял, роль не забрала),
   // тихо умирал в `failed` по TTL, и владелец так и не узнавал, что на
@@ -157,8 +162,7 @@ export function chatDeliveryLeaseMinutes(): number {
 /** Сколько раз оборванный ход можно вернуть в очередь, прежде чем
  *  закрыть его окончательно. По умолчанию 2. */
 export function chatDeliveryMaxReclaims(): number {
-  const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_RECLAIMS ?? 2);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
+  return chatDeliveryMaxRestarts();
 }
 
 /** Вернуть в очередь ходы, чья аренда истекла и за которыми не стоит
@@ -180,36 +184,9 @@ export function reclaimStalePickedDeliveries(
     // Живой ход (лок в памяти, активная попытка, открытый слот) — не наш:
     // отберём аренду у работающей роли.
     if (roleIsBusyNow(row.role_id, row.chat_id)) continue;
-    const payload = (() => {
-      try {
-        return JSON.parse(row.payload_json ?? "{}") ?? {};
-      } catch {
-        return {};
-      }
-    })();
-    const count = Number(payload.reclaimCount ?? 0);
-    const attempts = Number.isFinite(count) && count > 0 ? count : 0;
-    if (attempts >= chatDeliveryMaxReclaims()) {
-      const done = db
-        .prepare(
-          `UPDATE chat_message_queue
-              SET status='failed', finished_at=datetime('now'), updated_at=datetime('now'),
-                  payload_json=json_set(COALESCE(payload_json,'{}'),'$.expired',1)
-            WHERE id=? AND status='picked'`,
-        )
-        .run(row.id).changes;
-      if (done) closed += 1;
-      continue;
-    }
-    const back = db
-      .prepare(
-        `UPDATE chat_message_queue
-            SET status='pending', picked_at=NULL, updated_at=datetime('now'),
-                payload_json=json_set(COALESCE(payload_json,'{}'),'$.reclaimCount',?)
-          WHERE id=? AND status='picked'`,
-      )
-      .run(attempts + 1, row.id).changes;
-    if (back) reclaimed += 1;
+    const result = restartDelivery(row.id, "lease_expired", "picked");
+    if (result === "restarted") reclaimed++;
+    if (result === "exhausted") closed++;
   }
   return { reclaimed, closed };
 }
