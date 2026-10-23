@@ -1,3 +1,4 @@
+import { readModelUsage } from "../lib/modelUsage.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { authOrApiToken, ownerOrApiToken } from "../auth.js";
 import { piRuntime } from "../runtime/index.js";
@@ -47,6 +48,12 @@ export function sendRuntimeError(reply: FastifyReply, err: unknown): FastifyRepl
 
 export function registerRuntimeRoutes(app: FastifyInstance): void {
   const authPre = authOrApiToken;
+  app.get<{Querystring:{window?:string}}>("/api/runtime/usage", {preHandler:ownerOrApiToken}, async(req,reply)=>{
+    const window=req.query.window??"week";
+    if(!["today","week","month"].includes(window))return reply.code(400).send({error:"invalid_window"});
+    return readModelUsage(window);
+  });
+
 
   app.get("/api/runtime/status", { preHandler: authPre }, async () => {
     const runtime = await piRuntime.status();

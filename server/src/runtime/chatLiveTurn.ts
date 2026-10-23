@@ -1,3 +1,4 @@
+import { recordModelUsage } from "../lib/modelUsage.js";
 import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 // Живой ход роли в чате (владелец 27.09.2026): пока роль отвечает, окно
 // чата показывает то же, что окно сессии Claude Code, — текст ответа
@@ -346,6 +347,7 @@ export function unwrapRoleEnvelope(text: string): string {
 
 // ── Сам ход ─────────────────────────────────────────────────────────────
 
+let usagePersistenceWarning = false;
 export class LiveTurn {
   readonly chatId: string;
   readonly userId: string;
@@ -406,6 +408,10 @@ export class LiveTurn {
     const sub = e.type === "message_update" ? e.assistantMessageEvent?.type : undefined;
     if (sub && this.genStartedAt === null) this.genStartedAt = Date.now();
     if (e.type === "message_end" || e.type === "turn_usage") this.addUsage(event);
+    if (e.type === "message_end") {
+      try { recordModelUsage((event as any).message, this.publish ? "task" : "chat"); }
+      catch { if(!usagePersistenceWarning){usagePersistenceWarning=true;console.warn("[model-usage] could not save response counters");} }
+    }
     // Ответ модели без текста — молчание (21.10.2026). Помечаем последний
     // такой ответ: пустой ответ виден как сбой, а не как «роль молчит».
     if (e.type === "message_end") {

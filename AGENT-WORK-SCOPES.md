@@ -289,3 +289,5 @@
 | LOCK-ROLE-PROMPT-SPLIT-20261023 | REVIEW | ROLE-PROMPT-SPLIT | Инструкции ролей разделены по виду работы: чат — цикл чата и текстовый ответ, карточка — контракт и сдача шага | , ,  (новый),  (новый), , , ,  | Владелец 23.10.2026: «разграничить чат и задачи на уровне инструкции и сервера» | opencode | promptModes 4/4, tsc чист |
 
 | LOCK-MEMORY-NUDGE-20261023 | REVIEW | MEMORY-NUDGE | Однократное напоминание после 10 инструментов без памяти/БЗ | `AGENT-WORK-SCOPES.md`, `server/src/runtime/memoryConsultationGuard.ts`, `server/src/runtime/PiRuntimeAdapter.ts`, `server/src/runtime/inProcessRun.ts`, `server/test/memoryConsultationGuard.test.ts`, `server/test/chatQueueResilience.test.ts`, `docs/2026-10-23-memory-nudge.md` | Владелец | Codex | RED/GREEN; 47 PASS; tsc PASS |
+
+| LOCK-AI-USAGE-20261024 | IN_PROGRESS | AI-USAGE | Долговечный учёт вызовов моделей, история SDK и сводка для обзора | `AGENT-WORK-SCOPES.md`, `server/src/lib/modelUsage.ts`, `server/src/runtime/chatLiveTurn.ts`, `server/src/routes/runtime.ts`, `server/scripts/import-model-usage.ts`, `server/test/modelUsage.test.ts`, `docs/2026-10-24-ai-usage.md` | Владелец | Codex | TDD; API; журнал SDK |
