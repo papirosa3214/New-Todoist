@@ -4,6 +4,8 @@ import db from "../src/db.js";
 import {
   AUTO_BRANCH_ENABLED,
   shouldFanOutOwnerMessage,
+  shouldFanOutTaskTopic,
+  taskTopicBranchAck,
   fanoutBranchAck,
   fanoutParentAck,
   fanoutTitle,
@@ -94,5 +96,23 @@ describe("ветка на сообщение владельца: живые да
       payload: { text: "И ещё: поправь заголовок" },
     })).json().message;
     expect(db.prepare("SELECT 1 FROM chats WHERE branch_of_message_id=?").get(second.id)).toBeUndefined();
+  });
+});
+
+describe("ветка-срез в теме задачи", () => {
+  const topic = { fromOwner: true, isTaskTopic: true, isBranch: false, repliesToRole: false, roleBusy: true };
+  it("занятая роль в теме задачи получает ветку-срез", () => {
+    expect(shouldFanOutTaskTopic(topic)).toBe(true);
+  });
+  it("не ветвится, когда роль свободна, это ветка или ответ роли", () => {
+    expect(shouldFanOutTaskTopic({ ...topic, roleBusy: false })).toBe(false);
+    expect(shouldFanOutTaskTopic({ ...topic, isBranch: true })).toBe(false);
+    expect(shouldFanOutTaskTopic({ ...topic, repliesToRole: true })).toBe(false);
+    expect(shouldFanOutTaskTopic({ ...topic, isTaskTopic: false })).toBe(false);
+    expect(shouldFanOutTaskTopic({ ...topic, fromOwner: false })).toBe(false);
+  });
+  it("отбивка говорит, что правка ушла в ход", () => {
+    expect(taskTopicBranchAck("Поправь кнопку")).toContain("Принял: «Поправь кнопку»");
+    expect(taskTopicBranchAck("Поправь кнопку")).toContain("ушла в ход");
   });
 });

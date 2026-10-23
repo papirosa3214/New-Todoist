@@ -92,3 +92,26 @@ export function fanoutBranchAck(text: string, busy: boolean): string {
 export function fanoutParentAck(text: string): string {
   return "Принял: «" + fanoutDigest(text) + "» — открыл ветку, работаю там.";
 }
+
+/** Тема задачи (карточка): сообщение владельца идёт в работу слота
+ *  (подмешивание) И открывает ветку-срез — в ней роль сразу отвечает
+ *  владельцу, что приняла правку и на какой она стадии. Основную работу
+ *  не отвлекаем (владелец 23.10.2026). */
+export function shouldFanOutTaskTopic(facts: {
+  fromOwner: boolean;
+  isTaskTopic: boolean;
+  isBranch: boolean;
+  repliesToRole: boolean;
+  roleBusy: boolean;
+}): boolean {
+  return facts.fromOwner && facts.isTaskTopic && !facts.isBranch && !facts.repliesToRole && facts.roleBusy;
+}
+
+/** Отбивка в ветке-срезе темы задачи. */
+export function taskTopicBranchAck(text: string): string {
+  return (
+    "Принял: «" + fanoutDigest(text) + "». " +
+    "Учту в текущей работе — правка ушла в ход. " +
+    "Здесь отвечу, как будет что показать по этой правке."
+  );
+}

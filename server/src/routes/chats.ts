@@ -7,7 +7,7 @@ import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
-import { shouldFanOutOwnerMessage, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
+import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { deliverTopicToWork, deliverChatToWork } from "../runtime/inProcessRun.js";
@@ -1042,7 +1042,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
 
       // Новое сообщение владельца останавливает текущий ход роли: отвечать
       // надо на новое, а не доканчивать старое (владелец 23.10.2026).
-      if (!handledByBranch && isOwner(req.userId)) {
+      if (!handledByBranch && isOwner(req.userId) && !chatTaskId && !chat.parent_chat_id) {
         try {
           const stopped = await interruptChatTurnForOwner(chatId, req.userId);
           if (stopped) console.log(`[chats] ход остановлен новым сообщением владельца chat=${chatId}`);
@@ -1963,17 +1963,30 @@ async function fanOutOwnerMessage(args: {
         LIMIT 1`,
     ).get(args.chatId),
   );
-  const allowed = shouldFanOutOwnerMessage({
-    fromOwner: isOwner(args.fromUserId),
-    direct: chat.kind === "direct",
-    roleMembers: roles.length,
+  const fromOwner = isOwner(args.fromUserId);
+  const isTaskTopic = Boolean(chat.task_id) && Boolean(chat.parent_chat_id);
+  // Тема задачи: сообщение владельца идёт в работу слота (подмешивание) и
+  // открывает ветку-срез, где роль сразу отвечает владельцу (23.10.2026).
+  const topicSlice = shouldFanOutTaskTopic({
+    fromOwner,
+    isTaskTopic,
     isBranch: Boolean(chat.branch_of_chat_id),
-    isTaskTopic: Boolean(chat.task_id) || Boolean(chat.parent_chat_id),
-    isCommon: chat.room_kind === "common",
     repliesToRole,
     roleBusy: busy,
-    openBranch,
   });
+  const allowed =
+    topicSlice ||
+    shouldFanOutOwnerMessage({
+      fromOwner,
+      direct: chat.kind === "direct",
+      roleMembers: roles.length,
+      isBranch: Boolean(chat.branch_of_chat_id),
+      isTaskTopic: Boolean(chat.task_id) || Boolean(chat.parent_chat_id),
+      isCommon: chat.room_kind === "common",
+      repliesToRole,
+      roleBusy: busy,
+      openBranch,
+    });
   if (!allowed) return false;
   const branchId = uid();
   const copyId = uid();
@@ -1984,8 +1997,8 @@ async function fanOutOwnerMessage(args: {
       .run(branchId, fanoutTitle(args.text), chat.kind, args.fromUserId, args.chatId, args.messageId);
     db.prepare("INSERT INTO chat_members (chat_id, member_id) SELECT ?, member_id FROM chat_members WHERE chat_id = ?").run(branchId, args.chatId);
     db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id) VALUES (?, ?, ?, 'chat', ?)").run(copyId, args.fromUserId, args.text, branchId);
-    db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id) VALUES (?, ?, ?, 'chat', ?, ?)").run(branchAckId, roleId, fanoutBranchAck(args.text, busy), branchId, copyId);
-    db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id) VALUES (?, ?, ?, 'chat', ?, ?)").run(parentAckId, roleId, fanoutParentAck(args.text), args.chatId, args.messageId);
+    db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id) VALUES (?, ?, ?, 'chat', ?, ?)").run(branchAckId, roleId, topicSlice ? taskTopicBranchAck(args.text) : fanoutBranchAck(args.text, busy), branchId, copyId);
+    db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id) VALUES (?, ?, ?, 'chat', ?, ?)").run(parentAckId, roleId, topicSlice ? "Принял: «" + String(args.text).slice(0, 60) + "» — правка ушла в работу, подробности открою в ветке." : fanoutParentAck(args.text), args.chatId, args.messageId);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id IN (?, ?)").run(args.chatId, branchId);
   })();
   broadcastToUsers(memberIds(branchId), { type: "chat:new", message: loadChatMessage(copyId) });
@@ -1999,7 +2012,9 @@ async function fanOutOwnerMessage(args: {
     hop: args.hop,
     mode: args.mode,
   });
-  return true;
+  // Тема задачи: ветка — срез для ответа владельцу, сама правка уже ушла в ход
+  // слота через обычную доставку, поэтому основной dispatch не отменяем.
+  return !topicSlice;
 }
 
 /** Итог по всем веткам комнаты: одна карточка «что сделано» вместо
