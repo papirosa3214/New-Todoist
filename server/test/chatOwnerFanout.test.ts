@@ -6,6 +6,7 @@ import {
   shouldFanOutOwnerMessage,
   shouldFanOutTaskTopic,
   taskTopicBranchAck,
+  branchSummaryLines,
   fanoutBranchAck,
   fanoutParentAck,
   fanoutTitle,
@@ -111,8 +112,14 @@ describe("ветка-срез в теме задачи", () => {
     expect(shouldFanOutTaskTopic({ ...topic, isTaskTopic: false })).toBe(false);
     expect(shouldFanOutTaskTopic({ ...topic, fromOwner: false })).toBe(false);
   });
-  it("отбивка говорит, что правка ушла в ход", () => {
-    expect(taskTopicBranchAck("Поправь кнопку")).toContain("Принял: «Поправь кнопку»");
-    expect(taskTopicBranchAck("Поправь кнопку")).toContain("ушла в ход");
+  it("первое сообщение ветки — контекст задачи, без дежурной фразы", () => {
+    const ack = taskTopicBranchAck("Поправь кнопку", "Задача: Кнопка\nШаги: правка — in_progress");
+    expect(ack).toContain("На связи");
+    expect(ack).toContain("Принял: «Поправь кнопку»");
+    expect(ack).toContain("Шаги: правка — in_progress");
+    expect(ack).not.toContain("ушла в ход");
+  });
+  it("сводка ветки — последние разные ответы", () => {
+    expect(branchSummaryLines(["раз", "два", "раз", "три"])).toEqual(["раз", "два", "три"]);
   });
 });

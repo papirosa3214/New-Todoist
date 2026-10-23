@@ -7,8 +7,7 @@ import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
-import { finishPausedWork, duePausedWork } from "../lib/chatPausedWork.js";
-import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
+import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, branchSummaryLines, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { deliverTopicToWork, deliverChatToWork } from "../runtime/inProcessRun.js";
@@ -601,6 +600,27 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!closed && chat.archived_at)
         return reply.code(409).send({ error: "Убранный в архив чат вернуть нельзя" });
       db.prepare("UPDATE chats SET closed_at = CASE WHEN ? THEN COALESCE(closed_at, datetime('now')) ELSE NULL END WHERE id=?").run(closed ? 1 : 0, chat.id);
+      // Ветка закрыта — её сводка уходит в комнату-родитель, к основной роли.
+      const branch = db.prepare("SELECT branch_of_chat_id, title FROM chats WHERE id=?").get(chat.id) as
+        | { branch_of_chat_id: string | null; title: string | null }
+        | undefined;
+      if (closed && branch?.branch_of_chat_id) {
+        try {
+          const answers = (db
+            .prepare("SELECT text FROM chat_messages WHERE chat_id = ? AND from_user_id LIKE 'role_%' ORDER BY created_at")
+            .all(chat.id) as Array<{ text: string }>).map((row) => unwrapRoleEnvelope(row.text));
+          const lines = branchSummaryLines(answers);
+          const summaryId = uid();
+          const summary =
+            "Ветка «" + String(branch.title ?? "").replace(/^Ветка:\s*/, "") + "» закрыта." +
+            (lines.length ? "\nИтог: " + lines.join(" · ") : "");
+          db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, message_type) VALUES (?, ?, ?, 'chat', ?, 'system')")
+            .run(summaryId, req.userId, summary, branch.branch_of_chat_id);
+          broadcastToUsers(memberIds(branch.branch_of_chat_id), { type: "chat:new", message: loadChatMessage(summaryId) });
+        } catch (error) {
+          console.warn("[chats] сводка закрытой ветки не ушла в родителя:", error instanceof Error ? error.message : error);
+        }
+      }
       return { chat: chatRow(chat.id) };
     },
   );
@@ -1922,33 +1942,27 @@ async function interruptChatTurnForOwner(chatId: string, ownerId: string): Promi
   return true;
 }
 
-/** Возврат к прерванной работе после паузы (владелец 23.10.2026): одна
- *  системная строка в комнате и обычный ход роли — уже с учётом разговора. */
-export async function resumePausedChatWork(): Promise<number> {
-  const due = duePausedWork();
-  let resumed = 0;
-  for (const item of due) {
-    try {
-      const role = roleFromUserId(item.roleId);
-      if (!role || !isMember(item.chatId, item.ownerId)) {
-        finishPausedWork(item.id);
-        continue;
-      }
-      const text = "Продолжаю прерванную работу с учётом того, что обсудили.";
-      const id = uid();
-      db.prepare(
-        "INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, message_type) VALUES (?, ?, ?, 'chat', ?, 'system')",
-      ).run(id, item.ownerId, text, item.chatId);
-      broadcastToUsers(memberIds(item.chatId), { type: "chat:new", message: loadChatMessage(id) });
-      finishPausedWork(item.id);
-      await dispatchRoleReplies({ chatId: item.chatId, messageId: id, fromUserId: item.ownerId, text, hop: 0, mode: "work" });
-      resumed += 1;
-    } catch (error) {
-      console.warn(`[chats] возврат к работе не удался chat=${item.chatId}:`, error instanceof Error ? error.message : error);
-      finishPausedWork(item.id);
-    }
+/** Короткий контекст задачи для ветки-среза: что уже сделано по шагам и
+ *  последние события. Владелец будет спрашивать по этому контексту. */
+function taskSliceContext(taskId: string | null | undefined): string {
+  if (!taskId) return "";
+  const task = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as
+    | { title: string; description: string | null }
+    | undefined;
+  if (!task) return "";
+  const steps = db
+    .prepare("SELECT title, COALESCE(agent_state, CASE WHEN done=1 THEN 'done' ELSE 'pending' END) AS state FROM subtasks WHERE task_id = ? ORDER BY position")
+    .all(taskId) as Array<{ title: string; state: string }>;
+  const events = db
+    .prepare("SELECT kind, COALESCE(field,'') AS field, COALESCE(to_value,'') AS value, created_at FROM task_events WHERE task_id = ? ORDER BY created_at DESC LIMIT 5")
+    .all(taskId) as Array<{ kind: string; field: string; value: string; created_at: string }>;
+  const lines: string[] = [`Задача: ${task.title}`];
+  if (steps.length) lines.push("Шаги: " + steps.map((step) => `${step.title} — ${step.state}`).join("; "));
+  if (events.length) {
+    lines.push("Последние события:");
+    for (const event of events) lines.push(`- ${event.created_at}: ${event.kind} ${event.field} ${event.value}`.trim());
   }
-  return resumed;
+  return lines.join("\n");
 }
 
 async function fanOutOwnerMessage(args: {
@@ -2030,7 +2044,7 @@ async function fanOutOwnerMessage(args: {
       .run(branchId, fanoutTitle(args.text), chat.kind, args.fromUserId, args.chatId, args.messageId);
     db.prepare("INSERT INTO chat_members (chat_id, member_id) SELECT ?, member_id FROM chat_members WHERE chat_id = ?").run(branchId, args.chatId);
     db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id) VALUES (?, ?, ?, 'chat', ?)").run(copyId, args.fromUserId, args.text, branchId);
-    db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id) VALUES (?, ?, ?, 'chat', ?, ?)").run(branchAckId, roleId, topicSlice ? taskTopicBranchAck(args.text) : fanoutBranchAck(args.text, busy), branchId, copyId);
+    db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id) VALUES (?, ?, ?, 'chat', ?, ?)").run(branchAckId, roleId, topicSlice ? taskTopicBranchAck(args.text, taskSliceContext(chat.task_id)) : fanoutBranchAck(args.text, busy), branchId, copyId);
     db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id) VALUES (?, ?, ?, 'chat', ?, ?)").run(parentAckId, roleId, topicSlice ? "Принял: «" + String(args.text).slice(0, 60) + "» — правка ушла в работу, подробности открою в ветке." : fanoutParentAck(args.text), args.chatId, args.messageId);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id IN (?, ?)").run(args.chatId, branchId);
   })();

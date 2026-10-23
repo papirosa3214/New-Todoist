@@ -107,11 +107,23 @@ export function shouldFanOutTaskTopic(facts: {
   return facts.fromOwner && facts.isTaskTopic && !facts.isBranch && !facts.repliesToRole && facts.roleBusy;
 }
 
-/** Отбивка в ветке-срезе темы задачи. */
-export function taskTopicBranchAck(text: string): string {
+/** Первое сообщение ветки-среза: «на связи» и что уже сделано по задаче.
+ *  Владелец 23.10.2026: дежурная фраза «принял, ушла в ход» не нужна — нужен
+ *  контекст, по которому он будет спрашивать: что было сделано в рамках
+ *  задачи и какая цель. */
+export function taskTopicBranchAck(text: string, context: string): string {
   return (
-    "Принял: «" + fanoutDigest(text) + "». " +
-    "Учту в текущей работе — правка ушла в ход. " +
-    "Здесь отвечу, как будет что показать по этой правке."
+    "На связи. Принял: «" + fanoutDigest(text) + "».\n\n" +
+    "Что сделано по задаче к этому моменту:\n" +
+    (context.trim() || "по шагам пока пусто") +
+    "\n\nСпрашивай — отвечу по этому контексту и по цели задачи."
   );
+}
+
+/** Сводка ветки для основной роли: последние ответы ветки, по строкам. */
+export function branchSummaryLines(answers: string[]): string[] {
+  return answers
+    .map((text) => fanoutDigest(text))
+    .filter((line, index, all) => line && all.indexOf(line) === index)
+    .slice(-5);
 }
