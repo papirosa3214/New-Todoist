@@ -85,7 +85,7 @@ export const ROLE_BLOCK_GUIDE: Record<string, string> = {
   report: "`report_kind` (`intermediate`|`final`), `sections`",
   handoff: "`artifact_key`, `summary`",
   command: "`command`, необязательный `title`: команда для запуска на .110; у владельца рядом кнопка «Запустить». Одна команда — один блок",
-  link: "`title`, `url`: кликабельная ссылка. Внешний адрес — http(s); заметка в приложении на телефоне — `taskflow://note/<id заметки>`",
+  link: "`title`, `url`: кликабельная ссылка. Внешний адрес — http(s); заметка в приложении на телефоне — `note://<id заметки>`",
   html: "`title`, `html`: интерактив в окне чата — самодостаточная страница HTML/CSS/JS",
   widget: "`widget`: объект виджета (`metrics`, `progress`, `checklist`, `card`, `chart` и др.); сервер проверяет его по каталогу виджетов",
 };
@@ -96,11 +96,13 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 /**
  * Адрес в блоке link: внешний http(s) ИЛИ внутренняя ссылка на заметку
- * приложения `taskflow://note/<id>` (владелец 23.10.2026: «ссылку правильную
- * давай на материал... чтобы по падении мог сразу прочитать» — с телефона
- * тап по ссылке открывает заметку в приложении, а не веб-страницу).
+ * приложения `note://<id>` (владелец 23.10.2026: «ссылку правильную давай
+ * на материал... чтобы по падении мог сразу прочитать» — с телефона тап по
+ * ссылке открывает заметку в приложении, а не веб-страницу). Схема та же, что
+ * у `taskflow_chat_share_material`: клиент уже умеет её открывать
+ * (`ChatMaterialDestination` в iOS).
  */
-const LINK_URL_PATTERN = /^(?:https?:\/\/\S+|taskflow:\/\/note\/[A-Za-z0-9_-]+)$/;
+const LINK_URL_PATTERN = /^(?:https?:\/\/\S+|note:\/\/[A-Za-z0-9_-]+)$/;
 const isText = (value: unknown, max = 4000): value is string =>
   typeof value === "string" && value.length <= max;
 const isMaterial = (value: unknown): boolean => isObject(value) &&
@@ -134,7 +136,7 @@ function structuredBlockErrors(value: unknown, path: string, report = false): st
     }
     case "handoff": stringField("artifact_key", 128); stringField("summary"); break;
     case "command": stringField("command", 8000); if (value.title !== undefined) stringField("title", 300); if (isText(value.command) && (!value.command.trim() || value.command.includes("```"))) errors.push(path + ".command: пустая команда или ``` внутри"); break;
-    case "link": stringField("title", 300); if (!isText(value.url, 2048) || !LINK_URL_PATTERN.test(value.url)) errors.push(path + ".url: ожидается http(s)-адрес без пробелов или taskflow://note/<id>"); break;
+    case "link": stringField("title", 300); if (!isText(value.url, 2048) || !LINK_URL_PATTERN.test(value.url)) errors.push(path + ".url: ожидается http(s)-адрес без пробелов или note://<id заметки>"); break;
     case "html": stringField("title", 300); stringField("html", 60000); if (isText(value.html) && value.html.includes("```")) errors.push(path + ".html: ``` внутри"); break;
     case "widget": for (const problem of validateWidgetBlock(value.widget, path + ".widget")) errors.push(problem.path + ": " + problem.message); break;
   }
