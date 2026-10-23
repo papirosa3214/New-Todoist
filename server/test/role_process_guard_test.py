@@ -49,6 +49,13 @@ class UnmanagedTests(unittest.TestCase):
    fixture(113,'/opt/google/chrome/chrome','0::/unrelated.service')
    self.assertEqual([r['pid'] for r in guard.processes(root)],[111])
    self.assertIn('unmanaged',guard.invalid_lease('unmanaged'))
+   fixture(114,'node','0::/taskflow-server.service')
+   fixture(115,'node','0::/taskflow-server.service')
+   for pid in (114,115):
+    (root/str(pid)/'cmdline').write_bytes(b'node\0--import\0tsx\0src/index.ts\0')
+   (root/'114'/'cwd').symlink_to('/tmp/removed (deleted)')
+   (root/'115'/'cwd').symlink_to('/tmp/live')
+   self.assertEqual(sorted(r['pid'] for r in guard.processes(root)),[111,114])
 
 class NasSearchTests(unittest.TestCase):
  def test_only_long_root_find_crossing_network_mount_is_stopped(self):

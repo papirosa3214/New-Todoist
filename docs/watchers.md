@@ -335,3 +335,5 @@ chatCoordination.ts: при старте и каждые15 минут созда
 - Развёртывание/откат: `docs/2026-10-23-qa-process-lifecycle.md`.
 
 Дополнение23.10около04:30: тот же минутный role_process_watch.py останавливает принадлежащий пользователю сервера find / старше60с, если у него действительно открыта папка /run/user/1000/gvfs/... . Поиск в проекте и find / -xdev/-mount исключены. Тип уведомления nas_search_watch,1/сутки. Подтверждённый инцидент: два find / вызвали74%CPU GVFS и37%портала; послеTERM0%и0,4%. Это отдельный путь SSH/host-команд UIDmaksim, вне прежней очистки tfrole.
+
+TaskFlow CPU budget (2026-10-23): CPUQuota=400%, CPUWeight=50; role-process-watch проверяет cpu.max каждую минуту и включает потерю лимита в штатную сводку. Уборка также охватывает старые tfrole Node src/index.ts с удалённым cwd. Подробности: docs/2026-10-23-taskflow-cpu-budget.md.

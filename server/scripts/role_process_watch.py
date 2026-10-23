@@ -83,6 +83,9 @@ def main():
         return 0
     state={'checked_epoch':time.time(),'checked_at':dt.datetime.now().astimezone().isoformat()}
     try:
+        quota,period=Path('/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/taskflow-server.service/cpu.max').read_text().split()
+        state['cpu_budget_cores']=None if quota=='max' else int(quota)/int(period)
+        budget_missing=quota=='max' or state['cpu_budget_cores']>4.01
         nas_searches=stop_nas_searches()
         state['nas_searches_stopped']=nas_searches
         if nas_searches:
@@ -92,6 +95,8 @@ def main():
         state.update(reaped=result['matched'],reaped_pids=result['pids'],reasons=result['reasons'],active=active['matched'],by_kind=active['by_kind'],leases=active['leases'],contexts=active['contexts'],error=None)
         # Probe only after recording actual incident count, so it cannot invent incidents.
         probe()
+        if budget_missing:
+            raise RuntimeError('CPU budget missing: TaskFlow must be limited to at most 4 cores')
         if result['matched']:
             notify(f"Сторож QA убрал {result['matched']} процессов после завершения роли или потери API. Остатки браузеров/сборок могли нагружать сервер. Проверить журнал taskflow-role-process-watch.service и docs/watchers.md; файлы и результаты не удалялись.")
     except Exception as e:

@@ -39,7 +39,10 @@ def processes(proc=Path('/proc')):
             executable=Path(argv[0]).name
             cmd=' '.join(argv)
             browser=executable in {'chrome','google-chrome','chrome-headless-shell','chrome_crashpad_handler','MiniBrowser','WebKitWebProcess','WebKitNetworkProcess'}
-            build=executable=='esbuild' or (executable in {'node','nodejs'} and any('node_modules/.bin/vite' in a or 'vite/bin/vite' in a for a in argv[1:3]))
+            try:cwd=os.readlink(p/'cwd')
+            except OSError:cwd=''
+            deleted_sandbox=(executable in {'node','nodejs'} and 'src/index.ts' in argv and cwd.endswith(' (deleted)'))
+            build=deleted_sandbox or executable=='esbuild' or (executable in {'node','nodejs'} and any('node_modules/.bin/vite' in a or 'vite/bin/vite' in a for a in argv[1:3]))
             kind='browser' if browser else 'build' if build else 'other'
             if not TOKEN.fullmatch(lease):
                 # Legacy/uninstrumented QA children must not silently bypass the guard.
