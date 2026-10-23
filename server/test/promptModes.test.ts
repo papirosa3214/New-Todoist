@@ -19,18 +19,19 @@ describe("канон по виду работы", () => {
     expect(common).toContain("## Кто ты");
   });
 
-  it("чатовый канон: цикл чата и обычный текст вместо JSON", () => {
+  it("чатовый канон: цикл чата и тот же контракт ответа", () => {
     const chat = read("role-chat-prompt.md");
     expect(chat).toContain("Цикл работы в чате");
     expect(chat).toContain("БЫСТРО:");
-    expect(chat).toContain("обычный текст");
-    expect(chat).not.toContain("schema_version");
+    expect(chat).toContain("role-answer-contract.md");
     expect(chat).not.toContain("taskflow_subtask_done(");
   });
 
-  it("канон карточки: контракт ответа и сдача шага", () => {
+  it("канон карточки: сдача шага, контракт приходит отдельным файлом", () => {
     const task = read("role-task-prompt.md");
-    expect(task).toContain("schema_version");
+    const contract = read("role-answer-contract.md");
+    expect(contract).toContain("schema_version");
+    expect(task).toContain("role-answer-contract.md");
     expect(task).toContain("report_markdown");
     expect(task).toContain("taskflow_subtask_done");
     expect(task).not.toContain("Цикл работы в чате");
@@ -42,7 +43,7 @@ describe("канон по виду работы", () => {
     const chat = renderPromptAddendum("chat", "builder", fakeHome);
     const task = renderPromptAddendum("task", "builder", fakeHome);
     expect(chat).toContain("Цикл работы в чате");
-    expect(chat).not.toContain("schema_version");
+    expect(chat).toContain("schema_version");
     expect(task).toContain("schema_version");
     expect(task).not.toContain("Цикл работы в чате");
     expect(task).not.toContain("{{BLOCKS}}");

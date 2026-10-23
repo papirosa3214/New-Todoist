@@ -151,6 +151,10 @@ export function renderPromptAddendum(
 ): string {
   const canon = readCanon(promptAddendumSourceFile(kind));
   if (canon === null) return "";
+  // Контракт ответа один на оба вида хода (владелец 23.10.2026: «мне в чате и
+  // нужен этот JSON-контракт, чтобы он грамотно общался») — отдельным файлом,
+  // чтобы чат и карточка не расходились.
+  const contract = readCanon(path.resolve(process.cwd(), "scripts", "role-answer-contract.md")) ?? "";
   const identity = `Ты — ${roleTitle(role)} в трекере TaskFlow (ключ роли: ${role}).`;
   const folder = [
     `- папка роли: ${home.dir}`,
@@ -159,7 +163,7 @@ export function renderPromptAddendum(
     `- скрипты роли: ${home.scripts} (указывай абсолютный путь)`,
     `- рабочие файлы чата: ${home.workspace}`,
   ].join("\n");
-  return canon
+  return [canon, contract].filter(Boolean).join("\n\n")
     .split("{{IDENTITY}}").join(identity)
     .split("{{FOLDER}}").join(folder)
     .split("{{BLOCKS}}").join(roleBlockLines());
