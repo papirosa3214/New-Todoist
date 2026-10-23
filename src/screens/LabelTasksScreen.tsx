@@ -19,6 +19,7 @@ import {
 } from "../components/UI";
 import { MarkdownInline } from "../components/MarkdownInline";
 import { MONTHS_SHORT } from "../lib/date";
+import { MarkdownInline } from "../components/MarkdownInline";
 import { PRIORITY_COLORS } from "../lib/priority";
 
 function formatDue(dateStr: string): string {

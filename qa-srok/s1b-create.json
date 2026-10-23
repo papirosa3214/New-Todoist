@@ -1,0 +1,13 @@
+[
+  { "goto": "/task/new" },
+  { "wait": 1000 },
+  { "fill": ["textarea[placeholder='Название задачи']", "QA создание со сроком 1792708606"] },
+  { "click": "text=\"Срок и время\"" },
+  { "wait": 600 },
+  { "click": "button:text-is(\"Завтра\")" },
+  { "wait": 400 },
+  { "snap": "sozdanie-srok" },
+  { "click": "text=\"Готово\"" },
+  { "wait": 2000 },
+  { "snap": "sozdano" }
+]
