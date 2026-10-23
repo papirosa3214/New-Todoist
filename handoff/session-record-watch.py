@@ -247,7 +247,11 @@ def main():
                                           'empty_closing':state['after']['empty_closing']})
             if not a.dry_run:write_state(state)
             if state['after']['empty_closing']>=a.limit:
-                raise RuntimeError('осталось %d пустых записей сеансов Linux (было %d) — перечитка systemd, terminate-session и остановка scope-юнитов не помогли' % (state['after']['empty_closing'],state['before']['empty_closing']))
+                # Живая проверка 23.10.2026: записи держит logind в памяти — scope-юнит сеанса
+                # уже выгружен (LoadState=not-found), cgroup и процесс-владелец исчезли.
+                # Ни daemon-reload, ни loginctl terminate-session (rc=0), ни снятие файлов
+                # /run/systemd/sessions такую запись не убирают: нужен рестарт systemd-logind.
+                raise RuntimeError('осталось %d пустых записей сеансов Linux (было %d) — перечитка systemd, terminate-session и остановка scope-юнитов не помогли. Записи держит logind в памяти (scope-юнит сеанса уже выгружен), штатные средства их не убирают: нужен перезапуск systemd-logind — решение владельца' % (state['after']['empty_closing'],state['before']['empty_closing']))
             notify('Убраны пустые записи сеансов Linux: было %d, осталось %d (всего записей %d). Живые сеансы и службы не останавливались. Это предотвращает накопление записей и медленные запросы Cockpit.' % (state['before']['empty_closing'],state['after']['empty_closing'],state['after']['total']))
         else:
             state['after']=state['before']
