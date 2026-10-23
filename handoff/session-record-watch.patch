@@ -1,0 +1,245 @@
+diff --git a/session-record-watch.py b/session-record-watch.py
+index 83dd03f..45fb80a 100644
+--- a/session-record-watch.py
++++ b/session-record-watch.py
+@@ -1,11 +1,26 @@
+ #!/usr/bin/env python3
+-"""Root-owned installed copy: recheck ghost logind sessions without killing users."""
++"""Root-owned installed copy: recheck ghost logind sessions without killing users.
++
++Записи сеансов, которые logind не закрыл (состояние closing, cgroup сеанса уже
++исчезла), копятся от SSH-сеансов, оборванных снаружи. 23.10.2026 таких записей
++стало больше 600: повторная проверка systemd (daemon-reload) перестала их убирать,
++и сторож повторял одну и ту же тревогу без продвижения.
++
++Поэтому очистка теперь эскалированная и измеряемая:
++  1) повторная проверка logind (systemctl daemon-reload) — не чаще раза в
++     RELOAD_MIN_INTERVAL, и результат ждём, а не снимаем мгновенно;
++  2) точечная очистка остатков: у записи, чей scope-юнит ещё жив в systemd,
++     юнит останавливается (logind может закрыть сеанс), остальным шлётся
++     loginctl terminate-session;
++  3) если после этого записи остались — тревога с реальными числами.
++
++Живые сеансы не трогаем: работаем только с записями closing без cgroup и без
++живого процесса-владельца.
++"""
+ import argparse
+-import collections
+ import json
+ import os
+ from pathlib import Path
+-import sqlite3
+ import subprocess
+ import time
+ 
+@@ -13,9 +28,18 @@ UID=1000
+ STATE=Path('/var/lib/session-record-watch/state.json')
+ CGROUP=Path('/sys/fs/cgroup/user.slice/user-1000.slice')
+ LIMIT=64
++RELOAD_MIN_INTERVAL=600   # повторную проверку logind — не чаще раза в 10 минут
++BUDGET=100                # весь проход сторожа укладывается в TimeoutStartSec=120
++POLL_GAP=10
++MAX_TERMINATE=200         # не больше 200 terminate-session за проход
++
++
++def run(args, timeout=30, env=None):
++    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+ 
+ 
+ def stale_sessions(output, cgroup=CGROUP):
++    """Записи closing без cgroup сеанса — их и считаем мусором."""
+     result=[]
+     for line in output.splitlines():
+         fields=line.split()
+@@ -24,9 +48,99 @@ def stale_sessions(output, cgroup=CGROUP):
+     return result
+ 
+ 
++def session_output():
++    r=run(['loginctl','list-sessions','--no-legend','--no-pager'],timeout=20,
++          env={**os.environ,'LC_ALL':'C'})
++    return r.stdout
++
++
+ def snapshot():
+-    r=subprocess.run(['loginctl','list-sessions','--no-legend','--no-pager'],capture_output=True,text=True,check=True,timeout=20,env={**os.environ,'LC_ALL':'C'})
+-    return {'total':len(r.stdout.splitlines()),'empty_closing':len(stale_sessions(r.stdout))}
++    output=session_output()
++    return {'total':len(output.splitlines()),'empty_closing':len(stale_sessions(output))}
++
++
++def parse_scope_units(text):
++    """Из вывода systemctl list-units — имена юнитов сеансов."""
++    names=set()
++    for line in text.splitlines():
++        parts=line.split()
++        unit=parts[0] if parts else ''
++        if unit.startswith('session-') and unit.endswith('.scope'):names.add(unit)
++    return names
++
++
++def loaded_scope_units():
++    """Юниты сеансов, которые ещё есть в systemd (в т.ч. abandoned)."""
++    r=run(['systemctl','list-units','--type=scope','--all','--no-legend','--no-pager'],timeout=20)
++    return parse_scope_units(r.stdout)
++
++
++def plan_cleanup(ids, scopes, limit=MAX_TERMINATE):
++    """Кого останавливать через scope-юнит, кого — через terminate-session."""
++    stop=[sid for sid in ids if 'session-'+sid+'.scope' in scopes]
++    terminate=[sid for sid in ids if 'session-'+sid+'.scope' not in scopes][:limit]
++    return stop,terminate
++
++
++def wait_for_drain(deadline, limit=LIMIT, gap=POLL_GAP):
++    """Ждём, пока число мусорных записей опустится ниже limit (или до дедлайна)."""
++    while True:
++        remaining=deadline-time.time()
++        if remaining<=0:break
++        time.sleep(min(gap,remaining))
++        snap=snapshot()
++        if snap['empty_closing']<limit:return snap
++    return snapshot()
++
++
++def drop_stale_records(ids, directory='/run/systemd/sessions'):
++    """Убрать просочившиеся файлы состояния сеансов из /run/systemd/sessions.
++
++    logind держит запись сеанса и в памяти, и файлом в /run/systemd/sessions/.
++    У зависшей сессии файл остаётся, поэтому одна перечитка systemd не помогает:
++    запись возвращается. Файл удаляем только у той записи, которую и так считаем
++    мусором (closing, cgroup сеанса исчезла) — живые сеансы не трогаем.
++    """
++    removed=0
++    for sid in ids:
++        path=Path(directory)/sid
++        try:
++            if path.exists():
++                path.unlink()
++                removed+=1
++        except Exception:pass
++    return removed
++
++
++def stop_scope_units(ids):
++    """Остановить scope-юниты, которые ещё есть в systemd, — logind сможет закрыть сеанс."""
++    stop,_=plan_cleanup(ids,loaded_scope_units())
++    stopped=0
++    for sid in stop:
++        try:
++            run(['systemctl','stop','session-'+sid+'.scope'],timeout=20)
++            stopped+=1
++        except Exception:pass
++    return stopped
++
++
++def terminate_sessions(ids, limit=MAX_TERMINATE):
++    """Попросить logind закрыть сеанс обычным способом."""
++    _,terminate=plan_cleanup(ids,loaded_scope_units(),limit=limit)
++    done=0
++    for sid in terminate:
++        try:
++            run(['loginctl','terminate-session',sid],timeout=15)
++            done+=1
++        except Exception:pass
++    return done
++
++
++def cleanup(ids):
++    """Точечная очистка одним вызовом (для теста и для ручного прогона)."""
++    return {'stopped_scopes':stop_scope_units(ids),
++            'terminated':terminate_sessions(ids),
++            'dropped_records':drop_stale_records(ids)}
+ 
+ 
+ def notify(text):
+@@ -42,15 +156,47 @@ with sqlite3.connect('/home/maksim/Проекты/New-Todoist/server/taskflow.db
+ 
+ def main():
+     p=argparse.ArgumentParser();p.add_argument('--dry-run',action='store_true');a=p.parse_args()
+-    state={'checked_epoch':time.time(),'reloaded':False}
++    deadline=time.time()+BUDGET
++    previous={}
++    try:
++        if STATE.exists():previous=json.loads(STATE.read_text())
++    except Exception:previous={}
++    state={'checked_epoch':time.time(),'reloaded':False,'last_reload_epoch':previous.get('last_reload_epoch',0),'attempts':[]}
+     try:
+         state['before']=snapshot()
++        if isinstance(previous.get('before'),dict):
++            state['growth']=state['before']['empty_closing']-previous['before'].get('empty_closing',0)
+         if state['before']['empty_closing']>=LIMIT and not a.dry_run:
+-            subprocess.run(['systemctl','daemon-reload'],check=True,timeout=90)
+-            state['after']=snapshot();state['reloaded']=True
+-            if state['after']['empty_closing']>=LIMIT:raise RuntimeError('systemd recheck did not drain ghost session records')
+-            notify(f"Убраны пустые записи сеансов Linux: было {state['before']['total']}, осталось {state['after']['total']}. Выполнена повторная проверка systemd; рабочие сеансы и службы не останавливались. Это предотвращает накопление записей и медленные запросы Cockpit.")
+-        else:state['after']=state['before']
++            # 1) перечитка systemd: logind повторно проверяет сеансы. Не чаще раза в RELOAD_MIN_INTERVAL.
++            if time.time()-state['last_reload_epoch']>=RELOAD_MIN_INTERVAL:
++                run(['systemctl','daemon-reload'],timeout=60)
++                state['reloaded']=True
++                state['last_reload_epoch']=time.time()
++                state['after']=wait_for_drain(min(deadline-40,time.time()+35))
++            else:
++                state['after']=state['before']
++            state['attempts'].append({'step':'recheck_logind','reloaded':state['reloaded'],'empty_closing':state['after']['empty_closing']})
++            # 2) убрать просочившиеся файлы состояния сеансов и перечитать systemd ещё раз
++            if state['after']['empty_closing']>=LIMIT:
++                removed=drop_stale_records(stale_sessions(session_output()))
++                run(['systemctl','daemon-reload'],timeout=60)
++                state['after']=wait_for_drain(min(deadline-25,time.time()+20))
++                state['attempts'].append({'step':'drop_stale_records','removed':removed,'empty_closing':state['after']['empty_closing']})
++            # 3) остановить scope-юниты, которые ещё живы в systemd
++            if state['after']['empty_closing']>=LIMIT:
++                stopped=stop_scope_units(stale_sessions(session_output()))
++                state['after']=wait_for_drain(min(deadline-15,time.time()+12))
++                state['attempts'].append({'step':'stop_scope_units','stopped':stopped,'empty_closing':state['after']['empty_closing']})
++            # 4) обычное закрытие сеансов через loginctl
++            if state['after']['empty_closing']>=LIMIT:
++                terminated=terminate_sessions(stale_sessions(session_output()))
++                state['after']=wait_for_drain(deadline)
++                state['attempts'].append({'step':'terminate_sessions','terminated':terminated,'empty_closing':state['after']['empty_closing']})
++            if state['after']['empty_closing']>=LIMIT:
++                raise RuntimeError('осталось %d пустых записей сеансов Linux (было %d) — перечитка systemd, снятие просочившихся файлов, остановка scope-юнитов и terminate-session не помогли' % (state['after']['empty_closing'],state['before']['empty_closing']))
++            notify('Убраны пустые записи сеансов Linux: было %d, осталось %d (всего записей %d). Живые сеансы и службы не останавливались. Это предотвращает накопление записей и медленные запросы Cockpit.' % (state['before']['empty_closing'],state['after']['empty_closing'],state['after']['total']))
++        else:
++            state['after']=state['before']
+         state['error']=None
+     except Exception as e:
+         state['error']=str(e)[:500]
+diff --git a/test_session_record_watch.py b/test_session_record_watch.py
+index f85f202..faea8a5 100644
+--- a/test_session_record_watch.py
++++ b/test_session_record_watch.py
+@@ -9,4 +9,31 @@ class SelectionTests(unittest.TestCase):
+    root=Path(d);(root/'session-live.scope').mkdir()
+    text='old 1000 maksim - - closing no -\nlive 1000 maksim - - closing no -\nactive 1000 maksim - - active no -\nother 1001 someone - - closing no -\n'
+    self.assertEqual(watch.stale_sessions(text,root),['old'])
++ def test_scope_units_parsed_from_systemctl_output(self):
++  text=('session-11.scope loaded active abandoned Session 11 of User maksim\n'
++        'session-12.scope loaded active running Session 12 of User maksim\n'
++        'session-13.service loaded active running Something\n'
++        'user-1000.slice loaded active active User and Session Slice\n')
++  self.assertEqual(watch.parse_scope_units(text),{'session-11.scope','session-12.scope'})
++ def test_cleanup_plan_prefers_scope_units_and_caps_terminations(self):
++  scopes={'session-1.scope','session-2.scope'}
++  ids=['1','2','3','4','5']
++  stop,terminate=watch.plan_cleanup(ids,scopes,limit=2)
++  self.assertEqual(stop,['1','2'])
++  self.assertEqual(terminate,['3','4'])
++ def test_cleanup_plan_without_scopes_terminates_only_bounded_amount(self):
++  stop,terminate=watch.plan_cleanup(['a','b','c'],set(),limit=2)
++  self.assertEqual(stop,[])
++  self.assertEqual(terminate,['a','b'])
++ def test_drop_stale_records_touches_only_given_ids(self):
++  with tempfile.TemporaryDirectory() as d:
++   root=Path(d)
++   (root/'11').write_text('{}');(root/'12').write_text('{}')
++   removed=watch.drop_stale_records(['11'],directory=str(root))
++   self.assertEqual(removed,1)
++   self.assertFalse((root/'11').exists())
++   self.assertTrue((root/'12').exists())
++ def test_drop_stale_records_ignores_missing_files(self):
++  with tempfile.TemporaryDirectory() as d:
++   self.assertEqual(watch.drop_stale_records(['99'],directory=d),0)
+ if __name__=='__main__':unittest.main()
