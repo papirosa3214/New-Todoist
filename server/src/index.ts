@@ -18,6 +18,7 @@ import { setInProcessApp } from "./runtime/inProcessRun.js";
 import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
 import { collapseDuplicateQueuedJobs } from "./runtime/roleRunQueue.js";
 import { startChatQueueRecovery, scheduleChatQueueRecovery } from "./runtime/chatQueueRecovery.js";
+import { resumePausedChatWork } from "./routes/chats.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
@@ -962,6 +963,9 @@ if (isMain) {
     // pending и поднимает in-memory очередь сам.
     if (!sandbox && process.env.TASKFLOW_QUEUE_RECOVERY !== "off") {
       const queueRecovery = startChatQueueRecovery();
+      // Пауза в личном чате: минута тишины — роль возвращается к работе.
+      const pausedWorkTimer = setInterval(() => { void resumePausedChatWork().catch(() => {}); }, 20_000);
+      app.addHook("onClose", async () => { clearInterval(pausedWorkTimer); });
       if (queueRecovery.recovered > 0) {
         console.log(`[chatQueue] recovered ${queueRecovery.recovered} pending deliveries`);
       }

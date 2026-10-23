@@ -4968,6 +4968,18 @@ const migrations: Migration[] = [
       if (!cols.some(c => c.name === "execution_mode")) db.exec(`ALTER TABLE ${table} ADD COLUMN execution_mode TEXT CHECK(execution_mode IN ('chat','card'))`);
     }
   } },
+  { id: "168_chat_paused_work", description: "Пауза работы роли в личном чате: остановка хода новым сообщением и авто-возврат", up: () => db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_paused_work (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      paused_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_owner_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resumed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_paused_work_open ON chat_paused_work(chat_id, resumed_at);
+  `) },
   { id: "167_role_tool_gain_requests", description: "Заявки ролей на закрытые инструменты", up: () => db.exec(ROLE_TOOL_REQUEST_SCHEMA) },
 ];
 /**

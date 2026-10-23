@@ -7,6 +7,7 @@ import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
+import { pauseChatWork, noteOwnerMessageWhilePaused, finishPausedWork, duePausedWork } from "../lib/chatPausedWork.js";
 import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
@@ -1045,7 +1046,17 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!handledByBranch && isOwner(req.userId) && !chatTaskId && !chat.parent_chat_id) {
         try {
           const stopped = await interruptChatTurnForOwner(chatId, req.userId);
-          if (stopped) console.log(`[chats] ход остановлен новым сообщением владельца chat=${chatId}`);
+          if (stopped) {
+            // Работа не бросается: чат встаёт на паузу, роль отвечает на новое
+            // сообщение, а к прерванной работе вернётся после тишины.
+            for (const roleKey of chatMemberRoles(chatId)) {
+              const pausedRole = roleAccountId(roleKey);
+              if (pausedRole) pauseChatWork(chatId, pausedRole, req.userId);
+            }
+            console.log(`[chats] ход остановлен, чат на паузе chat=${chatId}`);
+          } else {
+            noteOwnerMessageWhilePaused(chatId);
+          }
         } catch (error) {
           console.warn(`[chats] остановка хода не удалась chat=${chatId}:`, error instanceof Error ? error.message : error);
         }
@@ -1916,6 +1927,35 @@ async function interruptChatTurnForOwner(chatId: string, ownerId: string): Promi
     }
   }
   return true;
+}
+
+/** Возврат к прерванной работе после паузы (владелец 23.10.2026): одна
+ *  системная строка в комнате и обычный ход роли — уже с учётом разговора. */
+export async function resumePausedChatWork(): Promise<number> {
+  const due = duePausedWork();
+  let resumed = 0;
+  for (const item of due) {
+    try {
+      const role = roleFromUserId(item.roleId);
+      if (!role || !isMember(item.chatId, item.ownerId)) {
+        finishPausedWork(item.id);
+        continue;
+      }
+      const text = "Продолжаю прерванную работу с учётом того, что обсудили.";
+      const id = uid();
+      db.prepare(
+        "INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, message_type) VALUES (?, ?, ?, 'chat', ?, 'system')",
+      ).run(id, item.ownerId, text, item.chatId);
+      broadcastToUsers(memberIds(item.chatId), { type: "chat:new", message: loadChatMessage(id) });
+      finishPausedWork(item.id);
+      await dispatchRoleReplies({ chatId: item.chatId, messageId: id, fromUserId: item.ownerId, text, hop: 0, mode: "work" });
+      resumed += 1;
+    } catch (error) {
+      console.warn(`[chats] возврат к работе не удался chat=${item.chatId}:`, error instanceof Error ? error.message : error);
+      finishPausedWork(item.id);
+    }
+  }
+  return resumed;
 }
 
 async function fanOutOwnerMessage(args: {
