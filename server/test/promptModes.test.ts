@@ -31,7 +31,10 @@ describe("канон по виду работы", () => {
     const task = read("role-task-prompt.md");
     const contract = read("role-answer-contract.md");
     expect(contract).toContain("schema_version");
+    expect(contract).not.toContain("## Сдача шага");
     expect(task).toContain("role-answer-contract.md");
+    expect(task).toContain("## Сдача шага");
+    expect(task).toContain("/api/subtasks/<шаг>/work-plan");
     expect(task).toContain("report_markdown");
     expect(task).toContain("taskflow_subtask_done");
     expect(task).not.toContain("Цикл работы в чате");
