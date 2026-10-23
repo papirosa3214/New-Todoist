@@ -81,21 +81,29 @@ TERMINAL_CHAT_QUEUE_STATUSES = ("done", "failed", "superseded")
 # 21.10.2026 (карточка 568a2b93): очередь чата держала выкладку 31,6 часа —
 # три строки, которые никто не забирал.
 CHAT_DELIVERY_TTL_MIN = int(os.environ.get("TASKFLOW_CHAT_DELIVERY_TTL_MIN", "60"))
+# Аренда хода: живой ход подтверждает себя раз в минуту. `picked` старше
+# аренды — оборванный ход, выкладку он держать не должен.
+CHAT_DELIVERY_LEASE_MIN = int(os.environ.get("TASKFLOW_CHAT_DELIVERY_LEASE_MIN", "5"))
 
 
-def pending_chat_deliveries(con, ttl_minutes=CHAT_DELIVERY_TTL_MIN):
+def pending_chat_deliveries(con, ttl_minutes=CHAT_DELIVERY_TTL_MIN,
+                            lease_minutes=CHAT_DELIVERY_LEASE_MIN):
     """Недоставленные доставки, которые ещё могут быть выполнены.
 
-    Мёртвые (старше порога) не считаются: их сервер сам переводит в
-    терминальный статус, а до этого момента они не должны держать
-    выкладку — иначе правка в main не доезжает до живого сервера.
+    `pending` ждёт ответа, поэтому живёт до общего срока жизни.
+    `picked` держит выкладку только пока жива аренда: живой ход обновляет
+    её раз в минуту, а оборванный — нет. Иначе одна мёртвая запись
+    останавливает выкладку на час (карточка 568a2b93).
     """
-    placeholders = ",".join("?" for _ in TERMINAL_CHAT_QUEUE_STATUSES)
     query = (
-        f"SELECT count(*) FROM chat_message_queue WHERE status NOT IN ({placeholders}) "
-        "AND julianday(updated_at) >= julianday('now', ?)"
+        "SELECT count(*) FROM chat_message_queue WHERE "
+        "(status='pending' AND julianday(updated_at) >= julianday('now', ?)) OR "
+        "(status='picked' AND julianday(updated_at) >= julianday('now', ?))"
     )
-    return con.execute(query, (*TERMINAL_CHAT_QUEUE_STATUSES, f"-{ttl_minutes} minutes")).fetchone()[0]
+    return con.execute(
+        query,
+        (f"-{ttl_minutes} minutes", f"-{lease_minutes} minutes"),
+    ).fetchone()[0]
 
 
 def busy():

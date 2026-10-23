@@ -244,6 +244,32 @@ export function finishMessageDelivery(id: string, ok: boolean): boolean {
   return changed;
 }
 
+/** Подтвердить, что ход ещё жив: обновляет аренду (`updated_at`).
+ *  Нужен длинным ходам: `picked` без подтверждений — мёртвая запись,
+ *  её можно вернуть в очередь и не считать ролью занятой. */
+export function heartbeatMessageDelivery(id: string): boolean {
+  return (
+    db
+      .prepare(
+        `UPDATE chat_message_queue SET updated_at=datetime('now') WHERE id=? AND status='picked'`,
+      )
+      .run(id).changes === 1
+  );
+}
+
+/** Держать аренду хода живой, пока идёт работа. Возвращает остановку. */
+export function startDeliveryHeartbeat(id: string, everyMs = 60_000): () => void {
+  const timer = setInterval(() => {
+    try {
+      heartbeatMessageDelivery(id);
+    } catch {
+      // Аренда — не повод ронять ход: следующий тик попробует снова.
+    }
+  }, everyMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 /** Применить fence: пометить ход `superseded` независимо от того,
  *  был ли он `pending` или уже `picked`. Используется, когда
  *  обнаружено, что generation устарел. */

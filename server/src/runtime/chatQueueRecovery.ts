@@ -97,6 +97,13 @@ export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-pr
   } catch (error) {
     console.warn("[chatDeliveryWatch] пинг висящих вопросов на старте не удался:", error);
   }
+  // Оборванные ходы (аренда истекла, живого хода нет) — обратно в очередь.
+  const reclaimed = reclaimStalePickedDeliveries();
+  if (reclaimed.reclaimed > 0 || reclaimed.closed > 0) {
+    console.log(
+      `[chatQueueRecovery] возвращено в очередь: ${reclaimed.reclaimed}, закрыто: ${reclaimed.closed}`,
+    );
+  }
   // Мёртвые доставки (старше порога) — в терминальный статус: иначе они
   // держат сторож выкладки и правка в main не доезжает до живого сервера.
   const expired = expireStaleDeliveries();
@@ -137,6 +144,74 @@ export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-pr
 export function chatDeliveryTtlMinutes(): number {
   const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_TTL_MIN ?? 60);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60;
+}
+
+/** Аренда хода в чате (минуты). Живой ход обновляет `updated_at` раз в
+ *  минуту (heartbeat), поэтому `picked` старше аренды — это оборванный
+ *  ход, а не работающая роль. По умолчанию 5 минут. */
+export function chatDeliveryLeaseMinutes(): number {
+  const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_LEASE_MIN ?? 5);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 5;
+}
+
+/** Сколько раз оборванный ход можно вернуть в очередь, прежде чем
+ *  закрыть его окончательно. По умолчанию 2. */
+export function chatDeliveryMaxReclaims(): number {
+  const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_RECLAIMS ?? 2);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
+}
+
+/** Вернуть в очередь ходы, чья аренда истекла и за которыми не стоит
+ *  живой ход. Так сообщение не теряется и не висит `picked` часами:
+ *  ход перезапускается. Исчерпавшему лимит — терминальный статус. */
+export function reclaimStalePickedDeliveries(
+  leaseMinutes: number = chatDeliveryLeaseMinutes(),
+): { reclaimed: number; closed: number } {
+  const cutoff = `-${Math.max(1, Math.floor(leaseMinutes))} minutes`;
+  const rows = db
+    .prepare(
+      `SELECT id, chat_id, role_id, payload_json FROM chat_message_queue
+        WHERE status='picked' AND julianday(updated_at) < julianday('now', ?)`,
+    )
+    .all(cutoff) as Array<{ id: string; chat_id: string; role_id: string; payload_json: string | null }>;
+  let reclaimed = 0;
+  let closed = 0;
+  for (const row of rows) {
+    // Живой ход (лок в памяти, активная попытка, открытый слот) — не наш:
+    // отберём аренду у работающей роли.
+    if (roleIsBusyNow(row.role_id, row.chat_id)) continue;
+    const payload = (() => {
+      try {
+        return JSON.parse(row.payload_json ?? "{}") ?? {};
+      } catch {
+        return {};
+      }
+    })();
+    const count = Number(payload.reclaimCount ?? 0);
+    const attempts = Number.isFinite(count) && count > 0 ? count : 0;
+    if (attempts >= chatDeliveryMaxReclaims()) {
+      const done = db
+        .prepare(
+          `UPDATE chat_message_queue
+              SET status='failed', finished_at=datetime('now'), updated_at=datetime('now'),
+                  payload_json=json_set(COALESCE(payload_json,'{}'),'$.expired',1)
+            WHERE id=? AND status='picked'`,
+        )
+        .run(row.id).changes;
+      if (done) closed += 1;
+      continue;
+    }
+    const back = db
+      .prepare(
+        `UPDATE chat_message_queue
+            SET status='pending', picked_at=NULL, updated_at=datetime('now'),
+                payload_json=json_set(COALESCE(payload_json,'{}'),'$.reclaimCount',?)
+          WHERE id=? AND status='picked'`,
+      )
+      .run(attempts + 1, row.id).changes;
+    if (back) reclaimed += 1;
+  }
+  return { reclaimed, closed };
 }
 
 /**
@@ -193,6 +268,11 @@ export function scheduleChatQueueRecovery(intervalSeconds = 600): () => void {
       }
     } catch (error) {
       console.warn("[chatDeliveryWatch] пинг висящих вопросов не удался:", error);
+    }
+    try {
+      reclaimStalePickedDeliveries();
+    } catch (error) {
+      console.warn("[chatQueueRecovery] возврат оборванных ходов не удался:", error);
     }
     try {
       expireStaleDeliveries();

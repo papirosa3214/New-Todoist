@@ -95,6 +95,7 @@ import {
 import {
   currentChatGeneration,
   fenceMessageDelivery,
+  startDeliveryHeartbeat,
 } from "../runtime/chatQueue.js";
 import {
   cancelChatRunsFor,
@@ -1612,6 +1613,7 @@ export async function recoverAgentDelivery(input: {
   // что ход в работе, а значит — рестарт в этот момент не
   // приведёт к двойному Pi-вызову.
   pickDurableDelivery(deliveryId);
+  const stopHeartbeat = startDeliveryHeartbeat(deliveryId);
   let replyId: string | null = null;
   try {
     replyId = await enqueueChatReply(chatId, roleId, () =>
@@ -1644,6 +1646,8 @@ export async function recoverAgentDelivery(input: {
     );
     completeDurableDelivery(deliveryId, false);
     return { status: "failed", replyId: null };
+  } finally {
+    stopHeartbeat();
   }
 }
 
@@ -2239,6 +2243,9 @@ async function dispatchRoleReplies(args: {
       continue;
     }
     pickDurableDelivery(durableRecord.id);
+    // Аренда: пока ход идёт, он подтверждает, что живой. Мёртвый picked
+    // (оборванный ход) по аренде вернётся в очередь, а живой — не тронут.
+    const stopHeartbeat = startDeliveryHeartbeat(durableRecord.id);
     // Перед постановкой в очередь проверяем generation fence: ход
     // мог устареть, пока ждал durable-записи (например, пришёл
     // `/new-session` ровно в этот момент). Если generation уже
@@ -2335,7 +2342,7 @@ async function dispatchRoleReplies(args: {
     }).catch(error => {
       console.warn("[chats] clarification delivery failed",error);
       completeDurableDelivery(durableRecord.id,false);
-    });
+    }).finally(stopHeartbeat);
   }
 }
 

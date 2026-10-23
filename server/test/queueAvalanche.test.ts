@@ -24,8 +24,11 @@ import {
   roleRunJobGroup,
 } from "../src/runtime/roleRunQueue.js";
 import {
+  chatDeliveryLeaseMinutes,
+  chatDeliveryMaxReclaims,
   chatDeliveryTtlMinutes,
   expireStaleDeliveries,
+  reclaimStalePickedDeliveries,
 } from "../src/runtime/chatQueueRecovery.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
@@ -169,6 +172,73 @@ describe("очередь чата: срок жизни доставки", () => 
   });
 });
 
+describe("очередь чата: аренда хода", () => {
+  function insertPicked(id: string, minutesAgo: number, payload = "{}"): void {
+    db.prepare(
+      `INSERT INTO chat_message_queue
+         (id, chat_id, role_id, delivery_id, session_generation, payload_json, status, updated_at)
+       VALUES (?, ?, ?, ?, 1, ?, 'picked', datetime('now', ?))`,
+    ).run(id, CHAT_ID, ROLE_USER, id, payload, `-${minutesAgo} minutes`);
+  }
+  const status = (id: string): string =>
+    (db.prepare("SELECT status FROM chat_message_queue WHERE id=?").get(id) as { status: string }).status;
+  const payload = (id: string): any =>
+    JSON.parse((db.prepare("SELECT payload_json FROM chat_message_queue WHERE id=?").get(id) as { payload_json: string }).payload_json ?? "{}");
+
+  it("оборванный ход возвращается в очередь, а не висит picked", () => {
+    insertPicked("cmq_dead_picked", 30);
+    const report = reclaimStalePickedDeliveries(5);
+    expect(report.reclaimed).toBe(1);
+    expect(status("cmq_dead_picked")).toBe("pending");
+    expect(payload("cmq_dead_picked").reclaimCount).toBe(1);
+  });
+
+  it("живая аренда не отбирается", () => {
+    insertPicked("cmq_live_picked", 1);
+    const report = reclaimStalePickedDeliveries(5);
+    expect(report.reclaimed).toBe(0);
+    expect(status("cmq_live_picked")).toBe("picked");
+  });
+
+  it("после лимита возвратов ход закрывается, а не крутится вечно", () => {
+    insertPicked("cmq_hopeless", 30, JSON.stringify({ reclaimCount: 2 }));
+    const report = reclaimStalePickedDeliveries(5);
+    expect(report.closed).toBe(1);
+    expect(status("cmq_hopeless")).toBe("failed");
+    expect(payload("cmq_hopeless").expired).toBe(1);
+  });
+
+  it("ход живой роли не отбирают даже при старой аренде", () => {
+    const taskId = "avalanche_task_live_turn";
+    seedTask(taskId);
+    db.prepare(
+      `INSERT INTO attempts (id, task_id, executor_id, heartbeat_at)
+       VALUES ('att_live_turn', ?, ?, datetime('now'))`,
+    ).run(taskId, ROLE_USER);
+    insertPicked("cmq_live_role", 30);
+    try {
+      const report = reclaimStalePickedDeliveries(5);
+      expect(report.reclaimed).toBe(0);
+      expect(status("cmq_live_role")).toBe("picked");
+    } finally {
+      db.prepare("DELETE FROM attempts WHERE id='att_live_turn'").run();
+    }
+  });
+
+  it("аренда и лимит возвратов берутся из настроек", () => {
+    delete process.env.TASKFLOW_CHAT_DELIVERY_LEASE_MIN;
+    delete process.env.TASKFLOW_CHAT_DELIVERY_RECLAIMS;
+    expect(chatDeliveryLeaseMinutes()).toBe(5);
+    expect(chatDeliveryMaxReclaims()).toBe(2);
+    process.env.TASKFLOW_CHAT_DELIVERY_LEASE_MIN = "3";
+    process.env.TASKFLOW_CHAT_DELIVERY_RECLAIMS = "4";
+    expect(chatDeliveryLeaseMinutes()).toBe(3);
+    expect(chatDeliveryMaxReclaims()).toBe(4);
+    delete process.env.TASKFLOW_CHAT_DELIVERY_LEASE_MIN;
+    delete process.env.TASKFLOW_CHAT_DELIVERY_RECLAIMS;
+  });
+});
+
 describe("сторож выкладки: мёртвые доставки не держат выкладку", () => {
   it("python-сторож считает занятыми только живые доставки", () => {
     const dbPath = path.join(os.tmpdir(), `taskflow-deploy-busy-${process.pid}.db`);
@@ -185,6 +255,7 @@ con.execute("""CREATE TABLE chat_message_queue(
   updated_at TEXT NOT NULL)""")
 con.execute("INSERT INTO chat_message_queue VALUES('m1','c','r','d1','picked', datetime('now','-3 hours'))")
 con.execute("INSERT INTO chat_message_queue VALUES('f1','c','r','d2','pending', datetime('now'))")
+con.execute("INSERT INTO chat_message_queue VALUES('p1','c','r','d4','picked', datetime('now','-1 minutes'))")
 con.execute("INSERT INTO chat_message_queue VALUES('d1','c','r','d3','done', datetime('now','-5 hours'))")
 con.commit()
 spec = importlib.util.spec_from_file_location("deploy_when_idle", script_path)
@@ -194,7 +265,8 @@ print(mod.pending_chat_deliveries(con))
 `;
     const out = execFileSync("python3", ["-c", python, dbPath, script], { encoding: "utf8" });
     fs.rmSync(dbPath, { force: true });
-    // Мёртвая доставка (3 часа) не считается занятостью, свежая — считается.
-    expect(out.trim()).toBe("1");
+    // Мёртвый ход (3 часа) не считается занятостью, свежие pending и
+    // живой picked (1 минута) — считаются.
+    expect(out.trim()).toBe("2");
   });
 });
