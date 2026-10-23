@@ -14,6 +14,8 @@
 //
 // Отключение (откат без пересборки клиента): TASKFLOW_ROLE_ISOLATION=off.
 import fs from "node:fs";
+import crypto from "node:crypto";
+import { RoleProcessLease, cleanupRoleProcesses } from "./roleProcessLease.js";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -76,17 +78,38 @@ export function guardPath(p: string, roots: string[], mode: "чтение" | "з
 
 const q = (s: string) => "'" + s.replaceAll("'", "'\"'\"'") + "'";
 
-export function isolatedBashOperations(cwd: string): BashOperations {
+export function isolatedBashOperations(cwd: string, lease?: RoleProcessLease): BashOperations {
   const local = createLocalBashOperations();
   return {
-    exec: (command, runCwd, options) => {
+    exec: async (command, runCwd, options) => {
       const dir = guardPath(runCwd || cwd, roleRoots(cwd).write, "запись");
       // PATH сервера несёт nvm/node; секретов в нём нет, остальное окружение
       // sudo отбрасывает (env_reset) — роль не видит токены процесса сервера.
       const pathVar = (options.env?.PATH ?? process.env.PATH ?? "/usr/bin:/bin").replaceAll("'", "");
-      const inner = `export HOME=${q(ROLE_HOME)} PATH=${q(pathVar)}; umask 002; cd ${q(dir)} && ${command}`;
+      const processLease = lease ?? new RoleProcessLease(ROLE_USER);
+      processLease.ensure();
+      const commandId = crypto.randomUUID();
+      const inner = `export HOME=${q(ROLE_HOME)} PATH=${q(pathVar)} TF_PROCESS_LEASE=${q(processLease.id)} TF_PROCESS_COMMAND=${q(commandId)}; umask 002; cd ${q(dir)} && exec /bin/bash -c ${q(command)}`;
       const wrapped = `sudo -n -u ${ROLE_USER} /bin/bash -c ${q(inner)}`;
-      return local.exec(wrapped, dir, options);
+      let cleanup: Promise<void> | undefined;
+      const stop = () => {
+        cleanup ??= cleanupRoleProcesses(ROLE_USER, "command", commandId).catch(error => {
+          console.warn("[roleProcesses] command cleanup failed; external guard will retry", String(error));
+        });
+      };
+      options.signal?.addEventListener("abort", stop, {once:true});
+      const timer = options.timeout === undefined ? undefined : setTimeout(stop, options.timeout * 1000);
+      try {
+        const result = await local.exec(wrapped, dir, options);
+        if(result.exitCode !== 0)stop();
+        return result;
+      } catch(error) { stop(); throw error; }
+      finally {
+        if(timer)clearTimeout(timer);
+        options.signal?.removeEventListener("abort", stop);
+        if(cleanup)await cleanup;
+        if(!lease)await processLease.dispose();
+      }
     },
   };
 }
@@ -105,7 +128,7 @@ export function grantRoleAccess(dir: string): void {
   }
 }
 
-export function isolatedLocalOperations(cwd: string) {
+export function isolatedLocalOperations(cwd: string, lease?: RoleProcessLease) {
   grantRoleAccess(cwd);
   const roots = roleRoots(cwd);
   const R = (p: string) => guardPath(p, roots.read, "чтение");
@@ -144,5 +167,5 @@ export function isolatedLocalOperations(cwd: string) {
       return out;
     },
   };
-  return { bash: isolatedBashOperations(cwd), read, write, edit, ls, grep, find };
+  return { bash: isolatedBashOperations(cwd, lease), read, write, edit, ls, grep, find };
 }

@@ -71,6 +71,13 @@ const engine = flag("engine", "chromium") === "webkit" ? webkit : chromium;
 const steps = JSON.parse(fs.readFileSync(scenarioFile, "utf8"));
 
 const browser = await engine.launch();
+let closing;
+const closeBrowser = () => closing ??= browser.close();
+const onTerm = () => { void closeBrowser().finally(() => process.exit(143)); };
+const onInt = () => { void closeBrowser().finally(() => process.exit(130)); };
+process.once("SIGTERM", onTerm);
+process.once("SIGINT", onInt);
+try {
 const context = await browser.newContext({
   viewport: { width: w, height: h },
   deviceScaleFactor: dpr,
@@ -166,7 +173,7 @@ for (const [i, step] of steps.entries()) {
   results.push(rec);
 }
 const final = await snap("финал");
-await browser.close();
+await closeBrowser();
 
 const noisy = problems.console.length + problems.pageerror.length;
 const report = { base, viewport: `${w}x${h}@${dpr}`, engine: flag("engine", "chromium"), failed_steps: failed, problems, steps: results, final };
@@ -201,4 +208,9 @@ const md = [
 fs.writeFileSync(path.join(out, "report.md"), md);
 console.log(md);
 console.log(`\nОтчёт и кадры: ${out}`);
-process.exit(failed || noisy ? 1 : 0);
+process.exitCode = failed || noisy ? 1 : 0;
+} finally {
+  await closeBrowser();
+  process.removeListener("SIGTERM", onTerm);
+  process.removeListener("SIGINT", onInt);
+}
