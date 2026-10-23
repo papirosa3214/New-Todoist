@@ -186,6 +186,23 @@ export function markScheduleRun(
 }
 
 /**
+ * Слоты, занятые в ЭТОМ процессе.
+ *
+ * Слот занимается ДО создания карточки (это и даёт идемпотентность), и
+ * между «заняли слот» и «появилась карточка» есть окно. Если в этом окне
+ * процесс упал, в истории остаётся запись «создана» без карточки — а
+ * карточки нет.
+ *
+ * Память процесса — то, что отличает такой брошенный слот от живого
+ * запуска, идущего прямо сейчас (в том числе в соседнем проходе
+ * планировщика). После перезапуска сервера память пуста, и брошенный слот
+ * виден как чужой.
+ */
+const liveSlots = new Set<string>();
+
+const slotKey = (scheduleId: string, runAt: string) => `${scheduleId}|${runAt}`;
+
+/**
  * Занять слот запуска. UNIQUE(schedule_id, run_at) гасит повтор: если слот
  * уже занят (второй проход планировщика в то же окно), created=false — и
  * вторая карточка не создаётся.
@@ -198,6 +215,7 @@ export function claimRun(input: {
 }): { created: boolean; row?: ScheduleRunRow } {
   const id = uid();
   const runAt = toUtcIso(input.runAt);
+  const key = slotKey(input.scheduleId, runAt);
   try {
     db.prepare(
       `INSERT INTO schedule_runs (id, schedule_id, run_at, task_id, status, detail, created_at)
@@ -209,8 +227,21 @@ export function claimRun(input: {
     const row = db
       .prepare("SELECT * FROM schedule_runs WHERE schedule_id = ? AND run_at = ?")
       .get(input.scheduleId, runAt) as ScheduleRunRow | undefined;
+    if (row && !row.task_id && row.status === "created" && !liveSlots.has(key)) {
+      // Слот занят, карточки нет, и в этом процессе он не в работе —
+      // значит, его оставил упавший процесс. Честная запись — ошибка
+      // запуска, а не «создана» (D5).
+      db.prepare(
+        `UPDATE schedule_runs
+            SET status = 'failed', detail = 'запуск прерван: карточка не создана'
+          WHERE id = ?`,
+      ).run(row.id);
+      row.status = "failed";
+      row.detail = "запуск прерван: карточка не создана";
+    }
     return { created: false, row };
   }
+  liveSlots.add(key);
   const row = db.prepare("SELECT * FROM schedule_runs WHERE id = ?").get(id) as ScheduleRunRow;
   return { created: true, row };
 }
@@ -228,6 +259,8 @@ export function updateRun(input: {
         SET status = ?, detail = ?, task_id = COALESCE(?, task_id)
       WHERE schedule_id = ? AND run_at = ?`,
   ).run(input.status, input.detail ?? null, input.taskId ?? null, input.scheduleId, toUtcIso(input.runAt));
+  // Слот отработал — он больше не «в работе».
+  liveSlots.delete(slotKey(input.scheduleId, toUtcIso(input.runAt)));
 }
 
 export function listRuns(scheduleId: string, limit = 50): ScheduleRunRow[] {
@@ -242,6 +275,50 @@ export function countRuns(scheduleId: string): number {
   return (
     db.prepare("SELECT COUNT(*) AS n FROM schedule_runs WHERE schedule_id = ?").get(scheduleId) as { n: number }
   ).n;
+}
+
+/**
+ * Через сколько минут брошенный запуск считается прерванным.
+ *
+ * Страховка для записей, слот которых уже не текущий (например, рутина
+ * пересчитала расписание, а запись осталась). Основной механизм — па��ять
+ * процесса в claimRun.
+ */
+export const INTERRUPTED_RUN_AFTER_MS = 10 * 60_000;
+
+/**
+ * Чинит брошенные записи запуска: помечает их ошибкой запуска.
+ *
+ * Отличаем от нормальной картины по двум признакам: у успешного запуска
+ * есть task_id, а незавершённый старше порога (значит, он не «прямо сейчас»).
+ */
+export function repairInterruptedRuns(
+  olderThanMs: number = INTERRUPTED_RUN_AFTER_MS,
+): number {
+  const rows = db
+    .prepare(
+      `SELECT id, schedule_id, run_at FROM schedule_runs
+        WHERE status = 'created' AND task_id IS NULL
+          AND strftime('%s', created_at) < strftime('%s', 'now') - ?`,
+    )
+    .all(Math.round(olderThanMs / 1000)) as Array<{
+    id: string;
+    schedule_id: string;
+    run_at: string;
+  }>;
+  const update = db.prepare(
+    `UPDATE schedule_runs
+        SET status = 'failed', detail = 'запуск прерван: карточка не создана'
+      WHERE id = ?`,
+  );
+  let fixed = 0;
+  for (const row of rows) {
+    // Живой запуск этого процесса не трогаем: он ещё в работе.
+    if (liveSlots.has(slotKey(row.schedule_id, row.run_at))) continue;
+    update.run(row.id);
+    fixed += 1;
+  }
+  return fixed;
 }
 
 /** Экземпляр рутины ещё открыт? (для overlap_policy=skip). */

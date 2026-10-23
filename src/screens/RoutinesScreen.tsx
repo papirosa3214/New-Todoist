@@ -647,6 +647,18 @@ export function RoutinesScreen() {
         </div>
       )}
 
+      {lastRunNotice && (
+        <div className="bg-card2 rounded-xl px-3 py-2.5 mb-3 flex items-center gap-2">
+          <span className="tf-action text-sub flex-1">{lastRunNotice}</span>
+          <IconButton
+            icon="close"
+            label="Скрыть"
+            size={14}
+            onClick={() => setLastRunNotice(null)}
+          />
+        </div>
+      )}
+
       {isLoading && <SkeletonList />}
 
       {isError && (

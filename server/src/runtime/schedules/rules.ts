@@ -39,6 +39,24 @@ export const CRON_RULE_KIND: ScheduleRuleKind = "cron";
 export const MIN_INTERVAL_MINUTES = 5;
 /** Окно догона: просроченный запуск догоняем один раз, если прошло меньше суток. */
 export const CATCH_UP_HOURS = 24;
+/**
+ * Нижняя граница интервала обхода планировщика (5 минут).
+ *
+ * Опоздание в пределах интервала — это не пропуск, а обычная задержка
+ * обхода: планировщик заходит на рутины раз в 5 минут, поэтому «раз в
+ * час в 10:00» он видит в 10:04. Порог отключения догона обязан быть не
+ * меньше интервала планировщика с запасом — иначе штатный ход рутины
+ * пропускается в 4 случаях из 5.
+ */
+export const MIN_SCHEDULER_INTERVAL_MS = 5 * 60_000;
+/**
+ * Запас сверх интервала планировщика в допуске опоздания.
+ *
+ * Рутина со временем запуска 10:00 видна планировщику не в 10:00, а на
+ * ближайшем обходе после 10:00 — это опоздание на величину интервала, а не
+ * пропущенный запуск. Запас сверх интервала закрывает задержки обхода.
+ */
+export const LATE_GRACE_MARGIN_MS = 2 * 60_000;
 
 export interface ScheduleRule {
   kind: ScheduleRuleKind;
@@ -112,6 +130,23 @@ function zoneOffsetMs(instant: Date, timezone: string): number {
  * второй — поправку на границу DST (часа в сутки «не существует» или
  * «повторяется»).
  */
+/**
+ * Местная дата момента в зоне рутины — якорь для «раз в неделю» и
+ * «раз в месяц».
+ *
+ * Якорь один и тот же на всех путях: создание рутины, правка, предпросмотр
+ * и тик считают от даты создания рутины. Фиктивный якорь (например
+ * 1970-01-01) на пути создания давал первый запуск в один день, а все
+ * последующие — в другой.
+ */
+export function anchorForInstant(
+  instant: Date,
+  timezone: string,
+): { year: number; month: number; day: number } {
+  const local = zonedParts(instant, timezone);
+  return { year: local.year, month: local.month, day: local.day };
+}
+
 export function zonedToUtc(
   parts: { year: number; month: number; day: number; hour: number; minute: number },
   timezone: string,
@@ -470,8 +505,16 @@ export function decideRun(input: {
   catchUp: boolean;
   overlapOpen: boolean;
   catchUpHours?: number;
+  /**
+   * Допуск опоздания при выключенном догоне: пока опоздание не больше
+   * этого, запуск считается штатным (планировщик зашёл с опозданием), а
+   * не пропущенным. По умолчанию — интервал планировщика (5 минут) плюс
+   * запас в минуту.
+   */
+  lateGraceMs?: number;
 }): RunDecision {
   const hours = input.catchUpHours ?? CATCH_UP_HOURS;
+  const grace = input.lateGraceMs ?? MIN_SCHEDULER_INTERVAL_MS + LATE_GRACE_MARGIN_MS;
   if (input.nextRunAt.getTime() > input.now.getTime()) {
     return { action: "skip", runAt: input.nextRunAt, reason: "ещё не время" };
   }
@@ -482,7 +525,7 @@ export function decideRun(input: {
   if (input.overlapOpen) {
     return { action: "skip", runAt: input.nextRunAt, reason: "прошлый экземпляр не закрыт" };
   }
-  if (!input.catchUp && lateMs > 60_000) {
+  if (!input.catchUp && lateMs > grace) {
     return { action: "skip", runAt: input.nextRunAt, reason: "догон отключён" };
   }
   return { action: "run", runAt: input.nextRunAt };
