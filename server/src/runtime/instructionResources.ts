@@ -12,7 +12,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import {registerInstructionBlock, composeLayer, LAYER_CATALOG, type RunMode} from '../lib/roleContextResolver.js';
 import {INSTRUCTION_DEFAULTS} from './instructionDefaults.js';
-import {ensureRoleHome, roleHomeInstruction, systemPromptSourceFile, renderSystemPrompt} from './roleHome.js';
+import {ensureRoleHome, roleHomeInstruction, systemPromptSourceFile, renderSystemPrompt, renderPromptAddendum} from './roleHome.js';
 import { withObservationContext } from "../lib/contextObservability.js";
 import { selectSkillsByJev } from "../lib/memorySkillsJev.js";
 const ROLE_RESOURCE_MODES: RunMode[] = ['work','resume','reply','review','subtask','chat'];
@@ -194,6 +194,7 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  append.push(composeLayer(role,'rules')!.effective);
  append.push(roleHomeInstruction(role));
  append.push(behaviorInstruction(role));
+ append.push(renderPromptAddendum('chat',role,ensureRoleHome(role)));
  append.push(chatModeInstruction(mode));
  append.push('ПРОМЕЖУТОЧНЫЕ ПОЯСНЕНИЯ: краткость относится к итогу. Перед содержательной проверкой скажи одной фразой, что проверяешь; между сериями инструментов кратко сообщай значимую находку, изменение подхода или ожидание коллеги. Обычный текст должен быть понятен владельцу без открытия инструментов. Не комментируй каждый вызов и не выдумывай прогресс. Не раскрывай внутренние рассуждения. Это правило уточняет запреты пересказа хода работы в старых инструкциях.');
  return [base,...append].join('\n\n');

@@ -125,6 +125,46 @@ function readCanon(file: string): string | null {
 /** Подстановка личности роли и её папки в канон. Если файл канона недоступен
  *  (запуск не из server/) — короткая запасная рамка, роль всё равно знает, кто
  *  она и где её инструментарий. */
+/** Вид хода: инструкция чата и инструкция карточки — разные каноны. */
+export type RunKind = "chat" | "task";
+
+const ADDENDUM_FILES: Record<RunKind, string> = {
+  chat: "role-chat-prompt.md",
+  task: "role-task-prompt.md",
+};
+
+export function promptAddendumSourceFile(kind: RunKind): string {
+  return path.resolve(process.cwd(), "scripts", ADDENDUM_FILES[kind]);
+}
+
+/**
+ * Дополнение к общему канону по виду работы (владелец 23.10.2026: «если
+ * задача — инструкция в рамках задачи, если чат — в рамках чата»).
+ * Чатовый ход получает цикл чата и обычный текстовый ответ, карточный —
+ * контракт ответа, сдачу шага и правила claim/heartbeat/review. Общая часть
+ * (кто ты, папка, координация, знания, границы) остаётся одной на всех.
+ */
+export function renderPromptAddendum(
+  kind: RunKind,
+  role: string,
+  home: ReturnType<typeof roleHome>,
+): string {
+  const canon = readCanon(promptAddendumSourceFile(kind));
+  if (canon === null) return "";
+  const identity = `Ты — ${roleTitle(role)} в трекере TaskFlow (ключ роли: ${role}).`;
+  const folder = [
+    `- папка роли: ${home.dir}`,
+    `- инструкция роли (AGENTS.md): ${home.agents}`,
+    `- навыки: ${home.skills}/<имя-навыка>/SKILL.md, скрипты и файлы навыка — рядом с его SKILL.md`,
+    `- скрипты роли: ${home.scripts} (указывай абсолютный путь)`,
+    `- рабочие файлы чата: ${home.workspace}`,
+  ].join("\n");
+  return canon
+    .split("{{IDENTITY}}").join(identity)
+    .split("{{FOLDER}}").join(folder)
+    .split("{{BLOCKS}}").join(roleBlockLines());
+}
+
 export function renderSystemPrompt(role: string, home: ReturnType<typeof roleHome>): string {
   const identity = `Ты — ${roleTitle(role)} в трекере TaskFlow (ключ роли: ${role}).`;
   const folder = [

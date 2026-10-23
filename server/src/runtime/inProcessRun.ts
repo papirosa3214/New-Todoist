@@ -36,7 +36,7 @@ import { branchMembership } from "./branchPlan.js";
 import { ensurePlanTopic, topicContext } from "../lib/projectTopics.js";
 import { markPlanFinalReviewerStarted, markPlanFinalReviewerWaiting, hasPendingPlanFinalReview, planReviewRouteContext } from "./planReviewLifecycle.js";
 import { instructionResources, createTaskResourceLoader } from "./instructionResources.js";
-import { ensureRoleHome } from "./roleHome.js";
+import { ensureRoleHome, renderPromptAddendum } from "./roleHome.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { roleProjectContext,roleProjectSnapshot } from "./roleProjectContext.js";
 import { saveSlotSnapshot, slotSnapshotBlock, technicalSlotSnapshot } from "./slotWorkSnapshot.js";
@@ -1508,6 +1508,7 @@ async function runRoleInProcessUnserialized(input: {
     // роль не просыпалась в вакуум. Только заметки с постоянной категорией
     // и без текущей задачи; пустой срез не вставляется.
     roleSliceBlock(role, taskId),
+    renderPromptAddendum("task", role, ensureRoleHome(role)),
   ].join("\n\n");
   // Карточка и текущий шаг — для галочки «Навыки под задачу» (раздел JEV).
   const workCard = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title: string; description: string | null } | undefined;
