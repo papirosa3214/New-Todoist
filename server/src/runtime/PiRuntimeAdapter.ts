@@ -1,3 +1,4 @@
+import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
 import { ChatPreparationDeadline } from "./chatPreparationDeadline.js";
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
@@ -1560,6 +1561,7 @@ export async function startChatRun(
     // вызов инструмента, тишина не копится (команда может честно работать
     // минуты), ход держит только общий потолок.
     const thrash = new ThrashGuard();
+    const memoryConsultation = new MemoryConsultationGuard();
     const idleMs = resolveChatRunIdle(input.idleMs);
     const runningTools = new Set<string>();
     let lastActivity = Date.now();
@@ -1597,7 +1599,9 @@ export async function startChatRun(
       // Сторож топтания: повторы одного вызова и длинные серии чтений без
       // изменений — указание в тот же ход (владелец 23.10.2026).
       if (event?.type === "tool_execution_start") {
-        const nudge = thrash.observe({ tool: String(event.toolName ?? ""), argsDigest: stepDigest((event as any).args) });
+        const memoryNudge = memoryConsultation.observe(String(event.toolName ?? ""), event.args);
+        const thrashNudge = thrash.observe({ tool: String(event.toolName ?? ""), argsDigest: stepDigest((event as any).args) });
+        const nudge = [memoryNudge, thrashNudge].filter(Boolean).join("\n\n");
         if (nudge) void session.steer(nudge).catch(() => {});
       }
       else if (event?.type === "tool_execution_end" && event.toolCallId)

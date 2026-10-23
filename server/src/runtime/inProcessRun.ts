@@ -1,3 +1,4 @@
+import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
 import {oneShotReviewInstruction} from "../lib/integrationResponsibility.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
 import {queueWorkCoordination,markDeliveredToWork,traceCoordination} from "./chatCoordination.js";
@@ -1596,6 +1597,7 @@ try {
   logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
   const thrash = new ThrashGuard();
+  const memoryConsultation = new MemoryConsultationGuard();
   const runControl: ActiveInProcessRun = { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now(), activityCount: 0, messengerMessages:new Set(),unacknowledgedMessengerMessages:new Set() };
   activeRuns.set(runId, runControl);
   const liveTurn = beginTaskLiveTurn({
@@ -1651,7 +1653,9 @@ try {
     // Сторож топтания (владелец 23.10.2026): повторы и серии чтений без
     // изменений получают указание прямо в текущий заход.
     {
-      const nudge = thrash.observe({ tool: String(event.toolName ?? ""), argsDigest: stepDigest((event as any).args) });
+      const memoryNudge = memoryConsultation.observe(String(event.toolName ?? ""), event.args);
+      const thrashNudge = thrash.observe({ tool: String(event.toolName ?? ""), argsDigest: stepDigest((event as any).args) });
+      const nudge = [memoryNudge, thrashNudge].filter(Boolean).join("\n\n");
       if (nudge) void runControl.steer(nudge).catch(() => {});
     }
     // Журнал нехватки (14.10.2026): роль позвала инструмент, которого у неё

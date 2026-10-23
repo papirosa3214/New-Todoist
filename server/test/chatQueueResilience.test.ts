@@ -49,6 +49,7 @@ import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 import { liveCatalogEntryOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
 const fakeClients: any[] = [];
+const steeringControl = { listener: (_event:any) => {}, nudges: [] as string[] };
 const promptControl = {run: async (_text:string) => {},answer:"ок"};
 const creationControl = {before:async()=>{},count:0,executed:[] as number[],disposed:[] as number[]};
 
@@ -102,7 +103,8 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
       return {
         session: {
           sessionId: "sess-test",
-          subscribe: () => () => {},
+          subscribe: (listener:any) => { steeringControl.listener=listener; return () => {}; },
+          steer: async (text:string) => { steeringControl.nudges.push(text); },
           prompt: async (text:string) => {creationControl.executed.push(ordinal);await promptControl.run(text);},
           abort: () => {},
           dispose: () => {creationControl.disposed.push(ordinal);},
@@ -149,6 +151,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  steeringControl.nudges=[];
   fakeClients.length = 0;
   promptControl.run = async () => {};
   promptControl.answer="ок";
@@ -400,4 +403,24 @@ it("история чата скрывает старую отдельную к�
  expect(ids).not.toContain("legacy-card");
  expect(ids).toContain("standalone-card");
  expect(db.prepare("SELECT id FROM chat_messages WHERE id='legacy-card'").get()).toBeDefined();
+});
+
+
+it.each([false,true])("private memory reminder in active chat (consulted=%s)",async(consulted)=>{
+  const id="memory-reminder-"+consulted;
+  seedDelivery(id);
+  promptControl.run=async()=>{
+    for(let i=0;i<15;i++){
+      const lookup=consulted && i===9;
+      steeringControl.listener({type:"tool_execution_start",toolCallId:"call-"+i,
+        toolName:lookup?"taskflow":"read",
+        args:lookup?{action:"invoke",operation:"taskflow_recall",arguments:{query:"queue"}}:{path:"file-"+i}});
+      steeringControl.listener({type:"tool_execution_end",toolCallId:"call-"+i});
+    }
+  };
+  await sweepRecoverableDeliveries();
+  expect(getMessageDelivery(id)?.status).toBe("done");
+  expect(steeringControl.nudges.filter(text=>text.includes("первые 10"))).toHaveLength(consulted?0:1);
+  const publicRows=db.prepare("SELECT text FROM chat_messages WHERE chat_id=?").all("chat_recovery_test") as {text:string}[];
+  expect(publicRows.some(row=>row.text.includes("первые 10"))).toBe(false);
 });
