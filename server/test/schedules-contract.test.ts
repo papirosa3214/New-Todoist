@@ -36,6 +36,35 @@ const MSK = "Europe/Moscow";
 /** Пятница, 23.10.2026, 13:00 МСК — момент, на котором считаем якорь. */
 const FRIDAY = new Date("2026-10-23T10:00:00.000Z");
 
+/**
+ * Фактический якорь рутины: дата её создания в зоне рутины.
+ *
+ * created_at ставит СУБД (datetime('now')), поэтому он не подменяется
+ * часами приложения — это реальное время. Тесты, которым нужен якорь,
+ * берут его отсюда, а не подставляют дату руками.
+ */
+function anchorOf(scheduleId: string, timezone: string) {
+  const row = getSchedule(scheduleId)!;
+  return localDateParts(new Date(row.created_at.replace(" ", "T") + "Z"), timezone);
+}
+
+/** День недели календарной даты (0 — воскресенье). */
+function weekdayOf(date: { year: number; month: number; day: number }): number {
+  return new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay();
+}
+
+/** Время суток в зоне рутины, «ЧЧ:ММ». */
+function localTimeOf(instant: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(instant);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("hour")}:${get("minute")}`;
+}
+
 describe("якорь первого запуска и явный день правила", () => {
   it("якорь без явного дня — дата создания рутины в её зоне", () => {
     expect(localDateParts(FRIDAY, MSK)).toEqual({ year: 2026, month: 10, day: 23 });
@@ -138,8 +167,28 @@ describe("рутины в базе: контракт API", () => {
       task_payload: { title: "Еженедельная сводка" },
     });
     expect(res.statusCode).toBe(201);
-    // Пятница 23.10 13:00 МСК → следующая пятница 30.10 09:00 МСК.
-    expect(res.json().schedule.next_run_at).toBe("2026-10-30T06:00:00.000Z");
+    // created_at ставит СУБД реальными часами (datetime('now')) — подмена
+    // часов приложения (vi.setSystemTime) на него не действует. Поэтому
+    // ожидание считаем от ФАКТИЧЕСКОГО якоря — даты создания рутины в её
+    // зоне, а не от зашитой в тесте даты: иначе кейс зелёный только в
+    // те дни недели, когда реальная дата совпадает с подставленной.
+    const anchor = anchorOf(res.json().schedule.id, MSK);
+    const expected = nextRunAfter(
+      {
+        kind: "weekly",
+        expr: null,
+        timeLocal: "09:00",
+        timezone: MSK,
+        anchor,
+      },
+      FRIDAY,
+    )!;
+    expect(res.json().schedule.next_run_at).toBe(expected.toISOString());
+    // Первый запуск — в тот же день недели, что и день создания рутины
+    // (иначе якорь уехал бы на 1970 год и рутина стартовала бы в четверг).
+    expect(weekdayOf(anchor)).toBe(weekdayOf(localDateParts(expected, MSK)));
+    // Время запуска — 09:00 по зоне рутины.
+    expect(localTimeOf(expected, MSK)).toBe("09:00");
   });
 
   it("рутина с явным днём недели — первый запуск в выбранный день", async () => {
