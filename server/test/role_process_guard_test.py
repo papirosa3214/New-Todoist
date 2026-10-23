@@ -50,4 +50,15 @@ class UnmanagedTests(unittest.TestCase):
    self.assertEqual([r['pid'] for r in guard.processes(root)],[111])
    self.assertIn('unmanaged',guard.invalid_lease('unmanaged'))
 
+class NasSearchTests(unittest.TestCase):
+ def test_only_long_root_find_crossing_network_mount_is_stopped(self):
+  spec=importlib.util.spec_from_file_location('naswatch',str(Path(__file__).resolve().parents[1]/'scripts/role_process_watch.py'))
+  watch=importlib.util.module_from_spec(spec);spec.loader.exec_module(watch)
+  fd=['/run/user/1000/gvfs/smb-share:server=nas,share=home/dir']
+  self.assertTrue(watch.unbounded_nas_find(['find','/','-name','report'],61,fd))
+  self.assertFalse(watch.unbounded_nas_find(['find','/','-xdev','-name','report'],61,fd))
+  self.assertFalse(watch.unbounded_nas_find(['find','/home/maksim/project'],61,fd))
+  self.assertFalse(watch.unbounded_nas_find(['find','/'],30,fd))
+  self.assertFalse(watch.unbounded_nas_find(['find','/'],61,['/tmp/local']))
+
 if __name__=='__main__':unittest.main()

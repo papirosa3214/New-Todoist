@@ -3,6 +3,7 @@
 import datetime as dt
 import json
 import os
+import signal
 from pathlib import Path
 import shlex
 import sqlite3
@@ -35,13 +36,41 @@ def probe():
     return True
 
 
-def notify(text):
+def unbounded_nas_find(argv, age, targets):
+    return (bool(argv) and Path(argv[0]).name == 'find' and '/' in argv[1:]
+            and '-xdev' not in argv and '-mount' not in argv and age >= 60
+            and any('/gvfs/' in target for target in targets))
+
+
+def stop_nas_searches():
+    stopped=[]
+    uptime=float(Path('/proc/uptime').read_text().split()[0]);hz=os.sysconf('SC_CLK_TCK')
+    for p in Path('/proc').glob('[0-9]*'):
+        try:
+            uid=int(next(l for l in (p/'status').read_text().splitlines() if l.startswith('Uid:')).split()[1])
+            if uid != os.getuid():continue
+            argv=(p/'cmdline').read_bytes().decode(errors='replace').strip('\0').split('\0')
+            if not argv or Path(argv[0]).name!='find':continue
+            stat=(p/'stat').read_text();start=stat[stat.rindex(')')+2:].split()[19]
+            targets=[]
+            for fd in (p/'fd').iterdir():
+                try:targets.append(os.readlink(fd))
+                except OSError:pass
+            if not unbounded_nas_find(argv,uptime-int(start)/hz,targets):continue
+            check=(p/'stat').read_text()
+            if check[check.rindex(')')+2:].split()[19]!=start:continue
+            os.kill(int(p.name),signal.SIGTERM);stopped.append(int(p.name))
+        except (OSError,ValueError,StopIteration):pass
+    return stopped
+
+
+def notify(text, kind='role_process_watch'):
     with sqlite3.connect(DB,timeout=10) as db:
-        if db.execute("SELECT 1 FROM notifications WHERE type='role_process_watch' AND created_at>=datetime('now','-1 day') LIMIT 1").fetchone():return
+        if db.execute("SELECT 1 FROM notifications WHERE type=? AND created_at>=datetime('now','-1 day') LIMIT 1",(kind,)).fetchone():return
         owners=db.execute("SELECT id FROM users WHERE role='owner'").fetchall()
         if not owners:raise RuntimeError('no owner for process watcher notification')
         for owner, in owners:
-            db.execute('INSERT INTO notifications(id,user_id,type,text) VALUES(?,?,?,?)',(str(uuid.uuid4()),owner,'role_process_watch',text))
+            db.execute('INSERT INTO notifications(id,user_id,type,text) VALUES(?,?,?,?)',(str(uuid.uuid4()),owner,kind,text))
 
 
 def main():
@@ -54,6 +83,10 @@ def main():
         return 0
     state={'checked_epoch':time.time(),'checked_at':dt.datetime.now().astimezone().isoformat()}
     try:
+        nas_searches=stop_nas_searches()
+        state['nas_searches_stopped']=nas_searches
+        if nas_searches:
+            notify(f"Остановлены затянувшиеся поиски find от корня, обходившие сетевые папки: PID {nas_searches}. Они создавали нагрузку GVFS/портала и NAS. Повторите поиск в каталоге проекта или с -xdev; файлы не удалялись.",kind='nas_search_watch')
         result=role_guard('--sweep')
         active=role_guard('--inspect')
         state.update(reaped=result['matched'],reaped_pids=result['pids'],reasons=result['reasons'],active=active['matched'],by_kind=active['by_kind'],leases=active['leases'],contexts=active['contexts'],error=None)
