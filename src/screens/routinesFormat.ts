@@ -113,6 +113,16 @@ export function formatNextRun(
   return formatWhen(value, timezone);
 }
 
+/**
+ * Текст уведомления о последнем запуске рутины (дизайн, словарь):
+ * задача создана, запуск пропущен с причиной или не удался.
+ */
+export function runNoticeText(status: string | null | undefined, detail: string | null): string {
+  if (status === "created") return "Запуск создан";
+  if (status === "skipped") return `Пропущено: ${detail ?? "прошлый запуск ещё не закрыт"}`;
+  return `Не удалось запустить: ${detail ?? runStatusLabel(status)}`;
+}
+
 /** Результат запуска по-русски (дизайн, словарь). */
 export function runStatusLabel(status: string | null | undefined): string {
   switch (status) {

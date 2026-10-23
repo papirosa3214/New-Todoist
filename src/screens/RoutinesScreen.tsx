@@ -38,7 +38,13 @@ import {
 } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
-import { formatNextRun, formatWhen, ruleSummary, runStatusLabel } from "./routinesFormat";
+import {
+  formatNextRun,
+  formatWhen,
+  ruleSummary,
+  runNoticeText,
+  runStatusLabel,
+} from "./routinesFormat";
 
 /** Правила в форме (дизайн, §2.5): шесть вариантов. */
 const RULE_OPTIONS: Array<{ value: ScheduleRuleKind; label: string }> = [
@@ -623,11 +629,7 @@ export function RoutinesScreen() {
       {runNotice && (
         <div className="bg-card2 r-control-md px-3 py-2.5 mb-3 flex items-center gap-2">
           <span className="tf-action text-sub flex-1">
-            {runNotice.status === "created"
-              ? "Запуск создан"
-              : runNotice.status === "skipped"
-                ? `Пропущено: ${runNotice.detail ?? "прошлый запуск ещё не закрыт"}`
-                : `Не удалось запустить: ${runNotice.detail ?? runStatusLabel(runNotice.status)}`}
+            {runNoticeText(runNotice.status, runNotice.detail)}
           </span>
           {runNotice.taskId && (
             <button
@@ -643,18 +645,6 @@ export function RoutinesScreen() {
             label="Скрыть"
             size={14}
             onClick={() => setRunNotice(null)}
-          />
-        </div>
-      )}
-
-      {lastRunNotice && (
-        <div className="bg-card2 rounded-xl px-3 py-2.5 mb-3 flex items-center gap-2">
-          <span className="tf-action text-sub flex-1">{lastRunNotice}</span>
-          <IconButton
-            icon="close"
-            label="Скрыть"
-            size={14}
-            onClick={() => setLastRunNotice(null)}
           />
         </div>
       )}
