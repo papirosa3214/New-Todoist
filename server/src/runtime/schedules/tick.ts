@@ -28,7 +28,6 @@ import {
   anchorFromCreatedAt,
   claimRun,
   currentInstanceOpen,
-  INTERRUPTED_RUN_AFTER_MS,
   listSchedules,
   markScheduleRun,
   parsePayload,
@@ -197,35 +196,19 @@ export async function runSchedulesTick(
     const claimed = claimRun({ scheduleId: row.id, runAt: decision.runAt });
     if (!claimed.created) {
       const existing = claimed.row;
-      // Запись без карточки, оставшаяся от упавшего процесса, — честная
-      // ошибка запуска, а не «создана» (D5). Живой запуск (несколько
-      // секунд назад) трогать нельзя.
-      const interrupted =
-        existing &&
-        existing.status === "created" &&
-        !existing.task_id &&
-        Date.now() - (parseUtc(existing.created_at)?.getTime() ?? 0) >
-          INTERRUPTED_RUN_AFTER_MS;
-      if (interrupted) {
-        updateRun({
-          scheduleId: row.id,
-          runAt: decision.runAt,
-          status: "failed",
-          detail: "запуск прерван: карточка не создана",
-        });
-        counts.failed += 1;
-      } else {
-        counts.skipped += 1;
-      }
+      // Если результата запуска нет — запуск брошен упавшим процессом, и
+      // хранилище уже пометило его ошибкой (D5): считаем ошибкой запуска.
+      // Иначе (успешный прошлый запуск в этом же окне) — обычный пропуск.
+      const interrupted = existing && existing.status === "failed" && !existing.task_id;
+      if (interrupted) counts.failed += 1;
+      else counts.skipped += 1;
       // Слот закрыт в любом случае — иначе рутина залипнет на нём и не
       // создаст карточек до конца окна догона (критерий приёмки 5 из
       // спеки: next_run_at после пересчёта строго в будущем).
+      // Ручной запуск расписание не двигает — это не его слот.
       if (!options.force) {
-        // Ручной запуск расписание не двигает — это не его слот.
-        if (!options.force) {
-          const next = nextRunAfter(rule, now);
-          markScheduleRun(row.id, { nextRunAt: next });
-        }
+        const next = nextRunAfter(rule, now);
+        markScheduleRun(row.id, { nextRunAt: next });
       }
       continue;
     }
