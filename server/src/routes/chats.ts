@@ -7,7 +7,7 @@ import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
-import { pauseChatWork, noteOwnerMessageWhilePaused, finishPausedWork, duePausedWork } from "../lib/chatPausedWork.js";
+import { finishPausedWork, duePausedWork } from "../lib/chatPausedWork.js";
 import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
@@ -1046,17 +1046,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!handledByBranch && isOwner(req.userId) && !chatTaskId && !chat.parent_chat_id) {
         try {
           const stopped = await interruptChatTurnForOwner(chatId, req.userId);
-          if (stopped) {
-            // Работа не бросается: чат встаёт на паузу, роль отвечает на новое
-            // сообщение, а к прерванной работе вернётся после тишины.
-            for (const roleKey of chatMemberRoles(chatId)) {
-              const pausedRole = roleAccountId(roleKey);
-              if (pausedRole) pauseChatWork(chatId, pausedRole, req.userId);
-            }
-            console.log(`[chats] ход остановлен, чат на паузе chat=${chatId}`);
-          } else {
-            noteOwnerMessageWhilePaused(chatId);
-          }
+          // В чате пауза не нужна (владелец 23.10.2026: схема с паузой и
+          // веткой-срезом — только для режима задачи): ход просто
+          // останавливается, роль отвечает здесь же на новое сообщение.
+          if (stopped) console.log(`[chats] ход остановлен новым сообщением владельца chat=${chatId}`);
         } catch (error) {
           console.warn(`[chats] остановка хода не удалась chat=${chatId}:`, error instanceof Error ? error.message : error);
         }
