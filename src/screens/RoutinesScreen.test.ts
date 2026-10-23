@@ -4,7 +4,13 @@
 // Проверяется без поднятия DOM: достаточно чистых функций экрана.
 
 import { describe, it, expect } from "vitest";
-import { formatNextRun, formatWhen, ruleSummary, runStatusLabel } from "./routinesFormat";
+import {
+  formatNextRun,
+  formatWhen,
+  ruleSummary,
+  runNoticeText,
+  runStatusLabel,
+} from "./routinesFormat";
 import type { ApiSchedule } from "../api/schedules";
 
 function makeSchedule(over: Partial<ApiSchedule> = {}): ApiSchedule {
@@ -74,5 +80,17 @@ describe("экран «Мои рутины»", () => {
     expect(runStatusLabel("skipped")).toBe("пропущено");
     expect(runStatusLabel("failed")).toBe("не создана");
     expect(runStatusLabel("error")).toBe("ошибка");
+  });
+
+  it("уведомление о последнем запуске называет причину пропуска", () => {
+    expect(runNoticeText("created", null)).toBe("Запуск создан");
+    expect(runNoticeText("skipped", "прошлый запуск ещё не закрыт")).toBe(
+      "Пропущено: прошлый запуск ещё не закрыт",
+    );
+    expect(runNoticeText("skipped", null)).toBe("Пропущено: прошлый запуск ещё не закрыт");
+    expect(runNoticeText("failed", "планировщик не ответил")).toBe(
+      "Не удалось запустить: планировщик не ответил",
+    );
+    expect(runNoticeText("failed", null)).toBe("Не удалось запустить: не создана");
   });
 });
