@@ -1,3 +1,4 @@
+import {compactChatReportMaterials} from "./chatReportMaterials.js";
 // JSON-контракт роли v1 (карточка 237d6f34, 17.10.2026).
 //
 // Что это. Промпты ролей (scripts/role-prompts/*.md) и паспорта ролей
@@ -632,7 +633,7 @@ export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
   const parsed = parseRoleContractV1(text);
   if (parsed.structuredEnvelope) {
     return {
-      envelope: parsed.structuredEnvelope,
+      envelope: compactChatReportMaterials(parsed.structuredEnvelope).envelope,
       displayText: structuredOutputText(parsed.structuredEnvelope.output),
       // Спасённый конверт (кривые блоки отброшены) — тоже правка сервера:
       // претензии уходят в журнал, а не теряются.

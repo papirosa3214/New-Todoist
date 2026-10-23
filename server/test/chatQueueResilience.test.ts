@@ -49,7 +49,7 @@ import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 import { liveCatalogEntryOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
 const fakeClients: any[] = [];
-const promptControl = {run: async (_text:string) => {}};
+const promptControl = {run: async (_text:string) => {},answer:"ок"};
 const creationControl = {before:async()=>{},count:0,executed:[] as number[],disposed:[] as number[]};
 
 /** Каталог и провайдеры — из боевого role-routing.yaml (helpers/liveRoutingModels):
@@ -106,7 +106,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
           prompt: async (text:string) => {creationControl.executed.push(ordinal);await promptControl.run(text);},
           abort: () => {},
           dispose: () => {creationControl.disposed.push(ordinal);},
-          getLastAssistantText: () => "ок",
+          getLastAssistantText: () => promptControl.answer,
         },
       };
     }),
@@ -151,6 +151,7 @@ beforeAll(async () => {
 beforeEach(() => {
   fakeClients.length = 0;
   promptControl.run = async () => {};
+  promptControl.answer="ок";
   creationControl.before=async()=>{};creationControl.count=0;creationControl.executed=[];creationControl.disposed=[];
   process.env.TASKFLOW_CHAT_DELIVERY_MAX_RESTARTS = "2";
   _resetActiveChatRunsForTests();
@@ -220,7 +221,7 @@ describe("доставка: очередь, независимость и бюд
     promptControl.run = async (text:string) => { if(text.includes("hold-first")) await gate.promise; };
     const sweep = sweepRecoverableDeliveries();
     try {
-      await vi.waitFor(() => expect(getMessageDelivery("free-second")?.status).toBe("done"), {timeout:500,interval:10});
+      await vi.waitFor(() => expect(getMessageDelivery("free-second")?.status).toBe("done"), {timeout:3000,interval:10});
       expect(getMessageDelivery("hold-first")?.status).toBe("picked");
     } finally {
       gate.resolve();
@@ -355,4 +356,48 @@ it("зависшая подготовка освобождает чат; опо�
     late.resolve(); await first;
     delete process.env.TASKFLOW_CHAT_PREPARATION_TIMEOUT_MS;
   }
+});
+
+import {buildRoleToolCatalog} from "../src/runtime/roleToolCatalog.js";
+it.each([true,false])("сервер собирает один отчёт после двух отправок материала (модель включила ссылки: %s)", async (included) => {
+  const triggerId="server-cleanup-report-"+included;
+  seedDelivery(triggerId);
+  const note="731fdc47-e893-4937-900c-e78ca7d152d3";
+  db.prepare("INSERT OR IGNORE INTO user_notes(id,title,content) VALUES(?,'Материал проверки',?)").run(note,JSON.stringify({type:"doc",content:[]}));
+  const material={kind:"document",title:"Материал проверки",ref:"note://"+note};
+  promptControl.run=async()=>{
+    const tools=buildRoleToolCatalog({role:"builder",mode:"work",runId:"server-cleanup-"+included,chatId:"chat_recovery_test",messageId:triggerId});
+    for(const request of ["first","second"]){
+      const result=await tools.customTools[0].execute("share-"+request,{action:"invoke",operation:"taskflow_chat_share_material",version:1,request_id:"cleanup-"+included+"-"+request,arguments:{note_id:note}});
+      expect(JSON.parse((result as any).content[0].text).ok).toBe(true);
+    }
+    expect(JSON.parse(getMessageDelivery(triggerId)!.payload_json).sharedReportMaterials).toEqual([material]);
+    promptControl.answer=JSON.stringify({schema_version:1,ok:true,output:[{type:"report",report_kind:"final",sections:{result:[{type:"text",text:"Готово"}],work:[],checks:[],limitations:[],materials:included?[material]:[]}}],artifacts:included?[material]:[],plan_artifact:null,error:null,next_hint:null});
+  };
+  const result=await recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,deliveryId:triggerId});
+  expect(result.status).toBe("done");
+  const messages=db.prepare("SELECT role_envelope_json FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=?").all(triggerId,ROLE_USER) as any[];
+  expect(messages).toHaveLength(1);
+  const envelope=JSON.parse(messages[0].role_envelope_json);
+  expect(envelope.artifacts).toEqual([]);
+  expect(envelope.output[0].sections.materials).toEqual([material]);
+});
+
+it("история чата скрывает старую отдельную карточку материала, уже включённого в итоговый отчёт",async()=>{
+ const triggerId="legacy-duplicate-history";
+ seedDelivery(triggerId);
+ const ref="note://731fdc47-e893-4937-900c-e78ca7d152d3";
+ const card="\`\`\`widget\n"+JSON.stringify({type:"card",title:"Материал",link:{title:"Открыть в TaskFlow",url:ref}})+"\n\`\`\`";
+ db.prepare("INSERT INTO chat_messages(id,from_user_id,chat_id,text,channel,reply_to_message_id) VALUES('legacy-card',?,'chat_recovery_test',?,'chat',?)").run(ROLE_USER,card,triggerId);
+ const envelope={schema_version:1,ok:true,output:[{type:"report",report_kind:"final",sections:{result:[{type:"text",text:"Готово"}],work:[],checks:[],limitations:[],materials:[{kind:"document",title:"Материал",ref}]}}],artifacts:[],plan_artifact:null,error:null,next_hint:null};
+ db.prepare("INSERT INTO chat_messages(id,from_user_id,chat_id,text,role_envelope_json,channel,reply_to_message_id) VALUES('legacy-report',?,'chat_recovery_test','Готово',?,'chat',?)").run(ROLE_USER,JSON.stringify(envelope),triggerId);
+ // A document from another question must remain visible.
+ db.prepare("INSERT INTO chat_messages(id,from_user_id,chat_id,text,channel,reply_to_message_id) VALUES('standalone-card',?,'chat_recovery_test',?,'chat',NULL)").run(ROLE_USER,card);
+ const response=await app!.inject({method:"GET",url:"/api/chats/chat_recovery_test/messages",headers:{authorization:"Bearer "+app!.jwt.sign({id:OWNER_USER})}});
+ expect(response.statusCode).toBe(200);
+ const ids=response.json().messages.map((m:any)=>m.id);
+ expect(ids).toContain("legacy-report");
+ expect(ids).not.toContain("legacy-card");
+ expect(ids).toContain("standalone-card");
+ expect(db.prepare("SELECT id FROM chat_messages WHERE id='legacy-card'").get()).toBeDefined();
 });

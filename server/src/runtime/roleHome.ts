@@ -144,6 +144,10 @@ export function promptAddendumSourceFile(kind: RunKind): string {
  * контракт ответа, сдачу шага и правила claim/heartbeat/review. Общая часть
  * (кто ты, папка, координация, знания, границы) остаётся одной на всех.
  */
+export function chatReportInstruction():string {
+  return readCanon(path.resolve(process.cwd(), "scripts", "role-chat-report.md")) ?? "";
+}
+
 export function renderPromptAddendum(
   kind: RunKind,
   role: string,
@@ -163,7 +167,7 @@ export function renderPromptAddendum(
     `- скрипты роли: ${home.scripts} (указывай абсолютный путь)`,
     `- рабочие файлы чата: ${home.workspace}`,
   ].join("\n");
-  return [canon, contract].filter(Boolean).join("\n\n")
+  return [canon, contract, kind === "chat" ? chatReportInstruction() : ""].filter(Boolean).join("\n\n")
     .split("{{IDENTITY}}").join(identity)
     .split("{{FOLDER}}").join(folder)
     .split("{{BLOCKS}}").join(roleBlockLines());

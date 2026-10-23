@@ -1,3 +1,5 @@
+import {compactChatReportMaterials} from "../lib/chatReportMaterials.js";
+import {preparedReportMaterials} from "../runtime/chatPreparedMaterials.js";
 import { prepareChatValue } from "../runtime/chatPreparationDeadline.js";
 import {chatExecutionMode,parseChatExecutionMode,isCardHandoffCommand} from "../runtime/chatExecutionMode.js";
 import {offerChatSteering} from "../runtime/chatSteering.js";
@@ -67,7 +69,7 @@ import {
   unwrapRoleEnvelope,
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
-import { formatChatMessage, loadChatMessage } from "../lib/chatMessages.js";
+import { formatChatMessage, formatChatHistory, loadChatMessage } from "../lib/chatMessages.js";
 import {
   ChecklistItemError,
   checklistStateOfChat,
@@ -756,7 +758,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
             WHERE m.chat_id = ? ORDER BY m.created_at ASC, m.rowid ASC`,
         )
         .all(req.params.id);
-      return { messages: messages.map(formatChatMessage) };
+      return { messages: formatChatHistory(messages) };
     },
   );
 
@@ -2688,6 +2690,15 @@ async function deliverAgentReply(args: {
   // Ответ пользователя остаётся без потери: валидный JSON v1 сохраняем
   // структурированным, а plain/invalid ответ — без изменений внутри text-блока.
   if (replyText) {
+    const prepared=preparedReportMaterials(chatId,roleUserId,trigger.id);
+    let overflow: import("../lib/chatReportMaterials.js").ChatMaterial[]=[];
+    if(prepared.length){
+      const envelope=storedRoleEnvelope ? JSON.parse(storedRoleEnvelope) : normalizeRoleReplyV1(replyText).envelope;
+      if(failure){envelope.ok=false;envelope.error={code:"tool_error",message:replyText,retryable:false};}
+      const compacted=compactChatReportMaterials(envelope,prepared);
+      storedRoleEnvelope=JSON.stringify(compacted.envelope);
+      overflow=compacted.overflow;
+    }
     replyId = uid();
     db.prepare(
       `INSERT INTO chat_messages (id, from_user_id, text, role_envelope_json, channel, chat_id, quick_replies, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id)
@@ -2696,6 +2707,13 @@ async function deliverAgentReply(args: {
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
     traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure));
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
+    for(const material of overflow){
+      const materialId=uid();
+      const card={type:"card",title:material.title,link:{title:"Открыть материал",url:material.ref}};
+      db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES(?,?,?,'chat',?,?)")
+        .run(materialId,roleUserId,"\`\`\`widget\n"+JSON.stringify(card)+"\n\`\`\`",chatId,trigger.id);
+      broadcastToUsers(memberIds(chatId),{type:"chat:new",message:loadChatMessage(materialId)});
+    }
     persistedReply=!failure;
   }
   } finally {

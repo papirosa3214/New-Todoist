@@ -39,7 +39,7 @@ export function instructionResources(cwd=process.cwd()) {
 export async function chatInstructionArgs(role:string, configPath:string, mode:ChatWorkMode="work", cwd=ensureRoleHome(role).workspace):Promise<string[]> {
  instructionResources(cwd);
  const dir=path.dirname(configPath);const prefix=path.basename(configPath);
- const discovered=await discoverChatResources(role);
+ const discovered=await discoverChatResources(role,true);
  const append=discovered.agentsFiles.map(x=>'# '+x.path+'\n'+composeLayer(role,keyFor(x.path))!.effective);
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
  append.push(composeLayer(role,'rules')!.effective);
@@ -94,19 +94,20 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
 }
 
 /** Same SDK discovery as chat, with executable extensions disabled while inspecting resources. */
-export async function discoverChatResources(role:string) {
+export async function discoverChatResources(role:string, sharedChatSkills=false) {
  const home=ensureRoleHome(role,{refreshSystem:true});
  const loader=new DefaultResourceLoader({
   cwd:home.workspace,agentDir:home.dir,settingsManager:SettingsManager.inMemory(),
   noExtensions:true,noThemes:true,noSkills:true,noPromptTemplates:true,noContextFiles:true,
-  additionalSkillPaths:[home.skills],additionalPromptTemplatePaths:[home.prompts],
+  additionalSkillPaths:sharedChatSkills ? [path.resolve(process.cwd(),'scripts','shared-skills'),home.skills] : [home.skills],additionalPromptTemplatePaths:[home.prompts],
   agentsFilesOverride:()=>({agentsFiles:[{path:home.agents,content:fs.readFileSync(home.agents,'utf8')}]}),
  });
  await loader.reload();
  const currentKeys=new Set<string>();
  const register=(file:string,title:string,text:string,readOnly=false,modes=ROLE_RESOURCE_MODES)=>{
   const key=keyFor(file);currentKeys.add(key);
-  registerInstructionBlock({key,title,group:'Контекст',scope:file===systemPromptSourceFile()?'command':'role',roles:file===systemPromptSourceFile()?undefined:[role],modes,sourceKind:'file',originRef:file,readOnly},text);
+ const shared=file.startsWith(path.resolve(process.cwd(),'scripts','shared-skills')+path.sep);
+  registerInstructionBlock({key,title,group:'Контекст',scope:file===systemPromptSourceFile()||shared?'command':'role',roles:file===systemPromptSourceFile()||shared?undefined:[role],modes:shared?['chat']:modes,sourceKind:'file',originRef:file,readOnly},text);
  };
  // AGENTS.md uses the static role.prompt layer; never expose a second resource editor.
  for(const file of loader.getAgentsFiles().agentsFiles)if(path.basename(file.path)!=='AGENTS.md')register(file.path,path.basename(file.path),file.content);
@@ -126,9 +127,9 @@ export async function discoverChatResources(role:string) {
 }
 
 /** Тот же набор файлов роли; cwd задачи не меняется, executable extensions отключены. */
-export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}):Promise<ResourceLoader & {disposeResources:()=>void}> {
+export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}, sharedChatSkills=false):Promise<ResourceLoader & {disposeResources:()=>void}> {
  const home=ensureRoleHome(role);
- const discovered=await discoverChatResources(role);
+ const discovered=await discoverChatResources(role,sharedChatSkills);
  let snapshotDir:string|undefined;
  const skills=discovered.skills.map(skill=>{
   const effective=composeLayer(role,keyFor(skill.filePath))!.effective;
@@ -174,7 +175,7 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  */
 export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:string):Promise<string> {
  instructionResources(cwd);
- const discovered=await discoverChatResources(role);
+ const discovered=await discoverChatResources(role,true);
  const custom=discovered.systemPromptSource;
  let base:string;
  if(custom) base=renderSystemPrompt(role,ensureRoleHome(role));

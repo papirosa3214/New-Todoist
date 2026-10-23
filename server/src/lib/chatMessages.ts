@@ -1,3 +1,4 @@
+import {compactChatReportMaterials} from "./chatReportMaterials.js";
 import {coordinationCardData} from "../runtime/chatCoordination.js";
 // Сообщение чата с ролями в том виде, в каком его видит клиент.
 //
@@ -78,7 +79,7 @@ export function formatChatMessage(message: any) {
     // Конверт роли (JSON-контракт v1, 17.10.2026): нормализованные поля
     // `ok/output/artifacts/error/next_hint/needs_human` для клиента. У сообщений
     // без конверта поля нет — старые ответы приходят как приходили.
-    role_envelope: parsed?.structuredEnvelope ?? parsed?.envelope ?? null,
+    role_envelope: parsed?.structuredEnvelope ? compactChatReportMaterials(parsed.structuredEnvelope).envelope : parsed?.envelope ?? null,
     // Конверт ok/output в ответе роли (01.10.2026) — показываем только output.
     text: displayText,
     ...(message.steps && JSON.parse(message.steps).coordination ? {kind:"coordination",coordination:coordinationCardData(message)} : {}),
@@ -99,4 +100,34 @@ export function loadChatMessage(id: string) {
     )
     .get(id);
   return row ? formatChatMessage(row) : null;
+}
+
+/** Compact legacy share cards only within the same author's answer to one request.
+ * Stored history remains intact; unique cards and other conversations are preserved. */
+export function formatChatHistory(rows:any[]) {
+  const messages=rows.map(formatChatMessage);
+  const answerKey=(message:any)=>JSON.stringify([message.chat_id,message.from_user_id,message.reply_to_message_id]);
+  const reported=new Map<string,Set<string>>();
+  for(const message of messages){
+    if(!message.reply_to_message_id || !String(message.from_user_id).startsWith("role_"))continue;
+    const envelope=message.role_envelope;
+    if(!Array.isArray(envelope?.output))continue;
+    const reports=envelope.output.filter((block:any)=>block.type==="report" && block.report_kind==="final");
+    if(!reports.length)continue;
+    const refs=reported.get(answerKey(message)) ?? new Set<string>();
+    for(const material of [...reports.flatMap((block:any)=>block.sections.materials),...envelope.artifacts])
+      if(typeof material?.ref==="string")refs.add(material.ref);
+    reported.set(answerKey(message),refs);
+  }
+  return messages.filter(message=>{
+    if(message.role_envelope || !message.reply_to_message_id)return true;
+    const refs=reported.get(answerKey(message));
+    if(!refs?.size || typeof message.text!=="string")return true;
+    const match=/^\`\`\`widget\s*([\s\S]*?)\s*\`\`\`$/.exec(message.text.trim());
+    if(!match)return true;
+    try {
+      const card=JSON.parse(match[1]);
+      return !(card?.type==="card" && card.link?.title==="Открыть в TaskFlow" && refs.has(card.link?.url));
+    } catch { return true; }
+  });
 }

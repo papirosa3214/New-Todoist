@@ -1450,6 +1450,8 @@ export async function startChatRun(
       role,
       cwd,
       systemPrompt,
+      undefined,
+      true,
     ), resource => resource.disposeResources());
     const composio = await preparation.wait(connectRoleComposio(role, mode, input.chatId).catch(
       (error) => {

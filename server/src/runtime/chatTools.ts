@@ -1,3 +1,4 @@
+import {prepareReportMaterial} from "./chatPreparedMaterials.js";
 // Инструменты роли в чате — внутри сервера (владелец 02.10.2026: «у нас всё
 // должно быть на сервере», чаты легли на `Unknown option: --mcp-config`).
 //
@@ -144,11 +145,13 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         };
       }),
     ...(ownerContext ? [T("taskflow_chat_share_material",
-      "Отправить владельцу документ Библиотеки/базы знаний для чтения ВНУТРИ TaskFlow, без системного просмотрщика iPhone. note_id — существующая заметка (taskflow_doc_write/taskflow_kb_search/taskflow_docs). Сначала сохрани готовый материал через taskflow_doc_write, если заметки ещё нет. Инструмент проверит документ и сам отправит в текущий чат карточку «Открыть в TaskFlow». Не копирует заметку и не прикладывает файл. Для скачивания отдельного файла используй taskflow_chat_attach_file. В итоговом artifacts/sections.materials используй возвращённый material целиком; не подставляй пути сервера или голый ID вместо ссылки.",
+      "Отправить владельцу документ Библиотеки/базы знаний для чтения ВНУТРИ TaskFlow, без системного просмотрщика iPhone. note_id — существующая заметка (taskflow_doc_write/taskflow_kb_search/taskflow_docs). Сначала сохрани готовый материал через taskflow_doc_write, если заметки ещё нет. Инструмент проверит документ; в активном ходе сервер сохранит ссылку для итогового отчёта без отдельной карточки. Вне активного хода отправит карточку «Открыть в TaskFlow». Не копирует заметку и не прикладывает файл. Для скачивания отдельного файла используй taskflow_chat_attach_file. В итоговом artifacts/sections.materials используй возвращённый material целиком; не подставляй пути сервера или голый ID вместо ссылки.",
       Type.Object({note_id:Type.String(),caption:S("краткое пояснение к материалу")}),
       async p=>{
         const note=await asRole(role,"GET",`/api/notes/${encodeURIComponent(p.note_id)}?format=markdown`);
         const material={kind:"document",title:note.title || "Документ",ref:`note://${note.id}`};
+        if(prepareReportMaterial(ownerContext.chatId,roleUserId(role),ownerContext.messageId,material))
+          return {material,message_id:null,delivery:"report",итог:"Материал подготовлен к итоговому ответу. Сервер добавит ссылку один раз; отдельная карточка не отправляется."};
         const card={type:"card",title:material.title,subtitle:String(p.caption??"Документ Библиотеки TaskFlow"),link:{title:"Открыть в TaskFlow",url:material.ref}};
         const response=await asRole(role,"POST",`/api/chats/${ownerContext.chatId}/messages`,{
           text:"```widget\n"+JSON.stringify(card)+"\n```",reply_to_message_id:ownerContext.messageId,work_mode:"work",
