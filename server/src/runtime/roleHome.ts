@@ -1,3 +1,4 @@
+import {behaviorInstruction} from './roleBehavior.js';
 import { roleBlockLines } from "../lib/roleContractV1.js";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,6 +20,7 @@ export function roleHome(role: string) {
     dir,
     system: path.join(dir, "SYSTEM.md"),
     agents: path.join(dir, "AGENTS.md"),
+    role: path.join(dir, "ROLE.md"),
     skills: path.join(dir, "skills"),
     scripts: path.join(dir, "scripts"),
     workspace: path.join(dir, "workspace"),
@@ -170,6 +172,7 @@ export function ensureRoleHome(role: string, options: { refreshSystem?: boolean 
   } else {
     writeOnce(home.system, renderSystemPrompt(role, home));
   }
+  writeOnce(home.role, `# Личность роли ${role}\n\nТы — ${roleTitle(role)}. Общайся ясно и уважительно.\n`);
   writeOnce(home.agents, `# Роль ${role} в TaskFlow\n\n${roleHomeInstruction(role)}\n`);
   writeOnce(path.join(home.scripts, "mcp_server.py"), scriptWrapper("mcp_server.py"));
   if (role === "researcher") writeOnce(path.join(home.scripts, "research_server.py"), scriptWrapper("research_server.py"));
@@ -232,9 +235,9 @@ export async function prepareChatSessionDirectory(role: string, chatId: string, 
 export function roleInstructionText(role: string, options: { withAgents?: boolean } = {}): string {
   const home = ensureRoleHome(role, { refreshSystem: true });
   const system = fs.readFileSync(home.system, "utf8").trim();
-  if (options.withAgents === false) return system;
+  if (options.withAgents === false) return [system,behaviorInstruction(role)].join("\n\n");
   const agents = fs.existsSync(home.agents) ? fs.readFileSync(home.agents, "utf8").trim() : "";
-  return [system, agents].filter(Boolean).join("\n\n");
+  return [system, agents, behaviorInstruction(role)].filter(Boolean).join("\n\n");
 }
 
 /** Своё у роли — текст AGENTS.md (то, что показывает и правит редактор). */

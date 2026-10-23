@@ -1,3 +1,5 @@
+import {systemPromptSourceFile} from '../runtime/roleHome.js';
+import {readRoleBehavior,applyRoleBehavior,saveRoleBehaviorTemplate,BehaviorConflict} from '../runtime/roleBehavior.js';
 import type {FastifyInstance} from 'fastify';
 import db from '../db.js';
 import {authOrApiToken} from '../auth.js';
@@ -5,11 +7,11 @@ import {isOwner} from '../access.js';
 import {roleUserId} from '../roleRouting.js';
 import {taskflowTools} from '../runtime/inProcessRun.js';
 import {instructionResources, discoverChatResources} from '../runtime/instructionResources.js';
-import {applyOverride, compose, composeLayer, composeTeamText, getLayerSpec, globalVersionForRole, listHistory, LAYER_CATALOG, readHistoryEntry, revision, InstructionConflict, type ComposedLayer, type RunMode} from '../lib/roleContextResolver.js';
+import {canonicalInstructionLayer, applyOverride, compose, composeLayer, composeTeamText, getLayerSpec, globalVersionForRole, listHistory, LAYER_CATALOG, readHistoryEntry, revision, InstructionConflict, type ComposedLayer, type RunMode} from '../lib/roleContextResolver.js';
 const MODES=new Set(['work','resume','reply','review','subtask','chat','voice','summary']);
 function known(role:string) { return !!db.prepare('SELECT 1 FROM roles WHERE key=?').get(role); }
 function json(l:ComposedLayer,role?:string,ownerId?:string) { return {layer:l.layer,effective:l.effective,source:l.source,origin:l.origin,version:l.version,role_version:l.roleVersion,command_version:l.commandVersion,team_text:role?composeTeamText(role,l.layer,ownerId):undefined,updated_at:l.updatedAt,updated_by:l.updatedBy,read_only:l.readOnly,modes:l.modes,title:l.title,group:l.group,default_text:l.defaultText,placeholders:l.placeholders}; }
-function block(l:ComposedLayer,role:string,ownerId?:string) { return {id:l.layer,title:l.title ?? l.layer,group:l.group ?? 'Возможности',scope:l.source,source:l.origin.ref,editable:!l.readOnly,text:l.effective,teamText:composeTeamText(role,l.layer,ownerId),defaultText:l.defaultText,version:l.version,commandVersion:l.commandVersion,modes:l.modes,placeholders:l.placeholders,allowsTeam:getLayerSpec(l.layer)?.scope==='command'}; }
+function block(l:ComposedLayer,role:string,ownerId?:string) { return {id:l.layer,title:l.title ?? l.layer,group:l.group ?? 'Возможности',scope:l.source,source:l.origin.ref,editable:!l.readOnly,text:l.effective,teamText:composeTeamText(role,l.layer,ownerId),defaultText:l.defaultText,version:l.version,commandVersion:l.commandVersion,modes:l.modes,placeholders:l.placeholders,allowsTeam:l.origin.ref!==systemPromptSourceFile() && getLayerSpec(l.layer)?.scope==='command'}; }
 function version(req:any):number|null {
  const raw=req.headers['if-match']?.replace(/^"|"$/g,'') ?? req.body?.if_match ?? req.body?.expectedVersion;
  if (raw===undefined) return null;
@@ -18,6 +20,24 @@ function version(req:any):number|null {
 export function registerRuntimeContextRoutes(app:FastifyInstance) {
  const owner=async(req:any,reply:any)=>{await authOrApiToken(req,reply); if(reply.sent)return; if(!isOwner(req.userId))return reply.code(403).send({error:'контекст ролей доступен только владельцу'});};
  const init=async(role:string)=>{taskflowTools(role,null); instructionResources(); await discoverChatResources(role);};
+ app.get<{Params:{role:string}}>('/api/roles/:role/behavior',{preHandler:owner},async(req,reply)=>{
+  if(!known(req.params.role))return reply.code(404).send({error:'роль не найдена'});
+  return readRoleBehavior(req.params.role);
+ });
+ app.post<{Params:{role:string};Body:{name:string;text:string;gender:'male'|'female'}}>('/api/roles/:role/behavior/templates',{preHandler:owner},async(req,reply)=>{
+  if(!known(req.params.role))return reply.code(404).send({error:'роль не найдена'});
+  try{return saveRoleBehaviorTemplate(req.params.role,req.body ?? {} as any);}catch(e){return reply.code(422).send({error:(e as Error).message});}
+ });
+ app.patch<{Params:{role:string};Body:{text:string;gender:'male'|'female';expectedVersion:number}}>('/api/roles/:role/behavior',{preHandler:owner},async(req,reply)=>{
+  if(!known(req.params.role))return reply.code(404).send({error:'роль не найдена'});
+  if(!Number.isSafeInteger(req.body?.expectedVersion))return reply.code(428).send({error:'expectedVersion обязателен'});
+  try{
+   await init(req.params.role);
+   if(req.body.gender!=='male' && req.body.gender!=='female')throw new Error('пол: male или female');
+   applyOverride({scope:'role',roleKey:req.params.role,layer:'role.persona',text:req.body.text,gender:req.body.gender,action:'set',expectedVersion:req.body.expectedVersion,sourceKind:'file',sourceRef:'ROLE.md',createdBy:(req as any).userId});
+   return readRoleBehavior(req.params.role);
+  }catch(e){return reply.code(e instanceof BehaviorConflict || e instanceof InstructionConflict?409:422).send({error:(e as Error).message,current:readRoleBehavior(req.params.role)});}
+ });
  app.get('/api/runtime/context/catalog',{preHandler:owner},async()=>{await init('builder');return {layers:LAYER_CATALOG};});
  app.get<{Querystring:{role?:string;mode?:string}}>('/api/runtime/context',{preHandler:owner},async(req,reply)=>{
   const role=req.query.role ?? ''; const mode=req.query.mode ?? 'work';
@@ -31,15 +51,15 @@ export function registerRuntimeContextRoutes(app:FastifyInstance) {
   return {role,canEdit:true,blocks:layers.map(l=>block(l,role,(req as any).userId)),layers:layers.map(l=>({id:l.layer,title:l.title ?? l.layer,scope:l.modes.join(', '),source:l.origin.ref,editable:!l.readOnly,text:l.effective})),notice:'Правки действуют в следующем запуске. История сессии сохраняется и может содержать прежние инструкции. Текст не меняет права и схемы инструментов.'};
  });
  app.get<{Params:{role:string;layer:string};Querystring:{scope?:string}}>('/api/runtime/context/:role/:layer',{preHandler:owner},async(req,reply)=>{
-  const {role,layer}=req.params;if(!known(role))return reply.code(404).send({error:'роль не найдена'});await init(role);
+  const {role}=req.params;const layer=canonicalInstructionLayer(role,req.params.layer);if(!known(role))return reply.code(404).send({error:'роль не найдена'});await init(role);
   const l=composeLayer(role,layer,(req as any).userId);if(!l)return reply.code(404).send({error:'слой не найден'});
-  const scope=req.query.scope==='command'?'command':'role';return {...json(l),history:listHistory(scope,layer.startsWith("owner.")?"owner:"+(req as any).userId:role,layer)};
+  const scope=l.origin.ref===systemPromptSourceFile() || req.query.scope==='command'?'command':'role';return {...json(l),history:listHistory(scope,layer.startsWith("owner.")?"owner:"+(req as any).userId:role,layer)};
  });
  const mutate=async(req:any,reply:any,action:'set'|'reset'|'restore')=>{
-  const {role,layer}=req.params;if(!known(role))return reply.code(404).send({error:'роль не найдена'});await init(role);
+  const {role}=req.params;const layer=canonicalInstructionLayer(role,req.params.layer);if(!known(role))return reply.code(404).send({error:'роль не найдена'});await init(role);
   const spec=getLayerSpec(layer);if(!spec || !composeLayer(role,layer,(req as any).userId))return reply.code(404).send({error:'слой не найден'});
   if(spec.readOnly)return reply.code(422).send({error:'слой только для просмотра'});
-  const scope=req.body?.scope==='command' || req.body?.scope==='team'?'command':'role';
+  const scope=spec.originRef===systemPromptSourceFile() || req.body?.scope==='command' || req.body?.scope==='team'?'command':'role';
   if(req.body?.scope && !['role','command','team',`role:${role}`].includes(req.body.scope))return reply.code(422).send({error:'недопустимая область'});
   if(scope==='command'&&spec.scope!=='command')return reply.code(422).send({error:'слой только для роли'});
   const expected=version(req);if(expected===null)return reply.code(428).send({error:'If-Match / expectedVersion обязателен'});

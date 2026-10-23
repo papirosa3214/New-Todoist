@@ -1,3 +1,4 @@
+import {roleInstructionText} from './roleHome.js';
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import { assertVoiceChat, voiceChatContext, saveVoiceMessage, voiceSummaryText } from "../lib/secretaryVoiceConversation.js";
 import { randomUUID } from "node:crypto";
@@ -36,7 +37,7 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       const query = new URL(req.url!,"http://localhost").searchParams;
       const chatId = query.get("chat_id"), ownerId=query.get("owner_id");
       if (chatId) {try {assertVoiceChat(ownerId || "",chatId);} catch {send(403,{error:"нет доступа к исходному чату"});return;}}
-      send(200,{instructions:composeLayer("secretary","secretary.voice")!.effective+"\n\n"+VOICE_TOOLS_GUIDE+"\n\n"+chatExecutionInstruction(chatExecutionMode(chatId ?? undefined)),greeting:composeLayer("secretary","secretary.greeting")!.effective,manifest:instructionManifest("secretary","voice")}); return;
+      send(200,{instructions:composeLayer("secretary","secretary.voice")!.effective+"\n\n"+roleInstructionText("secretary")+"\n\n"+VOICE_TOOLS_GUIDE+"\n\n"+chatExecutionInstruction(chatExecutionMode(chatId ?? undefined)),greeting:composeLayer("secretary","secretary.greeting")!.effective,manifest:instructionManifest("secretary","voice")}); return;
     }
     if (req.method === "GET" && req.url === "/secretary/tools") {
       try { send(200,{tools:await voiceToolManifest()}); } catch (error) { app.log.error({err:error},"не собран список инструментов голосового Помощника владельца"); send(500,{error:"сбой списка инструментов"}); }

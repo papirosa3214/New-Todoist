@@ -1,3 +1,4 @@
+import {behaviorInstruction} from './roleBehavior.js';
 import { stageSkillNames } from "../lib/collaborationTemplates.js";
 import { PLANNING_TOOLS, chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
 import fs from 'node:fs';
@@ -11,11 +12,11 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import {registerInstructionBlock, composeLayer, LAYER_CATALOG, type RunMode} from '../lib/roleContextResolver.js';
 import {INSTRUCTION_DEFAULTS} from './instructionDefaults.js';
-import {ensureRoleHome, roleHomeInstruction} from './roleHome.js';
+import {ensureRoleHome, roleHomeInstruction, systemPromptSourceFile, renderSystemPrompt} from './roleHome.js';
 import { withObservationContext } from "../lib/contextObservability.js";
 import { selectSkillsByJev } from "../lib/memorySkillsJev.js";
 const ROLE_RESOURCE_MODES: RunMode[] = ['work','resume','reply','review','subtask','chat'];
-const keyFor=(file:string)=>'resource.'+crypto.createHash('sha256').update(file).digest('hex').slice(0,20);
+const keyFor=(file:string)=>path.basename(file)==='AGENTS.md'?'role.prompt':file===systemPromptSourceFile()?'role.system':'resource.'+crypto.createHash('sha256').update(file).digest('hex').slice(0,20);
 const builtinTools=(cwd:string)=>[...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()];
 export function instructionResources(cwd=process.cwd()) {
  const specs:Array<{key:string;text:string;title:string;source:string;editable:boolean}>=[];
@@ -42,6 +43,7 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  const append=discovered.agentsFiles.map(x=>'# '+x.path+'\n'+composeLayer(role,keyFor(x.path))!.effective);
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
  append.push(composeLayer(role,'rules')!.effective);
+ append.push(behaviorInstruction(role));
  append.push(chatModeInstruction(mode));
  append.push('ПРОМЕЖУТОЧНЫЕ ПОЯСНЕНИЯ: краткость относится к итогу. Перед содержательной проверкой скажи одной фразой, что проверяешь; между сериями инструментов кратко сообщай значимую находку, изменение подхода или ожидание коллеги. Обычный текст должен быть понятен владельцу без открытия инструментов. Не комментируй каждый вызов и не выдумывай прогресс. Не раскрывай внутренние рассуждения. Это правило уточняет запреты пересказа хода работы в старых инструкциях.');
  append.push(roleHomeInstruction(role));
@@ -82,7 +84,7 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  const {buildSystemPrompt}=await import(pathToFileURL(path.join(sdkRoot,'core/system-prompt.js')).href);
  const tools=[createReadToolDefinition,createBashToolDefinition,createEditToolDefinition,createWriteToolDefinition,createGrepToolDefinition,createFindToolDefinition,createLsToolDefinition]
   .map(make=>make(cwd)).filter(t=>mode!=='plan'||PLANNING_TOOLS.includes(t.name));
- const base=custom ? composeLayer(role,keyFor(custom.path))!.effective : buildSystemPrompt({
+ const base=custom ? renderSystemPrompt(role,ensureRoleHome(role)) : buildSystemPrompt({
   cwd,selectedTools:tools.map(t=>t.name),
   toolSnippets:Object.fromEntries(tools.map(t=>[t.name,t.promptSnippet])),
   promptGuidelines:tools.flatMap(t=>t.promptGuidelines ?? []),
@@ -104,10 +106,12 @@ export async function discoverChatResources(role:string) {
  const currentKeys=new Set<string>();
  const register=(file:string,title:string,text:string,readOnly=false,modes=ROLE_RESOURCE_MODES)=>{
   const key=keyFor(file);currentKeys.add(key);
-  registerInstructionBlock({key,title,group:'Контекст',scope:'role',roles:[role],modes,sourceKind:'file',originRef:file,readOnly},text);
+  registerInstructionBlock({key,title,group:'Контекст',scope:file===systemPromptSourceFile()?'command':'role',roles:file===systemPromptSourceFile()?undefined:[role],modes,sourceKind:'file',originRef:file,readOnly},text);
  };
- for(const file of loader.getAgentsFiles().agentsFiles)register(file.path,path.basename(file.path),file.content);
- for(const source of [loader.getSystemPromptSource(),...loader.getAppendSystemPromptSources()].filter((x):x is {path:string}=>!!x))register(source.path,path.basename(source.path),fs.readFileSync(source.path,'utf8'),false,['chat']);
+ // AGENTS.md uses the static role.prompt layer; never expose a second resource editor.
+ for(const file of loader.getAgentsFiles().agentsFiles)if(path.basename(file.path)!=='AGENTS.md')register(file.path,path.basename(file.path),file.content);
+ register(systemPromptSourceFile(),'Общие инструкции — SYSTEM.md',fs.readFileSync(systemPromptSourceFile(),'utf8'),false,['work','resume','reply','review','subtask','chat','voice']);
+ for(const source of [...loader.getAppendSystemPromptSources()].filter((x):x is {path:string}=>!!x))register(source.path,path.basename(source.path),fs.readFileSync(source.path,'utf8'),false,['chat']);
  const skills=loader.getSkills().skills;
  for(const skill of skills)register(skill.filePath,'Навык: '+skill.name,fs.readFileSync(skill.filePath,'utf8'));
  const prompts=loader.getPrompts().prompts;
@@ -155,7 +159,7 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
   systemPrompt:systemPrompt+'\n\n'+roleHomeInstruction(role)+stagePrompt+missingPrompt,
   appendSystemPrompt:[],
   skillsOverride:()=>({skills:usedSkills,diagnostics:discovered.diagnostics}),
-  agentsFilesOverride:()=>({agentsFiles:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))!.effective}))}),
+  agentsFilesOverride:()=>({agentsFiles:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))!.effective})).filter(f=>!systemPrompt.includes(f.content))}),
  });
  await loader.reload();
  return Object.assign(loader,{disposeResources:()=>{if(snapshotDir)fs.rmSync(snapshotDir,{recursive:true,force:true});}});
@@ -173,7 +177,7 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  const discovered=await discoverChatResources(role);
  const custom=discovered.systemPromptSource;
  let base:string;
- if(custom) base=composeLayer(role,keyFor(custom.path))!.effective;
+ if(custom) base=renderSystemPrompt(role,ensureRoleHome(role));
  else {
   const sdkRoot=path.dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')));
   const {buildSystemPrompt}=await import(pathToFileURL(path.join(sdkRoot,'core/system-prompt.js')).href);
@@ -189,6 +193,7 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
  append.push(composeLayer(role,'rules')!.effective);
  append.push(roleHomeInstruction(role));
+ append.push(behaviorInstruction(role));
  append.push(chatModeInstruction(mode));
  append.push('ПРОМЕЖУТОЧНЫЕ ПОЯСНЕНИЯ: краткость относится к итогу. Перед содержательной проверкой скажи одной фразой, что проверяешь; между сериями инструментов кратко сообщай значимую находку, изменение подхода или ожидание коллеги. Обычный текст должен быть понятен владельцу без открытия инструментов. Не комментируй каждый вызов и не выдумывай прогресс. Не раскрывай внутренние рассуждения. Это правило уточняет запреты пересказа хода работы в старых инструкциях.');
  return [base,...append].join('\n\n');

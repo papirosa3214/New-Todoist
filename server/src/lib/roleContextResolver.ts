@@ -1,3 +1,4 @@
+import {readRoleBehavior,applyRoleBehavior,behaviorInstruction,atomicBehaviorWrite} from '../runtime/roleBehavior.js';
 import {taskBriefInstruction} from "./taskBrief.js";
 import { pendingRulesForRole } from "./agentRules.js";
 /**
@@ -37,7 +38,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import db from "../db.js";
-import { roleAgentsText, writeRoleAgents } from "../runtime/roleHome.js";
+import { roleAgentsText, writeRoleAgents, systemPromptSourceFile, roleHome } from "../runtime/roleHome.js";
 import { loadRoleRouting } from "../roleRouting.js";
 import { AGENT_RULES } from "../agentState.js";
 // LOCAL_EXECUTION_POLICY живёт в inProcessRun.ts, импорт через прямой
@@ -222,6 +223,7 @@ for (const [key, [title, group, modes, placeholders]] of Object.entries(BLOCK_ME
     originRef: "server/src/runtime/instructionDefaults.ts:" + key, readOnly: false,
     ...(key.startsWith("secretary.") ? {roles: ["secretary"]} : {})});
 }
+LAYER_CATALOG.push({key:'role.persona',title:'Личность роли — ROLE.md',group:'Роль',scope:'role',modes:['work','resume','reply','review','subtask','chat','voice'],sourceKind:'file',originRef:'~/taskflow/roles/<role>/ROLE.md',readOnly:false});
 for (const key of ["owner.task_intake","owner.extract_tasks","ai.subtasks","ai.structure"]) LAYER_CATALOG.push({key,title:({"owner.task_intake":"Постановка задач владельца","owner.extract_tasks":"Извлечение задач","ai.subtasks":"Предложение подзадач","ai.structure":"Разбор надиктовки"} as Record<string,string>)[key],group:"Постановка",scope:key.startsWith("owner.") ? "role" : "command",modes:["voice","chat","work"],sourceKind:"db",originRef:key.startsWith("owner.")?"user_ai_prompts (существующие настройки ИИ)":"ai.ts → instructionDefaults",readOnly:false,roles:["secretary"]});
 export function ownerPromptKey(ownerId?:string): string {
  return ownerId ?? (db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY created_at,id LIMIT 1").get() as {id:string}|undefined)?.id ?? "";
@@ -242,6 +244,7 @@ for (const spec of LAYER_CATALOG) {
 }
 export function registerInstructionBlock(spec: LayerSpec, original: string): void {
  if (!getLayerSpec(spec.key)) LAYER_CATALOG.push(spec);
+ else if(spec.key==="role.system")Object.assign(getLayerSpec(spec.key)!,spec);
  INSTRUCTION_DEFAULTS[spec.key] = original;
 }
 
@@ -272,6 +275,7 @@ function readActiveOverride(
   roleKey: string,
   layer: string,
 ): OverrideRow | null {
+
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='role_context_overrides'").get()) return null;
   const row = db
     .prepare(
@@ -292,8 +296,13 @@ function readOriginal(layer: LayerSpec, role: string, ownerId?: string): string 
     const row=db.prepare("SELECT prompt FROM user_ai_prompts WHERE user_id=? AND scope=?").get(ownerPromptKey(ownerId),layer.key.slice(6)) as {prompt:string}|undefined;
     return row?.prompt?.trim() ? row.prompt : (INSTRUCTION_DEFAULTS[layer.key] ?? "");
   }
+  if(layer.key==="role.prompt")return roleAgentsText(role);
+  if(layer.key==="role.system")return fs.readFileSync(systemPromptSourceFile(),"utf8");
+  if(layer.key==="role.persona") return readRoleBehavior(role).text;
+  if(layer.key.startsWith("resource.") && layer.sourceKind==="file" && fs.existsSync(layer.originRef))return fs.readFileSync(layer.originRef,"utf8");
   if (Object.hasOwn(INSTRUCTION_DEFAULTS, layer.key)) return INSTRUCTION_DEFAULTS[layer.key];
   switch (layer.key) {
+    case "role.persona": return readRoleBehavior(role).text;
     case "role.prompt": {
       // Один источник (20.10.2026): «Инструкция роли» — это AGENTS.md в папке
       // роли. Общий шаблон сюда не входит; недопустимый ключ — пустой текст.
@@ -377,11 +386,23 @@ function readOriginal(layer: LayerSpec, role: string, ownerId?: string): string 
   }
 }
 
+export function canonicalInstructionLayer(role:string,layer:string):string {
+ if(!layer.startsWith('resource.'))return layer;
+ const home=roleHome(role);
+ const hashed=(file:string)=>'resource.'+crypto.createHash('sha256').update(file).digest('hex').slice(0,20);
+ if(layer===hashed(home.agents))return 'role.prompt';
+ if(layer===hashed(home.system)||layer===hashed(systemPromptSourceFile()))return 'role.system';
+ return layer;
+}
 export function revision(scope: "role" | "command", role: string, layer: string, ownerId?:string): number {
+  layer=canonicalInstructionLayer(role,layer);
+  if(getLayerSpec(layer)?.originRef===systemPromptSourceFile()){scope="command";role="*";}
+  if(layer === "role.persona") return scope==="command"?0:readRoleBehavior(role).version;
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='role_context_overrides'").get()) return 0;
   return (db.prepare("SELECT COALESCE(MAX(version),0) AS v FROM role_context_overrides WHERE scope=? AND role_key=? AND layer=?").get(scope, scope === "command" ? "*" : layer.startsWith("owner.") ? "owner:"+ownerPromptKey(ownerId) : role, layer) as {v:number}).v;
 }
 export function composeLayer(role: string, layerKey: string, ownerId?:string): ComposedLayer | null {
+ layerKey=canonicalInstructionLayer(role,layerKey);
  const spec = getLayerSpec(layerKey);
  if (!spec || (spec.roles && !spec.roles.includes(role))) return null;
  const original = readOriginal(spec, role, ownerId);
@@ -415,7 +436,7 @@ export function composeLayer(role: string, layerKey: string, ownerId?:string): C
    };
  }
  return {layer: layerKey, title: spec.title, group: spec.group, defaultText: original,
-  effective: taskBriefInstruction(layerKey, (layerKey === "role.prompt" || layerKey.startsWith("owner.")) ? original : (row?.text ?? original)),
+  effective: taskBriefInstruction(layerKey, (layerKey === "role.system" || layerKey === "role.persona" || layerKey === "role.prompt" || layerKey.startsWith("owner.")) ? original : (row?.text ?? original)),
   source: row ? (roleRow ? "override" : "command_default") : "original",
   origin: {kind: spec.sourceKind, ref: spec.originRef}, version: revision("role", role, layerKey, ownerId),
   roleVersion: revision("role", role, layerKey, ownerId), commandVersion: revision("command", "*", layerKey),
@@ -427,7 +448,7 @@ export function composeTeamText(role:string,layerKey:string,ownerId?:string):str
  return readActiveOverride("command","*",layerKey)?.text ?? readOriginal(spec,role,ownerId);
 }
 export function compose(role: string, mode: RunMode): ComposedLayer[] {
- return listLayerKeysForMode(mode).map(k => composeLayer(role,k)).filter((x): x is ComposedLayer => !!x);
+ return listLayerKeysForMode(mode).map(k => composeLayer(role,k)).filter((x): x is ComposedLayer => !!x).map(x=>x.layer==="role.persona"?{...x,effective:behaviorInstruction(role)}:x);
 }
 export function globalVersionForRole(role: string): number {
  return (db.prepare("SELECT COUNT(*) AS v FROM role_context_overrides WHERE (scope='role' AND role_key=?) OR (scope='command' AND role_key='*')").get(role) as {v:number}).v;
@@ -456,7 +477,8 @@ export function validateInstruction(layer: string, text: string): void {
   if (!text.includes("{"+name+"}")) throw new Error("обязательный placeholder: " + name);
  }
 }
-export function applyOverride(args: {scope:"role"|"command";roleKey:string;layer:string;text:string;sourceKind:string;sourceRef:string;createdBy:string;action:"set"|"reset"|"restore";reason?:string|null;expectedVersion?:number}): ComposedLayer {
+export function applyOverride(args: {scope:"role"|"command";roleKey:string;layer:string;text:string;sourceKind:string;sourceRef:string;createdBy:string;action:"set"|"reset"|"restore";reason?:string|null;expectedVersion?:number;gender?:"male"|"female"}): ComposedLayer {
+ args={...args,layer:canonicalInstructionLayer(args.roleKey,args.layer)};
  const spec=getLayerSpec(args.layer);
  if (!spec || spec.readOnly) throw new Error("слой только для просмотра или не найден");
  if (spec.scope === "role" && args.scope !== "role") throw new Error("этот слой можно менять только для роли");
@@ -469,7 +491,12 @@ export function applyOverride(args: {scope:"role"|"command";roleKey:string;layer
    db.prepare("INSERT INTO role_context_overrides_history(id,scope,role_key,layer,version,text,source_kind,source_ref,action,by_user_id) VALUES (?,?,?,?,0,?,?,?,'set',?)").run(crypto.randomUUID(),args.scope,roleKey,args.layer,readOriginal(spec,args.roleKey,args.createdBy),spec.sourceKind,spec.originRef,args.createdBy);
   }
   db.prepare("UPDATE role_context_overrides SET is_active=0 WHERE scope=? AND role_key=? AND layer=?").run(args.scope,roleKey,args.layer);
-  if (args.layer === "role.prompt" && args.action !== "reset") writeRoleAgents(args.roleKey,args.text,args.createdBy);
+  const fileLayer=args.layer==="role.persona" || args.layer==="role.prompt" || spec.originRef===systemPromptSourceFile() || (args.layer.startsWith("resource.") && spec.originRef.endsWith("/AGENTS.md"));
+  const fileText=args.action==="reset" && fileLayer ? (readHistoryEntry(args.scope,roleKey,args.layer,0)?.text ?? readOriginal(spec,args.roleKey,args.createdBy)) : args.text;
+  if(spec.originRef===systemPromptSourceFile()) {atomicBehaviorWrite(systemPromptSourceFile(),fileText);}
+  if(spec.originRef.endsWith("/AGENTS.md") && args.layer.startsWith("resource.") )writeRoleAgents(args.roleKey,fileText,args.createdBy);
+  if(args.layer==="role.persona") {const current=readRoleBehavior(args.roleKey);applyRoleBehavior(args.roleKey,{text:fileText,gender:args.gender ?? current.gender,expectedVersion:previous});}
+  if (args.layer === "role.prompt") writeRoleAgents(args.roleKey,fileText,args.createdBy);
   if(args.layer.startsWith("owner.")) {
    if(args.action==="reset")db.prepare("DELETE FROM user_ai_prompts WHERE user_id=? AND scope=?").run(args.createdBy,args.layer.slice(6));
    else db.prepare("INSERT INTO user_ai_prompts(user_id,scope,prompt) VALUES (?,?,?) ON CONFLICT(user_id,scope) DO UPDATE SET prompt=excluded.prompt,updated_at=datetime('now')").run(args.createdBy,args.layer.slice(6),args.text);

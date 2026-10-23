@@ -199,6 +199,7 @@ describe("/api/runtime/context — REST", () => {
   it("POST /reset после правки возвращает effective=оригинал и пишет history", async () => {
     const { app, session } = await bootstrap();
     const role = seedRole("builder");
+    const original = (await app.inject({method:"GET",url:`/api/runtime/context/${role}/role.prompt`,headers:{authorization:`Bearer ${session.ownerToken}`}})).json().effective;
     // Сначала задать override
     await app.inject({
       method: "PATCH",
@@ -216,7 +217,7 @@ describe("/api/runtime/context — REST", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { effective: string; version: number; source: string };
     expect(body.source).toBe("original"); // reset removes override
-    expect(body.effective).toBe("");      // original для роли без промпта — пустой
+    expect(body.effective).toBe(original); // исходный AGENTS.md, сохранённый в истории v0
     expect(body.version).toBe(2);          // set v1, потом reset v2
     await app.close();
   });
