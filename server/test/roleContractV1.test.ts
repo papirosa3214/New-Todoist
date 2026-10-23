@@ -402,21 +402,21 @@ describe("блоки command, link, widget и таблица (20.10.2026)", () =
     expect(errors).toMatch(/output\[1\]\.command/);
     expect(errors).toMatch(/output\[2\]\.widget/);
   });
-  it("принимает внутреннюю ссылку на заметку taskflow://note/<id> (23.10.2026)", async () => {
+  it("принимает внутреннюю ссылку на заметку note://<id> (23.10.2026)", async () => {
     const { validateStructuredRoleContractV1, ROLE_BLOCK_GUIDE } = await import("../src/lib/roleContractV1.js");
     // Владелец: «ссылку правильную давай на материал... чтобы по падении мог
     // сразу прочитать» — с телефона тап по ссылке открывает заметку в
     // приложении, а не веб-страницу.
     expect(validateStructuredRoleContractV1(env([
-      { type: "link", title: "Отчёт по ветке", url: "taskflow://note/f1dd193f-9ebf-4ecc-926c-04988bcc58c6" },
+      { type: "link", title: "Отчёт по ветке", url: "note://f1dd193f-9ebf-4ecc-926c-04988bcc58c6" },
     ])).errors).toEqual([]);
     // Чужие схемы и подделки — по-прежнему мимо.
     const errors = validateStructuredRoleContractV1(env([
-      { type: "link", title: "x", url: "taskflow://evil/payload" },
+      { type: "link", title: "x", url: "task://evil/payload" },
       { type: "link", title: "y", url: "javascript:alert(1)" },
     ])).errors.join("\n");
-    expect(errors).toMatch(/taskflow:\/\/note\/<id>/);
-    expect(ROLE_BLOCK_GUIDE.link).toContain("taskflow://note/");
+    expect(errors).toMatch(/note:\/\/<id заметки>/);
+    expect(ROLE_BLOCK_GUIDE.link).toContain("note://<id заметки>");
   });
 });
 

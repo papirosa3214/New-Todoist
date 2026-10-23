@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import db from "../db.js";
 import { recoverAgentDelivery } from "../routes/chats.js";
+import { isChatRoleLocked } from "./chatSession.js";
 
 // Сторож доставок сообщений ролям: два механизма, которые закрывают
 // «уточняющий вопрос без ответа».
@@ -24,10 +25,13 @@ import { recoverAgentDelivery } from "../routes/chats.js";
 //   • `sweepFailedDeliveries` — поднимает УПАВШИЙ ход заново тем же
 //     путём, что и живое сообщение (`recoverAgentDelivery`), с
 //     ограниченным числом попыток. Истёкшие по TTL доставки не
-//     трогаем: они помечены в payload ключом `expired`.
+//     трогаем: они помечены в payload ключом `expired`. Сбой старше
+//     окна (по умолчанию 6 часов) тоже не трогаем: это не «вопрос без
+//     ответа», а archaeology.
 //   • `sweepStalledDeliveries` — сообщает владельцу, что вопрос
-//     висит: роль не работает по этой карточке, а доставка лежит
-//     дольше порога. Это последнее окно, когда ещё можно вмешаться.
+//     висит: роль не работает по этой карточке (или не занята этой
+//     перепиской), а доставка лежит дольше порога. Это последнее
+//     окно, когда ещё можно вмешаться.
 
 /** Через сколько минут после сбоя ход поднимается заново. */
 export function chatDeliveryRetryMinutes(): number {
@@ -45,6 +49,23 @@ export function chatDeliveryMaxAttempts(): number {
 export function chatDeliveryStallMinutes(): number {
   const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_STALL_MIN ?? 20);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 20;
+}
+
+/**
+ * Как далеко в прошлом может быть сбой хода, чтобы доставку ещё стоило
+ * поднимать заново.
+ *
+ * Без этого ограничения повтор поднимал ВСЕ упавшие доставки: в боевой БД
+ * их 75, и 73 из них старше суток (12–21.10.2026). Подъём недельной
+ * давности — не починка вопроса, а шум: роль отвечает на вопрос, который
+ * уже никому не нужен, и съедает реальный ресурс.
+ *
+ * Окно 6 часов покрывает живые случаи (ход роли упал ночью — утром
+ * владелец ещё ждёт ответа) и отсекает всю archaeology.
+ */
+export function chatDeliveryRetryMaxAgeMinutes(): number {
+  const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_RETRY_MAX_AGE_MIN ?? 360);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 360;
 }
 
 export const DELIVERY_STALLED_NOTICE_TYPE = "delivery_stalled";
@@ -103,30 +124,41 @@ export interface FailedDeliverySweepReport {
  * Поднять упавшие ходы заново.
  *
  * Берём только `failed`, у которых НЕТ метки `expired` (это доставки,
- * истёкшие по TTL — их сервер закрыл сам, вопрос по ним неактуален).
+ * истёкшие по TTL — их сервер закрыл сам, вопрос по ним неактуален),
+ * и только СВЕЖИЕ сбои: сбой старше окна (по умолчанию 6 часов) не
+ * поднимается — это не «вопрос без ответа», а неделя-old archaeology.
  * Попытки считаются в `payload_json.retryCount`; лимит достигнут —
  * доставка больше не поднимается, владельцу уходит уведомление.
  */
 export async function sweepFailedDeliveries(options?: {
   minAgeMinutes?: number;
+  maxAgeMinutes?: number;
   maxAttempts?: number;
   limit?: number;
 }): Promise<FailedDeliverySweepReport> {
   const minAge = options?.minAgeMinutes ?? chatDeliveryRetryMinutes();
+  const maxAge = options?.maxAgeMinutes ?? chatDeliveryRetryMaxAgeMinutes();
   const maxAttempts = options?.maxAttempts ?? chatDeliveryMaxAttempts();
   const limit = options?.limit ?? 20;
   const rows = db
     .prepare(
-      `SELECT id, chat_id, role_id, message_id, payload_json, finished_at, updated_at, NULL AS chat_task_id
-         FROM chat_message_queue
-        WHERE status='failed'
-          AND finished_at IS NOT NULL
-          AND julianday(finished_at) < julianday('now', ?)
-          AND COALESCE(json_extract(COALESCE(payload_json,'{}'),'$.expired'),0)=0
-        ORDER BY finished_at
+      `SELECT q.id, q.chat_id, q.role_id, q.message_id, q.payload_json, q.finished_at, q.updated_at,
+              c.task_id AS chat_task_id
+         FROM chat_message_queue q
+         LEFT JOIN chats c ON c.id = q.chat_id
+        WHERE q.status='failed'
+          AND q.finished_at IS NOT NULL
+          AND julianday(q.finished_at) < julianday('now', ?)
+          AND julianday(q.finished_at) > julianday('now', ?)
+          AND COALESCE(json_extract(COALESCE(q.payload_json,'{}'),'$.expired'),0)=0
+        ORDER BY q.finished_at
         LIMIT ?`,
     )
-    .all(`-${Math.max(1, Math.floor(minAge))} minutes`, limit) as QueueRow[];
+    .all(
+      `-${Math.max(1, Math.floor(minAge))} minutes`,
+      `-${Math.max(1, Math.floor(maxAge))} minutes`,
+      limit,
+    ) as QueueRow[];
 
   const report: FailedDeliverySweepReport = { retried: 0, exhausted: 0 };
   for (const row of rows) {
@@ -207,11 +239,53 @@ function roleWorksOnTask(roleId: string, taskId: string): boolean {
   return Boolean(job);
 }
 
+/**
+ * Живой ли сейчас ход роли.
+ *
+ * Пока ход идёт, доставку нельзя считать мёртвой: она либо уже взята
+ * ролью в работу (`picked`), либо ждёт своей очереди (`pending`), и роль
+ * разберёт её, когда освободится. Прежний порог в 60 минут в этом случае
+ * помечал неуспешным сообщение легитимного долгого хода роли — замечание
+ * проверяющей к правке d2789497.
+ *
+ * Признаки живого хода:
+ *   • роль заняла пару (чат, роль) — ход роли идёт прямо сейчас;
+ *   • у роли есть живая попытка с недавним пульсом;
+ *   • у роли есть занятый слот карточки с недавним пульсом.
+ *
+ * Живёт здесь, а не в `chatQueueRecovery.ts`: тем же признанием живого
+ * хода пользуется и сторож висящих вопросов, и просрочка доставок —
+ * одно понятие «роль занята» на оба случая.
+ */
+export function roleIsBusyNow(roleId: string, chatId: string): boolean {
+  if (chatId && isChatRoleLocked(chatId, roleId)) return true;
+  const attempt = db
+    .prepare(
+      `SELECT 1 FROM attempts
+        WHERE executor_id = ? AND ended_at IS NULL
+          AND heartbeat_at > datetime('now', '-10 minutes')
+        LIMIT 1`,
+    )
+    .get(roleId);
+  if (attempt) return true;
+  const slot = db
+    .prepare(
+      `SELECT 1 FROM subtasks
+        WHERE agent_id = ? AND done = 0
+          AND agent_state IN ('in_progress', 'review')
+          AND agent_heartbeat_at > datetime('now', '-10 minutes')
+        LIMIT 1`,
+    )
+    .get(roleId);
+  return Boolean(slot);
+}
+
 export interface StalledDelivery {
   id: string;
   chatId: string;
   roleId: string;
-  taskId: string;
+  /** Карточка доставки; в личной переписке её нет — null. */
+  taskId: string | null;
   ageMinutes: number;
   messageId: string | null;
   slot: string | null;
@@ -219,9 +293,10 @@ export interface StalledDelivery {
 }
 
 /**
- * Доставки, которые висят: роль-получатель не работает по карточке,
- * а сообщение лежит в `pending` дольше порога. Такие вопросы без
- * вмешательства доживали до TTL и умирали молча.
+ * Доставки, которые висят: роль-получатель не работает по карточке
+ * (или не занята этой перепиской), а сообщение лежит в `pending` дольше
+ * порога. Такие вопросы без вмешательства доживали до TTL и умирали
+ * молча.
  */
 export function findStalledDeliveries(options?: {
   minAgeMinutes?: number;
@@ -245,10 +320,16 @@ export function findStalledDeliveries(options?: {
   const stalled: StalledDelivery[] = [];
   for (const row of rows) {
     const taskId = taskIdOfDelivery(row);
-    // Вопрос без карточки (личная переписка) ждёт живого хода роли:
-    // там доставку поднимает сам маршрут, пинг не нужен.
-    if (!taskId) continue;
-    if (roleWorksOnTask(row.role_id, taskId)) continue;
+    if (taskId) {
+      // Карточка: роль работает по ней — вопрос в очереди, всё в порядке.
+      if (roleWorksOnTask(row.role_id, taskId)) continue;
+    } else {
+      // Личная переписка: карточки нет, но вопрос висит так же — если
+      // роль им не занята. Это ровно тот случай, о котором владелец
+      // 23.10.2026: «регистратор задал уточняющий вопрос — и никто не
+      // ответит». Раньше такие доставки молча пропускались.
+      if (roleIsBusyNow(row.role_id, row.chat_id)) continue;
+    }
     const text = row.message_id
       ? ((db.prepare("SELECT text FROM chat_messages WHERE id=?").get(row.message_id) as
           | { text: string }
@@ -289,10 +370,14 @@ function taskTitle(taskId: string): string {
 function stalledText(item: StalledDelivery): string {
   const parts = [
     `Вопрос без ответа: ${roleName(item.roleId)} ждёт ${item.ageMinutes} мин.`,
-    `Карточка «${taskTitle(item.taskId)}» (${item.taskId})`,
+    item.taskId
+      ? `Карточка «${taskTitle(item.taskId)}» (${item.taskId})`
+      : `Переписка ${item.chatId}`,
     item.slot ? `этап ${item.slot}` : null,
     item.snippet ? `Текст: «${item.snippet}»` : null,
-    "Роль не работает по этому этапу — либо запусти её, либо ответь сам.",
+    item.taskId
+      ? "Роль не работает по этому этапу — либо запусти её, либо ответь сам."
+      : "Роль не занята этой перепиской — ответь в чате сам или запусти роль.",
   ];
   return parts.filter(Boolean).join(". ");
 }

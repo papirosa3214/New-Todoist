@@ -32,8 +32,11 @@ import {
   getMessageDelivery,
 } from "./chatQueue.js";
 import { recoverAgentDelivery } from "../routes/chats.js";
-import { isChatRoleLocked } from "./chatSession.js";
-import { sweepFailedDeliveries, sweepStalledDeliveries } from "./chatDeliveryWatch.js";
+import {
+  roleIsBusyNow,
+  sweepFailedDeliveries,
+  sweepStalledDeliveries,
+} from "./chatDeliveryWatch.js";
 
 interface RecovererHandle {
   stop: () => void;
@@ -80,6 +83,20 @@ export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-pr
   // Only leases from before this process. Fresh pickups are never stolen.
   const cutoff=new Date(Math.floor(processStartedAt.getTime()/1000)*1000-1000).toISOString();
   db.prepare("UPDATE chat_message_queue SET status='pending',picked_at=NULL,updated_at=datetime('now') WHERE status='picked' AND julianday(updated_at)<julianday(?)").run(cutoff);
+  // Пинг висящих вопросов — ДО просрочки, в том числе на старте сервера.
+  // Иначе вопрос, который пережил перезапуск (сервер стоял, роль не забрала),
+  // тихо умирал в `failed` по TTL, и владелец так и не узнавал, что на
+  // него ждут. Пинг — последнее окно, когда ещё можно вмешаться.
+  try {
+    const stalled = sweepStalledDeliveries();
+    if (stalled.notified > 0) {
+      console.log(
+        `[chatDeliveryWatch] висящих вопросов на старте: ${stalled.stalled}, уведомлений владельцу: ${stalled.notified}`,
+      );
+    }
+  } catch (error) {
+    console.warn("[chatDeliveryWatch] пинг висящих вопросов на старте не удался:", error);
+  }
   // Мёртвые доставки (старше порога) — в терминальный статус: иначе они
   // держат сторож выкладки и правка в main не доезжает до живого сервера.
   const expired = expireStaleDeliveries();
@@ -120,47 +137,6 @@ export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-pr
 export function chatDeliveryTtlMinutes(): number {
   const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_TTL_MIN ?? 60);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60;
-}
-
-/**
- * Перевести в терминальный статус доставки, которые старше порога.
- * Возвращает число закрытых доставок.
- */
-/**
- * Живой ли сейчас ход роли.
- *
- * Пока ход идёт, доставку нельзя считать мёртвой: она либо уже взята
- * ролью в работу (`picked`), либо ждёт своей очереди (`pending`), и роль
- * разберёт её, когда освободится. Прежний порог в 60 минут в этом случае
- * помечал неуспешной сообщение легитимного долгого хода роли — замечание
- * проверяющей к правке d2789497.
- *
- * Признаки живого хода:
- *   • роль заняла пару (чат, роль) — ход роли идёт прямо сейчас;
- *   • у роли есть живая попытка с недавним пульсом;
- *   • у роли есть занятый слот карточки с недавним пульсом.
- */
-export function roleIsBusyNow(roleId: string, chatId: string): boolean {
-  if (chatId && isChatRoleLocked(chatId, roleId)) return true;
-  const attempt = db
-    .prepare(
-      `SELECT 1 FROM attempts
-        WHERE executor_id = ? AND ended_at IS NULL
-          AND heartbeat_at > datetime('now', '-10 minutes')
-        LIMIT 1`,
-    )
-    .get(roleId);
-  if (attempt) return true;
-  const slot = db
-    .prepare(
-      `SELECT 1 FROM subtasks
-        WHERE agent_id = ? AND done = 0
-          AND agent_state IN ('in_progress', 'review')
-          AND agent_heartbeat_at > datetime('now', '-10 minutes')
-        LIMIT 1`,
-    )
-    .get(roleId);
-  return Boolean(slot);
 }
 
 /**
@@ -252,6 +228,11 @@ export function _getRecoveryRow(id: string) {
 // Re-export fenceMessageDelivery — нужен местами в тестах для
 // ручной эмуляции state «уже superseded».
 export { fenceMessageDelivery };
+
+// Признак живого хода роли живёт в стороже доставок: тем же понятием
+// пользуется и пинг висящих вопросов, и просрочка доставок. Реэкспорт —
+// чтобы старые импорты не сломались.
+export { roleIsBusyNow };
 
 // Re-export helper для прямого вызова из тестов (без sweep'а).
 export { recoverAgentDelivery } from "../routes/chats.js";

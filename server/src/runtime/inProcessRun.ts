@@ -72,7 +72,8 @@ import { buildInProcessTaskContext } from "./taskContextBridge.js";
 import { buildDependencyContext } from "./dependencyContext.js";
 import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
-import { isolatedLocalOperations, roleIsolationEnabled } from "./localRoleOperations.js";
+import { RoleProcessLease } from "./roleProcessLease.js";
+import { ROLE_USER, isolatedLocalOperations, roleIsolationEnabled } from "./localRoleOperations.js";
 import { previousSessionDigest } from "./slotSession.js";
 import { remoteRoleWorkspace } from "./roleWorkspace.js";
 import { resolveRoleHost } from "./roleHost.js";
@@ -1541,9 +1542,11 @@ try {
     bash: { operations: o.bash }, read: { operations: o.read }, write: { operations: o.write },
     edit: { operations: o.edit }, grep: { operations: o.grep }, find: { operations: o.find }, ls: { operations: o.ls },
   });
+  const runId = `inproc_${crypto.randomUUID()}`;
+  const processLease = !host && roleIsolationEnabled() ? new RoleProcessLease(ROLE_USER, {runId, taskId, role, subtaskId:input.subtaskId}) : undefined;
   const операции = host
     ? поИнструментам(hostOperations(host, cwd))
-    : roleIsolationEnabled() ? поИнструментам(isolatedLocalOperations(cwd)) : undefined;
+    : roleIsolationEnabled() ? поИнструментам(isolatedLocalOperations(cwd, processLease)) : undefined;
   const builtinTools = withHostToolExecution(host, cwd,
     [...createCodingTools(cwd, операции), ...createReadOnlyTools(cwd, операции)]
   );
@@ -1587,7 +1590,6 @@ try {
     (session as any).setThinkingLevel(roleThinking);
   }
 
-  const runId = `inproc_${crypto.randomUUID()}`;
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
   logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
@@ -1818,7 +1820,8 @@ try {
         }
       }
       if(input.subtaskId)rememberSlotSession(input.subtaskId,manager);
-      session.dispose();
+      try { session.dispose(); }
+      finally { await processLease?.dispose().catch(error => console.warn("[roleProcesses] run cleanup failed; guard will retry", String(error))); }
       resourceLoader.disposeResources();
       await composio.close().catch(() => {});
       await infra.close().catch(() => {});

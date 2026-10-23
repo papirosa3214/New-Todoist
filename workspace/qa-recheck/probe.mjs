@@ -1,0 +1,18 @@
+import { chromium } from "playwright";
+const base = process.argv[2] || "http://127.0.0.1:4104";
+const path = process.argv[3] || "/upcoming";
+const b = await chromium.launch();
+const p = await b.newPage({ viewport: { width: 420, height: 912 }, deviceScaleFactor: 2, locale: "ru-RU", timezoneId: "Europe/Moscow" });
+const errs = [];
+p.on("console", m => { if (m.type() === "error") errs.push(m.text()); });
+p.on("pageerror", e => errs.push("pageerror: " + e.message));
+await p.goto(base + path, { waitUntil: "networkidle" });
+await p.waitForTimeout(2500);
+const txt = await p.evaluate(() => document.body.innerText);
+console.log("=== innerText (first 2500) ===");
+console.log(txt.slice(0, 2500));
+console.log("=== innerText includes QA-проверка:", txt.includes("QA-проверка"));
+const chips = await p.evaluate(() => Array.from(document.querySelectorAll("*")).filter(e => e.textContent && e.textContent.includes("QA-проверка")).slice(0,10).map(e => e.tagName + "." + e.className + " :: " + e.textContent.slice(0,120)));
+console.log("=== elements mentioning QA-проверка:", JSON.stringify(chips, null, 1));
+console.log("=== console errors:", JSON.stringify(errs.slice(0,10)));
+await b.close();

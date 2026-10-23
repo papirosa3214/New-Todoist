@@ -1,0 +1,14 @@
+[
+  { "goto": "/task/2d23e96a-794a-4096-8210-7ed4e1da7445/edit" },
+  { "wait": 1500 },
+  { "snap": "forma-redakciya" },
+  { "click": "text=\"Срок и время\"" },
+  { "wait": 600 },
+  { "snap": "panel-sroka" },
+  { "click": "button:text-is(\"Сегодня\")" },
+  { "wait": 400 },
+  { "snap": "vybrano-segodnya" },
+  { "click": "text=\"Готово\"" },
+  { "wait": 1500 },
+  { "snap": "sohraneno" }
+]
