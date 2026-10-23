@@ -141,7 +141,7 @@ export function useRunScheduleNow() {
     mutationFn: (id: string) =>
       api.post<{
         ok: boolean;
-        counts: { created: number };
+        counts: { created: number; skipped: number; failed: number };
         run: {
           id: string;
           run_at: string;

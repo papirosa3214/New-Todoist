@@ -137,6 +137,9 @@ export function registerScheduleRoutes(app: FastifyInstance) {
     if (kind === "cron" && !parseCron(expr)) {
       return reply.code(400).send({ error: "cron — пять полей: минуты часы день месяц день-недели" });
     }
+    // Якорь предпросмотра — сегодняшняя дата в зоне рутины: ровно тот же
+    // якорь, что получит рутина при создании (D3).
+    const now = new Date();
     const next = nextRunAfter(
       {
         kind,
@@ -147,7 +150,7 @@ export function registerScheduleRoutes(app: FastifyInstance) {
         // запуск, посчитанный планировщиком по той же формуле, совпадают.
         anchor: anchorForNow(new Date(), timezone),
       },
-      new Date(),
+      now,
     );
     return {
       next_run_at: next ? next.toISOString() : null,
@@ -239,25 +242,34 @@ export function registerScheduleRoutes(app: FastifyInstance) {
       });
     }
 
-    const anchor = anchorForNow(new Date(), timezone);
     const rule = {
       kind,
       expr: ruleExpr,
       timeLocal: time ? timeLocal : kind === "cron" ? "00:00" : "09:00",
       timezone,
-      anchor,
+      // Якорь рутины — дата её создания в зоне рутины (тот же, что и в
+      // тике): считаем ПОСЛЕ вставки, created_at ставит сама БД.
+      anchor: { year: 1970, month: 1, day: 1 },
     };
-    const next = nextRunAfter(rule, new Date());
     const created = createSchedule({
       title,
       taskPayload: payload as never,
       rule,
-      nextRunAt: next,
+      nextRunAt: null,
       catchUp: body.catch_up === false ? false : true,
       overlapPolicy: body.overlap_policy === "allow" ? "allow" : "skip",
       createdBy: req.userId,
     });
-    return reply.code(201).send({ schedule: present(created) });
+    const anchored = {
+      ...rule,
+      anchor: anchorFromCreatedAt(created),
+    };
+    const next = nextRunAfter(anchored, new Date());
+    const saved = updateSchedule(created.id, {
+      rule: anchored,
+      nextRunAt: next,
+    });
+    return reply.code(201).send({ schedule: present(saved ?? created) });
   });
 
   app.patch<{ Params: { id: string } }>(
@@ -343,6 +355,8 @@ export function registerScheduleRoutes(app: FastifyInstance) {
         expr: ruleExpr,
         timeLocal,
         timezone,
+        // Якорь — дата создания рутины в ЕЁ текущей зоне: тот же, что
+        // использует тик (D3).
         anchor: anchorFromCreatedAt(existing),
       };
       // Пересчёт следующего запуска: правило изменилось или рутина

@@ -17,19 +17,23 @@ import { startSingleExecutorPlan } from "../../routes/task-collaboration-plans.j
 import { ROLE_NAMES, roleUserId } from "../../roleRouting.js";
 import {
   decideRun,
+  LATE_GRACE_MARGIN_MS,
   nextRunAfter,
   type ScheduleRule,
 } from "./rules.js";
 import { resolveLabelIds } from "./labels.js";
 import { routinesEnabled, routinesTickEnabled } from "./feature.js";
+import { getSetting } from "../../lib/serverSettings.js";
 import {
   anchorFromCreatedAt,
   claimRun,
   currentInstanceOpen,
+  INTERRUPTED_RUN_AFTER_MS,
   listSchedules,
   markScheduleRun,
   parsePayload,
   parseUtc,
+  repairInterruptedRuns,
   ruleOf,
   toUtcIso,
   updateRun,
@@ -118,6 +122,10 @@ export async function runSchedulesTick(
   if (!routinesEnabled()) return counts;
   if (!options.force && !routinesTickEnabled()) return counts;
 
+  // Чиним брошенные записи запуска: процесс мог упасть между «заняли слот»
+  // и «появилась карточка» — в истории лежал бы «создана» без карточки (D5).
+  repairInterruptedRuns();
+
   // Срабатывание по расписанию берёт только активные рутины: пауза
   // останавливает создание карточек (критерий приёмки 12 из спеки).
   const schedules = listSchedules().filter((row) => {
@@ -131,13 +139,27 @@ export async function runSchedulesTick(
     const rule = ruleFor(row);
     const overlapOpen =
       row.overlap_policy === "skip" && currentInstanceOpen(row);
+    // Ручной запуск («Запустить сейчас») не ест будущий слот расписания,
+    // но наложение всё равно уважает: если прошлый запуск ещё не закрыт —
+    // ждём его (дизайн, состояние «прошлый экземпляр не закрыт»).
     const decision = options.force
-      ? { action: "run" as const, runAt: now }
+      ? overlapOpen
+        ? {
+            action: "skip" as const,
+            runAt: now,
+            reason: "прошлый запуск ещё не закрыт",
+          }
+        : { action: "run" as const, runAt: now }
       : decideRun({
           now,
           nextRunAt: nextRunAt!,
           catchUp: row.catch_up === 1,
           overlapOpen,
+          // Порог отключения догона не меньше интервала планировщика с
+          // запасом: иначе штатный ход рутины (заход планировщика с
+          // опозданием до интервала) пропускался бы в 4 случаях из 5.
+          lateGraceMs:
+            getSetting("scheduler_interval_ms") + LATE_GRACE_MARGIN_MS,
         });
     if (decision.action === "skip") {
       // «Ещё не время» — это не пропуск: рутина просто ждёт своего часа.
@@ -161,8 +183,11 @@ export async function runSchedulesTick(
         // считали от старого next_run_at, рутина цепляла бы тот же
         // просроченный слот снова и снова (критерий приёмки 5 из спеки:
         // next_run_at после пересчёта всегда в будущем).
-        const next = nextRunAfter(rule, now);
-        markScheduleRun(row.id, { nextRunAt: next });
+        // Ручной запуск расписание не двигает — это не его слот.
+        if (!options.force) {
+          const next = nextRunAfter(rule, now);
+          markScheduleRun(row.id, { nextRunAt: next });
+        }
       }
       continue;
     }
@@ -171,7 +196,37 @@ export async function runSchedulesTick(
     // планировщика в это окно не создаёт ничего нового.
     const claimed = claimRun({ scheduleId: row.id, runAt: decision.runAt });
     if (!claimed.created) {
-      counts.skipped += 1;
+      const existing = claimed.row;
+      // Запись без карточки, оставшаяся от упавшего процесса, — честная
+      // ошибка запуска, а не «создана» (D5). Живой запуск (несколько
+      // секунд назад) трогать нельзя.
+      const interrupted =
+        existing &&
+        existing.status === "created" &&
+        !existing.task_id &&
+        Date.now() - (parseUtc(existing.created_at)?.getTime() ?? 0) >
+          INTERRUPTED_RUN_AFTER_MS;
+      if (interrupted) {
+        updateRun({
+          scheduleId: row.id,
+          runAt: decision.runAt,
+          status: "failed",
+          detail: "запуск прерван: карточка не создана",
+        });
+        counts.failed += 1;
+      } else {
+        counts.skipped += 1;
+      }
+      // Слот закрыт в любом случае — иначе рутина залипнет на нём и не
+      // создаст карточек до конца окна догона (критерий приёмки 5 из
+      // спеки: next_run_at после пересчёта строго в будущем).
+      if (!options.force) {
+        // Ручной запуск расписание не двигает — это не его слот.
+        if (!options.force) {
+          const next = nextRunAfter(rule, now);
+          markScheduleRun(row.id, { nextRunAt: next });
+        }
+      }
       continue;
     }
 
