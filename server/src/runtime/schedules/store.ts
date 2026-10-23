@@ -299,7 +299,8 @@ export function repairInterruptedRuns(
     .prepare(
       `SELECT id, schedule_id, run_at FROM schedule_runs
         WHERE status = 'created' AND task_id IS NULL
-          AND strftime('%s', created_at) < strftime('%s', 'now') - ?`,
+          AND CAST(strftime('%s', created_at) AS INTEGER)
+              < CAST(strftime('%s', 'now') AS INTEGER) - ?`,
     )
     .all(Math.round(olderThanMs / 1000)) as Array<{
     id: string;

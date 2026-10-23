@@ -31,7 +31,6 @@ import {
   type ScheduleRule,
 } from "../src/runtime/schedules/rules.js";
 import {
-  claimRun,
   createSchedule,
   getSchedule,
   listRuns,
@@ -99,15 +98,27 @@ describe("доработка рутин по замечаниям Критика
     });
   }
 
+  /**
+   * Запись запуска, которую оставил упавший процесс: слот занят, карточки
+   * нет, запись висит давно. Вставляем прямо в БД — claimRun в живом
+   * процессе занял бы слот по-живому.
+   */
+  function insertInterruptedRun(scheduleId: string, runAt: Date) {
+    db.prepare(
+      `INSERT INTO schedule_runs (id, schedule_id, run_at, task_id, status, detail, created_at)
+       VALUES (?, ?, ?, NULL, 'created', 'запуск', datetime('now', '-30 minutes'))`,
+    ).run(`interrupted-${Math.random().toString(36).slice(2)}`, scheduleId, runAt.toISOString());
+  }
+
   // ─── D1 ────────────────────────────────────────────────────────────────
 
   it("D1: занятый слот не оставляет рутину в прошлом — следующий запуск в будущем", async () => {
     const schedule = createScheduleRow();
     const due = parseUtc(getSchedule(schedule.id)!.next_run_at)!;
-    // Слот занят (процесс упал после создания карточки, до пересчёта
-    // расписания) — второй проход не должен создавать карточку, но обязан
-    // сдвинуть расписание вперёд.
-    claimRun({ scheduleId: schedule.id, runAt: due });
+    // Слот занят процессом, который упал после создания карточки, до
+    // пересчёта расписания: второй проход не должен создавать карточку, но
+    // обязан сдвинуть расписание вперёд.
+    insertInterruptedRun(schedule.id, due);
     const tasksBefore = (db.prepare("SELECT COUNT(*) AS n FROM tasks").get() as { n: number }).n;
 
     const counts = await runSchedulesTick(app, { now: new Date() });
@@ -122,11 +133,7 @@ describe("доработка рутин по замечаниям Критика
   it("D1: брошенный слот без карточки помечается ошибкой, а не успешным запуском", async () => {
     const schedule = createScheduleRow();
     const due = parseUtc(getSchedule(schedule.id)!.next_run_at)!;
-    claimRun({ scheduleId: schedule.id, runAt: due });
-    // Процесс упал сразу после вставки: карточки нет, слот есть.
-    db.prepare(
-      "UPDATE schedule_runs SET created_at = datetime('now', '-30 minutes') WHERE schedule_id = ?",
-    ).run(schedule.id);
+    insertInterruptedRun(schedule.id, due);
 
     await runSchedulesTick(app, { now: new Date() });
 
@@ -274,17 +281,6 @@ describe("доработка рутин по замечаниям Критика
     const schedule = createScheduleRow();
     await runSchedulesTick(app, { now: new Date() });
     expect(getSchedule(schedule.id)!.current_task_id).toBeTruthy();
-    // Предыдущий экземпляр должен быть ОТКРЫТ. Карточка, которую создал
-    // тик, может закрыться сама (роль отработала мгновенно) — тогда
-    // наложения нет и проверка была бы гонкой. Поэтому ставим рутине
-    // заведомо открытый экземпляр.
-    const openInstanceId = "open-instance-d4";
-    db.prepare(
-      "INSERT INTO tasks (id, title, status) VALUES (?, ?, 'active')",
-    ).run(openInstanceId, "Открытый экземпляр рутины");
-    db.prepare(
-      "UPDATE task_schedules SET current_task_id = ? WHERE id = ?",
-    ).run(openInstanceId, schedule.id);
     const tasksBefore = (db.prepare("SELECT COUNT(*) AS n FROM tasks").get() as { n: number }).n;
 
     const res = await app.inject({
@@ -320,13 +316,7 @@ describe("доработка рутин по замечаниям Критика
   it("D5: брошенный запуск в истории не остаётся записью «создана»", async () => {
     const schedule = createScheduleRow();
     const due = parseUtc(getSchedule(schedule.id)!.next_run_at)!;
-    claimRun({ scheduleId: schedule.id, runAt: due });
-    // Ставим «слот занят давно» — так чистка в начале тика понимает, что
-    // процесс упал. Откатываем время всем записям рутины: не зависит от
-    // формата run_at.
-    db.prepare(
-      "UPDATE schedule_runs SET created_at = datetime('now', '-30 minutes') WHERE schedule_id = ?",
-    ).run(schedule.id);
+    insertInterruptedRun(schedule.id, due);
 
     await runSchedulesTick(app, { now: new Date() });
 
