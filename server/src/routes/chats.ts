@@ -1040,6 +1040,17 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         );
       }
 
+      // Новое сообщение владельца останавливает текущий ход роли: отвечать
+      // надо на новое, а не доканчивать старое (владелец 23.10.2026).
+      if (!handledByBranch && isOwner(req.userId)) {
+        try {
+          const stopped = await interruptChatTurnForOwner(chatId, req.userId);
+          if (stopped) console.log(`[chats] ход остановлен новым сообщением владельца chat=${chatId}`);
+        } catch (error) {
+          console.warn(`[chats] остановка хода не удалась chat=${chatId}:`, error instanceof Error ? error.message : error);
+        }
+      }
+
       // Этап 2: авто-ответ ролей. «Best effort»: ошибки НЕ откатывают уже
       // сохранённое сообщение и не роняют запрос — пользователь уже видит
       // своё сообщение в ленте.
@@ -1883,6 +1894,30 @@ function chatModelChoice(value: unknown): string | null {
  *  получал тишину, пока роль копалась в первом. Ветка отвечает сразу и
  *  работает параллельно. Ветки не ветвятся, на ответ роли ветки нет, темы
  *  задач и общий чат не трогаем. */
+/** Новое сообщение владельца важнее текущего хода (владелец 23.10.2026:
+ *  «зачем подмешивание — останови текущую задачу и займись новым»).
+ *  Подмешивание держало ответ на полчаса: роль продолжала гонять инструменты,
+ *  а сообщение лежало в её контексте без ответа. Останавливаем ход и запускаем
+ *  новый — по новому сообщению. */
+async function interruptChatTurnForOwner(chatId: string, ownerId: string): Promise<boolean> {
+  if (!isMember(chatId, ownerId) || !isOwner(ownerId)) return false;
+  const roleIds = chatMemberRoles(chatId)
+    .map((role) => roleAccountId(role))
+    .filter((id): id is string => Boolean(id));
+  if (!roleIds.length) return false;
+  const live = liveTurnsOfChat(chatId);
+  const running = roleIds.filter((roleId) => live.some((turn) => turn.user_id === roleId));
+  if (!running.length) return false;
+  for (const roleId of running) {
+    try {
+      await cancelChatRunsFor(chatId, roleId);
+    } catch (error) {
+      console.warn(`[chats] не удалось остановить ход ${roleId} в ${chatId}:`, error instanceof Error ? error.message : error);
+    }
+  }
+  return true;
+}
+
 async function fanOutOwnerMessage(args: {
   chatId: string;
   messageId: string;

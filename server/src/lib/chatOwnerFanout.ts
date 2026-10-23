@@ -38,7 +38,15 @@ export type OwnerFanoutFacts = {
   openBranch: boolean;
 };
 
+/**
+ * Автоветвление выключено (владелец 23.10.2026: «давай выключим эту ветку»).
+ * В личной комнате ветка дублировала работу: занятая роль и так получает
+ * сообщение. Ветка осталась ручной — кнопкой «Ответвление».
+ */
+export const AUTO_BRANCH_ENABLED = false;
+
 export function shouldFanOutOwnerMessage(facts: OwnerFanoutFacts): boolean {
+  if (!AUTO_BRANCH_ENABLED) return false;
   return (
     facts.fromOwner &&
     facts.direct &&
