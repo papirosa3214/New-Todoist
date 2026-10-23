@@ -52,7 +52,7 @@ it('uses ROLE exactly once in actual task/chat prompts and shares the common doc
 });
 it('enforces owner authentication, known roles, save-only and stale conflicts in API',async()=>{
  const previousSystem=process.env.TASKFLOW_ROLE_SYSTEM_PROMPT;process.env.TASKFLOW_ROLE_SYSTEM_PROMPT=path.join(dir,'api-common.md');fs.writeFileSync(process.env.TASKFLOW_ROLE_SYSTEM_PROMPT,'API_COMMON_ORIGINAL {{IDENTITY}}');
- const {buildApp}=await import('../src/index.js');const db=(await import('../src/db.js')).default;
+ const {buildApp}=await import('../src/index.js');const dbModule=await import('../src/db.js');dbModule.migrate();(await import('../src/migrations.js')).runMigrations();const db=dbModule.default;
  const owner=crypto.randomUUID(),agent=crypto.randomUUID();
  for(const [id,role] of [[owner,'owner'],[agent,'agent']])db.prepare("INSERT INTO users(id,name,email,password_hash,role,type) VALUES(?,?,?,?,?,'human')").run(id,id,id+'@test','hash',role);
  const key='test_behavior';db.prepare("INSERT OR IGNORE INTO roles(key,title,summary,enabled,position) VALUES(?,?,?,1,0)").run(key,key,'');
@@ -64,6 +64,9 @@ it('enforces owner authentication, known roles, save-only and stale conflicts in
  const headers=auth(owner);
  expect((await app.inject({method:'GET',url:'/api/roles/unknown_role/behavior',headers})).statusCode).toBe(404);
  const first=(await app.inject({method:'GET',url:'/api/roles/'+key+'/behavior',headers})).json();
+ const skill=path.join(dir,key,'skills','fixture');fs.mkdirSync(skill,{recursive:true});fs.writeFileSync(path.join(skill,'SKILL.md'),'---\nname: fixture\ndescription: Runtime resource regression fixture\n---\nRead the fixture.');
+ const nativeContext=await app.inject({method:'GET',url:'/api/roles/'+key+'/runtime-context',headers});
+ expect(nativeContext.statusCode).toBe(200);expect(nativeContext.json().blocks.some((x:any)=>x.title==='Навык: fixture')).toBe(true);
  const saved=await app.inject({method:'POST',url:'/api/roles/'+key+'/behavior/templates',headers,payload:{name:'Mine',text:'CUSTOM_PATTERN',gender:'female'}});expect(saved.statusCode).toBe(200);
  expect(readRoleBehavior(key).text).toBe(first.text);
  const updated=await app.inject({method:'PATCH',url:'/api/roles/'+key+'/behavior',headers,payload:{text:'CUSTOM_PATTERN',gender:'female',expectedVersion:first.version}});expect(updated.statusCode).toBe(200);

@@ -387,7 +387,8 @@ function readOriginal(layer: LayerSpec, role: string, ownerId?: string): string 
 }
 
 export function canonicalInstructionLayer(role:string,layer:string):string {
- if(!layer.startsWith('resource.'))return layer;
+ // Command revisions use '*' as a database scope, never as a filesystem role.
+ if(!layer.startsWith('resource.') || role==='*')return layer;
  const home=roleHome(role);
  const hashed=(file:string)=>'resource.'+crypto.createHash('sha256').update(file).digest('hex').slice(0,20);
  if(layer===hashed(home.agents))return 'role.prompt';
