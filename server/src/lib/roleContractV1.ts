@@ -301,6 +301,39 @@ const LEGACY_MARK = /ok\s*:\s*(true|false)/;
 const LEGACY_KEY = /^(artifacts|error|next_hint|needs_human):/;
 const BACKTICK_KEY = /^`((?:ok|output|artifacts|error|next_hint|needs_human):.*)`\s*$/;
 
+/** Конверт, вклиненный в произвольный текст: ответ роли часто приходит как
+ *  «пояснение + JSON». Раньше такой ответ не распознавался, и владелец видел
+ *  сырой JSON. Здесь ищем первый сбалансированный JSON-объект, который сам
+ *  проходит проверку конверта, и вырезаем его вместе с обвязкой. */
+function extractEmbeddedEnvelope(text: string): { candidate: unknown; prefix: string; suffix: string } | null {
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== "{") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === "{") depth += 1;
+      else if (ch === "}") {
+        depth -= 1;
+        if (depth !== 0) continue;
+        const body = text.slice(start, i + 1);
+        const candidate = asV1Candidate(body);
+        if (candidate) return { candidate, prefix: text.slice(0, start), suffix: text.slice(i + 1) };
+        break;
+      }
+    }
+  }
+  return null;
+}
+
 /** Кандидат в JSON-конверт: старый строковый output или целевой массив блоков. Один `ok`
  *  без `output` — не конверт (например, пример JSON в обычном ответе). */
 function asV1Candidate(body: string): unknown | null {
@@ -550,9 +583,8 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
     warnings.push(...checked.warnings);
     if (!checked.valid || !checked.envelope) {
       errors.push(...checked.errors);
-      const text = brokenEnvelopeText(candidate);
-      replaced = true;
-      return text ?? BROKEN_CONTRACT_NOTE;
+      // Битый конверт: исходный текст не переписываем, претензия уходит в errors.
+      return whole;
     }
     replaced = true;
     envelope ??= checked.envelope;
@@ -580,6 +612,35 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
       return { format: "v1", text: checked.envelope.output, envelope: checked.envelope, structuredEnvelope: null, errors: [], warnings: checked.warnings };
     }
     return { format: "v1", text: brokenEnvelopeText(bare) ?? BROKEN_CONTRACT_NOTE, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: checked.warnings };
+  }
+
+  const embedded = extractEmbeddedEnvelope(text);
+  if (embedded) {
+    const value = embedded.candidate as Record<string, unknown>;
+    const before = embedded.prefix.trim();
+    const after = embedded.suffix.trim();
+    if (value.schema_version !== undefined) {
+      const checked = validateStructuredRoleContractV1(value);
+      if (checked.valid && checked.envelope) {
+        const blocks = [...checked.envelope.output];
+        if (before) blocks.unshift({ type: "text", text: before });
+        if (after) blocks.push({ type: "text", text: after });
+        return { format: "v1", text: structuredOutputText(blocks), envelope: null, structuredEnvelope: { ...checked.envelope, output: blocks }, errors: [], warnings: [] };
+      }
+      const salvaged = salvageStructured(value);
+      if (salvaged) {
+        const blocks = [...salvaged.output];
+        if (before) blocks.unshift({ type: "text", text: before });
+        if (after) blocks.push({ type: "text", text: after });
+        return { format: "v1", text: structuredOutputText(blocks), envelope: null, structuredEnvelope: { ...salvaged, output: blocks }, errors: checked.errors, warnings: [] };
+      }
+      // Битый конверт внутри текста: текст не переписываем, претензию отдаём в errors.
+      return { format: "v1", text, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: [] };
+    }
+    const checkedLegacy = validateRoleContractV1(value);
+    if (checkedLegacy.valid && checkedLegacy.envelope) {
+      return { format: "v1", text: checkedLegacy.envelope.output, envelope: checkedLegacy.envelope, structuredEnvelope: null, errors: [], warnings: checkedLegacy.warnings };
+    }
   }
 
   const legacy = parseLegacy(text);

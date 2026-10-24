@@ -468,3 +468,35 @@ describe("кривой блок не ломает показ всего отве
     expect(validateStructuredRoleContractV1(JSON.parse(answer)).valid).toBe(false);
   });
 });
+
+// 24.10.2026: владелец показал, что ответ «пояснение + JSON» приходит сырым
+// текстом. Разбор должен вырезать конверт из произвольного текста.
+describe("конверт, вклиненный в текст", () => {
+  const envelope = {
+    schema_version: 1, ok: true,
+    output: [{ type: "text", text: "Спиннер по центру." }],
+    artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: false,
+  };
+
+  it("JSON после пояснения распознаётся, обвязка сохраняется", () => {
+    const raw = "Исправил, вот отчёт:\n" + JSON.stringify(envelope) + "\nГотово.";
+    const parsed = parseRoleContractV1(raw);
+    expect(parsed.structuredEnvelope).not.toBeNull();
+    expect(parsed.text).toContain("Спиннер по центру.");
+    expect(parsed.text).toContain("Исправил, вот отчёт:");
+    expect(parsed.text).toContain("Готово.");
+    expect(parsed.text).not.toContain("schema_version");
+  });
+
+  it("нормализация в чате не отдаёт сырой JSON", () => {
+    const raw = "Пояснение\n" + JSON.stringify(envelope);
+    const normalized = normalizeRoleReplyV1(raw);
+    expect(normalized.displayText).not.toContain("schema_version");
+    expect(normalized.displayText).toContain("Спиннер по центру.");
+  });
+
+  it("обычный текст без конверта остаётся текстом", () => {
+    const parsed = parseRoleContractV1("Просто слова без JSON.");
+    expect(parsed.structuredEnvelope).toBeNull();
+  });
+});
