@@ -48,6 +48,7 @@ export function readModelUsage(window:string) {
  const totals=decorate(db.prepare(`SELECT ${aggregate} FROM model_usage WHERE occurred_at>=?`).get(since));
  const models=(db.prepare(`SELECT provider,model,${aggregate} FROM model_usage WHERE occurred_at>=? GROUP BY provider,model ORDER BY sum(input_tokens+output_tokens+cache_read+cache_write) DESC`).all(since) as any[]).map(decorate);
  const daily=(db.prepare(`SELECT date(occurred_at,'+3 hours') day,${aggregate} FROM model_usage WHERE occurred_at>=? GROUP BY day ORDER BY day`).all(since) as any[]).map(decorate);
+ const dailyByModel=(db.prepare(`SELECT date(occurred_at,'+3 hours') day,provider,model,${aggregate} FROM model_usage WHERE occurred_at>=? GROUP BY day,provider,model ORDER BY day`).all(since) as any[]).map(decorate);
  const trackingSince=(db.prepare("SELECT min(occurred_at) first FROM model_usage").get() as any).first;
- return {window,since,trackingSince,scope:"taskflow_roles",currency:"USD",costBasis:"sdk_estimate",totals,models,daily};
+ return {window,since,trackingSince,scope:"taskflow_roles",currency:"USD",costBasis:"sdk_estimate",totals,models,daily,dailyByModel};
 }
