@@ -235,10 +235,23 @@ export function registerAttachmentRoutes(app: FastifyInstance) {
         return reply.code(410).send({ error: "файл потерян на диске" });
       }
       // filename* с кодировкой — иначе кириллица в имени приезжает мусором.
+      //
+      // ⚠️ Content-Disposition: attachment, а НЕ inline (24.10.2026, аудит
+      // безопасности). При `inline` браузер исполняет содержимое прямо в
+      // origin приложения: загруженный `text/html` со `<script>` — это
+      // постоянный XSS (украденный из localStorage JWT, действия от имени
+      // владельца). Фронт ходит через Vite-прокси `/api → :3001`, поэтому
+      // ответ приходит same-origin с приложением — защиты нет.
+      //
+      // `attachment` заставляет браузер СКАЧАТЬ файл. Просмотр картинок и
+      // PDF не ломается: они и так открываются как файл, а не как документ
+      // в origin приложения. Плюс `nosniff` — чтобы браузер не угадывал
+      // тип по содержимому и не исполнил файл как HTML.
       reply.header("Content-Type", att.mime);
+      reply.header("X-Content-Type-Options", "nosniff");
       reply.header(
         "Content-Disposition",
-        `inline; filename*=UTF-8''${encodeURIComponent(att.file_name)}`,
+        `attachment; filename*=UTF-8''${encodeURIComponent(att.file_name)}`,
       );
       return reply.send(fs.createReadStream(full));
     },

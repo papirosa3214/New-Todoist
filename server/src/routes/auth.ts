@@ -40,6 +40,21 @@ export function registerAuthRoutes(app: FastifyInstance) {
       // "Body cannot be empty when content-type is set". Эндпоинт body не
       // использует, поэтому разрешаем пустой/отсутствующий body.
       schema: { body: undefined },
+      // Лимит (24.10.2026, аудит безопасности): маршрут выдаёт JWT владельца
+      // и стоял без ограничения. В сочетании с обходом проверки «браузерности»
+      // это был неограниченный выпуск токенов. 20 в минуту на IP — браузеру
+      // хватает (он берёт токен один раз), а перебор упирается в лимит.
+      //
+      // hook: 'preHandler' — как у /api/auth/login и /api/auth/register:
+      // на onRequest тело запроса ещё не разобрано.
+      config: {
+        rateLimit: {
+          max: 20,
+          timeWindow: "1 minute",
+          hook: "preHandler",
+          keyGenerator: (req: any) => req.ip || "unknown",
+        },
+      },
     },
     async (req, reply) => {
       const ownerId = lanOwnerId(req);

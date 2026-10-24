@@ -146,6 +146,12 @@ export function registerReportRoutes(app: FastifyInstance) {
         "Content-Type",
         fmt === "pdf" ? "application/pdf" : "text/html; charset=utf-8",
       );
+      // Заголовки безопасности (24.10.2026, аудит безопасности): отчёт с
+      // HTML-выводом открывается в origin приложения. Даже после санитайзера
+      // тела — nosniff и CSP sandbox не дают содержимому ни выйти за пределы
+      // песочницы, ни угадать свой тип.
+      reply.header("X-Content-Type-Options", "nosniff");
+      reply.header("Content-Security-Policy", "sandbox; default-src 'none'");
       reply.header(
         "Content-Disposition",
         `inline; filename*=UTF-8''${encodeURIComponent(row.title)}.${fmt}`,

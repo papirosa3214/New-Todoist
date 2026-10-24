@@ -32,7 +32,12 @@ const ALLOWED_MIME = [
   /^image\/jpeg$/,
   /^image\/webp$/,
   /^image\/gif$/,
-  /^image\/svg\+xml$/,
+  // ⚠️ SVG здесь больше НЕ принимается (24.10.2026, аудит безопасности).
+  // SVG — это не картинка, а документ: в нём есть `<script>`, обработчики
+  // событий и внешние ссылки. Открытый напрямую (аватар подставляется в
+  // `<img src>`, но ссылка на него попадает в HTML и в переписку) такой файл
+  // исполняется в origin приложения — XSS без единого заголовка авторизации.
+  // Растровая картинка (png/jpeg/webp/gif) вредоносного кода не несёт.
 ];
 
 function mimeAllowed(mime: string): boolean {
@@ -192,6 +197,16 @@ export function registerAvatarRoutes(app: FastifyInstance) {
                 ? "image/gif"
                 : "image/jpeg";
       reply.header("Content-Type", mime);
+      // Заголовки безопасности на ПУБЛИЧНУЮ раздачу (24.10.2026, аудит
+      // безопасности). Маршрут открыт без авторизации — аватар видят все,
+      // у кого есть ссылка, — поэтому исполняемое содержимое тут недопустимо.
+      //   nosniff — браузер не угадывает тип по содержимому;
+      //   CSP sandbox — даже если файл оказался исполняемым, он работает в
+      //   песочнице без скриптов и без доступа к origin;
+      //   attachment — файл скачивается, а не открывается как документ.
+      reply.header("X-Content-Type-Options", "nosniff");
+      reply.header("Content-Security-Policy", "sandbox; default-src 'none'");
+      reply.header("Content-Disposition", "attachment");
       // Картинки под UUID-именем неизменяемы (новая смена — новое имя) —
       // можно кешировать надолго без риска отдать протухшую версию.
       reply.header("Cache-Control", "public, max-age=31536000, immutable");

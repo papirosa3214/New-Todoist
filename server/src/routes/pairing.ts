@@ -24,7 +24,8 @@ import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
-import { issueMachineKey } from "../host/machines.js";
+import { isOwner } from "../access.js";
+import { findMachineByName, issueMachineKey } from "../host/machines.js";
 
 /** Срок жизни кода — 5 минут (документ решения §5). */
 const CODE_TTL_MS = 5 * 60 * 1000;
@@ -114,6 +115,19 @@ export function registerPairingRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const userId = (req as any).userId as string;
 
+      // Код для привязки выдаёт ВЛАДЕЛЕЦ (24.10.2026, аудит безопасности).
+      //
+      // Раньше маршрут был открыт любому авторизованному, и роль могла
+      // получить код, обменять его на машинный ключ и получить удалённое
+      // выполнение команд на маке-хосте. Привязка телефона — тоже дело
+      // владельца: телефон привязывают к СВОЕМУ аккаунту, а роль — не
+      // владелец.
+      if (!isOwner(userId)) {
+        return reply
+          .code(403)
+          .send({ error: "код привязки выдаёт только владелец" });
+      }
+
       // Лимит на пользователя, а не на IP: у Максима телефон, браузер и все
       // агенты сидят с одного адреса, лимит по IP запер бы их вместе.
       const issued = db
@@ -173,7 +187,20 @@ export function registerPairingRoutes(app: FastifyInstance) {
        * система рядом с готовой была бы ровно тем, чего здесь не хотим.
        */
       target?: "device" | "machine";
-      /** Разрешённые папки машины — но берутся с сервера, не с хоста. */
+      /**
+       * Разрешённые папки машины.
+       *
+       * ⚠️ Это поле НЕ является разрешением (24.10.2026, аудит безопасности).
+       * Раньше корни брались прямо отсюда, и любой, у кого есть pairing-код,
+       * выпускал машинный ключ с allowed_roots:["/"] — то есть удалённое
+       * выполнение команд на маке-хосте (bash, read, write, edit, git_push).
+       * Проверено на живом сервере: роль role_architect без прав владельца
+       * обменяла код на ключ с корнем "/".
+       *
+       * Теперь корни для target:"machine" берутся ТОЛЬКО из реестра машин,
+       * заведённого владельцем через POST /api/machines. Поле из тела запроса
+       * игнорируется. Завести машину через pairing может только владелец.
+       */
       allowed_roots?: string[];
     };
   }>("/api/pairing/exchange", async (req, reply) => {
@@ -248,12 +275,49 @@ export function registerPairingRoutes(app: FastifyInstance) {
     //     install_id: у машины его нет.
     if (цель === "machine") {
       const имя = String(req.body?.name || "").trim() || "mac";
-      // Папки по умолчанию — домашний каталог, но только если оператор
-      // заранее завёл машину с правами. Хост присылает лишь то, что просит,
-      // и это просьба, а не разрешение.
-      const просимые = Array.isArray(req.body?.allowed_roots)
-        ? req.body.allowed_roots.filter((x): x is string => typeof x === "string" && x.trim() !== "")
-        : [];
+
+      // Корни разрешённых папок — ИЗ РЕЕСТРА, а не из тела запроса.
+      //
+      // Почему (24.10.2026, аудит безопасности): раньше корни брались из
+      // req.body.allowed_roots, и РОЛЬ (у которой есть свой api_token и
+      // доступ к /api/pairing/code) обменивала код на машинный ключ с
+      // allowed_roots:["/"] — ключ, который подключается к /host-ws и
+      // получает операции bash/write/edit/git_push по всему диску машины.
+      // Комментарий в коде обещал обратное («берутся с сервера, не с хоста»),
+      // но обещание не было выполнено.
+      //
+      // Теперь: машина должна быть ЗАВЕДЕНА владельцем заранее
+      // (POST /api/machines — только владелец), и обмен выдаёт ключ с теми
+      // корнями, что указал владелец при заведении. Ключ с другими корнями
+      // выпустить нельзя.
+      const заведённая = findMachineByName(имя);
+      if (!заведённая) {
+        logExchangeAttempt(ip, codeHash, false);
+        return reply.code(400).send({ error: "invalid_code" });
+      }
+      const просимые = заведённая.allowed_roots;
+
+      // Завести новую машину через pairing может только владелец: у роли нет
+      // права расширять полномочия машин. Обмен для УЖЕ ЗАВЕДЁННОЙ машины
+      // (повторный ключ, переустановка хоста) допускаем всем, у кого есть
+      // код — корни у такой машины всё равно те же, что задал владелец.
+      const владелецКода = db
+        .prepare("SELECT role, type FROM users WHERE id = ?")
+        .get(row.created_by) as { role: string; type: string } | undefined;
+      const кодОтВладельца =
+        владелецКода?.role === "owner" || владелецКода?.type === "human";
+      if (!кодОтВладельца) {
+        const можетОбновить =
+          db
+            .prepare(
+              "SELECT 1 FROM machines WHERE name = ? AND revoked_at IS NULL AND id = ?",
+            )
+            .get(имя, заведённая.id) !== undefined;
+        if (!можетОбновить) {
+          logExchangeAttempt(ip, codeHash, false);
+          return reply.code(400).send({ error: "invalid_code" });
+        }
+      }
 
       let выдано: { machine: { id: string; name: string; allowed_roots: string[]; token_prefix: string }; token: string } | null = null;
       let выдача_не_прошла = false;
@@ -266,13 +330,19 @@ export function registerPairingRoutes(app: FastifyInstance) {
 
         // Прежняя машина с тем же именем отзывается: новая привязка той же
         // машины не должна оставлять в реестре две живые записи с одним
-        // именем — роль спрашивает «машина mac», и ответ стал бы неоднозначным.
+        // именем — роль спрашивает «машина mac», и ответ стал бы
+        // неоднозначным. Имена живых машин уникальны (частичный индекс,
+        // миграция 142), поэтому без отзыва выпуск нового ключа упал бы.
+        //
+        // Корни нового ключа берутся из заведённой машины (см. выше) —
+        // отзыв прежней записи на них не влияет.
         const прежние = db
           .prepare("SELECT id FROM machines WHERE name = ? AND revoked_at IS NULL")
           .all(имя) as Array<{ id: string }>;
         for (const м of прежние) {
-          db.prepare("UPDATE machines SET revoked_at = ?, revoke_reason = 'repaired' WHERE id = ?")
-            .run(nowIso(), м.id);
+          db.prepare(
+            "UPDATE machines SET revoked_at = ?, revoke_reason = 'repaired' WHERE id = ?",
+          ).run(nowIso(), м.id);
         }
 
         try {
@@ -283,8 +353,8 @@ export function registerPairingRoutes(app: FastifyInstance) {
             createdBy: row.created_by,
           });
         } catch {
-          // Имя занято живой машиной и отзыв не помог — отказ теми же словами,
-          // что и на телефоне, чтобы клиенту не пришлось разбирать коды.
+          // Имя занято живой машиной — отказ теми же словами, что и на
+          // телефоне, чтобы клиенту не пришлось разбирать коды.
           выдача_не_прошла = true;
         }
       })();

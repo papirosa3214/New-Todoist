@@ -65,25 +65,42 @@ export interface ReportMeta {
   date: string;
 }
 
+/**
+ * Markdown → HTML с очисткой опасного содержимого.
+ *
+ * ⚠️ Санитайз (24.10.2026, аудит безопасности). Python-`markdown` по
+ * умолчанию ПРОПУСКАЕТ сырой HTML: тело отчёта — пользовательский текст, и
+ * `<script>` в нём попадал в готовый HTML-документ как есть. Отчёт отдаётся
+ * как `text/html` с `inline` — то есть исполнялся в origin приложения (XSS),
+ * и вдобавок исполнялся при сборке PDF на сервере (Chrome --headless
+ * --allow-file-access-from-files) — с правами процесса сервера.
+ *
+ * Очистка живёт в отдельном файле `scripts/md_sanitize.py`: там она читается
+ * как обычный Python, а не как набор строковых литералов внутри TS.
+ */
 async function markdownToHtml(md: string): Promise<string> {
   const tmp = path.join(os.tmpdir(), `tf-md-${uid()}.md`);
   fs.writeFileSync(tmp, md, "utf8");
   try {
     const { stdout } = await execFileAsync(
       "python3",
-      [
-        "-c",
-        "import sys,markdown;sys.stdout.write(markdown.markdown(" +
-          "open(sys.argv[1],encoding='utf-8').read()," +
-          "extensions=['tables','fenced_code','toc','sane_lists']))",
-        tmp,
-      ],
+      [path.resolve(import.meta.dirname, "../../scripts/md_sanitize.py"), tmp],
       { maxBuffer: 32 * 1024 * 1024, timeout: 30_000 },
     );
     return stdout;
   } finally {
     fs.rmSync(tmp, { force: true });
   }
+}
+
+/**
+ * Экспорт для теста: очищенный HTML из markdown.
+ *
+ * Проверяется не «функция вернула строку», а что в выводе НЕТ исполняемого
+ * содержимого (24.10.2026, аудит безопасности).
+ */
+export async function markdownToHtmlForTest(md: string): Promise<string> {
+  return markdownToHtml(md);
 }
 
 function esc(s: string): string {
@@ -95,6 +112,11 @@ function esc(s: string): string {
 function documentHtml(meta: ReportMeta, bodyHtml: string, libs: string): string {
   return `<!doctype html>
 <html lang="ru"><head><meta charset="utf-8">
+<!-- CSP в самом документе (24.10.2026, аудит безопасности): скрипты в
+     отчёте запрещены. Тело и так проходит через санитайзер, но отчёт ещё
+     и собирается в PDF через Chrome на сервере — а там скрипт выполнился бы
+     с правами процесса сервера. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:;">
 <title>${esc(meta.title)}</title>
 <style>
   :root { color-scheme: light; }

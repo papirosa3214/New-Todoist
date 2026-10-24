@@ -249,6 +249,43 @@ export interface CreateWebhookOutput {
    */
 }
 
+/**
+ * Внутренние адреса, куда доставке вебхука ходить нельзя.
+ *
+ * Зачем (24.10.2026, аудит безопасности): validateUrl проверял только схему,
+ * поэтому подписку можно было завести на `http://127.0.0.1:3001/...` или
+ * `http://169.254.169.254/` (метаданные облака). Тест-ручка возвращает
+ * http_status ответа — то есть работает как oracle для сканирования
+ * внутренней сети: «есть ли на порту N HTTP-сервис» и «как он отвечает».
+ *
+ * Публичные адреса пропускаем. Явно разрешённые внутренние — из
+ * TASKFLOW_WEBHOOK_ALLOW_INTERNAL (через запятую): по умолчанию пусто.
+ */
+function внутреннийАдрес(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) {
+    return true;
+  }
+  // IPv4: приватные диапазоны, loopback, link-local (169.254), 0.0.0.0
+  const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 127 || a === 0) return true;
+    if (a === 10) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+  // IPv6: ::1, fe80::/10, fc00::/7
+  if (h === "::1" || h === "::") return true;
+  if (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) {
+    return true;
+  }
+  return false;
+}
+
 function validateUrl(url: string): void {
   let parsed: URL;
   try {
@@ -258,6 +295,16 @@ function validateUrl(url: string): void {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new ValidationError("url должен использовать http или https");
+  }
+  // Внутренние адреса — только если владелец разрешил их явно.
+  const разрешены = (process.env.TASKFLOW_WEBHOOK_ALLOW_INTERNAL || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (внутреннийАдрес(parsed.hostname) && !разрешены.includes(parsed.hostname.toLowerCase())) {
+    throw new ValidationError(
+      "url не должен указывать на внутренний адрес (localhost, приватная сеть, link-local)",
+    );
   }
 }
 

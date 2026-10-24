@@ -81,6 +81,13 @@ process.env.TASKFLOW_KB_TRIAGE_STATE_DIR ??= path.join(os.tmpdir(), `taskflow-kb
 // (routes/auth.ts, 18.08.2026), здесь открываем явным флагом.
 process.env.TASKFLOW_ALLOW_REGISTRATION = "1";
 
+// Тесты вебхуков работают с 127.0.0.1 (24.10.2026, аудит безопасности).
+// Продакшн-сервер блокирует внутренние адреса в URL подписки — это защита от
+// SSRF во внутреннюю сеть. В тестах адрес внутренний by design (фейковый
+// приёмник), поэтому разрешаем его явно: переменная — это и есть список
+// исключений, который владелец может задать в бою.
+process.env.TASKFLOW_WEBHOOK_ALLOW_INTERNAL = "127.0.0.1,localhost";
+
 process.env.JWT_SECRET =
   "test-secret-" + crypto.randomBytes(16).toString("hex");
 

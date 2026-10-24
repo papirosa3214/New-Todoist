@@ -94,7 +94,15 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
       list: async () => [],
       open: () => ({}),
       create: () => ({}),
-      continueRecent: () => ({ getCwd: () => "/tmp", getSessionFile: () => undefined }),
+      // Мок повторяет публичный API SessionManager: inProcessRun зовёт
+      // getCwd/getSessionId/getSessionFile. Раньше getSessionId в моке не
+      // было — тест падал с "manager.getSessionId is not a function"
+      // (базовая линия от 24.10.2026, не регрессия).
+      continueRecent: () => ({
+        getCwd: () => "/tmp",
+        getSessionId: () => "test-session",
+        getSessionFile: () => undefined,
+      }),
     },
     SettingsManager: {
       ...actual.SettingsManager,
@@ -179,7 +187,7 @@ describe("MiniMax thinking: effective model/payload", () => {
     expect(resolveThinkingLevel({})).toBe("off");
   });
 
-  it("work: reasoning модель → SDK не получает explicit thinkingLevel (null), миграции нет", async () => {
+  it("work: reasoning модель → SDK получает уровень из роли, миграции нет", async () => {
     const taskId = makeTask("Work reasoning");
     script.reasoningByModel.set("minimax:minimax-m3", true);
     script.requestedThinkingLevels.length = 0;
@@ -188,11 +196,14 @@ describe("MiniMax thinking: effective model/payload", () => {
     try {
       await runRoleInProcess({ taskId, role: "builder", model: "minimax/minimax-m3" });
       await _settleInProcessRunsForTests();
-      // Сервер не передал опцию (resolveThinkingLevel → null) — SDK сам
-      // возьмёт "medium" из defaults и запишет в jsonl. Миграция не
-      // сработает, так как effective != "off".
+      // С 916c0c00 уровень задаётся per-role: resolveThinkingLevel(model, role)
+      // читает scripts/role-thinking.json. Для builder там нет записи, значит
+      // берётся default ("low"). Раньше (до per-role уровней) здесь ожидался
+      // null — тест устарел, а не прод-код сломался.
+      //
+      // Миграция persisted-значений при этом НЕ срабатывает: effective != "off".
       const last = script.requestedThinkingLevels.at(-1);
-      expect(last === undefined || last === null).toBe(true);
+      expect(last).toBe("low");
       expect(script.setThinkingCalls).toHaveLength(0);
     } finally {
       script.reasoningByModel.delete("minimax:minimax-m3");
@@ -216,12 +227,11 @@ describe("MiniMax thinking: effective model/payload", () => {
     }
   });
 
-  it("work: resumed сессия с persisted 'off' у reasoning модели → мигрирует на 'medium' с persist", async () => {
+  it("work: resumed сессия с persisted 'off' у reasoning модели → уровень роли, persisted не мешает", async () => {
     const taskId = makeTask("Resumed reasoning миграция");
     script.reasoningByModel.set("minimax:minimax-m3", true);
     // Имитируем persisted "off" в jsonl старой сессии: SDK восстановит
-    // effective "off". Сервер НЕ передал опцию (resolveThinkingLevel →
-    // null для reasoning), значит effective = persisted.
+    // effective "off", если сервер не передал опцию.
     script.persistedThinkingLevel = "off";
     script.requestedThinkingLevels.length = 0;
     script.setThinkingCalls.length = 0;
@@ -229,16 +239,17 @@ describe("MiniMax thinking: effective model/payload", () => {
     try {
       await runRoleInProcess({ taskId, role: "builder", model: "minimax/minimax-m3" });
       await _settleInProcessRunsForTests();
-      // Сервер не передал опцию — доверили SDK.
+      // С 916c0c00 сервер ВСЕГДА передаёт уровень из роли (scripts/
+      // role-thinking.json), поэтому persisted "off" не может удержать
+      // reasoning выключенным: explicit-опция SDK приоритетнее persisted.
+      // Раньше здесь ждали миграцию setThinkingLevel("medium", {persist:true})
+      // — её удалили намеренно (уровень теперь всегда из роли).
       const last = script.requestedThinkingLevels.at(-1);
-      expect(last === undefined || last === null).toBe(true);
-      // effective "off" у reasoning модели → миграция через
-      // setThinkingLevel("medium", { persist: true }): persisted в jsonl
-      // перепишется, и следующий resume уже не вернётся к off.
-      const persistCall = script.setThinkingCalls.find(
-        (c) => c.level === "medium" && c.persist === true,
-      );
-      expect(persistCall).toBeDefined();
+      expect(last).toBe("low");
+      // Миграции с persist больше нет — уровень и так приходит из роли.
+      expect(
+        script.setThinkingCalls.find((c) => c.persist === true),
+      ).toBeUndefined();
     } finally {
       script.reasoningByModel.delete("minimax:minimax-m3");
       script.persistedThinkingLevel = undefined;
