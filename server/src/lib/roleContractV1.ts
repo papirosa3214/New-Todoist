@@ -311,7 +311,7 @@ function asV1Candidate(body: string): unknown | null {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const obj = value as Record<string, unknown>;
     if (!("ok" in obj) || !("output" in obj)) return null;
-    if (typeof obj.output !== "string" && !(obj.schema_version === 1 && Array.isArray(obj.output))) return null;
+    if (typeof obj.output !== "string" && !Array.isArray(obj.output)) return null;
     return value;
   } catch {
     return null;
@@ -471,6 +471,41 @@ function salvageStructured(candidate: Record<string, unknown>): StructuredRoleEn
   return checked.valid ? checked.envelope : null;
 }
 
+/** Сообщение вместо сырого JSON, когда конверт битый и текста вытащить нечего. */
+const BROKEN_CONTRACT_NOTE = "⚠️ Ответ роли не прошёл проверку контракта JSON — запроси повтор.";
+
+/** Из битого JSON-конверта вытащить текст `output` (или `error`), чтобы владелец
+ *  видел содержимое, а не сырой объект с ключами. null — текста нет. */
+function brokenEnvelopeText(value: unknown): string | null {
+  if (!isObject(value)) return null;
+  const output = value.output;
+  if (typeof output === "string") {
+    const text = output.trim();
+    if (text) return text;
+  } else if (Array.isArray(output)) {
+    const parts: string[] = [];
+    for (const block of output) {
+      if (!isObject(block)) continue;
+      if (block.type === "text" && typeof block.text === "string" && block.text.trim()) parts.push(block.text);
+      else if (block.type === "heading" && typeof block.text === "string") parts.push(block.text);
+      else if (block.type === "list" && Array.isArray(block.items)) {
+        const items = (block.items as unknown[]).filter((x): x is string => typeof x === "string").map((x) => "• " + x);
+        if (items.length) parts.push(items.join("\n"));
+      } else if (block.type === "command" && typeof block.command === "string") {
+        parts.push((block.title ? String(block.title) + "\n" : "") + block.command);
+      } else if (block.type === "link" && typeof block.url === "string") {
+        parts.push(String(block.title ?? block.url));
+      }
+    }
+    const joined = parts.filter(Boolean).join("\n\n");
+    if (joined) return joined;
+  }
+  const error = value.error;
+  if (typeof error === "string" && error.trim()) return error.trim();
+  if (isObject(error) && typeof error.message === "string" && error.message.trim()) return error.message.trim();
+  return null;
+}
+
 /**
  * Разобрать ответ роли: сначала JSON-контракт v1, затем старый
  * YAML-подобный вид, иначе — обычный текст без изменений.
@@ -498,7 +533,11 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
       if (!checked.valid || !checked.envelope) {
         errors.push(...checked.errors);
         const salvaged = salvageStructured(candidate);
-        if (!salvaged) return whole;
+        if (!salvaged) {
+          const text = brokenEnvelopeText(candidate);
+          replaced = true;
+          return text ?? BROKEN_CONTRACT_NOTE;
+        }
         replaced = true;
         structuredEnvelope ??= salvaged;
         return structuredOutputText(salvaged.output);
@@ -511,7 +550,9 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
     warnings.push(...checked.warnings);
     if (!checked.valid || !checked.envelope) {
       errors.push(...checked.errors);
-      return whole;
+      const text = brokenEnvelopeText(candidate);
+      replaced = true;
+      return text ?? BROKEN_CONTRACT_NOTE;
     }
     replaced = true;
     envelope ??= checked.envelope;
@@ -532,13 +573,13 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
       if (salvaged) {
         return { format: "v1", text: structuredOutputText(salvaged.output), envelope: null, structuredEnvelope: salvaged, errors: checked.errors, warnings: [] };
       }
-      return { format: "v1", text, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: [] };
+      return { format: "v1", text: brokenEnvelopeText(bare) ?? BROKEN_CONTRACT_NOTE, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: [] };
     }
     const checked = validateRoleContractV1(bare);
     if (checked.valid && checked.envelope) {
       return { format: "v1", text: checked.envelope.output, envelope: checked.envelope, structuredEnvelope: null, errors: [], warnings: checked.warnings };
     }
-    return { format: "v1", text, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: checked.warnings };
+    return { format: "v1", text: brokenEnvelopeText(bare) ?? BROKEN_CONTRACT_NOTE, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: checked.warnings };
   }
 
   const legacy = parseLegacy(text);
