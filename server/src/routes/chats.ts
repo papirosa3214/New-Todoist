@@ -72,6 +72,7 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { formatChatMessage, formatChatHistory, loadChatMessage } from "../lib/chatMessages.js";
+import { trimThinkingItems } from "../lib/dataRetention.js";
 import {
   ChecklistItemError,
   checklistStateOfChat,
@@ -2720,7 +2721,7 @@ async function deliverAgentReply(args: {
     db.prepare(
       `INSERT INTO chat_messages (id, from_user_id, text, role_envelope_json, channel, chat_id, quick_replies, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id)
        VALUES (?, ?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(replyId, roleUserId, replyText, storedRoleEnvelope, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(steps) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null);
+    ).run(replyId, roleUserId, replyText, storedRoleEnvelope, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(trimThinkingItems(steps)) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
     traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure));
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });

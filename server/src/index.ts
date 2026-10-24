@@ -34,6 +34,7 @@ import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret, hardenEnvFile, hardenRepoAccess } from "./env.js";
+import { runRetention, startRetention } from "./lib/dataRetention.js";
 import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserId, resolveUserIdFromToken, authOrApiToken, isRevokedDeviceToken } from "./auth.js";
@@ -242,6 +243,19 @@ export async function buildApp(): Promise<FastifyInstance> {
   // нельзя — иначе она подменяет исполняемый код сервера или хук, который
   // исполнится при коммите владельца. См. hardenRepoAccess в env.ts.
   hardenRepoAccess();
+  // Уборка разросшихся таблиц (журнал идемпотентности инструментов и
+  // снимки шагов ходов роли). Раз в сутки по таймеру + один проход на
+  // старте — чтобы после простоя мусор не копился снова.
+  try {
+    const итог = runRetention();
+    if (итог.toolRequests || итог.thinkingTrimmed) {
+      console.log(
+        `[retention] на старте убрано записей: ${итог.toolRequests}, обрезано снимков: ${итог.thinkingTrimmed}`,
+      );
+    }
+  } catch (error) {
+    console.warn("[retention] уборка на старте не прошла:", error);
+  }
 
   // bodyLimit по умолчанию у Fastify — 1 МБ, мало для аудиозаписи диктовки
   // (кнопка микрофона, routes/transcribe.ts). Поднимаем до потолка самого
@@ -963,6 +977,7 @@ if (isMain) {
     let stopVoiceBridge: (() => Promise<void>) | null = null;
     let stopKnowledgeSync: (() => void) | null = null;
     let stopModelUsageRetention: (() => void) | null = null;
+    let stopDataRetention: (() => void) | null = null;
     let stopScheduler: (() => void) | null = null;
     let stopStalledWatch: (() => void) | null = null;
     let stopChatAutoClose: (() => void) | null = null;
@@ -977,6 +992,7 @@ if (isMain) {
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopModelUsageRetention?.();
+      stopDataRetention?.();
       stopScheduler?.();
       stopStalledWatch?.();
       stopChatAutoClose?.();
@@ -1018,6 +1034,12 @@ if (isMain) {
     // остаётся, чтобы «учёт с» не сдвигался.
     if (process.env.TASKFLOW_MODEL_USAGE_ROTATION !== "off") {
       stopModelUsageRetention = startModelUsageRetention();
+    }
+    // Уборка журнала идемпотентности инструментов и снимков шагов ходов.
+    // Таймер не должен мешать тестам: в тестовой среде выключается тем же
+    // флагом, что и остальные фоновые службы.
+    if (process.env.TASKFLOW_DATA_RETENTION !== "off" && !process.env.VITEST) {
+      stopDataRetention = startRetention();
     }
     // Durable worker стартует только в реальном process после listen.
     // buildApp() в unit tests остаётся полностью детерминированным.
