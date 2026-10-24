@@ -181,9 +181,10 @@ export function reclaimStalePickedDeliveries(
   let reclaimed = 0;
   let closed = 0;
   for (const row of rows) {
-    // Живой ход (лок в памяти, активная попытка, открытый слот) — не наш:
-    // отберём аренду у работающей роли.
-    if (roleIsBusyNow(row.role_id, row.chat_id)) continue;
+    // `updated_at` доставки старше аренды — heartbeat не тикает, ход мёртв.
+    // Это единственный живой признак. In-memory лок чата НЕ признак: зависший
+    // рантайм держит его вечно, и по нему мёртвая доставка висела бы `picked`
+    // часами, не переходя в `failed` и не уведомляя владельца (24.10.2026).
     const result = restartDelivery(row.id, "lease_expired", "picked");
     if (result === "restarted") reclaimed++;
     if (result === "exhausted") closed++;
@@ -218,7 +219,8 @@ export function expireStaleDeliveries(ttlMinutes: number = chatDeliveryTtlMinute
   );
   let closed = 0;
   for (const row of candidates) {
-    if (roleIsBusyNow(row.role_id, row.chat_id)) continue;
+    // Тот же принцип, что в reclaim: `updated_at` старше порога — доставка
+    // мертва, а in-memory лок чата (зависший рантайм) её не спасает.
     closed += close.run(row.id).changes;
   }
   return closed;
