@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "typebox";
 import { Check, Errors } from "typebox/value";
 import { recordToolAudit } from "./toolAuditStore.js";
+import { MISTAKE_LIMIT, stopRoleOnErrorLoop } from "./errorLoopStop.js";
 export type Tool = {
   name: string;
   description: string;
@@ -1239,9 +1240,10 @@ export function createUniversalTaskflow(
     },
   };
   // Тренер ошибок — обёртка внутренняя: три неверных вызова одной операции
-  // подряд → отказ с остановкой и готовым вызовом. Счётчик ошибок живёт в
-  // ней, и обёртка учёта его не трогает.
-  const coached = withMistakeCoach(api, registry);
+  // подряд → стоп хода (роль прервана, шаг в blocked, владелец уведомлён)
+  // и готовый вызов в ответе. Счётчик ошибок живёт в ней, и обёртка учёта
+  // его не трогает.
+  const coached = withMistakeCoach(api, registry, context);
   // Учёт вызовов — обёртка внешняя: ответ шлюза уходит роли как есть, а сам
   // вызов — в журнал. Снаружи — чтобы в журнал попало ровно то, что увидела
   // роль, включая сообщение тренера об остановке.
@@ -1263,14 +1265,19 @@ export function createUniversalTaskflow(
   return tool;
 }
 
-/** Сколько неверных вызовов одной операции подряд терпим до остановки роли. */
-export const MISTAKE_LIMIT = 3;
+export { MISTAKE_LIMIT };
 const ОШИБКИ_ВЫЗОВА = new Set(["INVALID_ARGUMENTS", "VERSION_MISMATCH", "ACTION_CONFLICT", "UNKNOWN_OPERATION"]);
 /** Владелец 20.10.2026: «если три раза неправильно вызвал инструмент — прилетает
  *  и говорит: дурью маешься, вот так надо». Счёт ведётся на операцию внутри
- *  одного инструмента (один заход роли); успешный вызов обнуляет счёт. На третьей
- *  ошибке подряд к отказу добавляется поле coach: остановка и готовый вызов. */
-function withMistakeCoach(api: Tool, registry: Map<string, Tool>): Tool {
+ *  одного инструмента (один заход роли); успешный вызов обнуляет счёт.
+ *
+ *  Правка 24.10.2026 (карточка 252c400e): одной подсказки оказалось мало —
+ *  роль получила «СТОП» 55 раз подряд и продолжила крутить тот же неверный
+ *  вызов, пока слот не завис на три часа. Теперь третье неверное вызов подряд —
+ *  это стоп хода: запуск прерывается, попытка закрывается с
+ *  outcome='error_loop', шаг уходит в blocked, владелец получает уведомление.
+ *  Правило владельца от 24.10.2026: «после трёх неверных — блок». */
+function withMistakeCoach(api: Tool, registry: Map<string, Tool>, context: Context): Tool {
   const подряд = new Map<string, number>();
   return {
     ...api,
@@ -1295,15 +1302,34 @@ function withMistakeCoach(api: Tool, registry: Map<string, Tool>): Tool {
       const form = tool
         ? invocationTemplate(tool.name, tool.parameters, !isReadOperation(tool.name))
         : null;
+      // Стоп хода. Счётчик живёт в памяти процесса — этого достаточно:
+      // вместе с ним умирает и сам ход (in-process run), а его ошибки
+      // остаются в журнале вызовов, где их видно и сторож, и владелец.
+      const stop = await stopRoleOnErrorLoop({
+        taskId: context.taskId,
+        subtaskId: context.subtaskId,
+        role: context.role,
+        operation: key,
+        attempts: n,
+        reason: String(env?.error?.message ?? "повторяется одна и та же ошибка").slice(0, 300),
+      });
       env.error.coach = {
         attempts: n,
+        stopped: stop.blocked,
         message:
           `СТОП. Это ${n}-й неверный вызов ${key} подряд — ты повторяешь одну и ту же ошибку. ` +
           "Не отправляй тот же вызов снова. " +
           (form
             ? "Возьми форму ниже, подставь свои значения в каждое поле и пришли ровно её: только operation и arguments."
-            : "Такой операции нет: сначала найди нужную через {\"query\":\"что ищешь\"}, затем describe."),
+            : "Такой операции нет: сначала найди нужную через {\"query\":\"что ищешь\"}, затем describe.") +
+          (stop.blocked
+            ? " Ход остановлен: роль прервана, шаг переведён в blocked, владельцу отправлено уведомление. Продолжить можно только после решения владельца."
+            : ""),
         ...(form ? { call: form.invokeTemplate, fields: form.templateFields } : {}),
+        // Что роль прислала на самом деле, с типами. Урок владельца
+        // 20.10.2026: «не повторять вызов, а чинить структуру по подсказке» —
+        // подсказка без фактических значений структуру не чинит.
+        received: diagnosticValue(p?.arguments ?? p),
       };
       return { ...out, content: [{ type: "text", text: JSON.stringify(env) }, ...out.content.slice(1)] };
     },

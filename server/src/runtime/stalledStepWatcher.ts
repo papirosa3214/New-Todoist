@@ -15,7 +15,6 @@ import {isRoutineServiceComment} from "../lib/serviceNoise.js";
 // `settleStalledPlanNode` (ход завершился без сдачи) намеренная: этот
 // модуль работает, пока ход НЕ завершился, но и событий по нему давно
 // нет. Узлы `todo`/`blocked`/`done` не трогаем.
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +27,8 @@ import { enqueueRoleRunJob, rearmRoleRunJob } from "./roleRunQueue.js";
 import { startPlanSubtaskRun } from "./planSubtaskAdmission.js";
 import { wakeAndDeliverStalled } from "./orchestratorWake.js";
 import { activeInProcessRun } from "./inProcessRun.js";
+import { MISTAKE_LIMIT, stopRoleOnErrorLoop, toolOutcomeStats } from "./errorLoopStop.js";
+import { ownerId, postOwnerNotification, postRoleNote, taskHeads } from "./stepNotes.js";
 
 /** Возраст последнего события хода, после которого шаг считается
  *  зависшим и сервер сам перезапускает попытку. Один порог, без
@@ -118,33 +119,6 @@ function roleOf(subtask: StalledSubtask): string | null {
   const node = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
     .get(subtask.collaboration_plan_id, subtask.plan_node_key) as { role_key: string } | undefined;
   return node?.role_key ?? null;
-}
-
-function ownerId(): string | null {
-  const row = db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined;
-  return row?.id ?? null;
-}
-
-function taskHeads(taskId: string): { creator_id: string | null; assignee_id: string | null; title: string } {
-  const row = db.prepare("SELECT creator_id, assignee_id, title FROM tasks WHERE id = ?").get(taskId) as
-    | { creator_id: string | null; assignee_id: string | null; title: string }
-    | undefined;
-  return row ?? { creator_id: null, assignee_id: null, title: "" };
-}
-
-function postRoleNote(taskId: string, role: string, text: string): void {
-  if (isRoutineServiceComment({user_id:"role_system", text})) return;
-  db.prepare("INSERT INTO comments (id, task_id, user_id, text) VALUES (?, ?, ?, ?)")
-    .run(crypto.randomUUID(), taskId, roleUserId(role), text);
-}
-
-function postOwnerNotification(taskId: string, title: string, body: string): void {
-  const owner = ownerId();
-  if (!owner) return;
-  const notifId = crypto.randomUUID();
-  db.prepare("INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'stalled_blocked', ?, ?, NULL)")
-    .run(notifId, owner, taskId, body);
-  logEvent({ taskId, actorId: null, kind: "stalled_step_blocked", field: title, toValue: body.slice(0, 160) });
 }
 
 /** mtime самого свежего `.jsonl` в каталоге сессии шага, или null,
@@ -405,6 +379,27 @@ export async function runStalledStepWatch(now: Date = new Date()): Promise<Stall
   for (const subtask of stalled) {
     const role = roleOf(subtask);
     if (!role) continue;
+    // Цикл неверных вызовов (24.10.2026, карточка 252c400e): ход не молчит —
+    // он повторяет один и тот же неверный вызов (55+ раз taskflow_work_plan).
+    // По mtime журнала такой ход выглядит живым — журнал свежий, — поэтому
+    // сторож его не трогал: слот висел три часа, модель жегла деньги.
+    // Признак цикла: в журнале вызовов есть отказы, а успешных вызовов нет.
+    // Такой ход блокируем, а не перезапускаем: перезапуск приведёт в тот же
+    // тупик и сожжёт следующую попытку.
+    const outcomes = toolOutcomeStats(subtask.id, Math.max(STALL_AFTER_MIN, 10));
+    if (outcomes.errors >= MISTAKE_LIMIT && outcomes.ok === 0) {
+      await stopRoleOnErrorLoop({
+        taskId: subtask.task_id,
+        subtaskId: subtask.id,
+        role,
+        operation: outcomes.lastOperation ?? "неверные вызовы",
+        attempts: outcomes.errors,
+        reason:
+          "роль повторяла один и тот же неверный вызов; успешных вызовов за окно не было",
+      });
+      report.blocked += 1;
+      continue;
+    }
     const fileMs = lastSessionEventMs(subtask, role);
     // Молчание хода, а не тишина файла: два разных факта (владелец 21.10.2026,
     // карточка c8083c2a, раздел И4). Пока ход жив, SDK трогает его активность
