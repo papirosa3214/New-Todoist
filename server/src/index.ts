@@ -1,3 +1,4 @@
+import { serverListenOptions } from "./runtime/systemdSocket.js";
 import {startToolRequestWatcher} from "./runtime/toolRequestStore.js";
 import {startChatCoordinationWatcher} from "./runtime/chatCoordination.js";
 import { startRoleLoadWatcher } from "./lib/roleLoadWatcher.js";
@@ -935,7 +936,7 @@ if (isMain) {
       if (stopVoiceBridge) await stopVoiceBridge();
     });
 
-    const addr = await app.listen({ port: PORT, host: HOST });
+    const addr = await app.listen(serverListenOptions(process.env, process.pid, PORT, HOST));
     // Сокетов после рестарта нет ни у кого — значит и «online» в базе быть
     // не может: иначе статус, оставшийся с прошлого запуска, врал бы до
     // первого подключения того же пользователя.
