@@ -1,3 +1,4 @@
+import {isQuietSystemMessage} from "./serviceNoise.js";
 import {compactChatReportMaterials} from "./chatReportMaterials.js";
 import {coordinationCardData} from "../runtime/chatCoordination.js";
 // Сообщение чата с ролями в том виде, в каком его видит клиент.
@@ -133,7 +134,7 @@ export function loadChatMessage(id: string) {
 /** Compact legacy share cards only within the same author's answer to one request.
  * Stored history remains intact; unique cards and other conversations are preserved. */
 export function formatChatHistory(rows:any[]) {
-  const messages=rows.map(formatChatMessage);
+  const messages=rows.map(formatChatMessage).filter(message=>!isQuietSystemMessage(message));
   const answerKey=(message:any)=>JSON.stringify([message.chat_id,message.from_user_id,message.reply_to_message_id]);
   const reported=new Map<string,Set<string>>();
   for(const message of messages){

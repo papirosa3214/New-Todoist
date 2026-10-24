@@ -1,3 +1,4 @@
+import {isQuietSystemMessage} from "./lib/serviceNoise.js";
 // WebSocket client registry + broadcast helpers, extracted out of index.ts so
 // route modules can push events without importing index.ts (which would be a
 // module cycle — index.ts registers the routes and starts the listener).
@@ -135,6 +136,8 @@ function alsoPushToIsland(event: unknown) {
 /** Push an event to every open socket for a single user. */
 export function broadcast(userId: string | null | undefined, event: unknown) {
   if (!userId) return;
+  const chatEvent = event as {type?:string; message?:unknown};
+  if (chatEvent?.type === "chat:new" && isQuietSystemMessage(chatEvent.message)) return;
   const notification = event as {type?:string;notificationId?:string};
   // Миграция подавляет дубли ещё при INSERT; не посылаем пустой сигнал.
   if (notification?.type === "notification:new" && notification.notificationId &&

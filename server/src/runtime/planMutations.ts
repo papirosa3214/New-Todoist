@@ -1,3 +1,4 @@
+import {isRoutineServiceComment} from "../lib/serviceNoise.js";
 import { wakeAndDeliver } from "./orchestratorWake.js";
 import { normalizePlanStartCondition } from "./planArtifactGate.js";
 // Живой план совместной работы (владелец 01.10.2026: «граф живой, может
@@ -519,6 +520,7 @@ function notifyPlanApprovalRequest(taskId: string, planId: string, opId: string,
 }
 
 function roleNote(taskId: string, roleKey: string, text: string): void {
+  if (isRoutineServiceComment({user_id:"role_system", text})) return;
   db.prepare("INSERT INTO comments (id, task_id, user_id, text) VALUES (?, ?, ?, ?)")
     .run(crypto.randomUUID(), taskId, roleUserId(roleKey), text);
 }

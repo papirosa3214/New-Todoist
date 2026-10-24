@@ -1,3 +1,4 @@
+import {isRoutineServiceComment} from "../lib/serviceNoise.js";
 import { wakeAndDeliver } from "./orchestratorWake.js";
 import {
   artifactHasEvidence,
@@ -653,6 +654,7 @@ export async function unlockReadyPlanSubtasks(
  *  писать туда роль может только в своей карточке, а узел плана бывает и
  *  в чужой. */
 function roleNote(taskId: string, role: string, text: string): void {
+  if (isRoutineServiceComment({user_id:"role_system", text})) return;
   db.prepare(
     "INSERT INTO comments (id, task_id, user_id, text) VALUES (?, ?, ?, ?)",
   ).run(crypto.randomUUID(), taskId, roleUserId(role), text);

@@ -1,3 +1,4 @@
+import {isRoutineServiceComment} from "../lib/serviceNoise.js";
 // Самовосстановление зависших шагов (карточка 71651ad0, поправки
 // оркестратора 17:01–17:06 от 06.10.2026: один порог 10 минут по потоку
 // событий хода, без пинга, до 2 автоперезапусков на шаг, затем blocked
@@ -132,6 +133,7 @@ function taskHeads(taskId: string): { creator_id: string | null; assignee_id: st
 }
 
 function postRoleNote(taskId: string, role: string, text: string): void {
+  if (isRoutineServiceComment({user_id:"role_system", text})) return;
   db.prepare("INSERT INTO comments (id, task_id, user_id, text) VALUES (?, ?, ?, ?)")
     .run(crypto.randomUUID(), taskId, roleUserId(role), text);
 }

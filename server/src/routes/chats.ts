@@ -1,3 +1,4 @@
+import {visibleChatSql} from "../lib/serviceNoise.js";
 import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
 import {compactChatReportMaterials} from "../lib/chatReportMaterials.js";
 import {preparedReportMaterials} from "../runtime/chatPreparedMaterials.js";
@@ -311,7 +312,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     const rows=db.prepare("SELECT id,task_id,parent_chat_id,closed_at FROM chats WHERE parent_chat_id=? ORDER BY updated_at DESC,id").all(req.params.id) as Array<{id:string;task_id:string|null;parent_chat_id:string|null;closed_at:string|null}>;
     return {chats:rows.filter(c=>isMember(c.id,req.userId) && (includeClosed || !taskTopicClosedAt(c))).map(c=>({
       ...chatRow(c.id),
-      unread_count:(db.prepare(`SELECT COUNT(*) AS n FROM chat_messages WHERE chat_id=? AND from_user_id != ? AND created_at > COALESCE((SELECT last_read_at FROM chat_members WHERE chat_id=? AND member_id=?),'1970-01-01')`).get(c.id,req.userId,c.id,req.userId) as {n:number}).n,
+      unread_count:(db.prepare(`SELECT COUNT(*) AS n FROM chat_messages WHERE ${visibleChatSql()} AND chat_id=? AND from_user_id != ? AND created_at > COALESCE((SELECT last_read_at FROM chat_members WHERE chat_id=? AND member_id=?),'1970-01-01')`).get(c.id,req.userId,c.id,req.userId) as {n:number}).n,
     }))};
   });
 
@@ -455,7 +456,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
                         AND (a.mime LIKE 'audio/%' OR a.file_name LIKE '%.m4a')) AS audio_count
                FROM chat_messages m
                LEFT JOIN users f ON f.id = m.from_user_id
-              WHERE m.chat_id = ?
+              WHERE m.chat_id = ? AND ${visibleChatSql("m")}
               ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1`,
           )
           .get(c.id) as
@@ -478,7 +479,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         const { n: unread } = db
           .prepare(
             `SELECT COUNT(*) AS n FROM chat_messages
-              WHERE chat_id = ? AND from_user_id != ? AND created_at > ?`,
+              WHERE chat_id = ? AND from_user_id != ? AND created_at > ? AND ${visibleChatSql()}`,
           )
           .get(c.id, req.userId, read?.last_read_at ?? "1970-01-01 00:00:00") as {
           n: number;

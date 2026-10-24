@@ -1,5 +1,5 @@
 // Брошенные после перезапуска сервера узлы плана (владелец 01.10.2026,
-// T05): роль пишет в ленту и продолжает; второй обрыв подряд — blocked.
+// T05): роль молча продолжает; второй обрыв подряд — blocked.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 
@@ -115,7 +115,7 @@ describe("узлы плана после перезапуска сервера",
       )
       .all(taskId) as Array<{ user_id: string; text: string }>;
 
-  it("первый обрыв: попытка interrupted, роль пишет в ленту и продолжает", async () => {
+  it("первый обрыв: попытка interrupted, роль молча продолжает", async () => {
     const before = subtask().current_attempt_id;
     const startedBefore = runs.count;
     expect(await recoverInterruptedPlanSubtasks()).toEqual({
@@ -132,9 +132,7 @@ describe("узлы плана после перезапуска сервера",
     expect(subtask().agent_state).toBe("in_progress");
     expect(subtask().current_attempt_id).not.toBe(before);
     expect(runs.count).toBe(startedBefore + 1);
-    const last = comments().at(-1)!;
-    expect(last.user_id).toBe(roleUserId("builder"));
-    expect(last.text).toContain("сервер перезапустился. Продолжаю");
+    expect(comments()).toHaveLength(0);
   });
 
   it("второй обрыв за полчаса: blocked и сообщение владельцу, без нового запуска", async () => {
@@ -163,7 +161,7 @@ describe("узлы плана после перезапуска сервера",
       comments().some((c) =>
         c.text.includes("после рестарта сервера снят признак"),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("сбрасывает succeeded/dead role_run_jobs этой задачи (Г1-к: дедупликация не возвращает старое задание)", async () => {

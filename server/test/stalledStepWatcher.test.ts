@@ -285,9 +285,8 @@ describe("stalledStepWatcher", () => {
     ).get(fixture.task.id) as { status: string; attempts: number; dedupe_key: string };
     expect(job).toBeTruthy();
     expect(job.dedupe_key).toMatch(/^stalled-restart:/);
-    // Лента: запись о перезапуске.
-    const last = comments(fixture.task.id).at(-1)!;
-    expect(last.text).toMatch(/перезапускаю попытку/);
+    // Технический перезапуск не создаёт комментарий.
+    expect(comments(fixture.task.id)).toHaveLength(0);
   });
 
   // Карточка 568a2b93: лавина заданий очереди ролей. Ключ дедупликации

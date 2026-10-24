@@ -1,3 +1,4 @@
+import {visibleTaskComments, isRoutineServiceComment} from "../lib/serviceNoise.js";
 import { wakeAndDeliver } from "../runtime/orchestratorWake.js";
 import { scheduleDraftRebuildFromSubtasks } from "./task-collaboration-plans.js";
 import { assigneeToBlockedSlot } from "../runtime/planSubtaskAdmission.js";
@@ -118,7 +119,7 @@ export function getFullTask(taskId: string) {
     )
     .all(taskId);
 
-  return { ...full, labels, subtasks, comments };
+  return { ...full, labels, subtasks, comments: visibleTaskComments(comments as any[]) };
 }
 
 /**
@@ -1186,13 +1187,13 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     async (req: any, reply) => {
       const task = getTaskForRead(req.params.taskId, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
-      return db
+      return visibleTaskComments(db
         .prepare(
           `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.avatar_url as user_avatar_url, u.initials as user_initials
          FROM comments c LEFT JOIN users u ON c.user_id = u.id
          WHERE c.task_id = ? ORDER BY c.created_at`,
         )
-        .all(req.params.taskId);
+        .all(req.params.taskId) as any[]);
     },
   );
 
@@ -1232,6 +1233,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       // результате шага — очевидное сервер заменяет сам, неверный блок
       // возвращает роль с образцом. Комментарий человека не переписывается.
       let commentText = (req.body?.text ?? "") as string;
+      if (attachmentIds.length === 0 && isRoutineServiceComment({user_id:req.userId,text:commentText})) {
+        return {ok:true, suppressed:true};
+      }
       if (isRoleAuthor(req.userId) && commentText.trim()) {
         const formatted = applyRoleFormat(commentText);
         if (formatted.problems.length) {

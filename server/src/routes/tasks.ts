@@ -1,3 +1,4 @@
+import {visibleTaskComments, isQuietSystemMessage} from "../lib/serviceNoise.js";
 import { registerIntegrationResponsibilityRoutes } from '../lib/integrationResponsibility.js';
 import { taskExecutionState } from "../runtime/taskExecutionState.js";
 import { ROLE_NAMES as PREPARATION_ROLES } from "../roleRouting.js";
@@ -840,6 +841,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
            FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.task_id = ? ORDER BY c.created_at`,
         )
         .all(task.id) as any[];
+      comments.splice(0, comments.length, ...visibleTaskComments(comments));
 
       // Вложения раскладываются по своим комментариям. Одним запросом на всю
       // задачу, а не по запросу на комментарий: файлов мало, а лишние
@@ -867,7 +869,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // привязывал).
       const chatComments = db
         .prepare(
-          `SELECT m.id, m.task_id, m.from_user_id AS user_id, m.text, m.created_at,
+          `SELECT m.id, m.task_id, m.from_user_id AS user_id, m.text, m.created_at, m.message_type, m.is_session_marker,
                   m.chat_id,
                   u.name AS user_name, u.avatar_color AS user_color,
                   u.avatar_url AS user_avatar_url, u.initials AS user_initials
@@ -877,6 +879,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
             ORDER BY m.created_at`,
         )
         .all(task.id) as any[];
+      chatComments.splice(0, chatComments.length, ...visibleTaskComments(chatComments).filter(row=>!isQuietSystemMessage(row)));
       if (chatComments.length) {
         // Вложения сообщений чата лежат не на задаче, а на самом сообщении
         // (`chat_message_id`), поэтому в общий `attachments` выше они не
