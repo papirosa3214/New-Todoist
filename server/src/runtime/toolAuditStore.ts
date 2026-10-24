@@ -68,7 +68,7 @@ export type ToolAuditEvent = {
   action?: string | null;
   tool?: string | null;
   operation?: string | null;
-  outcome: "ok" | "error";
+  outcome: "ok" | "error" | "repaired";
   errorCode?: string | null;
   errorMessage?: string | null;
   errorField?: string | null;
@@ -155,12 +155,12 @@ export function recordToolAudit(event: ToolAuditEvent): void {
         tool,
         isError ? 1 : 0,
       );
-      if (!isError) return;
+      if (event.outcome === "ok") return;
       db.prepare(
         `INSERT INTO role_tool_audit
            (id,role,model,provider,mode,run_id,task_id,subtask_id,action,tool,
             operation,outcome,error_code,error_message,error_field,error_expected,request_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,'error',?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ).run(
         crypto.randomUUID(),
         event.role,
@@ -173,6 +173,7 @@ export function recordToolAudit(event: ToolAuditEvent): void {
         event.action ?? null,
         tool,
         event.operation ?? null,
+        event.outcome,
         event.errorCode ?? null,
         event.errorMessage ?? null,
         event.errorField ?? null,
@@ -297,7 +298,13 @@ function sliceOf(
 
 export type ToolAuditSummary = {
   period: { from: string; to: string; granularity: "hour" };
-  totals: { calls: number; errors: number; error_rate: number };
+  totals: {
+    calls: number;
+    errors: number;
+    error_rate: number;
+    /** Сколько вызовов сервер починил сам (форма вызова) и выполнил. */
+    repairs: number;
+  };
   by_role: Slice[];
   by_model: Slice[];
   by_operation: Slice[];
@@ -332,12 +339,22 @@ export function toolAuditSummary(filters: ToolAuditFilters): ToolAuditSummary {
     )
     .all(...recordWhereSql.args) as Array<{ code: string; errors: number }>;
 
+  const repairsRow = db
+    .prepare(
+      `SELECT COUNT(*) AS repairs
+         FROM role_tool_audit
+        WHERE ${recordWhereSql.sql} AND outcome = 'repaired'`,
+    )
+    .get(...recordWhereSql.args) as { repairs: number };
+  const repairs = repairsRow.repairs ?? 0;
+
   return {
     period: { from: period.from, to: period.to, granularity: "hour" },
     totals: {
       calls,
       errors,
       error_rate: calls ? Number((errors / calls).toFixed(4)) : 0,
+      repairs,
     },
     by_role: sliceOf("role", filters, period),
     by_model: sliceOf("model", filters, period),

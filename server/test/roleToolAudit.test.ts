@@ -96,6 +96,30 @@ describe("учёт вызовов инструментов", () => {
     expect(stored).not.toContain(secret);
   });
 
+  it("починка формы вызова попадает в учёт отдельным исходом и в сводку", async () => {
+    const before = toolAuditSummary({ role: ROLE, model: MODEL }).totals;
+    const api = createUniversalTaskflow([operation], context);
+    const out = decode(
+      await api.execute("d", {
+        action: "invoke",
+        operation: operation.name,
+        version: 1,
+        arguments: {},
+        query: "сводка",
+      }),
+    );
+    expect(out.ok).toBe(true);
+    const after = toolAuditSummary({ role: ROLE, model: MODEL }).totals;
+    expect(after.repairs).toBe(before.repairs + 1);
+    const record = toolAuditRecords({ role: ROLE, model: MODEL }).find(
+      (row) => row.outcome === "repaired",
+    );
+    expect(record, "починка должна попасть в учёт").toBeTruthy();
+    expect(record?.error_code).toBeNull();
+    expect(record?.error_message).toContain("аргументы приведены к схеме");
+    expect(record?.error_message).not.toContain("сводка");
+  });
+
   it("успешный вызов считается счётчиком, сводка показывает долю ошибок", async () => {
     const before = toolAuditSummary({ role: ROLE, model: MODEL }).totals;
     const api = createUniversalTaskflow([operation], context);

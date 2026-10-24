@@ -213,6 +213,11 @@ function recordCall(
     const payload = typeof text === "string" ? JSON.parse(text) : null;
     const ok = payload?.ok !== false;
     const errorCode = ok ? null : (payload?.error?.code ?? null);
+    // Починка формы вызова: сервер сам привёл аргументы к схеме и выполнил
+    // операцию. Отдельный исход: в счётчике ошибок это не ошибка, но видно,
+    // сколько вызовов модель оформила не по форме.
+    const repaired =
+      ok && payload?.data?.repaired ? payload.data.repaired : null;
     // Тренер ошибок дописывает в отказ своё сообщение (остановка и готовый
     // вызов). Роль видела именно его — значит, и в журнале оно должно быть.
     const coach =
@@ -236,11 +241,15 @@ function recordCall(
       action: typeof p?.action === "string" ? p.action : null,
       tool: "taskflow",
       operation: typeof p?.operation === "string" ? p.operation : null,
-      outcome: ok ? "ok" : "error",
+      outcome: repaired ? "repaired" : ok ? "ok" : "error",
       errorCode,
-      errorMessage:
-        baseMessage && coach ? baseMessage + " Тренер: " + coach : baseMessage,
-      errorField: detail.field,
+      errorMessage: repaired
+        ? "аргументы приведены к схеме: " +
+          (repaired.changes ?? []).join("; ")
+        : baseMessage && coach
+          ? baseMessage + " Тренер: " + coach
+          : baseMessage,
+      errorField: repaired ? repaired.field ?? null : detail.field,
       errorExpected: detail.expected,
       requestId: payload?.request_id ?? p?.request_id ?? null,
     });
@@ -1065,7 +1074,12 @@ export function createUniversalTaskflow(
       const { request_id: изАргументов, ...присланные } = {
         ...(p.arguments ?? {}),
       } as Record<string, unknown>;
-      const args = нормализоватьАргументы(tool.parameters, присланные);
+      let args = нормализоватьАргументы(tool.parameters, присланные);
+      /** Что привели к схеме автоматически. Инцидент 24.10.2026 (карточка
+       *  252c400e): роль 55 раз подряд повторяла сломанный вызов
+       *  taskflow_work_plan, хотя сервер уже знал, как его починить, — но
+       *  отказывал и ждал повтора от модели. null — починки не было. */
+      let починка: { changes: string[]; field: string | null } | null = null;
       const наружные = Object.fromEntries(
         Object.entries(p).filter(([k]) => !СЛУЖЕБНЫЕ.has(k)),
       );
@@ -1105,20 +1119,15 @@ export function createUniversalTaskflow(
           tool.invalidArgsHint?.(args) ||
           образецВложенных(tool, args, наружные);
         if (Check(tool.parameters, diagnosis.candidate)) {
-          const corrected = {
-            operation: tool.name,
-            ...(write && raw?.request_id !== undefined
-              ? { request_id: requestId }
-              : {}),
-            arguments: diagnosis.candidate,
+          // Починка найдена и проходит схему: выполняем с исправленными
+          // аргументами. Раньше здесь был отказ с готовым примером — роль
+          // должна была повторить вызов сама, и 24.10.2026 повторяла его
+          // 55 раз подряд (карточка 252c400e).
+          args = diagnosis.candidate as Record<string, unknown>;
+          починка = {
+            changes: [...moves, ...diagnosis.moves],
+            field: diagnosis.problems[0]?.path ?? null,
           };
-          const example = diagnosticJson(corrected);
-          hint +=
-            example.length <= 8000
-              ? " Правильный вызов: " +
-                example +
-                ". Повтори исправленный вызов; операция ещё не выполнялась."
-              : " Применяй указанные переносы к исходному вызову, сохрани остальные значения: полный пример превышает 8000 символов. Повтори исправленный вызов; операция ещё не выполнялась.";
         } else {
           hint +=
             " " +
@@ -1127,21 +1136,21 @@ export function createUniversalTaskflow(
             " Получи полную схему: " +
             JSON.stringify({ action: "describe", operation: tool.name }) +
             ". Исправь указанные поля и повтори invoke. Операция ещё не выполнялась.";
+          const detail = diagnosis.issues.length
+            ? diagnosis.issues.join(" ")
+            : "Неверное размещение параметров.";
+          const firstProblem = diagnosis.problems[0];
+          return fail(
+            "INVALID_ARGUMENTS",
+            detail + " " + hint,
+            hint,
+            {
+              field: firstProblem?.path ?? null,
+              expected: firstProblem?.expected ?? null,
+              kind: firstProblem?.kind ?? null,
+            },
+          );
         }
-        const detail = diagnosis.issues.length
-          ? diagnosis.issues.join(" ")
-          : "Неверное размещение параметров.";
-        const firstProblem = diagnosis.problems[0];
-        return fail(
-          "INVALID_ARGUMENTS",
-          detail + " " + hint,
-          hint,
-          {
-            field: firstProblem?.path ?? null,
-            expected: firstProblem?.expected ?? null,
-            kind: firstProblem?.kind ?? null,
-          },
-        );
       }
       if (
         write &&
@@ -1209,7 +1218,18 @@ export function createUniversalTaskflow(
             operation: tool.name,
             version: 1,
             request_id: requestId,
-            data: { state: "succeeded", content: resultContent },
+            data: {
+              state: "succeeded",
+              content: resultContent,
+              ...(починка
+                ? {
+                    repaired: {
+                      changes: починка.changes,
+                      note: "Аргументы приведены к схеме, вызов выполнен. Повторять не нужно.",
+                    },
+                  }
+                : {}),
+            },
           },
           resultContent.filter((c: any) => c.type !== "text"),
         );

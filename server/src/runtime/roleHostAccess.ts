@@ -11,7 +11,7 @@ import {listMachines} from "../host/machines.js";
 import {resolveMachine,isMachineOnline,runOperation} from "../host/gateway.js";
 import {HOSTS_CONFIG} from "./roleWorkspace.js";
 import {hostOperations,withHostToolExecution} from "./hostOperations.js";
-import type {Tool} from "./universalTaskflow.js";
+import {местаОшибок, type Tool} from "./universalTaskflow.js";
 type Context={role:string;taskId?:string};
 const native=()=>[...new Map([...createCodingTools("/"),...createReadOnlyTools("/")].map(t=>[t.name,t])).values()];
 const bindings=()=>JSON.parse(fs.readFileSync(HOSTS_CONFIG,"utf8")).projects as Record<string,Record<string,string>>;
@@ -31,7 +31,9 @@ export function roleHostTargets(role:string){
 }
 export async function executeRoleHostTool(c:Context,p:any,signal?:AbortSignal,onUpdate?:any){
  const selected=native().find(t=>t.name===p.tool);
- if(!selected || !Check(selected.parameters,p.arguments??{}))throw new Error("Неверная операция хоста или её параметры");
+ if(!selected)throw new Error("Неизвестная операция хоста: "+String(p.tool));
+ const аргументы=p.arguments??{};
+ if(!Check(selected.parameters,аргументы))throw new Error("Неверные параметры операции "+String(p.tool)+":"+местаОшибок(selected.parameters,аргументы));
  const taskId=p.task_id??c.taskId;
  let projectId=p.project_id;
  if(taskId){

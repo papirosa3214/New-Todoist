@@ -172,20 +172,18 @@ describe("discover: конфликт с вызовом операции",()=>{
  });
 });
 
-describe("говорящие ошибки размещения параметров invoke",()=>{
- it.each(["query","limit","id"])("называет перенос %s внутрь arguments и даёт исправленный вызов",async(field)=>{
+describe("размещение параметров invoke: переносим и выполняем (24.10.2026)",()=>{
+ it.each(["query","limit","id"])("переносит %s внутрь arguments и выполняет вызов",async(field)=>{
   const execute=vi.fn(async()=>({content:[]}));
   const t={name:"taskflow_task_summary",description:"summary",parameters:Type.Object({[field]:Type.String()}),execute};
   const api=createUniversalTaskflow([t],context);
   const r=decode(await api.execute("bad",{action:"invoke",operation:t.name,version:1,arguments:{},[field]:"example"}));
-  expect(r.ok).toBe(false);
-  expect(r.error.message).toContain(field+" → arguments."+field);
-  expect(r.error.hint).toContain('"arguments":{"'+field+'":"example"}');
-  expect(r.error.hint).not.toContain("discover");
-  expect(execute).not.toHaveBeenCalled();
-  const corrected=JSON.parse(r.error.hint.match(/Правильный вызов: (.*)\. Повтори/)[1]);
-  expect(decode(await api.execute("corrected",corrected)).ok).toBe(true);
+  // Починка: сервер знает, как привести вызов к схеме, — приводит и выполняет.
+  expect(r.ok).toBe(true);
   expect(execute).toHaveBeenCalledTimes(1);
+  expect(execute.mock.calls[0][1]).toEqual({[field]:"example"});
+  expect(r.data.repaired.changes.join(" ")).toContain(field+" → arguments."+field);
+  expect(r.data.repaired.note).toContain("Повторять не нужно");
  });
  it("для отсутствующего поля явно называет arguments.query",async()=>{
   const api=createUniversalTaskflow([{name:"taskflow_task_summary",description:"summary",parameters:Type.Object({query:Type.String()}),execute:vi.fn()}],context);
@@ -223,13 +221,12 @@ describe("диагностика структуры и типов",()=>{
   const response=decode(await api.execute("bad",{action:"invoke",operation:"taskflow_task_summary",version:1,arguments:args,request_id:"diag"}));
   return {response,execute,api};
  };
- it("снимает лишний arguments в подсказке и даёт исполнимый пример",async()=>{
-  const {response:r,execute,api}=await run(Type.Object({query:Type.String()}),{arguments:{query:"сводка"}});
-  expect(r.error.hint).toContain("arguments.arguments.query → arguments.query");
-  expect(r.error.hint).toContain("Убери лишний уровень");
-  expect(execute).not.toHaveBeenCalled();
-  const example=JSON.parse(r.error.hint.match(/Правильный вызов: (.*)\. Повтори/)[1]);
-  expect(decode(await api.execute("fixed",example)).ok).toBe(true);
+ it("снимает лишний arguments и выполняет вызов",async()=>{
+  const {response:r,execute}=await run(Type.Object({query:Type.String()}),{arguments:{query:"сводка"}});
+  expect(r.ok).toBe(true);
+  expect(execute).toHaveBeenCalledTimes(1);
+  expect(execute.mock.calls[0][1]).toEqual({query:"сводка"});
+  expect(r.data.repaired.changes.join(" ")).toContain("arguments.arguments.query → arguments.query");
  });
  it("item-обёртка массива разворачивается и вызов идёт, а не отказывает",async()=>{
   const schema=Type.Object({base_revision:Type.Number(),items:Type.Array(Type.Object({id:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("done")])}))});
