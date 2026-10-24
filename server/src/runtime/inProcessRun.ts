@@ -68,6 +68,7 @@ import db from "../db.js";
 import { AGENT_RULES, logEvent } from "../agentState.js";
 import { loadRoleRouting, providerOfModel, rolePromptText, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
+import { instructionSnapshotValue } from "../lib/instructionManifestStore.js";
 import { getModelRuntime, resolveThinkingLevel } from "./PiRuntimeAdapter.js";
 import { parseModelRef, recordAttemptModel } from "../lib/attemptModel.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
@@ -1606,7 +1607,31 @@ try {
       console.warn(`[compact] ${role} ${taskId}: не удалось сжать сессию, идём на сырой истории:`, error instanceof Error ? error.message : String(error));
     }
   }
-  logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
+  // Манифест — в справочник по содержимому (instructionManifestStore), а в
+  // событие кладём ссылку: полный манифест в каждом событии раздувал
+  // task_events до 48 МБ (2 831 событие × 18 КБ при 530 уникальных
+  // манифестах). Аудит «какая версия правил ушла в модель» сохранён —
+  // манифест восстанавливается по ссылке (аудит 24.10.2026).
+  logEvent({
+    taskId,
+    actorId: roleUserId(role),
+    kind: "instruction_snapshot",
+    field: runId,
+    toValue: instructionSnapshotValue({
+      mode: input.subtaskId ? "subtask" : mode,
+      resumed,
+      manifest: instructionManifest(
+        role,
+        input.subtaskId
+          ? "subtask"
+          : resumed
+            ? "resume"
+            : mode === "work"
+              ? "work"
+              : mode,
+      ),
+    }),
+  });
   const before = progressMark(taskId);
   const thrash = new ThrashGuard();
   const memoryConsultation = new MemoryConsultationGuard();

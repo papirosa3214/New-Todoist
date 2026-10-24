@@ -82,6 +82,49 @@ export function ensureJwtSecret(): void {
  * Права чинятся на каждом старте: если кто-то (или другая программа)
  * расширит доступ позже, следующий запуск сервера его закроет.
  */
+/**
+ * Закрыть основной репозиторий от пользователя ролей (tfrole).
+ *
+ * Проблема (аудит 24.10.2026): на каталогах репозитория висел ACL
+ * `u:tfrole:rwx`. Роли работают в СВОИХ рабочих копиях
+ * (~/.local/state/taskflow-runs/worktrees/<task_id>), и доступ к ним
+ * выдаётся отдельно (grantRoleAccess в localRoleOperations.ts) — замысла
+ * в доступе к основному репозиторию не было.
+ *
+ * Что это давало роли:
+ *  - запись в server/src/** и server/dist/** (dist — исполняемый код
+ *    сервера: systemd запускает `node dist/index.js`);
+ *  - запись в .git/config → подмена core.hooksPath → выполнение кода роли
+ *    при следующем коммите владельца (тот идёт от maksim, с его
+ *    секретами в окружении) — полная эскалация без push;
+ *  - запись в .git/refs/heads/** → попытка сдвинуть ветку main;
+ *  - чтение server/taskflow.db (mode 674) → api_token владельца,
+ *    password_hash всех пользователей, вся переписка чатов.
+ *
+ * Как чинится: скрипт scripts/harden-repo-access.sh. Права переустанавливаются
+ * на каждом старте — если что-то (или кто-то) их расширит позже, следующий
+ * запуск сервера снова закроет доступ.
+ *
+ * Ошибки не роняют старт: сервер должен подняться даже без setfacl.
+ */
+export function hardenRepoAccess(): void {
+  const script = path.join(__dirname, "..", "scripts", "harden-repo-access.sh");
+  if (!fs.existsSync(script)) return;
+  try {
+    // Скрипт сам разбирается с путём (первый аргумент) и молчит, если
+    // репозитория нет. Таймаут — чтобы старт не завис.
+    execFileSync("/bin/bash", [script, path.join(__dirname, "..", "..")], {
+      stdio: "ignore",
+      timeout: 30_000,
+    });
+  } catch (error) {
+    console.warn(
+      "[env] не удалось закрыть доступ ролей к репозиторию:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
 export function hardenEnvFile(): void {
   if (!fs.existsSync(ENV_PATH)) return;
   try {

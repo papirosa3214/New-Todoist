@@ -33,7 +33,7 @@ import { startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
 import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
-import { ensureJwtSecret, hardenEnvFile } from "./env.js";
+import { ensureJwtSecret, hardenEnvFile, hardenRepoAccess } from "./env.js";
 import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserId, resolveUserIdFromToken, authOrApiToken, isRevokedDeviceToken } from "./auth.js";
@@ -236,6 +236,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   // создан (роли работают от пользователя tfrole, ему .env не нужен —
   // см. hardenEnvFile в env.ts).
   hardenEnvFile();
+  // Доступ ролей (tfrole) к основному репозиторию закрывается на каждом
+  // старте: роль пишет в СВОЕЙ рабочей копии, а в основном репозитории
+  // (server/src, server/dist, .git/config, .git/refs/heads/main) ей писать
+  // нельзя — иначе она подменяет исполняемый код сервера или хук, который
+  // исполнится при коммите владельца. См. hardenRepoAccess в env.ts.
+  hardenRepoAccess();
 
   // bodyLimit по умолчанию у Fastify — 1 МБ, мало для аудиозаписи диктовки
   // (кнопка микрофона, routes/transcribe.ts). Поднимаем до потолка самого

@@ -80,6 +80,10 @@ function briefInstructionSnapshot(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   try {
     const v = JSON.parse(raw) as { mode?: unknown; resumed?: unknown };
+    // Возвращаем только mode/resumed: полный манифест (18 КБ) в выдаче не
+    // нужен. Форма события изменился (24.10.2026): вместо полного манифеста
+    // в to_value лежит ссылка manifest_sha256 — на разбор это не влияет,
+    // читаются те же два поля.
     return JSON.stringify({ mode: v.mode ?? null, resumed: v.resumed ?? null });
   } catch {
     return null;
@@ -262,6 +266,34 @@ export function withSubtaskState(s: any) {
 // карточкой едет имя и аватар, как у исполнителя. Особенно это нужно с
 // тех пор, как карточки заводит не только владелец: их создают агенты и
 // разбор надиктовки.
+/**
+ * Колонки tasks для выдачи — БЕЗ composed_prompt_snapshot.
+ *
+ * Раньше здесь стояло `t.*`, и список задач тянул из БД полный system prompt
+ * роли (composed_prompt_snapshot, ~28 КБ на задачу). Он пишется сервером для
+ * разбора «что модель реально получила», но его НИКТО не читает: ни одна
+ * ручка выдачи, ни фронт (проверено grep'ом по src/). При `t.*` список из
+ * 164 задач вычитывал 4,3 МБ, которые тут же выбрасывались — 33 мс из 35 мс
+ * ответа (аудит 24.10.2026).
+ *
+ * Список строится из схемы В МОМЕНТ ЗАПРОСА, а не выписан руками: новая
+ * колонка из миграции подхватится сама, и её нельзя случайно потерять.
+ */
+let taskColumnsCache: string | null = null;
+export function taskColumnsForOutput(): string {
+  // Кэш: схема меняется только на старте (migrate() + runMigrations()), а
+  // первый запрос приходит после них. Значит, снятый один раз список
+  // колонок актуален до перезапуска.
+  if (taskColumnsCache) return taskColumnsCache;
+  const cols = (
+    db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>
+  )
+    .map((c) => c.name)
+    .filter((n) => n !== "composed_prompt_snapshot");
+  taskColumnsCache = cols.map((n) => `t.${n}`).join(", ");
+  return taskColumnsCache;
+}
+
 export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.type as assignee_type, u.role as assignee_role, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
              c.name as creator_name, c.type as creator_type, c.role as creator_role, c.avatar_color as creator_color, c.avatar_url as creator_avatar_url, c.initials as creator_initials,
              COALESCE(t.project_name_snapshot, p.name) as project_name, p.color as project_color,
@@ -302,7 +334,7 @@ export const TASK_JOINS = `FROM tasks t
 
 export function getTaskRow(id: string) {
   return db
-    .prepare(`SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.id = ?`)
+    .prepare(`SELECT ${taskColumnsForOutput()} ${TASK_JOINS} WHERE t.id = ?`)
     .get(id) as any;
 }
 
@@ -331,7 +363,7 @@ export function hydrateTask(task: any) {
     .all(task.id);
   const children = db
     .prepare(
-      `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`,
+      `SELECT ${taskColumnsForOutput()} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`,
     )
     .all(task.id)
     .map((t) => {
@@ -548,7 +580,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
 
     const includeChildren = req.query.include_children === "true";
     const parentFilter = includeChildren ? "" : "t.parent_id IS NULL AND ";
-    const columns = TASK_COLUMNS;
+    const columns = taskColumnsForOutput();
     const joins = TASK_JOINS;
 
     // Опциональные фильтры для планировщика (шаг 4): agent_state,
@@ -813,7 +845,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         .map(withSubtaskState);
       const children = db
         .prepare(
-          `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`,
+          `SELECT ${taskColumnsForOutput()} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`,
         )
         .all(task.id)
         .map((t) => {

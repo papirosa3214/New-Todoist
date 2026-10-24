@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { ROLE_TOOL_REQUEST_SCHEMA } from "./routes/role-tool-requests.js";
 import { OBSERVABILITY_SCHEMA } from "./lib/contextObservability.js";
 import { TOOL_REQUEST_SCHEMA } from "./runtime/toolRequestStore.js";
@@ -4422,6 +4423,23 @@ const migrations: Migration[] = [
           db.exec('ALTER TABLE "chat_messages_new" RENAME TO chat_messages');
         });
         rebuild();
+        // DROP TABLE chat_messages убивает индексы таблицы вместе с ней.
+        // Без восстановления ленты чатов и история задачи читают
+        // chat_messages полным сканом (аудит 24.10.2026: так потерялись
+        // idx_chat_messages_to / _task / _channel / _chat).
+        //
+        // Определения — из миграций 012/019/020 (git show 916c0c00:server/
+        // src/migrations.ts). IF NOT EXISTS — идемпотентно.
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_chat_messages_to
+            ON chat_messages(to_user_id, created_at);
+          CREATE INDEX IF NOT EXISTS idx_chat_messages_task
+            ON chat_messages(task_id);
+          CREATE INDEX IF NOT EXISTS idx_chat_messages_channel
+            ON chat_messages(channel, created_at);
+          CREATE INDEX IF NOT EXISTS idx_chat_messages_chat
+            ON chat_messages(chat_id, created_at);
+        `);
         const rowsAfter = (
           db.prepare("SELECT COUNT(*) AS n FROM chat_messages").get() as { n: number }
         ).n;
@@ -5041,6 +5059,129 @@ const migrations: Migration[] = [
           роль.key,
           роль.key,
           initials,
+        );
+      }
+    },
+  },
+
+  {
+    id: "171_instruction_manifests_store",
+    description:
+      "Справочник манифестов инструкций: событие instruction_snapshot хранит ссылку, а не полный манифест (48 МБ → ~1 МБ), плюс перенос уже накопленных событий",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS instruction_manifests (
+          sha256 TEXT PRIMARY KEY,
+          manifest TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+
+      // Перенос уже накопленных событий: манифест из to_value уезжает в
+      // справочник (один раз на уникальное содержимое), в событии остаётся
+      // ссылка. Аудит сохраняется — манифест восстанавливается по ссылке.
+      //
+      // События без манифеста (или с неразбираемым JSON) не трогаем: их
+      // читает briefInstructionSnapshot, и он продолжает видеть mode/resumed.
+      const строки = db
+        .prepare(
+          `SELECT id, to_value FROM task_events
+            WHERE kind = 'instruction_snapshot' AND to_value LIKE '%manifest%'`,
+        )
+        .all() as Array<{ id: string; to_value: string }>;
+      const вставить = db.prepare(
+        `INSERT INTO instruction_manifests (sha256, manifest, created_at)
+         VALUES (?, ?, datetime('now')) ON CONFLICT(sha256) DO NOTHING`,
+      );
+      const обновить = db.prepare(
+        `UPDATE task_events SET to_value = ? WHERE id = ?`,
+      );
+      let перенесено = 0;
+      for (const с of строки) {
+        let parsed: any;
+        try {
+          parsed = JSON.parse(с.to_value);
+        } catch {
+          continue;
+        }
+        if (!parsed || typeof parsed !== "object" || !("manifest" in parsed)) continue;
+        const манифест = parsed.manifest;
+        if (манифест === undefined || манифест === null) continue;
+        const json = JSON.stringify(манифест);
+        const sha = crypto.createHash("sha256").update(json).digest("hex");
+        вставить.run(sha, json);
+        // Форма события: mode, resumed и ссылка. Потребитель
+        // briefInstructionSnapshot читает только mode/resumed — он работает
+        // без изменений.
+        обновить.run(
+          JSON.stringify({
+            mode: parsed.mode ?? null,
+            resumed: parsed.resumed ?? null,
+            manifest_sha256: sha,
+          }),
+          с.id,
+        );
+        перенесено += 1;
+      }
+      if (перенесено > 0) {
+        console.log(
+          `171_instruction_manifests_store: перенесено событий instruction_snapshot — ${перенесено}`,
+        );
+      }
+    },
+  },
+
+  {
+    id: "172_chat_messages_indexes",
+    description:
+      "Индексы chat_messages, потерянные при пересборке таблицы в миграции 133 (DROP TABLE убивает индексы вместе с таблицей)",
+    up: () => {
+      // Миграция 133 пересобирает chat_messages (нужен новый CHECK на kind):
+      //   CREATE TABLE chat_messages_new → INSERT → DROP TABLE chat_messages
+      //   → RENAME chat_messages_new TO chat_messages
+      // DROP TABLE удаляет и индексы таблицы, а восстановить 133 взяла
+      // только один (idx_chat_messages_rule_ref). Остальные четыре
+      // (to / task / channel / chat) исчезли — на них стоят выборки лент
+      // чатов и истории задачи: без них SQLite делал полный скан таблицы.
+      //
+      // Здесь восстанавливаем их. Определения — из миграции 012/019/020,
+      // где они создавались (см. git show 916c0c00:server/src/migrations.ts).
+      //
+      // CREATE INDEX IF NOT EXISTS — идемпотентно: и на БД, где индексы
+      // ещё живы, и на той, где их уже нет.
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      const создать = (имя: string, sql: string) => {
+        if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(имя)) {
+          return;
+        }
+        db.exec(sql);
+      };
+      if (cols.has("to_user_id") && cols.has("created_at")) {
+        создать(
+          "idx_chat_messages_to",
+          "CREATE INDEX IF NOT EXISTS idx_chat_messages_to ON chat_messages(to_user_id, created_at)",
+        );
+      }
+      if (cols.has("task_id")) {
+        создать(
+          "idx_chat_messages_task",
+          "CREATE INDEX IF NOT EXISTS idx_chat_messages_task ON chat_messages(task_id)",
+        );
+      }
+      if (cols.has("channel") && cols.has("created_at")) {
+        создать(
+          "idx_chat_messages_channel",
+          "CREATE INDEX IF NOT EXISTS idx_chat_messages_channel ON chat_messages(channel, created_at)",
+        );
+      }
+      if (cols.has("chat_id") && cols.has("created_at")) {
+        создать(
+          "idx_chat_messages_chat",
+          "CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages(chat_id, created_at)",
         );
       }
     },

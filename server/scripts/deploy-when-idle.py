@@ -188,6 +188,21 @@ def main():
         state("failed", head)
         notify(f"TaskFlow: сборка dist {head[:8]} упала — проверь сервер.")
         return
+    # VACUUM: уборка освободившихся страниц. Нужен потому, что удалённые
+    # строки (task_events с манифестами инструкций — 48 МБ) оставляют
+    # после себя пустые страницы, и файл БД не сжимается (190 МБ вместо
+    # 145). Сжатие требует эксклюзивной блокировки, поэтому делаем его
+    # ЗДЕСЬ: выкладка идёт в окно простоя, сервер ещё не перезапущен,
+    # а резервная копия уже снята (строкой выше).
+    #
+    # Ошибка VACUUM не должна отменять выкладку — это обслуживание, а не
+    # условие её корректности. Пишем в журнал и идём дальше.
+    vacuum = sh("sqlite3", DB, "VACUUM;", cwd=SERVER, timeout=600)
+    if vacuum.returncode != 0:
+        log(f"VACUUM не прошёл: {(vacuum.stderr or vacuum.stdout).strip()[:200]}")
+    else:
+        size_mb = os.path.getsize(DB) / 1024 / 1024 if os.path.exists(DB) else 0
+        log(f"VACUUM выполнен, размер БД: {size_mb:.0f} МБ")
     sh("systemctl", "--user", "restart", "taskflow-server", timeout=120)
     if healthy():
         state("deployed", head)
