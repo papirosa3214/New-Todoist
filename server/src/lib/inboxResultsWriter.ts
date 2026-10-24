@@ -28,7 +28,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import * as crypto from "node:crypto";
 
 import db from "../db.js";
 
@@ -308,79 +307,14 @@ export function startInboxResultsWriter(): () => void {
       created_at: string;
     }>;
     const commentTexts = lastComments.map((c) => c.text);
-    // Если диагностика подтвердилась — в комментарии должно быть что-то,
-    // что оправдывает создание карточки на устранение. Просто берём всё что есть.
-    // Если же комментариев нет — пишем «не подтвердилось».
-    const confirmed =
-      commentTexts.length > 0 &&
-      !commentTexts.some((c) =>
-        c.toLowerCase().includes("не подтвердилось") ||
-        c.toLowerCase().includes("проблем не выявлено") ||
-        c.toLowerCase().includes("ложная тревога"),
-      );
-
-    let block = `\n## По результатам диагностики\n\n`;
-    if (confirmed) {
-      // Идемпотентный INSERT: проверяем, нет ли уже дочерней карточки на
-      // устранение для этой пары (parent_id, prefix-title). Защищаемся от
-      // дублирования при перезапуске writer'а.
-      const subTitlePrefix = `Устранение: ${task.title.replace(
-        /^\[Диагностика\] /,
-        "",
-      )}`;
-      // Вложенность одна (02.10.2026): диагностика сама дочерняя — карточка
-      // на устранение встаёт рядом с ней, к тому же родителю.
-      const fixParent =
-        (db.prepare("SELECT parent_id FROM tasks WHERE id = ?").get(task.id) as { parent_id: string | null } | undefined)
-          ?.parent_id ?? task.id;
-      const existingFix = db.prepare(
-        `SELECT id FROM tasks WHERE parent_id = ? AND title = ? LIMIT 1`,
-      ).get(fixParent, subTitlePrefix) as { id: string } | undefined;
-      let subId = existingFix?.id;
-      if (!subId) {
-        subId = crypto.randomUUID();
-        try {
-          db.prepare(
-            // Устранение — такая же служебная карточка, как диагностика
-            // (12.10.2026): без проекта, скрыта из списков. agent_state NULL,
-            // а не 'todo': с 'todo' диспетчер считал её уже взятой и не
-            // раздавал никому — починка не начиналась.
-            `INSERT INTO tasks (id, title, description, priority, creator_id, status, agent_state, parent_id, project_id, service_hidden, incident_key)
-             VALUES (?, ?, ?, ?, ?, 'active', NULL, ?, NULL, 1, ?)`,
-          ).run(
-            subId,
-            subTitlePrefix,
-            `Авто-создано по результатам диагностики #${task.id.slice(0, 8)}.\n\n` +
-              `## Источник: диагностическая задача ${task.id}\n\n` +
-              `## Комментарии диагностики:\n${commentTexts
-                .slice(0, 3)
-                .map((c) => `> ${c.slice(0, 600)}`)
-                .join("\n\n")}\n`,
-            2,
-            "u1",
-            fixParent,
-            `fix:${task.id}`,
-          );
-        } catch {
-          // уже существует другая карточка на устранение? — пропустим INSERT
-          const second = db.prepare(
-            `SELECT id FROM tasks WHERE parent_id = ? AND title = ? LIMIT 1`,
-          ).get(fixParent, subTitlePrefix) as { id: string } | undefined;
-          subId = second?.id;
-        }
-      }
-      // Карточку завести не удалось — пишем это, а не падаем на пустом id.
-      if (!subId) {
-        block += "Подтвердилось, но карточку на устранение завести не удалось — заведите её вручную.\n";
-      } else {
-        block +=
-          "Подтвердилось: " +
-          (commentTexts[0] ?? "(комментарий исполнителя)") +
-          `\n\nПо подтверждённым проблемам создана карточка на устранение: ` +
-          `[карточка #${subId.slice(0, 8)}](tf://task/${subId})\n`;
-      }
+    // Комментарий не доказывает поломку и не разрешает создавать новую
+    // карточку. Диагностика и дальнейшая работа остаются в исходной задаче.
+    let block = "\n## По результатам диагностики\n\n";
+    if (commentTexts.length > 0) {
+      block += commentTexts.slice(0, 3).map(text => `> ${text.slice(0, 1800)}`).join("\n\n");
+      block += `\n\nРезультат и дальнейшая работа — в [исходной карточке](tf://task/${task.id}).\n`;
     } else {
-      block += "Проблема не подтвердилась.\n";
+      block += "Результат диагностики не записан. Требуется отчёт в исходной карточке.\n";
     }
     const marker = `<!-- results-writer: ${task.id} diag-review -->`;
     // marker хранится в in-memory как подсказка чтобы не вызывать
