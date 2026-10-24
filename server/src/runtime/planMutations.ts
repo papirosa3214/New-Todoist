@@ -60,6 +60,103 @@ export class PlanOpError extends Error {
   }
 }
 
+const PLAN_OP_NAMES = new Set([
+  "request_help",
+  "add_step",
+  "update_step",
+  "remove_step",
+  "skip_step",
+  "rework",
+]);
+
+/**
+ * Форма операций до применения. Раньше тело запроса приводилось к PlanOp
+ * приведением типа (`req.body?.ops as PlanOp[]`), которого во время работы
+ * нет вовсе: 22.10.2026 POST …/collaboration-plans/:planId/ops падал 500
+ * «op.after is not iterable», потому что клиент прислал after строкой или
+ * объектом, а `for (const a of op.after)` ждёт список. После `setErrorHandler`
+ * такой сбой стал бы просто непонятной 500-й; здесь он превращается в 400 с
+ * указанием, какая операция и какое поле не той формы.
+ *
+ * Проверяется ТОЛЬКО форма (тип поля), а не смысл: пустой expected_result,
+ * неизвестную роль и несуществующий шаг по-прежнему разбирают applyOne и
+ * requireRole — их формулировки и коды ответов остаются как были.
+ */
+export function normalizePlanOps(input: unknown): PlanOp[] {
+  if (!Array.isArray(input) || input.length === 0) throw new PlanOpError("нет операций");
+  return input.map((raw, index) => {
+    const where = `операция №${index + 1}`;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new PlanOpError(`${where}: ожидается объект`);
+    }
+    const op = raw as Record<string, unknown>;
+    const name = op.op;
+    if (typeof name !== "string" || !PLAN_OP_NAMES.has(name)) {
+      throw new PlanOpError(
+        `${where}: неизвестное действие «${typeof name === "string" ? name : String(name)}»; допустимы: ${[...PLAN_OP_NAMES].join(", ")}`,
+      );
+    }
+    const text = (field: string, required = false): string | undefined => {
+      const value = op[field];
+      if (value === undefined || value === null) {
+        if (required) throw new PlanOpError(`${where}: не хватает поля «${field}»`);
+        return undefined;
+      }
+      if (typeof value !== "string") throw new PlanOpError(`${where}: поле «${field}» должно быть строкой`);
+      return value;
+    };
+    const slots = (field: "after" | "before"): string[] | undefined => {
+      const value = op[field];
+      if (value === undefined || value === null) return undefined;
+      if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
+        throw new PlanOpError(`${where}: поле «${field}» должно быть списком ключей шагов`);
+      }
+      return value as string[];
+    };
+    switch (name) {
+      case "request_help":
+        return {
+          op: name,
+          from_slot: text("from_slot", true),
+          role_key: text("role_key", true),
+          expected_result: text("expected_result", true),
+          instructions: text("instructions"),
+          after: slots("after"),
+        } as PlanOp;
+      case "add_step":
+        return {
+          op: name,
+          slot_key: text("slot_key"),
+          role_key: text("role_key", true),
+          expected_result: text("expected_result", true),
+          instructions: text("instructions"),
+          after: slots("after"),
+          before: slots("before"),
+        } as PlanOp;
+      case "update_step":
+        return {
+          op: name,
+          slot_key: text("slot_key", true),
+          role_key: text("role_key"),
+          expected_result: text("expected_result"),
+          instructions: text("instructions"),
+          after: slots("after"),
+        } as PlanOp;
+      case "remove_step":
+        return { op: name, slot_key: text("slot_key", true) } as PlanOp;
+      case "skip_step":
+        return { op: name, slot_key: text("slot_key", true), reason: text("reason", true) } as PlanOp;
+      default:
+        return {
+          op: name,
+          from_slot: text("from_slot", true),
+          role_key: text("role_key"),
+          defects: text("defects", true),
+        } as PlanOp;
+    }
+  });
+}
+
 type NodeRow = {
   slot_key: string;
   role_key: string;
@@ -537,7 +634,7 @@ export function applyPlanOps(
   actor: PlanActor,
   opts: { baseVersion?: number | null; reason?: string | null; bypassBudget?: boolean } = {},
 ): ApplyResult {
-  if (!Array.isArray(ops) || ops.length === 0) throw new PlanOpError("нет операций");
+  ops = normalizePlanOps(ops);
   if (ops.length > 20) throw new PlanOpError("слишком много операций за раз");
   roleCheck(ops, actor);
   const reason = opts.reason ? clip(opts.reason, 500) : null;

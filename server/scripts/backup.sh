@@ -45,6 +45,40 @@ alert() {
 
 mkdir -p "$(dirname "$LOG")"
 
+# 0. Ротация журнала самого сервера (server/dev-server.log).
+#
+# Journald тут не при чём: сервер пишет в файл сам (systemd
+# StandardOutput=append:, см. ~/.config/systemd/user/taskflow-server.service),
+# и до 24.10.2026 файл никто не подрезал — за 72 суток накопилось 1,56 ГБ
+# (~22 МБ в сутки). logrotate в /etc/logrotate.d без sudo не положить,
+# поэтому ротация живёт здесь, в том же ночном проходе.
+#
+# Копировать-и-обрезать (copytruncate), а не переименовывать: файл держит
+# открытым живой процесс, и после `mv` systemd продолжил бы писать в
+# переименованный файл. `: >` оставляет тот же inode, а запись идёт с
+# O_APPEND (append:), поэтому курсор сам уходит в начало пустого файла.
+# Цена приёма: строки, попавшие в файл между `cp` и обрезкой, теряются —
+# для журнала это приемлемо, для данных нет (данные — в бэкапе базы выше).
+LOG_FILE="$REPO/server/dev-server.log"
+LOG_MAX_MB=200
+LOG_KEEP_DAYS=14
+if [ -f "$LOG_FILE" ]; then
+  LOG_SIZE=$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)
+  if [ "$LOG_SIZE" -gt $((LOG_MAX_MB * 1024 * 1024)) ]; then
+    ROTATED="$LOG_FILE.$(date +%F_%H%M%S)"
+    if cp "$LOG_FILE" "$ROTATED" 2>>"$LOG"; then
+      : > "$LOG_FILE"
+      log "журнал сервера подрезан: было $((LOG_SIZE / 1048576)) МБ → копия $ROTATED"
+      # Сжимаем в фоне не нужно: ночью спешить некуда, зато копия сразу маленькая.
+      gzip -3 "$ROTATED" 2>>"$LOG" || log "не сжать $ROTATED"
+    else
+      log "не скопировать журнал сервера — обрезку не делаю"
+      alert error "Журнал TaskFlow" "Не смог скопировать dev-server.log ($((LOG_SIZE / 1048576)) МБ) перед обрезкой. Ротация пропущена, диск продолжает заполняться."
+    fi
+  fi
+  find "$(dirname "$LOG_FILE")" -maxdepth 1 -type f -name 'dev-server.log.*.gz' -mtime +"$LOG_KEEP_DAYS" -delete 2>/dev/null
+fi
+
 if ! mountpoint -q /mnt/nas; then
   log "NAS не подключён — слепок пропущен"
   alert error "Слепок TaskFlow" "NAS не подключён, слепок не снят."
