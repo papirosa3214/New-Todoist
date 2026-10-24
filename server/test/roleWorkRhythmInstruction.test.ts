@@ -39,6 +39,15 @@ describe("общая инструкция ролей: ритм работы", ()
     }
   });
 
+  it("во всех режимах требуется короткий прогресс в чате, а не молчание", () => {
+    for (const mode of modes) {
+      const text = String(INSTRUCTION_DEFAULTS[mode]);
+      expect(text, mode).toContain("ПОКАЖИ ХОД РАБОТЫ В ЧАТЕ");
+      expect(text, mode).toMatch(/одно короткое сообщение/);
+      expect(text, mode).toMatch(/Молчание и рассуждения вслух/);
+    }
+  });
+
   it("правило про развилку есть и в чате, где владелец ждёт кнопки", () => {
     const wrapper = String(INSTRUCTION_DEFAULTS["chat.wrapper"]);
     expect(wrapper).toContain("БЫСТРЫЕ ОТВЕТЫ ПОСЛЕДНЕЙ СТРОКОЙ");
