@@ -630,16 +630,34 @@ export function registerTaskRoutes(app: FastifyInstance) {
             .all(userId, userId, userId, ...extraParams)
     ) as any[];
 
-    const stmtLabels = db.prepare(`
-      SELECT l.id, l.name, l.color FROM labels l
-      JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?
-    `);
-    const stmtSub = db.prepare(
-      "SELECT * FROM subtasks WHERE task_id = ? ORDER BY position",
-    );
-    const stmtChildren = db.prepare(
-      "SELECT id, status FROM tasks WHERE parent_id = ?",
-    );
+    // Батч вместо N+1 (владелец 24.10.2026): подзадачи, дети, метки и время
+    // взятия собираются за 4 запроса на весь список, а не на каждую карточку.
+    const taskIds = tasks.map((t: any) => t.id) as string[];
+    const ph = taskIds.map(() => "?").join(",");
+    const subtaskMap = new Map<string, any[]>();
+    const childMap = new Map<string, { id: string; status: string }[]>();
+    const labelMap = new Map<string, any[]>();
+    const startedMap = new Map<string, string>();
+    if (taskIds.length) {
+      for (const s of db.prepare(`SELECT * FROM subtasks WHERE task_id IN (${ph}) ORDER BY task_id, position`).all(...taskIds) as any[]) {
+        const arr = subtaskMap.get(s.task_id) ?? [];
+        arr.push(s);
+        subtaskMap.set(s.task_id, arr);
+      }
+      for (const c of db.prepare(`SELECT id, status, parent_id FROM tasks WHERE parent_id IN (${ph})`).all(...taskIds) as Array<{ id: string; status: string; parent_id: string }>) {
+        const arr = childMap.get(c.parent_id) ?? [];
+        arr.push({ id: c.id, status: c.status });
+        childMap.set(c.parent_id, arr);
+      }
+      for (const l of db.prepare(`SELECT tl.task_id AS task_id, l.id, l.name, l.color FROM labels l JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id IN (${ph})`).all(...taskIds) as any[]) {
+        const arr = labelMap.get(l.task_id) ?? [];
+        arr.push({ id: l.id, name: l.name, color: l.color });
+        labelMap.set(l.task_id, arr);
+      }
+      for (const r of db.prepare(`SELECT task_id, MAX(created_at) AS created_at FROM task_events WHERE task_id IN (${ph}) AND kind = 'claimed' GROUP BY task_id`).all(...taskIds) as Array<{ task_id: string; created_at: string }>) {
+        startedMap.set(r.task_id, r.created_at);
+      }
+    }
 
     // Метка сессии вызывающего: кто именно спрашивает. По ней каждая
     // задача помечается `mine` — ведёт ли её ЭТА сессия. Учётка агента
@@ -650,8 +668,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
     // ничего не фильтрует и не прячет — владелец по-прежнему видит всё.
     const session = sessionOf(req);
     return tasks.map((t: any) => {
-      const subtasks = stmtSub.all(t.id).map(withSubtaskState);
-      const children = stmtChildren.all(t.id);
+      const subtasks = (subtaskMap.get(t.id) ?? []).map(withSubtaskState);
+      const children = childMap.get(t.id) ?? [];
       const bySubtask = subtasks.some(
         (s: any) => s.agent_session_id && s.agent_session_id === session,
       );
@@ -661,7 +679,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // телефон перекачивал его на каждом обновлении. В базе остаётся.
         composed_prompt_snapshot: undefined,
         mine: session ? t.agent_session_id === session || bySubtask : null,
-        labels: stmtLabels.all(t.id),
+        labels: labelMap.get(t.id) ?? [],
         subtasks,
         // Прогресс родителя в списке — ДВУМЯ ЧИСЛАМИ, а не массивом детей.
         //
@@ -683,7 +701,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // Третий путь отдачи задачи, и он тоже собирается вручную мимо
         // hydrateTask. Островок на телефоне живёт как раз от списка, так что
         // без этой строки время работы считалось бы от открытия приложения.
-        agent_started_at: agentStartedAt(t),
+        agent_started_at: t.id && t.agent_state ? (startedMap.get(t.id) ?? null) : null,
       };
     });
   });
