@@ -17,6 +17,7 @@
   "dependencies": {
     "@composio/core": "0.22.0",
     "@earendil-works/pi-coding-agent": "^0.84.4",
+    "@fastify/compress": "^9.2.2",
     "@fastify/cors": "^11.3.0",
     "@fastify/jwt": "^10.2.1",
     "@fastify/rate-limit": "^11.2.0",

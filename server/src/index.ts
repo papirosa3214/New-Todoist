@@ -13,6 +13,7 @@ import path from "path";
 import { execFileSync } from "child_process";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import compress from "@fastify/compress";
 import fastifyJwt from "@fastify/jwt";
 import { setRoleTokenSigner } from "./runtime/roleRunAccess.js";
 import { setInProcessApp } from "./runtime/inProcessRun.js";
@@ -460,6 +461,17 @@ export async function buildApp(): Promise<FastifyInstance> {
     // глаголы, которые реально использует клиент (api/client.ts).
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
+  // Сжатие ответов. До 24.10.2026 его не было вовсе: GET /api/tasks отдавал
+  // 3,02 МБ JSON на 123 карточки (в нём 6 коррелированных подзапросов на
+  // строку — «последний шаг», «счётчики детей» и т.п.), а это 399 тыс.
+  // запросов за окно журнала. Клиенты (URLSession у iOS, fetch в браузере)
+  // присылают Accept-Encoding сами, так что сжатие подхватывается без
+  // правок клиента; порог 1 КБ — мелочь вроде /api/health не трогаем.
+  // SSE (/api/runtime/events) пишет в reply.raw напрямую и через onSend не
+  // идёт, потоки файлов сжимаются только если их тип сжимаемый (у картинок
+  // и PDF — нет); тот же заголовок Content-Encoding, что уже стоит в ответе,
+  // повторно не ставится.
+  await app.register(compress, { global: true, threshold: 1024 });
   // ensureJwtSecret() выше гарантирует, что JWT_SECRET уже в process.env —
   // без литерала-запасного варианта: он либо пришёл снаружи, либо сгенерирован
   // и сохранён в server/.env при первом старте.
