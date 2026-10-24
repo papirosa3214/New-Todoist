@@ -323,9 +323,40 @@ export async function buildApp(): Promise<FastifyInstance> {
     return payload;
   });
 
-  // Необработанные сбои всего процесса: только что поднятый Fastify сам
-  // не отдаёт их в нормальный обработчик, и без этого хука они уходят
-  // «в никуда» — событие есть, а в журнале его нет.
+  // Наружу — только безопасный текст. До этого обработчика не было вовсе, и
+  // Fastify отдавал клиенту message исключения как есть: в живом журнале
+  // 23.10.2026 так утекли SQL («near "hours": syntax error», имя таблицы и
+  // колонок в «UNIQUE constraint failed: tf_realtime_dirty.topic,
+  // tf_realtime_dirty.task_id») и вывод git из /api/merges/roll-back.
+  // 4xx оставляем с текстом: это осмысленные отказы («только владелец»,
+  // «invalid_window»), их показывает интерфейс. 5xx — обезличенно, детали
+  // уже лежат в server_events и в pino (onError выше).
+  app.setErrorHandler((err: any, req: any, reply: any) => {
+    const status =
+      typeof err?.statusCode === "number" && err.statusCode >= 400 && err.statusCode < 600
+        ? err.statusCode
+        : 500;
+    if (reply.sent) return;
+    if (status >= 500) {
+      req.log.error({ err }, "route failed");
+      return reply.code(status).send({
+        statusCode: status,
+        error: "Internal Server Error",
+        message: "внутренняя ошибка сервера",
+        request_id: req.id,
+      });
+    }
+    return reply.code(status).send({
+      statusCode: status,
+      error: err?.name || "Bad Request",
+      message: err?.message || "некорректный запрос",
+      request_id: req.id,
+    });
+  });
+
+  // Журнал необработанных сбоев маршрута: тело ошибки пишем в общий серверный
+  // журнал (карточка e87cd93f), наружу при этом уходит безопасный текст из
+  // setErrorHandler выше.
   app.addHook("onError", async (req, reply, err) => {
     const norm = normalizeServerError(err, "fastify_route_error");
     logServerEvent({

@@ -4,13 +4,21 @@ import type Database from 'better-sqlite3';
  * No timer or persistent migration. Covers route and worker writes alike. */
 export function installRealtimeInvalidation(db: Database.Database, emit: (taskID: string, topic: string) => void) {
   let scheduled = false;
-  db.exec(`CREATE TEMP TABLE IF NOT EXISTS tf_realtime_dirty(topic TEXT NOT NULL, task_id TEXT NOT NULL, PRIMARY KEY(topic,task_id))`);
+  // Без PRIMARY KEY намеренно. Это «грязный» набор, а не справочник: одна и
+  // та же пара (topic, task_id) приходит из нескольких триггеров одного
+  // каскадного DELETE, и PRIMARY KEY превращал совпадение в ошибку
+  // SQLITE_CONSTRAINT_PRIMARYKEY, хотя вставки идут с OR IGNORE
+  // (24.10.2026: DELETE /api/tasks/:id падал 500 «UNIQUE constraint failed:
+  // tf_realtime_dirty.topic, tf_realtime_dirty.task_id» на карточке с планом
+  // совместной работы). Дубли не нужны и не вредны: сброс ниже склеивает их
+  // через SELECT DISTINCT и Map по `${topic}:${id}`.
+  db.exec(`CREATE TEMP TABLE IF NOT EXISTS tf_realtime_dirty(topic TEXT NOT NULL, task_id TEXT NOT NULL)`);
   db.function('tf_schedule_realtime', () => {
     if (!scheduled) {
       scheduled = true;
       queueMicrotask(() => {
         scheduled = false;
-        const rows = db.prepare('SELECT topic,task_id FROM temp.tf_realtime_dirty').all() as Array<{topic:string;task_id:string}>;
+        const rows = db.prepare('SELECT DISTINCT topic,task_id FROM temp.tf_realtime_dirty').all() as Array<{topic:string;task_id:string}>;
         db.prepare('DELETE FROM temp.tf_realtime_dirty').run();
         const events = new Map<string, {topic:string;taskID:string}>();
         for (const row of rows) {
