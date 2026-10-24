@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import db from "../src/db.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, recoverStaleRunning, requeueMerge, retryClearedObstructions, sweepMergeScratch, sweepUnmergedBranches, worktreeMaintenancePass } from "../src/runtime/worktreeMergeQueue.js";
+import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, recoverStaleRunning, requeueMerge, retryClearedObstructions, sweepMergeScratch, worktreeMaintenancePass } from "../src/runtime/worktreeMergeQueue.js";
 import { reloadServerSettings, setSetting } from "../src/lib/serverSettings.js";
 import { saveBaseline } from "../src/lib/worktree/testGate.js";
 
@@ -85,7 +85,7 @@ beforeAll(() => {
   );
   for (const [key] of stashedGitConfig) delete process.env[key];
 
-  db.exec(`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, merged_at TEXT, merged_into_commit TEXT, merged_into_branch TEXT)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, merged_at TEXT, merged_into_commit TEXT, merged_into_branch TEXT, status TEXT DEFAULT 'active', agent_state TEXT)`);
   db.exec(`CREATE TABLE IF NOT EXISTS task_events (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, actor_id TEXT, kind TEXT NOT NULL, field TEXT, from_value TEXT, to_value TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
   db.exec(`CREATE TABLE IF NOT EXISTS worktree_merge_queue (
     task_id TEXT PRIMARY KEY, trigger TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued',
@@ -206,7 +206,7 @@ describe("очередь автослияния", () => {
     expect(mergeQueueRow("t-keep-state")?.state).toBe("test_failed");
     // Следующая развертка не должна возвращать карточку в «queued» и
     // стирать причину: иначе отказ невозможно увидеть и починить.
-    sweepUnmergedBranches();
+    await worktreeMaintenancePass();
     expect(mergeQueueRow("t-keep-state")?.state).toBe("test_failed");
     expect(mergeQueueRow("t-keep-state")?.error).toContain("новые падения");
   });
@@ -456,5 +456,32 @@ describe("interrupted validation", () => {
     hooks.runTests = async () => ({ ok: false, output: "npm: command not found" });
     expect((await processMerge("t-test-crash")).state).toBe("test_failed");
     expect(git(repo.live, "rev-parse", "main")).toBe(before);
+  });
+});
+
+
+describe("integration stamp is the only admission",()=>{
+  it("does not discover a completed branch on its own",async()=>{
+    const repo=freshRepo();seedTask("t-no-stamp");seedBranch(repo,"t-no-stamp");
+    db.prepare("UPDATE tasks SET status='completed' WHERE id=?").run("t-no-stamp");
+    await worktreeMaintenancePass();
+    expect(mergeQueueRow("t-no-stamp")).toBeUndefined();
+  });
+  it("rejects sweep and final-orchestrator triggers",()=>{
+    const repo=freshRepo();seedTask("t-reject-trigger");seedBranch(repo,"t-reject-trigger");
+    expect(enqueueMerge("t-reject-trigger","sweep")).toBe(false);
+    expect(enqueueMerge("t-reject-trigger","orchestrator_step")).toBe(false);
+    expect(mergeQueueRow("t-reject-trigger")).toBeUndefined();
+  });
+  it("does not validate legacy sweep entries and allows a later integration stamp",async()=>{
+    const repo=freshRepo();seedTask("t-legacy");seedBranch(repo,"t-legacy");
+    db.prepare("INSERT INTO worktree_merge_queue(task_id,trigger,state) VALUES (?,'sweep','queued')").run("t-legacy");
+    let calls=0;hooks.runTests=async()=>{calls++;return {ok:true,output:"ok"};};
+    expect((await processMerge("t-legacy")).state).toBe("disabled");
+    expect(calls).toBe(0);
+    expect(requeueMerge("t-legacy")).toBe(false);
+    expect(enqueueMerge("t-legacy","integration_step")).toBe(true);
+    expect((await processMerge("t-legacy")).state).toBe("merged");
+    expect(calls).toBe(1);
   });
 });

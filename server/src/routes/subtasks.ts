@@ -47,7 +47,7 @@ import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 import { finalizeWorktreeError } from "../lib/worktree/finalize.js";
-import { enqueueMerge, isOrchestratedFinalStep, requeueMerge } from "../runtime/worktreeMergeQueue.js";
+import { enqueueMerge, requeueMerge } from "../runtime/worktreeMergeQueue.js";
 import { isIntegrationPlanStep } from "../runtime/integrationHandoff.js";
 import {
   SNAPSHOT_REASONS,
@@ -583,9 +583,8 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         // PATCH тем же значением не плодил одинаковые строки.
         if (done === true && !subtask.done) logEvent({taskId:subtask.task_id,actorId:req.userId,kind:"subtask_submission_confirmed",field:subtask.id});
         // Шаг интеграции закрыт — работа роли признана принятой, дальше
-        // переносит система (LOCK-WORKTREE-MANAGER-20261019). То же для
-        // плана orchestrated: там вливает шаг сборки Оркестратора, и
-        // он последний незакрытый в своём плане.
+        // переносит система. Финальный шаг Оркестратора сам по себе
+        // допуском к автослиянию не является (владелец 24.10.2026).
         if (done === true && !subtask.done) {
           try {
             // Повторная сдача шага интеграции после конфликта — это
@@ -593,8 +592,6 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             // в очередь из состояния конфликта или красных тестов.
             if (isIntegrationPlanStep(req.params.id)) {
               if (!enqueueMerge(subtask.task_id, "integration_step")) requeueMerge(subtask.task_id);
-            } else if (isOrchestratedFinalStep(req.params.id)) {
-              if (!enqueueMerge(subtask.task_id, "orchestrator_step")) requeueMerge(subtask.task_id);
             }
           } catch (error) {
             logEvent({taskId:subtask.task_id,actorId:req.userId,kind:"merge_queue_error",field:req.params.id,toValue:error instanceof Error ? error.message : String(error)});

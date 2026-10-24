@@ -299,7 +299,7 @@
 
 | LOCK-AI-USAGE-20261024 | IN_PROGRESS | AI-USAGE | Долговечный учёт вызовов моделей, история SDK и сводка для обзора | `AGENT-WORK-SCOPES.md`, `server/src/lib/modelUsage.ts`, `server/src/runtime/chatLiveTurn.ts`, `server/src/routes/runtime.ts`, `server/scripts/import-model-usage.ts`, `server/test/modelUsage.test.ts`, `docs/2026-10-24-ai-usage.md` | Владелец | Codex | TDD; API; журнал SDK |
 
-| LOCK-AUTOMATION-CPU-20261024 | IN_PROGRESS | AUTOMATION-CPU | Убрать фоновые полные прогоны без готового слияния, ограничить нагрузку и завершать дерево тестов | `AGENT-WORK-SCOPES.md`, `server/src/runtime/worktreeMergeQueue.ts`, `server/test/worktreeMergeQueue.test.ts`, `server/src/lib/worktree/testGate.ts`, `docs/2026-10-24-automation-cpu.md` | Прямое поручение владельца: отключить, оптимизировать, вернуть | Codex | Целевые unit-тесты до/после, tsc, live mode и CPU |
+| LOCK-AUTOMATION-CPU-20261024 | REVIEW | AUTOMATION-CPU | Убрать фоновые полные прогоны без готового слияния, ограничить нагрузку и завершать дерево тестов | `AGENT-WORK-SCOPES.md`, `server/src/runtime/worktreeMergeQueue.ts`, `server/src/routes/subtasks.ts`, `server/test/worktreeMergeQueue.test.ts`, `server/src/lib/worktree/testGate.ts`, `docs/2026-10-24-automation-cpu.md` | Прямое поручение владельца: отключить, оптимизировать, вернуть | Codex | Целевые unit-тесты до/после, tsc, live mode и CPU |
 
 | LOCK-DIAG-SINGLE-20261024 | REVIEW | DIAG-SINGLE | Не создавать дочернее устранение по комментарию диагностики | `AGENT-WORK-SCOPES.md`, `server/src/lib/inboxResultsWriter.ts`, `server/test/inboxResultsWriter.test.ts`, `docs/2026-10-24-automation-cpu.md` | Исходное поручение владельца: убрать лишнюю иерархию диагностики | Codex | Unit до/после, tsc, live |
 

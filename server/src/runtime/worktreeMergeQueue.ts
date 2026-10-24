@@ -215,10 +215,11 @@ function writeState(taskId: string, patch: Partial<MergeRow>): void {
 
 /**
  * Поставить карточку в очередь. Точка входа — сдача шага интеграции
- * (или закрытие шага сборки Оркестратора при плане `orchestrated`).
+ * ответственным за интеграцию. Других входов нет.
  * Повторная постановка того же состояния не плодит строки.
  */
 export function enqueueMerge(taskId: string, trigger: MergeTrigger): boolean {
+  if (trigger !== "integration_step") return false;
   if (worktreesDisabled()) return false;
   if (mergeMode() === "off") return false;
   if (!refExists(liveRepo(), "HEAD")) return false;
@@ -226,6 +227,13 @@ export function enqueueMerge(taskId: string, trigger: MergeTrigger): boolean {
     | { state: string }
     | undefined;
   if (existing) {
+    const previous = mergeQueueRow(taskId);
+    // Старый sweep не является допуском. Только новая сдача интегратора
+    // превращает такую запись в разрешённую очередь.
+    if (previous?.trigger !== "integration_step") {
+      db.prepare("UPDATE worktree_merge_queue SET trigger='integration_step', state='queued', error=NULL, updated_at=datetime('now') WHERE task_id=?").run(taskId);
+      return true;
+    }
     // Строку, которая уже в работе или уже разобрана, развертка не
     // трогает: иначе причина отказа («красные тесты», «грязный main»,
     // «грязная копия») стирается и её невозможно увидеть.
@@ -248,7 +256,7 @@ export function enqueueMerge(taskId: string, trigger: MergeTrigger): boolean {
  */
 export function requeueMerge(taskId: string): boolean {
   const changed = db
-    .prepare("UPDATE worktree_merge_queue SET state = 'queued', error = NULL, updated_at = datetime('now') WHERE task_id = ? AND state IN ('conflict', 'test_failed', 'blocked_dirty_main', 'dirty_worktree')")
+    .prepare("UPDATE worktree_merge_queue SET state = 'queued', error = NULL, updated_at = datetime('now') WHERE task_id = ? AND trigger = 'integration_step' AND state IN ('conflict', 'test_failed', 'blocked_dirty_main', 'dirty_worktree')")
     .run(taskId).changes;
   return changed > 0;
 }
@@ -295,6 +303,12 @@ function dropScratch(live: string, taskId: string): void {
 export async function processMerge(taskId: string): Promise<MergeOutcome> {
   const row = mergeQueueRow(taskId) ?? ({ task_id: taskId, trigger: "sweep", state: "queued" } as MergeRow);
   const outcome: MergeOutcome = { ...row };
+  if (row.trigger !== "integration_step") {
+    outcome.state = "disabled";
+    outcome.error = "нет допуска: требуется сданный шаг ответственного за интеграцию";
+    writeState(taskId, { state: outcome.state, error: outcome.error });
+    return outcome;
+  }
   const live = liveRepo();
   const branch = roleBranch(taskId);
 
@@ -649,57 +663,6 @@ export async function drainMergeQueue(limit = 1): Promise<MergeOutcome[]> {
 
 // ───────────────────────── проход обслуживания ─────────────────────────
 
-/**
- * Поставить в очередь ветки ролей, у которых есть неслитые коммиты.
- * Это разбирает хвост, оставшийся до появления менеджера.
- */
-export function sweepUnmergedBranches(limit = 20): number {
-  if (worktreesDisabled()) return 0;
-  const live = liveRepo();
-  const refs = gitOrNull(live, ["for-each-ref", "--format=%(refname:short)", "refs/heads/roles/"], 60_000);
-  if (!refs) return 0;
-  let queued = 0;
-  for (const ref of refs.split("\n").filter(Boolean).slice(0, 200)) {
-    if (queued >= limit) break;
-    const taskId = ref.replace(/^roles\//, "");
-    const state = inspectWorktree(taskId, "main", live);
-    if (!state.branch_exists || state.merged_into_base || state.ahead_count === 0) continue;
-    // Строка уже есть — состояние не трогаем: у неё либо свой диагноз,
-    // либо она уже в очереди. Развертка только добавляет новые.
-    if (mergeQueueRow(taskId)) continue;
-    try {
-      if (enqueueMerge(taskId, "sweep")) queued += 1;
-    } catch {
-      /* одна битая строка не должна ронять проход */
-    }
-  }
-  return queued;
-}
-
-/**
- * План `profile='orchestrated'`: интеграция считается не требуемой, и
- * вливает шаг сборки самого Оркестратора (владелец 13.10.2026). Этот
- * шаг — последний незакрытый в плане; его закрытие тоже запускает
- * перенос.
- */
-export function isOrchestratedFinalStep(subtaskId: string): boolean {
-  try {
-    const plan = db
-      .prepare(
-        "SELECT p.id AS id FROM subtasks s JOIN task_collaboration_plans p ON p.id = s.collaboration_plan_id " +
-          "WHERE s.id = ? AND p.profile = 'orchestrated' AND p.status IN ('draft','approved')",
-      )
-      .get(subtaskId) as { id: string } | undefined;
-    if (!plan) return false;
-    const open = db
-      .prepare("SELECT COUNT(*) AS n FROM subtasks WHERE collaboration_plan_id = ? AND done = 0")
-      .get(plan.id) as { n: number };
-    return open.n === 0;
-  } catch {
-    return false;
-  }
-}
-
 /** Убрать копии карточек, чьё слияние уже подтверждено. */
 export async function sweepMergedWorkspaces(limit = 20): Promise<number> {
   if (worktreesDisabled()) return 0;
@@ -745,8 +708,7 @@ export async function worktreeMaintenancePass(): Promise<number> {
   // в очередь: иначе карточка висит до прихода человека.
   const recovered = recoverStaleRunning().length;
   const merged = (await drainMergeQueue(1)).filter((row) => row.state === "merged").length;
-  const queued = mergeMode() === "off" ? 0 : sweepUnmergedBranches();
   const cleaned = await sweepMergedWorkspaces();
   const leftovers = sweepTestLeftovers() + sweepMergeScratch();
-  return unblocked + recovered + merged + queued + cleaned + leftovers;
+  return unblocked + recovered + merged + cleaned + leftovers;
 }
