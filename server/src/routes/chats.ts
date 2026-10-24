@@ -750,7 +750,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(404).send({ error: "Чат не найден" });
       const messages = db
         .prepare(
-          `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
+          `SELECT m.*, m.rowid AS sequence, f.name as from_user_name, f.avatar_color as from_user_color,
                   f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
                   t.title as task_title
              FROM chat_messages m
