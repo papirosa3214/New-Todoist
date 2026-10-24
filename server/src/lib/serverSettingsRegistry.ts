@@ -77,7 +77,7 @@ export const SETTING_GROUP_ORDER: readonly SettingGroup[] = [
 export const DEFAULTS = {
   snapshot_keep: 20,
   chat_short_limit: 600,
-  chat_goal_max_turns: 50,
+  chat_goal_max_turns: 10,
   role_run_concurrency: 3,
   task_context_timeout_ms: 15000,
   // Тишина

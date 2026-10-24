@@ -1595,6 +1595,17 @@ try {
   }
 
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
+  // Компактинг при возобновлении (владелец 24.10.2026): resumed-сессия грузит
+  // сырую историю вместе с прежними размышлениями — роль перечитывает их и
+  // закапывается ещё глубже. Сжимаем историю в выжимку ДО первого промпта,
+  // чтобы ход начинался с сути, а не с прошлого монолога.
+  if (resumed) {
+    try {
+      await (session as any).compact();
+    } catch (error) {
+      console.warn(`[compact] ${role} ${taskId}: не удалось сжать сессию, идём на сырой истории:`, error instanceof Error ? error.message : String(error));
+    }
+  }
   logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
   const thrash = new ThrashGuard();

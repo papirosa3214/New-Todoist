@@ -1,5 +1,5 @@
 {
-  "default": "medium",
+  "default": "low",
   "roles": {
     "code_orchestrator": "max",
     "architect": "max",
