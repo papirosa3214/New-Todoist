@@ -147,4 +147,20 @@ describe("комнаты ролей и лички", () => {
     expect(reset.statusCode).toBeLessThan(300);
     expect(readChatWorkPlan(room, "role_builder")).toBeNull();
   });
+  it("closed role DM is absent from both roles in rooms snapshot", () => {
+    const id=ensureDirectRoom("role_builder","role_code_orchestrator");
+    db.prepare("UPDATE chats SET closed_at=datetime('now') WHERE id=?").run(id);
+    try {
+      expect(roomsSnapshot().roles.flatMap(r=>r.dms).some(dm=>dm.chat_id===id)).toBe(false);
+    } finally { db.prepare("UPDATE chats SET closed_at=NULL WHERE id=?").run(id); }
+  });
+  it("new role contact reopens the same closed DM with its history", () => {
+    const id=ensureDirectRoom("role_builder","role_code_orchestrator");
+    const before=(db.prepare("SELECT COUNT(*) n FROM chat_messages WHERE chat_id=?").get(id) as any).n;
+    db.prepare("UPDATE chats SET closed_at=datetime('now') WHERE id=?").run(id);
+    expect(ensureDirectRoom("role_builder","role_code_orchestrator")).toBe(id);
+    expect(db.prepare("SELECT closed_at FROM chats WHERE id=?").get(id)).toEqual({closed_at:null});
+    expect((db.prepare("SELECT COUNT(*) n FROM chat_messages WHERE chat_id=?").get(id) as any).n).toBe(before);
+  });
+
 });

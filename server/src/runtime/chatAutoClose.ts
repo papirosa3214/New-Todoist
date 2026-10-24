@@ -10,15 +10,16 @@ export function chatAutoCloseIdleMinutes(): number {
 
 /** Закрыть простаивающие переписки ролей (dm/handoff), по которым нет идущей
  *  доставки. Возвращает число закрытых. dm-комната переиспользуется при новом
- *  сообщении пары (ensureDirectRoom не смотрит на closed_at), поэтому закрытие
- *  ничего не ломает — просто прячет разговор из списка владельца. */
+ *  обращении пары (ensureDirectRoom открывает её снова). Порог считается от
+ *  последнего сообщения, а у пустого чата — от создания; изменение метаданных
+ *  не продлевает разговор. История сохраняется. */
 export function autoCloseStaleRoleChats(idleMinutes = chatAutoCloseIdleMinutes()): number {
   const cutoff = `-${Math.max(1, Math.floor(idleMinutes))} minutes`;
   const rows = db.prepare(
     `SELECT id FROM chats
       WHERE room_kind IN ('dm', 'handoff')
         AND closed_at IS NULL
-        AND julianday(updated_at) < julianday('now', ?)
+        AND COALESCE((SELECT MAX(julianday(m.created_at)) FROM chat_messages m WHERE m.chat_id = chats.id), julianday(chats.created_at)) <= julianday('now', ?)
         AND NOT EXISTS (
           SELECT 1 FROM chat_message_queue q
            WHERE q.chat_id = chats.id AND q.status IN ('pending', 'picked')

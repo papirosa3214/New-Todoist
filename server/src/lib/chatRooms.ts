@@ -49,7 +49,10 @@ export function ensureDirectRoom(a: string, b: string): string {
         AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
         AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
       ORDER BY c.created_at, c.id LIMIT 1`).get(a, b) as { id: string } | undefined;
-    if (existing) return existing.id;
+    if (existing) {
+      db.prepare("UPDATE chats SET closed_at=NULL WHERE id=? AND closed_at IS NOT NULL").run(existing.id);
+      return existing.id;
+    }
     const id = crypto.randomUUID();
     db.prepare("INSERT INTO chats(id,kind,created_by,room_kind) VALUES(?,'direct',?,'dm')").run(id, a);
     const member = db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)");
@@ -106,7 +109,7 @@ export function roomsSnapshot(previewText?: (text: string) => string) {
   const roles = all.filter((r) => !r.external || r.has_room).map(({ external: _e, has_room: _h, ...role }) => role);
   const externalCandidates = all.filter((r) => r.external && !r.has_room).map(({ external: _e, has_room: _h, ...role }) => role);
   const dms = db.prepare(`SELECT c.id, GROUP_CONCAT(m.member_id) AS members FROM chats c JOIN chat_members m ON m.chat_id=c.id
-      WHERE c.room_kind='dm' GROUP BY c.id`).all() as Array<{ id: string; members: string }>;
+      WHERE c.room_kind='dm' AND c.closed_at IS NULL GROUP BY c.id`).all() as Array<{ id: string; members: string }>;
   const dmInfo = dms.map((d) => {
     const pair = d.members.split(",").sort();
     return { chat_id: d.id, members: pair, pair: pair.join(":"), live: isLive(d.id), last_message: lastMessage(d.id) };
