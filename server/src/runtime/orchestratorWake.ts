@@ -130,16 +130,19 @@ export function wakeAndDeliver(subtaskId: string, actorId: string | null, kind: 
  * профильного фильтра и только для этих трёх видов событий.
  */
 
-export type StalledWakeKind = "stalled_restarted" | "stalled_restart_failed" | "stalled_blocked";
+export type StalledWakeKind = "stalled_restarted" | "stalled_restart_failed" | "stalled_blocked" | "error_loop_blocked";
 
 /** Заголовок вида события. `stalled_restarted` уходит сразу после
  *  закрытия зависшей попытки, до результата старта, поэтому формулировка
  *  обещает только запуск перезапуска, а не его успех (ревью критика
- *  16.10.2026, D1). Провал старта — отдельный вид с отдельным ключом. */
+ *  16.10.2026, D1). Провал старта — отдельный вид с отдельным ключом.
+ *  `error_loop_blocked` — ход остановлен зацикливанием на неверных
+ *  вызовах (24.10.2026, карточка 252c400e). */
 const STALLED_HEADLINE: Record<StalledWakeKind, string> = {
   stalled_restarted: "завис, сервер запустил перезапуск",
   stalled_restart_failed: "завис, перезапуск сервером не удался",
   stalled_blocked: "завис и встал в блок",
+  error_loop_blocked: "зациклился на неверных вызовах, ход остановлен",
 };
 
 /** Личность события читается по-разному: у большинства видов это id
@@ -174,7 +177,7 @@ export function wakeOrchestratorStalled(subtaskId: string, kind: StalledWakeKind
       `Шаг «${row.title}» (${row.slot}, id ${subtaskId}) ${STALLED_HEADLINE[kind]}.`,
       `Событие сторожа зависших шагов, ${eventLabel(attemptKey)}.`,
       detail ? `Подробности: ${detail.slice(0, 600)}` : "",
-      ...(kind === "stalled_blocked" ? BLOCK_GUIDE : TAIL),
+      ...(kind === "stalled_blocked" || kind === "error_loop_blocked" ? BLOCK_GUIDE : TAIL),
     ].filter(Boolean).join("\n");
     db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,work_mode) VALUES (?,?,?,'chat',?,?,'work')").run(messageId, orch.id, text, chatId, row.task_id);
     db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(chatId);
