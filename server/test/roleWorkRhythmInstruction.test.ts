@@ -27,6 +27,7 @@ describe("общая инструкция ролей: ритм работы", ()
       const text = String(INSTRUCTION_DEFAULTS[mode]);
       expect(text, mode).toContain("ВОПРОС ВЛАДЕЛЬЦУ — РАЗВИЛКА, А НЕ ОСТАНОВКА");
       expect(text, mode).toContain("БЫСТРО: вариант1 | вариант2 | вариант3");
+      expect(text, mode).toContain("taskflow_chat_reply");
       expect(text, mode).toMatch(/делай сразу|делай по умолчанию/);
     }
   });

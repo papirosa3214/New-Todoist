@@ -871,6 +871,20 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         }
         storedText = formatted.text;
       }
+      // Быстрые ответы (кнопки-развилки) и в ПРОМЕЖУТОЧНОМ сообщении роли
+      // (владелец 24.10.2026: «задавай, если что, мне вопрос с вариантами
+      // ответов — развилки»). Раньше строка `БЫСТРО:` разбиралась только в
+      // финальном ответе роли (extractQuickReplies ниже), и вопрос в середине
+      // хода оставался без кнопок: развилку нельзя было нажать. Ответ
+      // владельца приходит подмешиванием в этот же ход (chatSteering).
+      let quickReplies: string[] | null = null;
+      if (senderRole && storedText) {
+        const extracted = extractQuickReplies(storedText);
+        if (extracted.replies) {
+          quickReplies = extracted.replies;
+          storedText = extracted.clean;
+        }
+      }
       // Промежуточные сообщения ИИ в чате не валидируем по длине —
       // иначе агент падает на 400 посреди работы (владелец 04.10.2026).
       // Лимит остаётся только для финального ответа роли (см. ниже,
@@ -963,9 +977,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         : isOwner(req.userId) && isCardHandoffCommand(text) ? "card" : requestedExecutionMode ?? chatExecutionMode(chatId);
       db.transaction(()=>{
       db.prepare(
-        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id)
-         VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, req.userId, storedText, chatId, taskId, mode === "goal" ? "work" : mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
+        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id,quick_replies)
+         VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, req.userId, storedText, chatId, taskId, mode === "goal" ? "work" : mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot,quickReplies?JSON.stringify(quickReplies):null);
       db.prepare("UPDATE chat_messages SET execution_mode=? WHERE id=?").run(executionMode,id);
       if(outstanding && ["pending","picked"].includes(outstanding.status)){
         pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
