@@ -26,10 +26,10 @@ export function closeOrphanedAttempts(maxAgeMinutes?: number): number {
   return rows.length;
 }
 
-/** Периодический проход: раз в 5 минут закрывать попытки с протухшим пульсом
+/** Периодический проход: раз в 6 часов закрывать попытки с протухшим пульсом
  *  (запуск роли умер без рестарта сервера). */
 export function startOrphanedAttemptSweep(
-  intervalMs = 5 * 60_000,
+  intervalMs = 6 * 60 * 60_000,
   maxAgeMinutes = 10,
 ): () => void {
   const timer = setInterval(() => {
