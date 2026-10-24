@@ -4987,6 +4987,64 @@ const migrations: Migration[] = [
     }
   } },
   { id: "167_role_tool_gain_requests", description: "Заявки ролей на закрытые инструменты", up: () => db.exec(ROLE_TOOL_REQUEST_SCHEMA) },
+  {
+    // 24.10.2026 (аудит качества данных): каноническая учётка роли —
+    // `role_<key>` — создавалась только через POST /api/roles (routes/roles.ts)
+    // и миграцией 144 для одной роли. Миграции, заводящие САМИ роли (056),
+    // строки в users НЕ писали.
+    //
+    // Что из этого следует: на свежей БД (или на восстановленной из бэкапа,
+    // где таблица roles есть, а учёток нет) любое обращение роли к данным
+    // падало «FOREIGN KEY constraint failed» — chat_sessions.role_id,
+    // subtasks.assignee_id и другие колонки ссылаются на users(id).
+    // Это же объясняло 42 падения в тестах: тестовая БД поднимается
+    // миграциями с нуля, а канонических учёток там не было.
+    //
+    // Что делает миграция: для каждой роли из таблицы roles, у которой нет
+    // учётки `role_<key>`, заводит её. Условия триггеров users_role_key_*_guard
+    // (миграция 058) соблюдены: type='ai', role='agent', is_system_bot=1,
+    // id = 'role_' || key, ключ роли есть в roles.
+    //
+    // Учётка не может логиниться: password_hash='!no-login' — тот же
+    // маркер, что у ролей, заведённых через API.
+    id: "170_role_accounts_for_all_roles",
+    description:
+      "Канонические учётки role_<key> для всех ролей из roles: без них роль не может работать на свежей БД (FOREIGN KEY)",
+    up: () => {
+      const роли = db
+        .prepare("SELECT key, title FROM roles ORDER BY position, key")
+        .all() as Array<{ key: string; title: string }>;
+      for (const роль of роли) {
+        const id = `role_${роль.key}`;
+        // Помощник владельца живёт под учёткой u-secretary — это
+        // историческое исключение из правила «учётка роли = role_<key>»
+        // (см. roleUserId в roleRouting.ts). У него уже есть role_key,
+        // поэтому отдельная учётка ему не нужна и невозможна: users.role_key
+        // уникален (миграция 058).
+        if (роль.key === "secretary") continue;
+        const есть = db.prepare("SELECT 1 FROM users WHERE id = ?").get(id);
+        if (есть) continue;
+        const естьПоКлючу = db
+          .prepare("SELECT 1 FROM users WHERE role_key = ?")
+          .get(роль.key);
+        if (естьПоКлючу) continue;
+        const initials = (роль.title || роль.key).trim().slice(0, 1).toUpperCase() || "Р";
+        db.prepare(
+          `INSERT INTO users
+             (id, name, email, password_hash, role, role_key, type, is_system_bot,
+              profile, initials, avatar_color, status)
+           VALUES (?, ?, ?, '!no-login', 'agent', ?, 'ai', 1, ?, ?, '#8E8E93', 'offline')`,
+        ).run(
+          id,
+          роль.title || роль.key,
+          `${роль.key.replace(/_/g, "-")}@taskflow.local`,
+          роль.key,
+          роль.key,
+          initials,
+        );
+      }
+    },
+  },
 ];
 /**
  * Опции прогона миграций.

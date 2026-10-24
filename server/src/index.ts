@@ -22,6 +22,7 @@ import { collapseDuplicateQueuedJobs } from "./runtime/roleRunQueue.js";
 import { startChatQueueRecovery, scheduleChatQueueRecovery } from "./runtime/chatQueueRecovery.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
+import { startModelUsageRetention } from "./lib/modelUsageRetention.js";
 import { startScheduler } from "./runtime/scheduler.js";
 import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
 import { startChatAutoClose } from "./runtime/chatAutoClose.js";
@@ -32,7 +33,7 @@ import { startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
 import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
-import { ensureJwtSecret } from "./env.js";
+import { ensureJwtSecret, hardenEnvFile } from "./env.js";
 import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserId, resolveUserIdFromToken, authOrApiToken, isRevokedDeviceToken } from "./auth.js";
@@ -230,6 +231,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   // До всего остального — секрет подписи JWT должен быть в process.env
   // раньше, чем fastifyJwt.register() ниже его прочитает (см. env.ts).
   ensureJwtSecret();
+  // Права server/.env чинятся на КАЖДОМ старте, а не только когда секрет
+  // генерируется: файл мог достаться в чужие руки после того, как был
+  // создан (роли работают от пользователя tfrole, ему .env не нужен —
+  // см. hardenEnvFile в env.ts).
+  hardenEnvFile();
 
   // bodyLimit по умолчанию у Fastify — 1 МБ, мало для аудиозаписи диктовки
   // (кнопка микрофона, routes/transcribe.ts). Поднимаем до потолка самого
@@ -950,6 +956,7 @@ if (isMain) {
     let stopRoleRuns: (() => Promise<void>) | null = null;
     let stopVoiceBridge: (() => Promise<void>) | null = null;
     let stopKnowledgeSync: (() => void) | null = null;
+    let stopModelUsageRetention: (() => void) | null = null;
     let stopScheduler: (() => void) | null = null;
     let stopStalledWatch: (() => void) | null = null;
     let stopChatAutoClose: (() => void) | null = null;
@@ -963,6 +970,7 @@ if (isMain) {
     let stopChatQueueSweep: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
+      stopModelUsageRetention?.();
       stopScheduler?.();
       stopStalledWatch?.();
       stopChatAutoClose?.();
@@ -996,6 +1004,14 @@ if (isMain) {
     // работает локально и не трогает внешние сервисы.
     if (process.env.TASKFLOW_SERVER_EVENTS_ROTATION !== "off") {
       stopEventsRetention = startServerEventsRetention();
+    }
+    // Ротация счётчика расхода моделей (24.10.2026, аудит качества данных):
+    // таблица model_usage росла без срока (~5000 строк в сутки) и через год
+    // заняла бы больше всей остальной базы. Отчёт читает максимум 30 дней,
+    // поэтому старые строки не нужны — но самая ранняя по каждой модели
+    // остаётся, чтобы «учёт с» не сдвигался.
+    if (process.env.TASKFLOW_MODEL_USAGE_ROTATION !== "off") {
+      stopModelUsageRetention = startModelUsageRetention();
     }
     // Durable worker стартует только в реальном process после listen.
     // buildApp() в unit tests остаётся полностью детерминированным.

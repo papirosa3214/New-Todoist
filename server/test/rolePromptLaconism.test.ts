@@ -1,22 +1,26 @@
-// c19c9460 (D1–D4): блок «Лаконичность» в начале каждого промпта роли
-// (server/scripts/role-prompts/*.md) + конкретные пределы, и тот же блок
-// в начало roles.prompt для secretary в БД (миграция 103).
+// Блок «Лаконичность» в инструкции роли (c19c9460 D1–D4).
+//
+// Источник правды изменился (20.10.2026): промпты ролей из
+// `server/scripts/role-prompts/*.md` убраны в Корзину — инструкции ролей
+// теперь в общем каноне `server/scripts/role-system-prompt.md` плюс личный
+// `AGENTS.md` роли (см. runtime/roleHome.ts, roleInstructionText).
+//
+// Тест прежде стоял на файлах `scripts/role-prompts/*.md` и после их удаления
+// падал с ENOENT на каждой из восьми ролей (24.10.2026, аудит качества
+// тестов). Теперь проверяется то, что реально уходит в модель: собранная
+// инструкция роли — общий канон + личный AGENTS.md.
+//
+// Проверка не «файл существует», а содержание: блок «## Лаконичность» есть
+// в собранной инструкции, за ним идут конкретные пределы, и фраза
+// «Пиши коротко» встречается ровно один раз.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import fs from "fs";
-import path from "path";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { rolePromptText } from "../src/roleRouting.js";
 
-const ROLE_PROMPTS_DIR = path.resolve(
-  process.env.TASKFLOW_ROLE_PROMPTS_DIR ??
-    path.join(process.cwd(), "scripts", "role-prompts"),
-);
-
-// 8 ролей из спек cd10bf34/534b1574 — в наборе и synthesizer, и
-// 7 «служебных». secretary идёт через БД-override (миграция 062), но
-// файл secretary.md должен быть синхронен с тем, что лежит в roles.prompt.
+// Роли, у которых есть личная папка и своя инструкция. secretary идёт
+// отдельно: его инструкция живёт в БД (миграция 103) плюс общий канон.
 const ROLES = [
   "analyst",
   "architect",
@@ -25,21 +29,7 @@ const ROLES = [
   "designer",
   "qa",
   "researcher",
-  "secretary",
-  "synthesizer",
 ];
-
-const TITLE_BY_ROLE: Record<string, string> = {
-  analyst: "# Analyst",
-  architect: "# Architect",
-  builder: "# Builder",
-  critic_verifier: "# Critic/Verifier",
-  designer: "# Дизайнер интерфейсов",
-  qa: "# Лайф-тестировщик",
-  researcher: "# Researcher",
-  secretary: "# Помощник владельца",
-  synthesizer: "# Synthesizer",
-};
 
 // Конкретные пределы из уточнения владельца c19c9460 (10:13:46).
 const LIMIT_MARKERS = [
@@ -51,34 +41,45 @@ const LIMIT_MARKERS = [
   "Пиши коротко. Подробности оформляй документом (`taskflow_doc_write`) и давай ссылку.",
 ];
 
-describe("промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4)", () => {
+describe("инструкции ролей: блок «Лаконичность» (c19c9460)", () => {
+  let app: FastifyInstance;
+  beforeAll(async () => {
+    app = await buildApp();
+  });
+  afterAll(async () => {
+    await app.close();
+  });
+
   for (const role of ROLES) {
-    it(`${role}.md: «# Title» сразу за ним блок «## Лаконичность» с пределами`, () => {
-      const file = path.join(ROLE_PROMPTS_DIR, `${role}.md`);
-      const text = fs.readFileSync(file, "utf8");
-      const title = TITLE_BY_ROLE[role];
-      const titleIdx = text.indexOf(title);
-      expect(titleIdx, `нет заголовка ${title} в ${role}.md`).toBeGreaterThanOrEqual(0);
-      const tail = text.slice(titleIdx + title.length);
-      // Перед блоком «## Лаконичность» — только перевод строки (после # Title),
-      // никаких «## Назначение и границы» или другого раздела.
-      const lacIdx = tail.indexOf("## Лаконичность");
-      expect(lacIdx, `нет «## Лаконичность» в ${role}.md`).toBeGreaterThanOrEqual(0);
-      const between = tail.slice(0, lacIdx);
-      expect(
-        between.trim(),
-        `между «${title}» и «## Лаконичность» в ${role}.md есть лишний текст: ${JSON.stringify(between)}`,
-      ).toBe("");
-      // Пределы на месте
+    it(`${role}: в собранной инструкции есть «## Лаконичность» с пределами`, () => {
+      const text = rolePromptText(role);
+      expect(text, `${role}: инструкция роли недоступна`).toBeTruthy();
+      const lacIdx = text!.indexOf("## Лаконичность");
+      expect(lacIdx, `${role}: нет «## Лаконичность» в инструкции`).toBeGreaterThanOrEqual(0);
       for (const marker of LIMIT_MARKERS) {
-        expect(text.includes(marker), `${role}.md: нет маркера «${marker}»`).toBe(true);
+        expect(text!.includes(marker), `${role}: нет маркера «${marker}»`).toBe(true);
       }
-      // Старый хвост «Пиши коротко…» в конце «Механики» убран (D4):
-      // после правки единственное вхождение фразы — внутри блока Лаконичность.
-      const occurrences = text.split("Пиши коротко").length - 1;
-      expect(occurrences, `${role}.md: фраза «Пиши коротко» встречается ${occurrences} раз`).toBe(1);
+      // Старый хвост «Пиши коротко…» убран (D4): единственное вхождение
+      // фразы — внутри блока Лаконичность, а не в конце «Механики».
+      const occurrences = text!.split("Пиши коротко").length - 1;
+      expect(occurrences, `${role}: фраза «Пиши коротко» встречается ${occurrences} раз`).toBe(1);
     });
   }
+
+  it("общий канон — единственный источник блока, а не восемь копий", () => {
+    // Блок лежит в scripts/role-system-prompt.md; личные AGENTS.md ролей
+    // своей копии не содержат — иначе правка канона разъезжалась бы с
+    // ролями (именно это и было проблемой до 20.10.2026).
+    const ролиСкопией: string[] = [];
+    for (const role of ROLES) {
+      const text = rolePromptText(role) ?? "";
+      // Считаем, сколько раз блок встречается в СОБРАННОЙ инструкции:
+      // канон + AGENTS.md роли. Блок должен быть ровно один.
+      const сколько = text.split("## Лаконичность").length - 1;
+      if (сколько !== 1) ролиСкопией.push(`${role}:${сколько}`);
+    }
+    expect(ролиСкопией.join(", ")).toBe("");
+  });
 });
 
 describe("роль secretary: блок «Лаконичность» в roles.prompt (c19c9460 D2, миграция 103)", () => {
@@ -102,13 +103,11 @@ describe("роль secretary: блок «Лаконичность» в roles.pro
   it("миграция 103 идемпотентна: повторный прогон не дублирует блок", () => {
     // Текущее значение после buildApp (миграция 103 уже применена).
     const before = (db.prepare("SELECT prompt FROM roles WHERE key = 'secretary'").get() as { prompt: string | null }).prompt ?? "";
-    // Вручную вызываем тело миграции повторно: она должна увидеть маркер
-    // и выйти без изменений.
+    // Меняем руками prompt на «как было до миграции» (без блока) и применяем
+    // логику миграции 103 ещё раз — блок должен появиться снова ровно один раз.
     const row = db.prepare("SELECT prompt FROM roles WHERE key = 'secretary'").get() as { prompt: string | null } | undefined;
     expect(row?.prompt).toBeTruthy();
     expect(row!.prompt!.includes("## Лаконичность\n")).toBe(true);
-    // Меняем руками prompt на «как было до миграции» (без блока) и применяем
-    // логику миграции 103 ещё раз — блок должен появиться снова ровно один раз.
     const cleaned = row!.prompt!.replace(/^## Лаконичность\n[\s\S]*?(?=\nТы — Помощник владельца)/, "").replace(/^\n+/, "");
     db.prepare("UPDATE roles SET prompt = ? WHERE key = 'secretary'").run(cleaned);
     expect((db.prepare("SELECT prompt FROM roles WHERE key = 'secretary'").get() as { prompt: string }).prompt.includes("## Лаконичность")).toBe(false);

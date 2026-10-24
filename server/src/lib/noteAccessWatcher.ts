@@ -1,5 +1,5 @@
 import db from "../db.js";
-import { raiseIncident } from "./incidents.js";
+import { raiseIncident, incidentRaisedRecently } from "./incidents.js";
 
 /**
  * Сторож прибора «учёт обращений к заметкам» (шаг 1 схемы базы знаний,
@@ -22,8 +22,14 @@ const INTERVAL_MS = 15 * 60 * 1000;
 const PROBE_PREFIX = "probe-note-access-";
 
 let pollHandle: NodeJS.Timeout | null = null;
-/** Защита от лавины задач: не чаще одной тревоги в сутки. */
-let lastRaisedAt = 0;
+/**
+ * Защита от лавины тревог: не чаще одной тревоги в сутки.
+ *
+ * Источник правды — БД (incidentRaisedRecently в incidents.ts), а не
+ * переменная в памяти: память обнуляется при рестарте, и ограничение
+ * переставало действовать (24.10.2026, аудит надёжности).
+ */
+const INCIDENT_KEY = "note-access-watch";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function probeId(): string {
@@ -79,12 +85,11 @@ export function checkNoteAccessInstrument(): { ok: boolean; reason: string } {
 }
 
 function raise(reason: string) {
-  const now = Date.now();
-  if (now - lastRaisedAt < DAY_MS) return;
-  lastRaisedAt = now;
+  // Дедуп по БД: переживает рестарт сервера (см. комментарий у INCIDENT_KEY).
+  if (incidentRaisedRecently(INCIDENT_KEY, DAY_MS)) return;
   const title = `Счётчик обращений к заметкам не работает: ${reason}`;
   raiseIncident({
-    key: "note-access-watch",
+    key: INCIDENT_KEY,
     title,
     description:
     [
@@ -110,9 +115,25 @@ function raise(reason: string) {
   console.error(`[note-access-watch] ПРИБОР НЕ РАБОТАЕТ: ${reason}`);
 }
 
-/** Сброс состояния для тестов: снять защиту от лавины тревог. */
-export function __setWatchState(at: number) { lastRaisedAt = at; }
-export function __resetWatchState() { lastRaisedAt = 0; }
+/**
+ * Сброс состояния для тестов.
+ *
+ * Раньше здесь была переменная `lastRaisedAt` в памяти — сброс обнулял её.
+ * Теперь состояние дедупа живёт в БД (карточка инцидента), поэтому сброс
+ * для теста — убрать карточку этого ключа. Функции оставлены с теми же
+ * именами, чтобы существующие тесты не ломались.
+ */
+export function __setWatchState(at: number) {
+  // Метка времени в памяти больше ни на что не влияет: дедуп в БД.
+  void at;
+  // Карточку НЕ удаляем: на неё ссылается task_events (внешний ключ), и
+  // удаление за traces стирает след починки. Для сброса дедупа достаточно
+  // отодвинуть created_at за окно — тревога снова разрешена.
+  db.prepare(
+    "UPDATE tasks SET created_at = datetime('now','-2 days') WHERE incident_key = ?",
+  ).run(INCIDENT_KEY);
+}
+export function __resetWatchState() { __setWatchState(0); }
 export function __raiseWatchAlert(reason: string) { raise(reason); }
 
 export function startNoteAccessWatcher() {

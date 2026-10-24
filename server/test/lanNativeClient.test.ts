@@ -56,8 +56,29 @@ describe("Вход без пароля из домашней сети", () => {
   });
 
   it("пускает браузер", async () => {
-    const ответ = await войти({ "user-agent": "Mozilla/5.0 (iPhone)" });
+    // Настоящий браузер шлёт всю тройку Sec-Fetch-* на каждый fetch/XHR.
+    // Именно эта тройка — признак браузера (см. looksLikeBrowser в auth.ts):
+    // раньше признаком был ЛЮБОЙ из заголовков, и `curl -H 'User-Agent:
+    // Mozilla/5.0'` получал доступ владельца (24.10.2026, аудит безопасности).
+    const ответ = await войти({
+      "sec-fetch-site": "same-origin",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-dest": "empty",
+      "user-agent": "Mozilla/5.0 (iPhone)",
+    });
     expect(ответ.statusCode).toBe(200);
+  });
+
+  it("НЕ пускает скрипт, подделавший только User-Agent", async () => {
+    // Регрессия на обход 24.10.2026: один заголовок User-Agent больше не
+    // открывает доступ владельца.
+    const ответ = await войти({ "user-agent": "Mozilla/5.0 (iPhone)" });
+    expect(ответ.statusCode).toBe(404);
+  });
+
+  it("НЕ пускает скрипт с одним заголовком Sec-Fetch", async () => {
+    const ответ = await войти({ "sec-fetch-mode": "cors" });
+    expect(ответ.statusCode).toBe(404);
   });
 
   it("НЕ пускает голый скрипт без заголовков", async () => {

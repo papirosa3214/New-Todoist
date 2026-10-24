@@ -55,8 +55,11 @@ describe("ветка на сообщение владельца: живые да
     owner = registered;
     db.prepare("UPDATE users SET role='owner' WHERE id=?").run(owner.user.id);
     db.prepare("INSERT OR IGNORE INTO roles(key,title,summary) VALUES('builder','Разработчик','')").run();
+    // OR IGNORE: каноническую учётку роли заводит миграция
+    // 170_role_accounts_for_all_roles, поэтому role_builder на тестовой базе
+    // уже есть — вставка без OR IGNORE падала на UNIQUE (users.role_key).
     db.prepare(
-      "INSERT INTO users(id,name,email,password_hash,role,type,role_key,is_system_bot) VALUES(?,?,'builder@test.local','x','agent','ai','builder',1)",
+      "INSERT OR IGNORE INTO users(id,name,email,password_hash,role,type,role_key,is_system_bot) VALUES(?,?,'builder@test.local','x','agent','ai','builder',1)",
     ).run(roleId, "Разработчик");
     chatId = (await app.inject({
       method: "POST",

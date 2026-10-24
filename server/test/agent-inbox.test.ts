@@ -49,8 +49,13 @@ describe("agent inbox /api/agent-inbox", () => {
     // (аудит 2026-10-05, п. 1.4/2.2: учётка роли architect из
     // role-routing.yaml, не поиск по title в team_catalog.json). Без
     // INSERT FK на agent_inbox.to_user_id упадёт на fallback'е.
+    //
+    // OR IGNORE: канонические учётки ролей заводятся миграцией
+    // 170_role_accounts_for_all_roles, поэтому role_architect на тестовой
+    // базе уже есть. Раньше тест вставлял его руками и падал на
+    // «UNIQUE constraint failed: users.id» (24.10.2026).
     db.prepare(
-      "INSERT INTO users (id, name, email, password_hash, role, type) VALUES (?, ?, ?, ?, 'agent', 'ai')",
+      "INSERT OR IGNORE INTO users (id, name, email, password_hash, role, type) VALUES (?, ?, ?, ?, 'agent', 'ai')",
     ).run("role_architect", "Архитектор", "architect@inbox.test", "x");
   });
 

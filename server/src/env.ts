@@ -32,6 +32,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { execFileSync } from "child_process";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -57,5 +58,47 @@ export function ensureJwtSecret(): void {
   // 0o600 — читает и пишет только владелец файла, тот же уровень доступа,
   // что и у server/taskflow.db по умолчанию в этой ОС.
   fs.writeFileSync(ENV_PATH, `JWT_SECRET=${secret}\n`, { mode: 0o600 });
+  hardenEnvFile();
   process.env.JWT_SECRET = secret;
+}
+
+/**
+ * Закрыть server/.env от всех, кроме владельца файла.
+ *
+ * `mode: 0o600` в writeFileSync действует ТОЛЬКО на новый файл: если .env
+ * уже создан, права не меняются. Плюс на каталоге server/ висел
+ * default-ACL `u:tfrole:rwx` — по нему НОВЫЕ файлы наследовали доступ
+ * пользователя tfrole, под которым работают роли (localRoleOperations.ts,
+ * `sudo -n -u tfrole /bin/bash -c`). Итог: роль через свой bash читала
+ * server/.env целиком — JWT_SECRET, GOOGLE_CLIENT_SECRET, LIVEKIT_API_SECRET,
+ * RAGFLOW_TOKEN, — подделывала JWT владельца и получала полный доступ к API
+ * (24.10.2026, аудит безопасности).
+ *
+ * Что здесь:
+ *  - снять все расширенные ACL с файла (setfacl -b) — наследование от
+ *    каталога и ручные права на tfrole;
+ *  - поставить 0600 — читает и пишет только владелец.
+ *
+ * Права чинятся на каждом старте: если кто-то (или другая программа)
+ * расширит доступ позже, следующий запуск сервера его закроет.
+ */
+export function hardenEnvFile(): void {
+  if (!fs.existsSync(ENV_PATH)) return;
+  try {
+    // setfacl -b — снять расширенные ACL целиком (включая default-наследие).
+    execFileSync("setfacl", ["-b", ENV_PATH], { stdio: "ignore", timeout: 5000 });
+  } catch {
+    // setfacl нет в системе или не хватило прав — chmod ниже всё равно
+    // закрывает файл для group/other; расширенные ACL останутся, поэтому
+    // сообщаем в журнал, а не молчим.
+    console.warn("[env] setfacl не сработал: права server/.env закрыты только chmod");
+  }
+  try {
+    fs.chmodSync(ENV_PATH, 0o600);
+  } catch (error) {
+    console.warn(
+      "[env] не удалось закрыть права server/.env:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 }

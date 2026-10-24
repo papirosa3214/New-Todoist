@@ -56,6 +56,37 @@ export function openIncidentTaskId(key: string): string | null {
   return row?.id ?? null;
 }
 
+/**
+ * Когда по этому ключу последний раз заводилась карточка починки?
+ *
+ * Зачем (24.10.2026, аудит надёжности): правило владельца — «не больше одной
+ * тревоги в сутки на сторожа». Сторожа держали это ограничение переменной
+ * в ПАМЯТИ процесса (`let lastRaisedAt`), а она обнуляется при рестарте —
+ * то есть после каждого перезапуска ограничение переставало действовать,
+ * и защита от лавины оказывалась «внутри одного запуска».
+ *
+ * Здесь источник правды — карточка инцидента в БД: она переживает рестарт.
+ * Проверяется ПОСЛЕДНЯЯ карточка по ключу, даже если её уже закрыли:
+ * поломка, случившаяся повторно сразу после починки, не должна снова
+ * заваливать «Состояние системы» — ровно то, чего требует правило.
+ *
+ * @param key ключ поломки (тот же, что у raiseIncident)
+ * @param windowMs окно, по умолчанию сутки
+ * @returns true — тревога этого ключа уже была в окне
+ */
+export function incidentRaisedRecently(key: string, windowMs = 24 * 60 * 60 * 1000): boolean {
+  const hours = Math.max(1, Math.round(windowMs / (60 * 60 * 1000)));
+  const row = db
+    .prepare(
+      `SELECT 1 AS hit FROM tasks
+        WHERE incident_key = ?
+          AND created_at >= datetime('now', ?)
+        LIMIT 1`,
+    )
+    .get(key, `-${hours} hours`);
+  return Boolean(row);
+}
+
 export function raiseIncident(input: IncidentInput): IncidentResult | null {
   const existing = openIncidentTaskId(input.key);
   if (existing) return { taskId: existing, created: false };

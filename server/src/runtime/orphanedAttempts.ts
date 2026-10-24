@@ -10,7 +10,21 @@ export function closeOrphanedAttempts(maxAgeMinutes?: number): number {
     maxAgeMinutes
       ? db
           .prepare(
-            `SELECT id FROM attempts WHERE ended_at IS NULL AND heartbeat_at < datetime('now', ?)`,
+            // `heartbeat_at IS NULL` — ВАЖНО (24.10.2026, аудит надёжности).
+            // Попытки заводятся БЕЗ heartbeat_at: createAttempt в
+            // PiRuntimeAdapter.ts не пишет эту колонку, и roleLoadWatcher тоже.
+            // В SQLite сравнение с NULL даёт NULL (не true), поэтому строка
+            // `heartbeat_at < datetime(...)` для них НЕ срабатывает — и
+            // периодический проход (раз в 6 часов) их никогда не закрывал:
+            // попытка висела `ended_at IS NULL` навсегда, занимала слот по
+            // UNIQUE-индексу и не давала новой попытке по той же задаче.
+            //
+            // NULL — это «пульса не было никогда», то есть попытка тем более
+            // протухла: её надо закрывать по тому же правилу, что и заведомо
+            // устаревшую.
+            `SELECT id FROM attempts
+              WHERE ended_at IS NULL
+                AND (heartbeat_at IS NULL OR heartbeat_at < datetime('now', ?))`,
           )
           .all(`-${maxAgeMinutes} minutes`)
       : db.prepare(`SELECT id FROM attempts WHERE ended_at IS NULL`).all()

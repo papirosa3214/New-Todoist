@@ -223,16 +223,27 @@ describe("перед blocked — проверь и позови помощь", (
     expect(eventsOf(taskId).some((e) => e.kind === "help_requested")).toBe(true);
   });
 
-  it("промпты всех ролей содержат порядок «перед blocked»", () => {
-    const dir = fileURLToPath(new URL("../scripts/role-prompts", import.meta.url));
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
-    expect(files.length).toBeGreaterThanOrEqual(9);
-    for (const f of files) {
-      const text = fs.readFileSync(path.join(dir, f), "utf8");
-      expect(text, f).toMatch(/Порядок перед blocked/);
-      expect(text, f).toMatch(/help_attempt/);
-      expect(text, f).toMatch(/help_skip_reason/);
-    }
+  it("общая инструкция ролей содержит порядок «перед blocked»", async () => {
+    // Источник правды изменился (20.10.2026): промпты ролей из
+    // `server/scripts/role-prompts/*.md` убраны в Корзину, инструкции ролей
+    // живут в общем каноне и в instructionDefaults.ts. Тест прежде стоял на
+    // удалённой папке и падал с ENOENT (24.10.2026, аудит качества тестов).
+    //
+    // Проверяем то, что реально уходит в модель: блок «УПЁРСЯ» в общих
+    // инструкциях требует help_attempt (кого звал, что ответили) либо
+    // help_skip_reason (почему никто не решит) — это и есть смысл гейта.
+    const { INSTRUCTION_DEFAULTS } = await import("../src/runtime/instructionDefaults.js");
+    const общие = Object.values(INSTRUCTION_DEFAULTS).join("\n");
+    expect(общие).toMatch(/help_attempt/);
+    expect(общие).toMatch(/help_skip_reason/);
+    // Порядок именно такой: сначала попытка снять препятствие, потом
+    // блокировка — иначе роль объявит blocked, не спросив никого.
+    const упёрся = общие.slice(общие.indexOf("УПЁРСЯ"));
+    const проба = упёрся.indexOf("Сначала попробуй снять препятствие");
+    const блок = упёрся.indexOf("state=blocked");
+    expect(проба, "нет «сначала попробуй снять препятствие»").toBeGreaterThanOrEqual(0);
+    expect(блок, "нет «state=blocked»").toBeGreaterThanOrEqual(0);
+    expect(проба, "блокировка идёт ДО попытки позвать помощь").toBeLessThan(блок);
   });
 
   it("unit: маркеры и решение гейта", async () => {

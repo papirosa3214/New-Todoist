@@ -29,6 +29,7 @@
 
 import crypto from "node:crypto";
 import db from "../db.js";
+import { incidentRaisedRecently } from "./incidents.js";
 import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
 import {
   WEBHOOK_PROJECT_ID,
@@ -45,7 +46,14 @@ const INTERVAL_MS = 30 * 60 * 1000; // 30 минут, как требует ко
 const PROBE_PREFIX = "probe-webhook-wake-";
 
 let pollHandle: NodeJS.Timeout | null = null;
-let lastRaisedAt = 0;
+/**
+ * Защита от лавины тревог: не чаще одной тревоги в сутки.
+ *
+ * Источник правды — БД (incidentRaisedRecently в incidents.ts по ключу
+ * инцидента), а не переменная в памяти: память обнуляется при рестарте,
+ * и ограничение переставало действовать (24.10.2026, аудит надёжности).
+ */
+const INCIDENT_KEY = "webhook-wake-watch";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const PROBE_THREAD_UUID = "00000000-0000-4000-8000-000000000001";
@@ -216,9 +224,8 @@ export async function checkWebhookWakeInstrument(opts?: {
 }
 
 function raise(reason: string, details?: Record<string, unknown>) {
-  const now = Date.now();
-  if (now - lastRaisedAt < DAY_MS) return;
-  lastRaisedAt = now;
+  // Дедуп по БД: переживает рестарт сервера (см. комментарий у INCIDENT_KEY).
+  if (incidentRaisedRecently(INCIDENT_KEY, DAY_MS)) return;
   const id = `webhook-wake-watch-${Date.now().toString(36)}`;
   const title = `Wake-канал вебхуков не работает: ${reason}`;
   const description = [
@@ -243,9 +250,10 @@ function raise(reason: string, details?: Record<string, unknown>) {
   const txn = db.transaction(() => {
     db.prepare(
       `INSERT INTO tasks (
-        id, title, description, priority, creator_id, status, agent_state, project_id
-      ) VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)`,
-    ).run(id, title, description, PRIORITY, OWNER_ID, serverNotificationsProjectId(OWNER_ID));
+        id, title, description, priority, creator_id, status, agent_state, project_id,
+        incident_key
+      ) VALUES (?, ?, ?, ?, ?, 'active', NULL, ?, ?)`,
+    ).run(id, title, description, PRIORITY, OWNER_ID, serverNotificationsProjectId(OWNER_ID), INCIDENT_KEY);
     // Это карточка-уведомление владельцу, не поручение работе: не пускаем её
     // в очередь авто-подготовки (тот же триггер, что у пробной карточки).
     db.prepare(
@@ -256,12 +264,24 @@ function raise(reason: string, details?: Record<string, unknown>) {
   console.error(`[webhook-wake-watch] ПРИБОР НЕ РАБОТАЕТ: ${reason}`);
 }
 
-/** Сброс состояния для тестов. */
+/**
+ * Сброс состояния для тестов.
+ *
+ * Дедуп тревоги живёт в БД (карточка инцидента), поэтому сброс — убрать
+ * карточку этого ключа. Раньше здесь была переменная lastRaisedAt в памяти,
+ * которая обнулялась при рестарте сервера (24.10.2026, аудит надёжности).
+ */
 export function __setWatchState(at: number) {
-  lastRaisedAt = at;
+  void at;
+  // Карточку не удаляем: на неё ссылается task_events (внешний ключ), и
+  // удаление стирает след починки. Для сброса дедупа достаточно отодвинуть
+  // created_at за окно — тревога снова разрешена.
+  db.prepare(
+    "UPDATE tasks SET created_at = datetime('now','-2 days') WHERE incident_key = ?",
+  ).run(INCIDENT_KEY);
 }
 export function __resetWatchState() {
-  lastRaisedAt = 0;
+  __setWatchState(0);
 }
 
 export function startWebhookWakeWatcher() {

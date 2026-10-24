@@ -16,7 +16,7 @@ import path from "node:path";
 
 import db from "../db.js";
 import { getSetting } from "./serverSettings.js";
-import { raiseIncident } from "./incidents.js";
+import { raiseIncident, incidentRaisedRecently } from "./incidents.js";
 import { loadBaseline } from "./worktree/testGate.js";
 import { loadPushStatus } from "./worktree/pushHosts.js";
 import {
@@ -42,7 +42,13 @@ export const LIMITS = {
 };
 
 let pollHandle: NodeJS.Timeout | null = null;
-let lastRaisedAt = 0;
+/**
+ * Защита от лавины тревог: не чаще одной тревоги в сутки.
+ *
+ * Источник правды — БД (incidentRaisedRecently в incidents.ts), а не
+ * переменная в памяти: память обнуляется при рестарте, и ограничение
+ * переставало действовать (24.10.2026, аудит надёжности).
+ */
 
 export interface MergeWatchResult {
   ok: boolean;
@@ -204,9 +210,8 @@ export const MERGE_WATCH_ACTIONS: readonly string[] = [
 ];
 
 function raise(problems: string[]) {
-  const now = Date.now();
-  if (now - lastRaisedAt < DAY_MS) return;
-  lastRaisedAt = now;
+  // Дедуп по БД: переживает рестарт сервера (см. комментарий у lastRaisedAt).
+  if (incidentRaisedRecently(INCIDENT_KEY, DAY_MS)) return;
   const title = `Автослияние стоит: ${problems[0]}`.slice(0, 200);
   const description = [
     "## Что случилось",

@@ -40,7 +40,8 @@
 //     «очередью» — значит уводить разбор не туда: теперь эти состояния
 //     различаются, и подсказка в карточке тревоги соответствует причине.
 
-import { raiseIncident } from "./incidents.js";
+import db from "../db.js";
+import { raiseIncident, incidentRaisedRecently } from "./incidents.js";
 import { getSetting } from "./serverSettings.js";
 import {
   OLLAMA_BASE_URL,
@@ -50,6 +51,8 @@ import {
 const INTERVAL_MS = 30 * 60 * 1000; // как требует контракт сторожей
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PRIORITY = 2;
+/** Ключ поломки в БД: по нему же идёт дедуп тревоги (incidentRaisedRecently). */
+const INCIDENT_KEY = "ollama-health";
 
 /** Нижняя граница окна пробы: не меньше окна приборов (30 с по умолчанию). */
 const MIN_PROBE_WINDOW_MS = 30_000;
@@ -70,7 +73,6 @@ const LOADING_STREAK_ALARM = 3;
 const DIAG_TIMEOUT_MS = 5_000;
 
 let pollHandle: NodeJS.Timeout | null = null;
-let lastRaisedAt = 0;
 let loadingStreak = 0;
 let probeWindowOverrideMs: number | null = null;
 
@@ -331,9 +333,11 @@ function raise(
   details?: Record<string, unknown>,
   state: OllamaProbeState = "unavailable",
 ) {
-  const now = Date.now();
-  if (now - lastRaisedAt < DAY_MS) return;
-  lastRaisedAt = now;
+  // Дедуп по БД: переживает рестарт сервера. Раньше здесь была переменная
+  // lastRaisedAt в памяти — она обнулялась при рестарте, и ограничение
+  // «не чаще одной тревоги в сутки» переставало действовать
+  // (24.10.2026, аудит надёжности).
+  if (incidentRaisedRecently(INCIDENT_KEY, DAY_MS)) return;
   const loading = state === "loading";
   const busy = state === "busy";
   const memory = state === "memory";
@@ -384,7 +388,7 @@ function raise(
     "## Что делать",
     ...whatToDo,
   ].join("\n");
-  raiseIncident({ key: "ollama-health", title, description, priority: PRIORITY });
+  raiseIncident({ key: INCIDENT_KEY, title, description, priority: PRIORITY });
 }
 
 /**
@@ -434,7 +438,13 @@ export function startOllamaHealthWatcher(): void {
 /** Сброс состояния для тестов: снять защиту от лавины тревог и счётчик
  *  неудачных загрузок. */
 export function __resetWatchState(): void {
-  lastRaisedAt = 0;
+  // Дедуп тревоги живёт в БД (карточка инцидента), а не в памяти: сброс для
+  // теста — отодвинуть карточку за окно. Раньше здесь была переменная
+  // lastRaisedAt, которая обнулялась при рестарте сервера (24.10.2026).
+  // Карточку не удаляем: на неё ссылается task_events (внешний ключ).
+  db.prepare(
+    "UPDATE tasks SET created_at = datetime('now','-2 days') WHERE incident_key = ?",
+  ).run(INCIDENT_KEY);
   loadingStreak = 0;
 }
 
