@@ -11,7 +11,7 @@
     /* Bundler mode */
     "moduleResolution": "bundler",
     "paths": {
-      "@capacitor/local-notifications": ["./src/lib/localNotifications.stub.ts"]
+      "@capacitor/local-notifications": ["./src (Временно приостановлена разработка)/lib/localNotifications.stub.ts"]
     },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
@@ -25,5 +25,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src (Временно приостановлена разработка)"]
 }

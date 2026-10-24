@@ -38,7 +38,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC = REPO_ROOT / "src"
+SRC = REPO_ROOT / "src (Временно приостановлена разработка)"
 REPORT_PATH = REPO_ROOT / "docs" / "2026-10-05-typography-mak-47" / "dedupe-report.md"
 
 # Классы шкалы, ровно как в src/index.css @layer components.
@@ -83,7 +83,7 @@ ALLOWED_OUTSIDE_SIZES = (
 
 # Файлы, в которых допускаются конкретные размеры вне шкалы.
 ALLOWED_FILE_OVERRIDES = {
-    "src/components/UpcomingCalendar.tsx": {"text-[9px]"},
+    "src (Временно приостановлена разработка)/components/UpcomingCalendar.tsx": {"text-[9px]"},
 }
 
 CLASSNAME_RE = re.compile(r'className=("([^"]*)"|\'([^\']*)\')')

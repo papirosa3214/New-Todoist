@@ -32,7 +32,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 
-const ROOT = path.resolve(process.argv[2] || path.join(REPO_ROOT, "src"));
+const ROOT = path.resolve(process.argv[2] || path.join(REPO_ROOT, "src (Временно приостановлена разработка)"));
 const APP_TSX = path.resolve(process.argv[3] || path.join(ROOT, "App.tsx"));
 
 const TAGS = ["button", "Link", "NavLink"];

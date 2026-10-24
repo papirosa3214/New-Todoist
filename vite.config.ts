@@ -27,7 +27,7 @@ export default defineConfig({
     alias: {
       "@capacitor/local-notifications": path.resolve(
         process.cwd(),
-        "src/lib/localNotifications.stub.ts",
+        "src (Временно приостановлена разработка)/lib/localNotifications.stub.ts",
       ),
     },
   },
