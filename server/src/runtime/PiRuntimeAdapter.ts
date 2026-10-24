@@ -1542,6 +1542,17 @@ export async function startChatRun(
     if (roleThinking && session.thinkingLevel !== roleThinking && typeof session.setThinkingLevel === "function") {
       session.setThinkingLevel(roleThinking);
     }
+    // Компактинг при возобновлении (владелец 24.10.2026): resumed-сессия чата
+    // грузит сырую историю вместе с прежними размышлениями — роль перечитывает
+    // их и закапывается. Сжимаем до первого промпта; на короткой истории SDK
+    // сам вернёт no-op (prepareCompaction пуст).
+    if (known) {
+      try {
+        await session.compact();
+      } catch (error) {
+        console.warn(`[compact] ${role} chat ${input.chatId}: не удалось сжать сессию, идём на сырой истории:`, error instanceof Error ? error.message : String(error));
+      }
+    }
 
     const run: ActiveChatRun = {
       runId,
