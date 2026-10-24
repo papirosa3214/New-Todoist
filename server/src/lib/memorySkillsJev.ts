@@ -106,7 +106,11 @@ export async function reviewMemoryWriteByJev(input: {
 export async function selectSkillsByJev(
   work: { title: string; description: string | null; step?: string | null },
   skills: Array<{ name: string; description: string }>,
+  requiredNames: readonly string[] = [],
 ): Promise<Set<string> | null> {
+  if (skills.length && skills.every(s => requiredNames.includes(s.name))) {
+    skippedObservation("skills","required_skills");return null;
+  }
   const cfg = jevScenario("skills");
   if (!cfg || skills.length < SKILLS_MIN_TO_SELECT) {skippedObservation("skills",!cfg?jevSkipReason("skills"):"too_few_skills");return null;}
   const questions: Record<string, JevQuestion> = {};
@@ -129,7 +133,7 @@ export async function selectSkillsByJev(
     {scenario:"skills"},
   );
   if (!result) return null;
-  const keep = new Set<string>();
+  const keep = new Set(skills.filter(s => requiredNames.includes(s.name)).map(s => s.name));
   skills.forEach((s, i) => {
     const a = result.answers[`s${i}`];
     // Нет ответа по навыку — оставляем: лишний навык дешевле отрезанного нужного.

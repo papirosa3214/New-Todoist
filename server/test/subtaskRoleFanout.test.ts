@@ -235,11 +235,11 @@ describe("умная параллелизация подзадач (subtaskRoleF
     it("уверенный выбор JEV назначает роль даже там, где эмбеддинги молчат; мелкий пункт остаётся исполнителю", async () => {
       saveJevSettings({ apiKey: "apik_test-1234567890", subtaskRoleEnabled: true });
       globalThis.fetch = jevAnswers({
-        role_0: { type: "choice", choice: "designer", confidence: 0.9, probabilities: {} },
+        role_0: { type: "choice", choice: "designer", confidence: 0.9, probabilities: {"designer": 1} },
         separate_0: { type: "noul", noul: 0.95 },
-        role_1: { type: "choice", choice: "qa", confidence: 0.85, probabilities: {} },
+        role_1: { type: "choice", choice: "qa", confidence: 0.85, probabilities: {"qa": 1} },
         separate_1: { type: "noul", noul: 0.9 },
-        role_2: { type: "choice", choice: "researcher", confidence: 0.9, probabilities: {} },
+        role_2: { type: "choice", choice: "researcher", confidence: 0.9, probabilities: {"researcher": 1} },
         separate_2: { type: "noul", noul: 0.1 },
       }) as any;
       const taskId = await makeTaskWithSubtasks("Экран настроек", "builder", ["нейтральный пункт раз", "нейтральный пункт два", "нейтральный пункт три"]);
@@ -254,9 +254,9 @@ describe("умная параллелизация подзадач (subtaskRoleF
     it("JEV не уверен — по этой подзадаче работает прежний подбор по эмбеддингам", async () => {
       saveJevSettings({ apiKey: "apik_test-1234567890", subtaskRoleEnabled: true, subtaskRoleMinConfidence: 0.8 });
       globalThis.fetch = jevAnswers({
-        role_0: { type: "choice", choice: "designer", confidence: 0.4, probabilities: {} },
+        role_0: { type: "choice", choice: "designer", confidence: 0.4, probabilities: {"designer": 1} },
         separate_0: { type: "noul", noul: 0.9 },
-        role_1: { type: "choice", choice: "designer", confidence: 0.4, probabilities: {} },
+        role_1: { type: "choice", choice: "designer", confidence: 0.4, probabilities: {"designer": 1} },
         separate_1: { type: "noul", noul: 0.9 },
       }) as any;
       const taskId = await makeTaskWithSubtasks("Фича", "builder", ["[qa] проверить сценарии", "[researcher] собрать примеры"]);

@@ -31,7 +31,7 @@ export function finishObservation(id:string|null,result:ObservationResult):void 
 export function updateObservation(id:string|null|undefined,result:Partial<ObservationResult>):void {
  if(!id)return;
  try{const row=db.prepare('SELECT status,reason,input_count,output_count,input_tokens,output_tokens,details,duration_ms FROM context_operations WHERE id=?').get(id) as any;if(!row)return;
- finishObservation(id,{status:row.status,reason:row.reason??undefined,inputCount:row.input_count,outputCount:row.output_count,durationMs:row.duration_ms,usage:{input_tokens:row.input_tokens,output_tokens:row.output_tokens},details:JSON.parse(row.details),...result});}catch{console.warn('context-observability: уточнение результата недоступно');}
+ finishObservation(id,{status:row.status,reason:row.reason??undefined,inputCount:row.input_count,outputCount:row.output_count,durationMs:row.duration_ms,usage:{input_tokens:row.input_tokens,output_tokens:row.output_tokens},details:JSON.parse(row.details),...result,...(result.details?{details:[...(JSON.parse(row.details) as string[]).filter(x=>x.startsWith("model: ")),...result.details.filter(x=>!x.startsWith("model: "))]}:{})});}catch{console.warn('context-observability: уточнение результата недоступно');}
 }
 export function skippedObservation(scenario:string,reason:string,extra:ObservationContext={}):void{finishObservation(startObservation('jev',scenario,extra),{status:'skipped',reason});}
 export function observationSince(window:string,now=Date.now()):string {

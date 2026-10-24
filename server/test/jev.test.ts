@@ -116,7 +116,7 @@ describe("протокол TypeSafe", () => {
     const fetchMock = answerWith("delivery", 0.9);
     globalThis.fetch = fetchMock as any;
     const out = await evaluateJev("текст", {
-      profile: { type: "choice", instructions: "?", criteria: { a: null } },
+      profile: { type: "choice", instructions: "?", criteria: { delivery: null } },
     });
     expect(out?.answers.profile).toMatchObject({
       type: "choice",

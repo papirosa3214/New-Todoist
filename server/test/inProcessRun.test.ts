@@ -128,6 +128,21 @@ describe("агент роли внутри сервера", () => {
   const call = (tools: Map<string, any>, name: string, params: any) =>
     tools.get(name).execute(`call-${name}`, params);
 
+  it("JEV report advice reaches the real critic prompt without recording a verdict",async()=>{
+    const {taskId}=builderTask("Проверить отчёт");
+    const assistance=await import("../src/lib/jevAssist.js");
+    const probe=vi.spyOn(assistance,"reportReviewBlockForTask").mockResolvedValue("JEV_REPORT_ADVICE_FIXTURE");
+    let seen="";
+    script.steps=async(_tools,prompt)=>{seen=prompt;};
+    try {
+      await runRoleInProcess({taskId,role:"critic_verifier",mode:"review"});
+      await _settleInProcessRunsForTests();
+      expect(probe).toHaveBeenCalledWith(taskId,undefined);
+      expect(seen).toContain("JEV_REPORT_ADVICE_FIXTURE");
+      expect(db.prepare("SELECT count(*) n FROM reviews WHERE task_id=?").get(taskId)).toEqual({n:0});
+    } finally {probe.mockRestore();}
+  });
+
   it("командные инструменты работают по слоту без исполнителя карточки и разрешения на карточку", async () => {
     const {taskId,stepId}=builderTask("Слот без захвата карточки");
     db.prepare("UPDATE tasks SET assignee_id=NULL,ready_for_pickup=0 WHERE id=?").run(taskId);

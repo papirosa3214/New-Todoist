@@ -1,3 +1,4 @@
+import {reportReviewBlockForTask} from "../lib/jevAssist.js";
 import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
 import {oneShotReviewInstruction} from "../lib/integrationResponsibility.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
@@ -1718,7 +1719,8 @@ try {
       // нуля. Ставим после задания этапа и ДО контекста запуска, чтобы роль
       // читала его как часть постановки, а не как приложение.
       const snapshot=input.subtaskId ? slotSnapshotBlock(input.subtaskId) : null;
-      const prompt = `${task}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
+      const reportAdvice=role==="critic_verifier" && mode==="review" ? await reportReviewBlockForTask(taskId,input.subtaskId) : "";
+      const prompt = `${task}${reportAdvice}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
       // Чек-лист идёт ПЕРЕД задачей (13.10.2026, владелец: «подсунуть ему
       // промп поближе»). В хвосте промпта, после задачи, переписки, контекста
       // запуска и памяти, инструкция о плане терялась: модель к этому месту

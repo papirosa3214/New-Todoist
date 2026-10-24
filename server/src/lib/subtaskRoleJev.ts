@@ -71,8 +71,9 @@ export async function pickRolesForSubtasksByJev(
       role.confidence < cfg.minConfidence
     )
       return;
-    const separate =
-      sep && sep.type === "noul" && typeof sep.noul === "number" ? sep.noul : 1;
+    // Incomplete classification cannot authorize delegation.
+    if (!sep || sep.type !== "noul") return;
+    const separate = sep.noul;
     out.set(s.id, { role: role.choice, confidence: role.confidence, separate });
   });
   updateObservation(result.observationId,{reason:out.size?"selected":"low_confidence",inputCount:subtasks.length,outputCount:out.size,details:[...out].map(([id,p])=>`${id}: ${p.role}, уверенность ${p.confidence}, отдельно ${p.separate}`)});

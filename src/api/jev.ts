@@ -18,6 +18,9 @@ export interface JevSettings {
   memoryWriteEnabled: boolean;
   memoryWriteMinConfidence: number;
   skillsEnabled: boolean;
+  reportReviewEnabled: boolean;
+  chatIntentEnabled: boolean;
+  chatIntentMinConfidence: number;
   updatedAt: string;
 }
 

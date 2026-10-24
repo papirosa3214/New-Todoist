@@ -150,7 +150,7 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  const names=stageSkillNames(work?.stageInstructions);
  const candidates=names === null ? skills : skills.filter(s=>names.includes(s.name));
  const missing=names?.filter(name=>!skills.some(s=>s.name===name)) ?? [];
- const keep=work ? await withObservationContext({role},()=>selectSkillsByJev({...work,step:[work.step,work.stageInstructions].filter(Boolean).join("\n")},candidates.map(s=>({name:s.name,description:s.description})))).catch(()=>null) : null;
+ const keep=work ? await withObservationContext({role},()=>selectSkillsByJev({...work,step:[work.step,work.stageInstructions].filter(Boolean).join("\n")},candidates.map(s=>({name:s.name,description:s.description})),names ?? [])).catch(()=>null) : null;
  const usedSkills=keep ? candidates.filter(s=>keep.has(s.name)) : candidates;
  const stagePrompt=work?.stageInstructions ? "\n\nЗадание текущего этапа:\n"+work.stageInstructions : "";
  const missingPrompt=missing.length ? "\n\nНедоступные навыки этапа: "+missing.join(", ")+". Не утверждай, что они подключены; укажи ограничение в результате." : "";

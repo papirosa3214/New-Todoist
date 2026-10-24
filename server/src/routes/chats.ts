@@ -1,3 +1,4 @@
+import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
 import {compactChatReportMaterials} from "../lib/chatReportMaterials.js";
 import {preparedReportMaterials} from "../runtime/chatPreparedMaterials.js";
 import { prepareChatValue } from "../runtime/chatPreparationDeadline.js";
@@ -2462,7 +2463,8 @@ async function deliverAgentReply(args: {
   if(isIntegrationHandoff(trigger.id) && !integrationContext)return null;
   const triggerTask = trigger.task_id ? `\nКонтекст задачи: ${trigger.task_id}` : "";
   const triggerFiles = trigger.attachments ? `\n[вложения: ${trigger.attachments}]` : "";
-  const userText = `${integrationContext ? integrationContext+"\n" : ""}${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}`;
+  const intentGuidance=isOwner(trigger.from_user_id) ? await chatIntentBlockForMessage(trigger.id) : "";
+  const userText = `${integrationContext ? integrationContext+"\n" : ""}${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}${intentGuidance}`;
 
   const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
   const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;

@@ -4980,6 +4980,12 @@ const migrations: Migration[] = [
     );
     CREATE INDEX IF NOT EXISTS idx_chat_paused_work_open ON chat_paused_work(chat_id, resumed_at);
   `) },
+  { id: "169_jev_assistance", description: "JEV: advisory report checks and chat intent", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(jev_settings)").all() as {name:string}[]).map(c=>c.name));
+    for (const [name, ddl] of Object.entries({report_review_enabled:"INTEGER NOT NULL DEFAULT 0",chat_intent_enabled:"INTEGER NOT NULL DEFAULT 0",chat_intent_min_confidence:"REAL NOT NULL DEFAULT 0.7"})) {
+      if (!cols.has(name)) db.exec(`ALTER TABLE jev_settings ADD COLUMN ${name} ${ddl}`);
+    }
+  } },
   { id: "167_role_tool_gain_requests", description: "Заявки ролей на закрытые инструменты", up: () => db.exec(ROLE_TOOL_REQUEST_SCHEMA) },
 ];
 /**

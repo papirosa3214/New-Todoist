@@ -1,0 +1,237 @@
+
+> taskflow-server@0.1.0 pretest
+> node -e "if (parseInt(process.versions.node) < 22) { console.error('Нужен Node 22+ (nvm use 22, см. .nvmrc); текущий ' + process.versions.node); process.exit(1); }"
+
+
+> taskflow-server@0.1.0 test
+> vitest run test/jevHardening.test.ts --maxWorkers=1
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/maksim/Проекты/New-Todoist/server[39m
+
+[90mstdout[2m | test/jevHardening.test.ts
+[22m[39m[042_pipeline_head] backfill: kept=0 moved=0 cleared=0
+
+ [31m❯[39m test/jevHardening.test.ts [2m([22m[2m9 tests[22m[2m | [22m[31m9 failed[39m[2m)[22m[33m 335[2mms[22m[39m
+[31m   [31m×[31m rejects invalid noul -0.1 before consumers use it[39m[32m 6[2mms[22m[39m
+[31m   [31m×[31m rejects invalid noul 1.1 before consumers use it[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m rejects invalid noul 0.8 before consumers use it[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m rejects non-finite confidence supplied by a broken transport[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m records the actual responding model[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m ends waiting when fetch ignores abort[39m[32m 2[2mms[22m[39m
+[31m   [31m×[31m includes body reading in the deadline[39m[32m 3[2mms[22m[39m
+[31m   [31m×[31m keeps explicitly required skills even when relevance is low[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m does not delegate on a partial answer missing separate[39m[32m 2[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 9 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m test/jevHardening.test.ts[2m > [22mrejects invalid noul -0.1 before consumers use it
+[31m[1mAssertionError[22m: expected { model: 'jev-1.14.0', …(2) } to be null[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+{
+  "answers": {
+    "check": {
+      "noul": -0.1,
+      "type": "noul",
+    },
+  },
+  "model": "jev-1.14.0",
+  "observationId": "59c6ff93-e1a8-4e71-8ebf-ed6a6b07b442",
+}
+
+[36m [2m❯[22m test/jevHardening.test.ts:[2m14:71[22m[39m
+    [90m 12|[39m const respond=(answers:unknown)=>vi.stubGlobal("fetch",vi.fn(async()=>…
+    [90m 13|[39m it.each([-0.1,1.1,"0.8"])("rejects invalid noul %s before consumers us…
+    [90m 14|[39m  respond({check:{type:"noul",noul}});expect(await evaluateJev("x",q)).…
+    [90m   |[39m                                                                       [31m^[39m
+    [90m 15|[39m })[33m;[39m
+    [90m 16|[39m it("rejects non-finite confidence supplied by a broken transport",asyn…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevHardening.test.ts[2m > [22mrejects invalid noul 1.1 before consumers use it
+[31m[1mAssertionError[22m: expected { model: 'jev-1.14.0', …(2) } to be null[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+{
+  "answers": {
+    "check": {
+      "noul": 1.1,
+      "type": "noul",
+    },
+  },
+  "model": "jev-1.14.0",
+  "observationId": "8c18338c-87c4-45d4-a068-97ec1c41556f",
+}
+
+[36m [2m❯[22m test/jevHardening.test.ts:[2m14:71[22m[39m
+    [90m 12|[39m const respond=(answers:unknown)=>vi.stubGlobal("fetch",vi.fn(async()=>…
+    [90m 13|[39m it.each([-0.1,1.1,"0.8"])("rejects invalid noul %s before consumers us…
+    [90m 14|[39m  respond({check:{type:"noul",noul}});expect(await evaluateJev("x",q)).…
+    [90m   |[39m                                                                       [31m^[39m
+    [90m 15|[39m })[33m;[39m
+    [90m 16|[39m it("rejects non-finite confidence supplied by a broken transport",asyn…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevHardening.test.ts[2m > [22mrejects invalid noul 0.8 before consumers use it
+[31m[1mAssertionError[22m: expected { model: 'jev-1.14.0', …(2) } to be null[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+{
+  "answers": {
+    "check": {
+      "noul": "0.8",
+      "type": "noul",
+    },
+  },
+  "model": "jev-1.14.0",
+  "observationId": "39ae8870-424e-4f70-86c5-2e9beeb507e2",
+}
+
+[36m [2m❯[22m test/jevHardening.test.ts:[2m14:71[22m[39m
+    [90m 12|[39m const respond=(answers:unknown)=>vi.stubGlobal("fetch",vi.fn(async()=>…
+    [90m 13|[39m it.each([-0.1,1.1,"0.8"])("rejects invalid noul %s before consumers us…
+    [90m 14|[39m  respond({check:{type:"noul",noul}});expect(await evaluateJev("x",q)).…
+    [90m   |[39m                                                                       [31m^[39m
+    [90m 15|[39m })[33m;[39m
+    [90m 16|[39m it("rejects non-finite confidence supplied by a broken transport",asyn…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevHardening.test.ts[2m > [22mrejects non-finite confidence supplied by a broken transport
+[31m[1mAssertionError[22m: expected { model: 'jev-1.14.0', …(2) } to be null[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+{
+  "answers": {
+    "pick": {
+      "choice": "yes",
+      "confidence": Infinity,
+      "probabilities": {
+        "yes": 1,
+      },
+      "type": "choice",
+    },
+  },
+  "model": "jev-1.14.0",
+  "observationId": "ad4d4ada-e0ba-4ffa-b671-e7c893b2b32d",
+}
+
+[36m [2m❯[22m test/jevHardening.test.ts:[2m18:97[22m[39m
+    [90m 16|[39m it("rejects non-finite confidence supplied by a broken transport",asyn…
+    [90m 17|[39m  vi.stubGlobal("fetch",vi.fn(async()=>({ok:true,text:async()=>'{"model…
+    [90m 18|[39m  expect(await evaluateJev("x",{pick:{type:"choice",instructions:"Pick"…
+    [90m   |[39m                                                                                                 [31m^[39m
+    [90m 19|[39m })[33m;[39m
+    [90m 20|[39m [34mit[39m([32m"records the actual responding model"[39m[33m,[39m[35masync[39m()[33m=>[39m{
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevHardening.test.ts[2m > [22mrecords the actual responding model
+[31m[1mAssertionError[22m: expected [] to include 'model: jev-1.14.0'[39m
+[36m [2m❯[22m test/jevHardening.test.ts:[2m23:34[22m[39m
+    [90m 21|[39m  respond({check:{type:"noul",noul:0.8}});const result=await evaluateJe…
+    [90m 22|[39m  const row=db.prepare("SELECT details FROM context_operations WHERE id…
+    [90m 23|[39m  [34mexpect[39m([33mJSON[39m[33m.[39m[34mparse[39m(row[33m.[39mdetails))[33m.[39m[34mtoContain[39m([32m"model: jev-1.14.0"[39m)[33m;[39m
+    [90m   |[39m                                  [31m^[39m
+    [90m 24|[39m })[33m;[39m
+    [90m 25|[39m [34mit[39m([32m"ends waiting when fetch ignores abort"[39m[33m,[39m[35masync[39m()[33m=>[39m{
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevHardening.test.ts[2m > [22mends waiting when fetch ignores abort
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m test/jevHardening.test.ts:[2m29:57[22m[39m
+    [90m 27|[39m  vi[33m.[39m[34mstubGlobal[39m([32m"fetch"[39m[33m,[39mvi[33m.[39m[34mfn[39m(()[33m=>[39m[35mnew[39m [33mPromise[39m(()[33m=>[39m{})))[33m;[39m
+    [90m 28|[39m  const pending=evaluateJev("x",q,{timeoutMs:500}).then(result=>{settle…
+    [90m 29|[39m  await vi.advanceTimersByTimeAsync(501);expect(settled).toBe(true);exp…
+    [90m   |[39m                                                         [31m^[39m
+    [90m 30|[39m })[33m;[39m
+    [90m 31|[39m [34mit[39m([32m"includes body reading in the deadline"[39m[33m,[39m[35masync[39m()[33m=>[39m{
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevHardening.test.ts[2m > [22mincludes body reading in the deadline
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m test/jevHardening.test.ts:[2m35:57[22m[39m
+    [90m 33|[39m  vi.stubGlobal("fetch",vi.fn(async()=>({ok:true,text:()=>new Promise((…
+    [90m 34|[39m  const pending=evaluateJev("x",q,{timeoutMs:500}).then(result=>{settle…
+    [90m 35|[39m  await vi.advanceTimersByTimeAsync(501);expect(settled).toBe(true);exp…
+    [90m   |[39m                                                         [31m^[39m
+    [90m 36|[39m })[33m;[39m
+    [90m 37|[39m it("keeps explicitly required skills even when relevance is low",async…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevHardening.test.ts[2m > [22mkeeps explicitly required skills even when relevance is low
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m test/jevHardening.test.ts:[2m41:30[22m[39m
+    [90m 39|[39m  respond(Object.fromEntries(skills.map((s,i)=>["s"+i,{type:"noul",noul…
+    [90m 40|[39m  const selected=await selectSkillsByJev({title:"work",description:null…
+    [90m 41|[39m  expect(selected?.has("s0")).toBe(true);expect(selected?.has("s1")).to…
+    [90m   |[39m                              [31m^[39m
+    [90m 42|[39m })[33m;[39m
+    [90m 43|[39m [34mit[39m([32m"does not delegate on a partial answer missing separate"[39m[33m,[39m[35masync[39m()[33m=>[39m{
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevHardening.test.ts[2m > [22mdoes not delegate on a partial answer missing separate
+[31m[1mAssertionError[22m: expected 1 to be +0 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 0[39m
+[31m+ 1[39m
+
+[36m [2m❯[22m test/jevHardening.test.ts:[2m46:106[22m[39m
+    [90m 44|[39m  [35mconst[39m role[33m=[39m[34mallRoles[39m()[33m.[39m[34mfilter[39m(r[33m=>[39mr[33m.[39menabled)[[34m0[39m][33m;[39m
+    [90m 45|[39m  respond({role_0:{type:"choice",choice:role.key,confidence:0.9,probabi…
+    [90m 46|[39m  expect((await pickRolesForSubtasksByJev({title:"work",description:nul…
+    [90m   |[39m                                                                                                          [31m^[39m
+    [90m 47|[39m })[33m;[39m
+    [90m 48|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/9]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m9 failed[39m[22m[90m (9)[39m
+[2m   Start at [22m 04:20:23
+[2m   Duration [22m 1.73s[2m (transform 656ms, setup 61ms, import 1.08s, tests 335ms, environment 0ms)[22m
+

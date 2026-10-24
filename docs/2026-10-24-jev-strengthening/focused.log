@@ -1,0 +1,68 @@
+
+> taskflow-server@0.1.0 pretest
+> node -e "if (parseInt(process.versions.node) < 22) { console.error('Нужен Node 22+ (nvm use 22, см. .nvmrc); текущий ' + process.versions.node); process.exit(1); }"
+
+
+> taskflow-server@0.1.0 test
+> vitest run test/jevAssist.test.ts test/jevHardening.test.ts test/jev.test.ts test/chatSteering.test.ts --maxWorkers=2
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/maksim/Проекты/New-Todoist/server[39m
+
+[90mstdout[2m | test/jev.test.ts
+[22m[39m[apns] ключ не настроен — островок будет обновляться только при открытом приложении
+
+[90mstdout[2m | test/jevAssist.test.ts
+[22m[39m[042_pipeline_head] backfill: kept=0 moved=0 cleared=0
+
+ [32m✓[39m test/jevAssist.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 209[2mms[22m[39m
+[90mstdout[2m | test/jevHardening.test.ts
+[22m[39m[042_pipeline_head] backfill: kept=0 moved=0 cleared=0
+
+[90mstderr[2m | test/jevHardening.test.ts[2m > [22m[2mends waiting when fetch ignores abort
+[22m[39mJEV: оценка не получена timeout
+
+[90mstderr[2m | test/jevHardening.test.ts[2m > [22m[2mincludes body reading in the deadline
+[22m[39mJEV: оценка не получена timeout
+
+ [32m✓[39m test/jevHardening.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 191[2mms[22m[39m
+ [32m✓[39m test/chatSteering.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+[90mstdout[2m | test/jev.test.ts
+[22m[39m[042_pipeline_head] backfill: kept=0 moved=0 cleared=0
+
+[90mstderr[2m | test/jev.test.ts
+[22m[39m[note-access-watch] прибор живой
+
+[90mstdout[2m | test/jev.test.ts
+[22m[39m[inbox-triage] polling /home/maksim/Проекты/taskflow-уведомления/inbox (every 1000 ms)
+[results-writer] watching tasks (0 known). poll=3000ms
+
+[90mstderr[2m | test/jev.test.ts[2m > [22m[2mпротокол TypeSafe[2m > [22m[2mошибка провайдера — null, а не исключение
+[22m[39mJEV: оценка не получена provider_error
+
+[90mstderr[2m | test/jev.test.ts[2m > [22m[2mшлюз jevai.org[2m > [22m[2mcode≠0 у jevai — null, а проверка подключения показывает текст сервиса
+[22m[39mJEV: оценка не получена provider_error
+
+[90mstderr[2m | test/jev.test.ts[2m > [22m[2mсценарий: отбор памяти для роли[2m > [22m[2mJEV упал — null, роль получает исходную выдачу
+[22m[39mJEV: оценка не получена provider_error
+
+[90mstderr[2m | test/jev.test.ts[2m > [22m[2mсценарий: проверка записи в память[2m > [22m[2mсомнение или отказ JEV — запись проходит
+[22m[39mJEV: оценка не получена provider_error
+
+[90mstderr[2m | test/jev.test.ts[2m > [22m[2mсценарий: навыки под задачу[2m > [22m[2mJEV ничего не выбрал или упал — null, роль получает все навыки
+[22m[39mJEV: оценка не получена provider_error
+
+(node:1998614) [FSTWRN001] FastifyWarning: The body schema for POST: /api/auth/lan is missing. This may indicate the schema is not well specified.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:1998614) [FSTWRN001] FastifyWarning: The body schema for POST: /api/pairing/code is missing. This may indicate the schema is not well specified.
+ [32m✓[39m test/jev.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 331[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m      Tests [22m [1m[32m61 passed[39m[22m[90m (61)[39m
+[2m   Start at [22m 04:27:47
+[2m   Duration [22m 3.42s[2m (transform 2.28s, setup 67ms, import 4.57s, tests 738ms, environment 0ms)[22m
+
+
+> taskflow-server@0.1.0 build
+> tsc
+

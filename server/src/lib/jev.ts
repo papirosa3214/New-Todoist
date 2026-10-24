@@ -88,6 +88,8 @@ const SCENARIOS = [
     key: "memoryWrite",
   },
   { flag: "skills_enabled", conf: null, key: "skills" },
+  { flag: "report_review_enabled", conf: null, key: "reportReview" },
+  { flag: "chat_intent_enabled", conf: "chat_intent_min_confidence", key: "chatIntent" },
 ] as const;
 
 type ScenarioKey = (typeof SCENARIOS)[number]["key"];
@@ -110,7 +112,7 @@ export type JevPublicSettings = {
   hasApiKey: boolean;
   updatedAt: string;
 } & { [K in `${ScenarioKey}Enabled`]: boolean } & {
-  [K in `${Exclude<ScenarioKey, "skills">}MinConfidence`]: number;
+  [K in `${Exclude<ScenarioKey, "skills" | "reportReview">}MinConfidence`]: number;
 };
 
 function row(): JevRow {
@@ -227,6 +229,16 @@ async function call(
   body?: unknown,
   timeoutMs?: number,
 ): Promise<any> {
+  const controller = new AbortController();
+  const budget = timeoutMs ?? r.timeout_ms;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new DOMException("JEV deadline exceeded", "TimeoutError"));
+    }, budget);
+  });
+  const request = (async () => {
   const res = await fetch(`${r.base_url}${path}`, {
     method,
     ...(new URL(r.base_url).hostname === "api.typesafe.ai" ? { dispatcher: typesafeProxy } : {}),
@@ -236,7 +248,7 @@ async function call(
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs ?? r.timeout_ms),
+    signal: controller.signal,
   });
   const text = await res.text();
   let parsed: any = text;
@@ -257,6 +269,26 @@ async function call(
     throw new Error(`HTTP ${res.status}${msg ? `: ${msg.slice(0, 200)}` : ""}`);
   }
   return parsed;
+  })();
+  try { return await Promise.race([request, expired]); }
+  finally { clearTimeout(timer); }
+}
+
+function probability(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+/** Partial answers are allowed; consumers retain their fallback for missing questions. */
+function validAnswer(answer: any, question: JevQuestion): boolean {
+  if (!answer || answer.type !== question.type) return false;
+  if (question.type === "noul") return probability(answer.noul);
+  if (!probability(answer.confidence) || !answer.probabilities ||
+      typeof answer.probabilities !== "object" || Array.isArray(answer.probabilities) ||
+      !Object.keys(answer.probabilities).length || !Object.values(answer.probabilities).every(probability)) return false;
+  if (question.type === "choice") return typeof answer.choice === "string" &&
+    Object.hasOwn(question.criteria, answer.choice) &&
+    Object.keys(answer.probabilities).every(key => Object.hasOwn(question.criteria, key));
+  return typeof answer.score === "number" && Number.isFinite(answer.score);
 }
 
 /**
@@ -350,10 +382,12 @@ export async function evaluateJev(
       !out ||
       typeof out !== "object" ||
       !out.answers ||
-      typeof out.answers !== "object"
+      typeof out.answers !== "object" || Array.isArray(out.answers) ||
+      !Object.entries(questions).every(([name, question]) =>
+        out.answers[name] === undefined || validAnswer(out.answers[name], question))
     )
       {finishObservation(observationId,{status:"error",reason:"invalid_response",usage:out?.usage});return null;}
-    finishObservation(observationId,{status:"ok",inputCount:Object.keys(questions).length,outputCount:Object.keys(out.answers).length,usage:out.usage});
+    finishObservation(observationId,{status:"ok",inputCount:Object.keys(questions).length,outputCount:Object.keys(out.answers).length,usage:out.usage,details:typeof out.model==="string" && /^[a-zA-Z0-9._-]{1,80}$/.test(out.model)?["model: "+out.model]:[]});
     return {...out,observationId} as JevResult;
   } catch (err: any) {
     const timeout=err?.name==="TimeoutError"||err?.name==="AbortError";

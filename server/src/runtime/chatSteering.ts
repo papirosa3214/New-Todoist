@@ -1,3 +1,4 @@
+import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
 import type { ChatExecutionMode } from "./chatExecutionMode.js";
 /** Active chat input, separate from the FIFO of complete model runs.
  * Acceptance by the SDK is not delivery: acknowledge only after a user message
@@ -58,6 +59,7 @@ const active = new Map<string, Map<string, Registration>>();
 export function registerChatSteering(input: Input) {
   const entries = new Map<string, Pending>();
   let closed = false;
+  let inputTail:Promise<unknown>=Promise.resolve();
   const registration: Registration = {
     chatId: input.chatId,
     async offer(id: string, source: SteeringOffer): Promise<SteeringReceipt | null> {
@@ -85,10 +87,16 @@ export function registerChatSteering(input: Input) {
       };
       entries.set(id, entry);
       // Install before invoking SDK: a synchronous message event must not be lost.
-      entry.ready = (async () => {
-        try { await input.steer(entry.text); return true; }
+      entry.ready = inputTail.then(async () => {
+        try {
+          const guidance=await chatIntentBlockForMessage(id);
+          if(closed){entry.resolveDelivered(false);entry.resolve(false);return false;}
+          entry.text+=guidance;
+          await input.steer(entry.text); return true;
+        }
         catch { entries.delete(id); entry.resolveDelivered(false); entry.resolve(false); return false; }
-      })();
+      });
+      inputTail=entry.ready;
       return await entry.ready ? entry.receipt : null;
     },
   };

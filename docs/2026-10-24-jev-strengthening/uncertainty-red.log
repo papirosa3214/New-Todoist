@@ -1,0 +1,53 @@
+
+> taskflow-server@0.1.0 pretest
+> node -e "if (parseInt(process.versions.node) < 22) { console.error('Нужен Node 22+ (nvm use 22, см. .nvmrc); текущий ' + process.versions.node); process.exit(1); }"
+
+
+> taskflow-server@0.1.0 test
+> vitest run test/jevAssist.test.ts -t passes report uncertainty --maxWorkers=1
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/maksim/Проекты/New-Todoist/server[39m
+
+[90mstdout[2m | test/jevAssist.test.ts
+[22m[39m[042_pipeline_head] backfill: kept=0 moved=0 cleared=0
+
+ [31m❯[39m test/jevAssist.test.ts [2m([22m[2m11 tests[22m[2m | [22m[31m1 failed[39m[2m | [22m[33m10 skipped[39m[2m)[22m[32m 243[2mms[22m[39m
+   [2m[90m↓[39m[22m exposes independent controls for the two advisory scenarios
+   [2m[90m↓[39m[22m question guidance preserves the original request and asks for a verbal answer
+   [2m[90m↓[39m[22m falls back on uncertain intent
+   [2m[90m↓[39m[22m keeps mixed requests distinct from a pure question
+   [2m[90m↓[39m[22m does not call the provider when the scenario is disabled
+   [2m[90m↓[39m[22m passes advisory intent into an active turn without breaking its receipt
+   [2m[90m↓[39m[22m gives the critic specific concerns and does not create a verdict
+   [2m[90m↓[39m[22m loads the current task result for pre-review without leaking another task
+   [2m[90m↓[39m[22m returns no invented pre-review when no report exists
+   [2m[90m↓[39m[22m preserves FIFO while two intent evaluations have different latency
+[31m   [31m×[31m passes report uncertainty to the critic rather than silently dropping all checks[39m[32m 6[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m test/jevAssist.test.ts[2m > [22mpasses report uncertainty to the critic rather than silently dropping all checks
+[31m[1mAssertionError[22m: expected '' to contain 'недостаточно уверенности'[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- недостаточно уверенности[39m
+
+[36m [2m❯[22m test/jevAssist.test.ts:[2m89:16[22m[39m
+    [90m 87|[39m  response(Object.fromEntries(["alignment","evidence","limitations"].ma…
+    [90m 88|[39m  const block=await assist.reviewReportByJev({task:{title:"Fix"},report…
+    [90m 89|[39m  expect(block).toContain("недостаточно уверенности");expect(block).toC…
+    [90m   |[39m                [31m^[39m
+    [90m 90|[39m })[33m;[39m
+    [90m 91|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[33m10 skipped[39m[90m (11)[39m
+[2m   Start at [22m 04:27:28
+[2m   Duration [22m 1.21s[2m (transform 393ms, setup 25ms, import 876ms, tests 243ms, environment 0ms)[22m
+

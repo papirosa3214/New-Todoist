@@ -367,6 +367,27 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     if (app) await app.close();
   });
 
+  it("JEV intent reaches the real new chat turn while preserving the question",async()=>{
+    const jev=await import("../src/lib/jev.js");
+    const oldFetch=globalThis.fetch;
+    const oldRole=(db.prepare("SELECT role FROM users WHERE id=?").get(ownerId) as {role:string}).role;
+    db.prepare("UPDATE users SET role='owner' WHERE id=?").run(ownerId);
+    jev.saveJevSettings({apiKey:"fixture-jev-key",chatIntentEnabled:true});
+    globalThis.fetch=vi.fn(async()=>new Response(JSON.stringify({model:"jev-1.14.0",answers:{intent:{type:"choice",choice:"question",confidence:0.99,probabilities:{question:1}}}}))) as any;
+    try {
+      const created=await createChat({kind:"direct",member_ids:["role_architect"]});
+      const chatId=created.json().chat.id;
+      const sent=await app.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers:ownerAuth,payload:{text:"Почему ты изменил кнопку?"}});
+      expect(sent.statusCode).toBe(200);
+      await vi.waitFor(()=>expect(fakeClients).toHaveLength(1));
+      await vi.waitFor(()=>expect(fakeClients[0].stop).toHaveBeenCalled());
+      const prompt=fakeClients[0].promptAndWait.mock.calls[0][0];
+      expect(prompt).toContain("Почему ты изменил кнопку?");
+      expect(prompt).toContain("ответ словами");
+      expect(prompt).toContain("не является разрешением");
+    } finally {globalThis.fetch=oldFetch;jev.resetJevSettings();db.prepare("UPDATE users SET role=? WHERE id=?").run(oldRole,ownerId);}
+  });
+
   it("planning is persisted and reaches the guarded runtime; next work turn restores work", async () => {
     const chatId = (await createChat({kind: "direct", member_ids: ["role_architect"]})).json().chat.id;
     const plan = await app.inject({method: "POST",url: `/api/chats/${chatId}/messages`, headers: ownerAuth,
