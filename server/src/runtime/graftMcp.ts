@@ -70,6 +70,10 @@ async function openClient(root: string): Promise<Client> {
     command: GRAFT_BIN,
     args: ["mcp", root],
     stderr: "ignore",
+    // Без автообновления графа (владелец 24.10.2026): граф построен заранее,
+    // а refresh на каждый запрос пересобирал его и молотил CPU. Graft сам
+    // читает GRAFT_NO_REFRESH и отвечает из графа как есть.
+    env: { GRAFT_NO_REFRESH: "1" },
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
