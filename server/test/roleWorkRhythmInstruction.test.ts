@@ -45,6 +45,7 @@ describe("общая инструкция ролей: ритм работы", ()
       expect(text, mode).toContain("ПОКАЖИ ХОД РАБОТЫ В ЧАТЕ");
       expect(text, mode).toMatch(/одно короткое сообщение/);
       expect(text, mode).toMatch(/Молчание и рассуждения вслух/);
+      expect(text, mode).toContain("taskflow_chat_reply");
     }
   });
 
