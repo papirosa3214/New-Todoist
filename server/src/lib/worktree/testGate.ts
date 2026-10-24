@@ -149,9 +149,8 @@ export async function refreshBaseline(
     }
     const result = await runTests(path.join(dir, "server"), timeoutMs);
     const failed = parseFailedTestFiles(result.output);
-    // `ok` игнорируем намеренно: снимаем картину «как есть», красная она
-    // или нет. Важно только множество файлов.
-    void result.ok;
+    // Таймаут/сбой запуска без результатов — не зелёная база.
+    if (!result.ok && (failed.length === 0 || /\[прервано по таймауту|\[запуск не удался/.test(result.output))) return null;
     return saveBaseline(failed, mainSha);
   } finally {
     try {

@@ -24,7 +24,7 @@ import { logEvent } from "../agentState.js";
 import { getSetting } from "../lib/serverSettings.js";
 import { inspectWorktree } from "../lib/worktree/inspect.js";
 import { cleanupWorktree, sweepTestLeftovers } from "../lib/worktree/cleanup.js";
-import { checkForRegression, loadBaseline, refreshBaseline } from "../lib/worktree/testGate.js";
+import { checkForRegression, loadBaseline, refreshBaseline, parseFailedTestFiles } from "../lib/worktree/testGate.js";
 import { pushMainToHosts, type PushStatus } from "../lib/worktree/pushHosts.js";
 import {
   GitError,
@@ -75,7 +75,7 @@ export const hooks = {
   /** Отправка main во все git-хосты после слияния; тесты подменяют. */
   pushHosts: (live: string): PushStatus => pushMainToHosts(live),
   runTests: async (cwd: string, timeoutMs: number): Promise<{ ok: boolean; output: string }> => {
-    const command = process.env.TASKFLOW_AUTO_MERGE_TEST_CMD || "npm test";
+    const command = process.env.TASKFLOW_AUTO_MERGE_TEST_CMD || "npm test -- --maxWorkers=2";
     return runShell(command, cwd, timeoutMs);
   },
 };
@@ -85,7 +85,8 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<{ ok
     const child = spawn(command, {
       cwd,
       shell: true,
-      env: { ...process.env, CI: "1" },
+      detached: process.platform !== "win32",
+      env: { ...process.env, CI: "1", GRAFT_NO_REFRESH: "1" },
     });
     let output = "";
     const cap = 200_000;
@@ -96,7 +97,10 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<{ ok
     child.stdout?.on("data", collect);
     child.stderr?.on("data", collect);
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      try {
+        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch { /* процесс уже завершён */ }
       resolve({ ok: false, output: `${output}\n[прервано по таймауту ${Math.round(timeoutMs / 1000)} с]` });
     }, timeoutMs);
     timer.unref?.();
@@ -381,11 +385,35 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
 
   // 2. Тесты — тоже в изолированной копии. main ещё не тронут.
   const timeoutMs = getSetting("auto_merge_test_timeout_min") * 60_000;
+  // Дорогой снимок main нужен только для готового слияния, под блокировкой
+  // очереди. Пустой проход, грязный main и конфликт тесты не запускают.
+  const baseline = loadBaseline();
+  if (!baseline || baseline.main_sha !== mainShaBefore) {
+    const refreshed = await refreshBaseline(hooks.runTests, timeoutMs, live);
+    if (!refreshed) {
+      dropScratch(live, taskId);
+      outcome.state = "test_failed";
+      outcome.error = "не удалось снять базу падений main";
+      writeState(taskId, { state: outcome.state, error: outcome.error });
+      return outcome;
+    }
+  }
+  // Владелец мог выключить автоматику во время долгого снимка.
+  if (mergeMode() === "off") {
+    dropScratch(live, taskId);
+    outcome.state = "queued";
+    writeState(taskId, { state: "queued", error: null });
+    return outcome;
+  }
   const tests = await hooks.runTests(path.join(dir, "server"), timeoutMs);
 
   // Решает не цвет прогона, а РЕГРЕССИЯ: на самом main уже есть своя
   // красная база, требовать «все тесты зелёные» значит не сливать никогда.
-  const gate = checkForRegression(tests.output, live);
+  const interrupted = !tests.ok && (parseFailedTestFiles(tests.output).length === 0 ||
+    /\[прервано по таймауту|\[запуск не удался/.test(tests.output));
+  const gate = interrupted
+    ? { ok: false, regressions: [], reason: "прогон тестов не завершён: " + tail(tests.output) }
+    : checkForRegression(tests.output, live);
   if (!gate.ok) {
     dropScratch(live, taskId);
     outcome.state = "test_failed";
@@ -408,6 +436,12 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
     return outcome;
   }
 
+  if (mergeMode() === "off") {
+    dropScratch(live, taskId);
+    outcome.state = "queued";
+    writeState(taskId, { state: "queued", error: null });
+    return outcome;
+  }
   // 4. Двигаем main — только теперь, после зелёных тестов.
   try {
     git(live, ["merge", "--ff-only", integrationBranch]);
@@ -704,14 +738,6 @@ export async function sweepMergedWorkspaces(limit = 20): Promise<number> {
  * хвост тестовых каталогов. Вызывается планировщиком.
  */
 export async function worktreeMaintenancePass(): Promise<number> {
-  // База падений: снимаем, только если её нет или main уехал. Дорогой
-  // прогон, поэтому не каждый проход.
-  const baseline = loadBaseline();
-  const liveNow = liveRepo();
-  const mainSha = gitOrNull(liveNow, ["rev-parse", "main"], 30_000);
-  if (mergeMode() !== "off" && (!baseline || baseline.main_sha !== mainSha)) {
-    await refreshBaseline(hooks.runTests, getSetting("auto_merge_test_timeout_min") * 60_000, liveNow);
-  }
   // Возврат снятых помех — до разбора: вернувшаяся строка сразу же
   // разбирается тем же проходом, а не следующим через 5 минут.
   const unblocked = retryClearedObstructions().length;

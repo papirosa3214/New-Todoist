@@ -26,6 +26,7 @@ for (const key of Object.keys(testEnv)) {
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env: testEnv }).trim();
 
+const realRunTests = hooks.runTests;
 const roots: string[] = [];
 let stashedGitConfig: Array<[string, string]> = [];
 const previousBase = process.env.TASKFLOW_ROLE_WORKTREES;
@@ -267,6 +268,7 @@ describe("очередь автослияния", () => {
     enqueueMerge("t-manual-conflict", "integration_step");
     expect((await processMerge("t-manual-conflict")).state).toBe("conflict");
 
+    saveBaseline([], git(repo.live, "rev-parse", "main"));
     seedBranch(repo, "t-manual-red");
     seedTask("t-manual-red");
     hooks.runTests = async () => ({ ok: false, output: " ❯ test/roles.test.ts (2 tests | 1 failed)" });
@@ -353,5 +355,106 @@ describe("очередь автослияния", () => {
     fs.mkdirSync(scratch, { recursive: true });
     expect(sweepMergeScratch()).toBe(0);
     expect(fs.existsSync(scratch)).toBe(true);
+  });
+});
+
+
+describe("maintenance demand", () => {
+  it("does not refresh a stale baseline when the queue is empty", async () => {
+    const repo = freshRepo();
+    saveBaseline([], "stale");
+    let calls = 0;
+    hooks.runTests = async () => { calls++; return { ok: true, output: "ok" }; };
+    await worktreeMaintenancePass();
+    expect(calls).toBe(0);
+  });
+  it("does not run tests when main is dirty even with queued work", async () => {
+    const repo = freshRepo();
+    seedTask("t-maint-dirty");
+    seedBranch(repo, "t-maint-dirty");
+    enqueueMerge("t-maint-dirty", "integration_step");
+    saveBaseline([], "stale");
+    fs.writeFileSync(path.join(repo.live, "dirty.txt"), "owner work");
+    let calls = 0;
+    hooks.runTests = async () => { calls++; return { ok: true, output: "ok" }; };
+    await worktreeMaintenancePass();
+    expect(calls).toBe(0);
+  });
+});
+
+
+describe("test process lifecycle", () => {
+  it("kills the test descendant on timeout", async () => {
+    const repo = freshRepo();
+    const pidFile = path.join(repo.live, "child.pid");
+    const fixture = path.join(repo.live, "child.cjs");
+    fs.writeFileSync(fixture, `require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(()=>{}, 1000);`);
+    const previous = process.env.TASKFLOW_AUTO_MERGE_TEST_CMD;
+    process.env.TASKFLOW_AUTO_MERGE_TEST_CMD = `node ${fixture}`;
+    let pid: number | undefined;
+    try {
+      const result = await realRunTests(repo.live, 500);
+      pid = Number(fs.readFileSync(pidFile, "utf8"));
+      expect(result.ok).toBe(false);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      let running = false;
+      try { running = !fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].startsWith("Z"); } catch {}
+      expect(running).toBe(false);
+    } finally {
+      if (pid) { try { process.kill(pid, "SIGKILL"); } catch {} }
+      if (previous === undefined) delete process.env.TASKFLOW_AUTO_MERGE_TEST_CMD;
+      else process.env.TASKFLOW_AUTO_MERGE_TEST_CMD = previous;
+    }
+  });
+});
+
+
+describe("merge demand and pause", () => {
+  it("refreshes stale main only for a ready merge", async () => {
+    const repo = freshRepo();
+    seedTask("t-ready-refresh"); seedBranch(repo, "t-ready-refresh");
+    enqueueMerge("t-ready-refresh", "integration_step");
+    saveBaseline([], "stale");
+    let calls = 0;
+    hooks.runTests = async () => { calls++; return { ok: true, output: "ok" }; };
+    expect((await processMerge("t-ready-refresh")).state).toBe("merged");
+    expect(calls).toBe(2);
+  });
+  it("does not move main if disabled during tests", async () => {
+    const repo = freshRepo();
+    seedTask("t-pause-tests"); seedBranch(repo, "t-pause-tests");
+    enqueueMerge("t-pause-tests", "integration_step");
+    const before = git(repo.live, "rev-parse", "main");
+    hooks.runTests = async () => {
+      setSetting("auto_merge_mode", "off", null);
+      return { ok: true, output: "ok" };
+    };
+    try {
+      expect((await processMerge("t-pause-tests")).state).toBe("queued");
+      expect(git(repo.live, "rev-parse", "main")).toBe(before);
+    } finally { setSetting("auto_merge_mode", "on", null); }
+  });
+});
+
+
+describe("interrupted validation", () => {
+  it("does not accept a timed out baseline as green", async () => {
+    const repo = freshRepo();
+    seedTask("t-baseline-timeout"); seedBranch(repo, "t-baseline-timeout");
+    enqueueMerge("t-baseline-timeout", "integration_step");
+    saveBaseline([], "stale");
+    const before = git(repo.live, "rev-parse", "main");
+    hooks.runTests = async () => ({ ok: false, output: "[прервано по таймауту 20 с]" });
+    expect((await processMerge("t-baseline-timeout")).state).toBe("test_failed");
+    expect(git(repo.live, "rev-parse", "main")).toBe(before);
+  });
+  it("does not accept a test startup failure as green", async () => {
+    const repo = freshRepo();
+    seedTask("t-test-crash"); seedBranch(repo, "t-test-crash");
+    enqueueMerge("t-test-crash", "integration_step");
+    const before = git(repo.live, "rev-parse", "main");
+    hooks.runTests = async () => ({ ok: false, output: "npm: command not found" });
+    expect((await processMerge("t-test-crash")).state).toBe("test_failed");
+    expect(git(repo.live, "rev-parse", "main")).toBe(before);
   });
 });
