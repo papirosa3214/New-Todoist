@@ -23,6 +23,7 @@ import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
 import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
 import { startChatAutoClose } from "./runtime/chatAutoClose.js";
+import { closeOrphanedAttempts, startOrphanedAttemptSweep } from "./runtime/orphanedAttempts.js";
 import { startProviderProbe } from "./runtime/providerProbe.js";
 import { startLinearAutoImport } from "./lib/linearAutoImport.js";
 import { startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
@@ -908,6 +909,7 @@ if (isMain) {
     let stopScheduler: (() => void) | null = null;
     let stopStalledWatch: (() => void) | null = null;
     let stopChatAutoClose: (() => void) | null = null;
+    let stopOrphanedAttempts: (() => void) | null = null;
     let stopProviderProbe: (() => void) | null = null;
     let stopLinearAutoImport: (() => void) | null = null;
     let stopLinearSync: (() => void) | null = null;
@@ -920,6 +922,7 @@ if (isMain) {
       stopScheduler?.();
       stopStalledWatch?.();
       stopChatAutoClose?.();
+      stopOrphanedAttempts?.();
       stopProviderProbe?.();
       stopLinearAutoImport?.();
       stopLinearSync?.();
@@ -995,6 +998,7 @@ if (isMain) {
     // Карточка 71651ad0; до этого всё чинил оркестратор руками (А30/А37/Г1-к/Г1-л).
     if (!sandbox) stopStalledWatch = startStalledStepWatch();
     if (!sandbox) stopChatAutoClose = startChatAutoClose();
+    if (!sandbox) stopOrphanedAttempts = startOrphanedAttemptSweep();
     // Метка «провайдер в лимите» снимается по факту сброса: пробный запрос раз в 5 минут
     // (runtime/providerProbe.ts), а не только по пятичасовому таймеру.
     if (!sandbox) stopProviderProbe = startProviderProbe();
@@ -1032,6 +1036,9 @@ if (isMain) {
         if (resumed || blocked) console.log(`[plan] после рестарта: продолжено ${resumed}, остановлено ${blocked}`);
       })
       .catch((error) => console.error("[plan] восстановление брошенных узлов не удалось:", error));
+    // Осиротевшие попытки (владелец 24.10.2026): рестарт обрывает запуски
+    // ролей, их строки в attempts висят открытыми. Закрываем на старте.
+    if (!sandbox) closeOrphanedAttempts();
     // Произвольная глубина (миграция 087): повреждённые связи и циклы
     // не исправляем молча — называем их в журнале.
     try {
