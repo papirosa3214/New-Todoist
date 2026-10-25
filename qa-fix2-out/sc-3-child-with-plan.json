@@ -1,0 +1,5 @@
+[
+  { "goto": "/task/451bb597-0f3d-407a-baa8-b226ce404fff", "note": "дочерняя с approved планом" },
+  { "wait": 1500 },
+  { "snap": "03-child-with-plan" }
+]
