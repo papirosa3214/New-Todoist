@@ -12,7 +12,6 @@ import { purgeTasks } from "../lib/taskPurge.js";
 import {
   ensureTaskChangesLedger,
   ledgerCursor,
-  ledgerSeq,
   listTaskChanges,
 } from "../lib/taskChanges.js";
 import { archiveTask, restoreTask, purgeArchivedTask, listArchivedTasks } from "../lib/taskArchive.js";

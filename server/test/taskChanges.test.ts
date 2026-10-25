@@ -75,7 +75,7 @@ describe("журнал изменений задач", () => {
   it("ловит правку ноды плана совместной работы (ключ — подзапрос к плану)", () => {
     db.prepare(
       "INSERT INTO task_collaboration_plans (id,task_id,revision,profile,created_by) VALUES (?,?,?,?,?)",
-    ).run("delta-plan", "delta-a", 1, "standard", owner);
+    ).run("delta-plan", "delta-a", 1, "research", owner);
     const before = (
       db.prepare("SELECT COUNT(*) AS n FROM task_changes WHERE task_id = 'delta-a'").get() as { n: number }
     ).n;
@@ -126,6 +126,32 @@ describe("GET /api/tasks/changes", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().full).toBe(true);
+  });
+
+  it("курсор идёт по часам сервера, а не застревает на последней записи журнала", async () => {
+    // Последняя запись журнала — час назад (тихая полоса). Курсор всё равно
+    // должен быть «сейчас»: иначе клиент на каждом опросе получал бы ту же
+    // дельту заново, окно чтения росло бы, а через 7 дней вышел бы за
+    // границу хранения журнала — и клиент сделал бы полную перечитку.
+    db.prepare("UPDATE task_changes SET changed_at = datetime('now', '-1 hour')").run();
+
+    const list = await app.inject({ method: "GET", url: "/api/tasks", headers: auth() });
+    const cursor = list.headers["x-taskflow-sync-cursor"] as string;
+    expect(cursor).toBeTruthy();
+
+    const nowSec = Date.now() / 1000;
+    const cursorSec = Date.parse(cursor.replace(" ", "T") + "Z") / 1000;
+    expect(Math.abs(cursorSec - nowSec)).toBeLessThan(5); // курсор ≈ сейчас
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/tasks/changes?since=${encodeURIComponent(cursor)}`,
+      headers: auth(),
+    });
+    const body = response.json();
+    expect(body.full).toBe(false);
+    const serverSec = Date.parse(body.server_time.replace(" ", "T") + "Z") / 1000;
+    expect(Math.abs(serverSec - nowSec)).toBeLessThan(5); // server_time ≈ сейчас
   });
 });
 
