@@ -657,6 +657,19 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         return await asRole(role, p.items === undefined ? "GET" : "PUT", planPath,
           p.items === undefined ? undefined : {base_revision:p.base_revision,items:p.items});
       }),
+    T("taskflow_work_item_submit", "Сдать текущий пункт чатового чек-листа: result — 1–2 предложения, что сделано. Сервер отметит пункт и только после этого выдаст следующий. Пункт — законченный результат, а не вызов инструмента; пункт вне очереди не принимается. Пункт заблокирован — outcome blocked и block_type (dependency | needs_input | capability | transient).",
+      Type.Object({item_id:Type.String(),result:Type.Optional(Type.String()),outcome:Type.Optional(Type.Union([Type.Literal("done"),Type.Literal("blocked")])),block_type:Type.Optional(Type.String()),reason:Type.Optional(Type.String())}),
+      async (p) => {
+        if (!chatContext?.chatId) throw new ToolError("Сдача пункта относится к чатовому ходу: в карточке шаг сдают через taskflow_subtask_done");
+        const body: Json = { item_id: p.item_id, outcome: p.outcome ?? "done" };
+        if (p.result !== undefined) body.result = p.result;
+        if (p.block_type) body.block_type = p.block_type;
+        if (p.reason) body.reason = p.reason;
+        // Ключ идемпотентности и поколение выводит сервер из доставки: модель
+        // не придумывает ключи и не может подделать повтор.
+        if (chatContext.messageId) body.message_id = chatContext.messageId;
+        return await asRole(role, "POST", `/api/chats/${chatContext.chatId}/work-plan/submit`, body);
+      }),
     T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. blocked принимается только с block_type: dependency | needs_input | capability | transient; для needs_input укажи changes_result=true, если меняет «Результат», «Критерии приёмки» или «Границы». При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния. Перед blocked по решаемой причине укажи help_attempt (кого звал, что ответили) или help_skip_reason (почему никто не решит). Пока работа идёт, технический снимок сервер пишет сам; при прогрессе и сдаче снимок от тебя не нужен.",
       Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()), block_type: Type.Optional(Type.String()), changes_result: Type.Optional(Type.Boolean()), snapshot: Type.Optional(SNAPSHOT_SHAPE), help_attempt: Type.Optional(Type.String()), help_skip_reason: Type.Optional(Type.String()) }),
       async (p) => {

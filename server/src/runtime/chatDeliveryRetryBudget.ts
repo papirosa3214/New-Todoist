@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import db from "../db.js";
+import { stopChatWorkPlan } from "../lib/subtaskWorkPlan.js";
 
 export function chatDeliveryMaxRestarts(): number {
   const raw = Number(process.env.TASKFLOW_CHAT_DELIVERY_MAX_RESTARTS
@@ -24,7 +25,7 @@ export function restartDelivery(
 ): "restarted" | "exhausted" | "skipped" {
   return db.transaction(() => {
     const row = db.prepare("SELECT q.*, c.task_id FROM chat_message_queue q LEFT JOIN chats c ON c.id=q.chat_id WHERE q.id=?")
-      .get(id) as {status:string;payload_json:string;chat_id:string;message_id:string|null;task_id:string|null}|undefined;
+      .get(id) as {status:string;payload_json:string;chat_id:string;role_id:string;message_id:string|null;task_id:string|null}|undefined;
     if (!row || row.status !== from) return "skipped";
     let payload: Record<string, unknown> = {};
     try {
@@ -39,6 +40,9 @@ export function restartDelivery(
       db.prepare("UPDATE chat_message_queue SET status='failed',finished_at=datetime('now'),updated_at=datetime('now'),payload_json=? WHERE id=? AND status=?")
         .run(JSON.stringify(payload),id,from);
       if (notify) {
+        // Общий бюджет повторов исчерпан окончательно: план останавливается с
+        // явной причиной, второго молчаливого повтора нет (карточка b504958a, §7).
+        stopChatWorkPlan(row.chat_id, row.role_id, "budget_exhausted");
         const explanation = payload.failureReason === "queue_wait_timeout" ? "истёк срок ожидания очереди"
           : {execution_failed:"ход завершился ошибкой",lease_expired:"потеряна аренда выполнения",server_restarted:"сервер перезапустился до ответа"}[reason];
         const text = `Роль не смогла ответить: исчерпан общий бюджет повторов (${used}). Причина: ${explanation}. Чат ${row.chat_id}, сообщение ${row.message_id ?? id}. Повтори сообщение в чате, чтобы продолжить вручную.`;

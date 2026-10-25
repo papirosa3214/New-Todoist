@@ -27,6 +27,8 @@ let slotTitleOf: import("better-sqlite3").Statement | null = null;
 let messageSequenceOf: import("better-sqlite3").Statement | null = null;
 let replySenderNameOf: import("better-sqlite3").Statement | null = null;
 let reactionsOf: import("better-sqlite3").Statement | null = null;
+let roleKeyOfUser: import("better-sqlite3").Statement | null = null;
+let deliveryStatusOf: import("better-sqlite3").Statement | null = null;
 
 /** Подпись по имени для шагов из БД; инструментам трекера без подписи. */
 function stepDetails(steps: SavedSteps): SavedSteps {
@@ -57,7 +59,8 @@ export function formatChatMessage(message: any) {
   messageSequenceOf ??= db.prepare("SELECT rowid AS sequence FROM chat_messages WHERE id=?");
   replySenderNameOf ??= db.prepare("SELECT u.name FROM chat_messages m JOIN users u ON u.id=m.from_user_id WHERE m.id=?");
   reactionsOf ??= db.prepare("SELECT user_id,emoji FROM chat_message_reactions WHERE message_id=? ORDER BY user_id");
-
+  roleKeyOfUser ??= db.prepare("SELECT role_key FROM users WHERE id=?");
+  deliveryStatusOf ??= db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=? AND role_id=? AND message_id=? ORDER BY created_at DESC LIMIT 1");
   const event = message.message_type === "system" || !!planTopicEventOf.get(message.id);
   // role_envelope_json — уже нормализованный конверт (JSON.stringify при записи):
   // парсим напрямую, а не через parseRoleContractV1 (там регекс + полная валидация
@@ -94,6 +97,22 @@ export function formatChatMessage(message: any) {
   if (typeof message.quick_replies === "string") {
     try { quickReplies = JSON.parse(message.quick_replies); } catch { quickReplies = null; }
   }
+  // Различение «сообщение сохранено» и «передано исполнителю» (карточка
+  // b504958a, контракт §10): считается по очереди доставки, отдельного
+  // хранилища нет. У сообщений человека признака нет — он не ходит в роль.
+  // Имя не `delivery_state`: так уже называется колонка chat_messages про
+  // доставку адресного сообщения человеку (миграция 130) — это другое.
+  let deliveryState: string | undefined;
+  if (message.chat_id && (roleKeyOfUser!.get(message.from_user_id) as { role_key: string | null } | undefined)?.role_key) {
+    const row = deliveryStatusOf!.get(message.chat_id, message.from_user_id, message.id) as { status: string } | undefined;
+    deliveryState = !row
+      ? "saved"
+      : row.status === "picked" || row.status === "done"
+        ? "accepted"
+        : row.status === "pending"
+          ? "queued"
+          : "stale";
+  }
   return {
     ...messageFields,
     sequence: message.sequence ?? (messageSequenceOf!.get(message.id) as { sequence: number } | undefined)?.sequence ?? null,
@@ -101,6 +120,7 @@ export function formatChatMessage(message: any) {
     ...(event ? { from_user_id: "taskflow_system", from_user_name: "Система", from_user_initials: "С", from_user_avatar_url: null } : {}),
     reply_to_sender_name: message.reply_to_message_id ? (replySenderNameOf!.get(message.reply_to_message_id) as { name: string } | undefined)?.name : null,
     reactions: reactionsOf!.all(message.id),
+    ...(deliveryState ? { queue_delivery_state: deliveryState } : {}),
     checklist_state: checklistStateOfMessage(message.id),
     attachments: attachmentsOf.all(message.id),
     quick_replies: quickReplies,

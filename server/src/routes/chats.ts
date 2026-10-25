@@ -6,7 +6,20 @@ import { prepareChatValue } from "../runtime/chatPreparationDeadline.js";
 import {chatExecutionMode,parseChatExecutionMode,isCardHandoffCommand} from "../runtime/chatExecutionMode.js";
 import {offerChatSteering} from "../runtime/chatSteering.js";
 import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
-import { clearChatWorkPlan, isWorkPlanFinished, readChatWorkPlan, readChatWorkPlans, saveChatWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
+import {
+  ChatItemSubmitError,
+  ChatPlanWriteRejection,
+  chatDeliveryRow,
+  chatPlanView,
+  chatPlanViewOf,
+  clearChatWorkPlan,
+  readChatWorkPlan,
+  readChatWorkPlans,
+  saveChatWorkPlan,
+  stopChatWorkPlan,
+  submitChatWorkItem,
+  validateWorkPlan,
+} from "../lib/subtaskWorkPlan.js";
 import {hasCoordinationCard,registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination,markDeliveredToWork,markCoordinationAnswered} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
@@ -1206,14 +1219,32 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // Рабочие чек-листы ролей в чате (21.10.2026): полоска над полем ввода.
+  // 25.10.2026 (карточка b504958a): клиент ничего не вычисляет сам — сервер
+  // отдаёт представление плана с текущим пунктом и состоянием каждого пункта.
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plans", { preHandler: authPre }, async (req: any, reply) => {
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
-    // Выполненный целиком план закрыт — полоска его не показывает.
-    return { plans: readChatWorkPlans(req.params.id).filter((p) => p.items.length && !isWorkPlanFinished(p.items)) };
+    // Выполненный целиком план закрыт — полоска его не показывает; остановленный
+    // остаётся видимым: владелец должен видеть, что работа остановлена и почему.
+    return {
+      plans: readChatWorkPlans(req.params.id)
+        .map((plan) => chatPlanViewOf(plan))
+        .filter((plan) => plan.items.length && plan.status !== "finished"),
+    };
   });
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
-    return readChatWorkPlan(req.params.id, req.userId) ?? { chat_id: req.params.id, role_id: req.userId, revision: 0, items: [] };
+    return (
+      chatPlanView(req.params.id, req.userId) ?? {
+        chat_id: req.params.id,
+        role_id: req.userId,
+        revision: 0,
+        status: "active",
+        stop_reason: null,
+        stopped_at: null,
+        current_item_id: null,
+        items: [],
+      }
+    );
   });
   // Пишет только сама роль — участник чата, и только свой план.
   app.put<{ Params: { id: string }; Body: { base_revision?: unknown; items?: unknown } }>("/api/chats/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
@@ -1225,16 +1256,82 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     try { items = validateWorkPlan(req.body?.items); }
     catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "Неверный план" }); }
     const base = Number(req.body?.base_revision ?? 0);
+    // Сообщение-поручение план открывает сервер: им становится то, что роль
+    // сейчас исполняет, а не то, что прислала модель.
+    const source = chatDeliveryRow(chatId, req.userId)?.message_id ?? null;
     try {
-      const plan = saveChatWorkPlan(chatId, req.userId, Number.isFinite(base) ? base : 0, items);
-      broadcastToUsers(memberIds(chatId).concat(ownerIdsForChat(chatId)), { type: "chat:work_plan", chat_id: chatId, plan });
-      return plan;
+      const plan = saveChatWorkPlan(chatId, req.userId, Number.isFinite(base) ? base : 0, items, { sourceMessageId: source });
+      const view = chatPlanViewOf(plan);
+      broadcastToUsers(memberIds(chatId).concat(ownerIdsForChat(chatId)), { type: "chat:work_plan", chat_id: chatId, plan: view });
+      return view;
     } catch (error) {
-      if (error instanceof Error && error.message === "revision_conflict")
-        return reply.code(409).send({ error: "План уже обновлён: прочитай его заново и возьми свежий revision", current: readChatWorkPlan(chatId, req.userId) });
+      if (error instanceof ChatPlanWriteRejection) {
+        const body = { error: error.message, code: error.code, ...error.extra };
+        if (error.code === "revision_conflict")
+          return reply.code(409).send({ ...body, error: "План уже обновлён: прочитай его заново и возьми свежий revision", current: chatPlanView(chatId, req.userId) });
+        return reply.code(409).send({ ...body, current: chatPlanView(chatId, req.userId) });
+      }
       throw error;
     }
   });
+  // Явная сдача текущего пункта (25.10.2026): сервер отмечает пункт и только
+  // затем выдаёт следующий. Прямой переход через несданный пункт отвергается.
+  app.post<{ Params: { id: string }; Body: { item_id?: unknown; result?: unknown; outcome?: unknown; block_type?: unknown; reason?: unknown; message_id?: unknown } }>(
+    "/api/chats/:id/work-plan/submit",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const chatId = req.params.id;
+      const roleKey = roleFromUserId(req.userId);
+      if (!roleKey) return reply.code(403).send({ error: "Пункт сдаёт роль" });
+      if (!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(chatId, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const itemId = typeof req.body?.item_id === "string" ? req.body.item_id.trim() : "";
+      if (!itemId) return reply.code(400).send({ error: "item_id обязателен" });
+      const outcome = req.body?.outcome === "blocked" ? "blocked" : "done";
+      const blockType = typeof req.body?.block_type === "string" ? req.body.block_type.trim() : null;
+      if (blockType && !["dependency", "needs_input", "capability", "transient"].includes(blockType))
+        return reply.code(400).send({ error: "block_type: dependency | needs_input | capability | transient" });
+      const messageId = typeof req.body?.message_id === "string" && req.body.message_id ? req.body.message_id : undefined;
+      try {
+        const result = submitChatWorkItem({
+          chatId,
+          roleId: req.userId,
+          itemId,
+          result: typeof req.body?.result === "string" ? req.body.result : null,
+          outcome,
+          blockType: blockType as any,
+          reason: typeof req.body?.reason === "string" ? req.body.reason : null,
+          messageId,
+        });
+        broadcastToUsers(memberIds(chatId).concat(ownerIdsForChat(chatId)), { type: "chat:work_plan", chat_id: chatId, plan: result.view });
+        return result;
+      } catch (error) {
+        if (error instanceof ChatItemSubmitError)
+          return reply.code(error.rejection.status).send({
+            error: error.rejection.message,
+            code: error.rejection.code,
+            ...(error.rejection.extra ?? {}),
+          });
+        throw error;
+      }
+    },
+  );
+  // Стоп плана — не «пауза»: остановленный план новые пункты не принимает,
+  // продолжить можно только новым планом. Живые ходы роли в этом чате гасим.
+  app.post<{ Params: { id: string }; Body: { role_id?: unknown } }>(
+    "/api/chats/:id/work-plan/stop",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const chatId = req.params.id;
+      if (!isMember(chatId, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+      const roleId = typeof req.body?.role_id === "string" && req.body.role_id ? req.body.role_id : req.userId;
+      const view = stopChatWorkPlan(chatId, roleId, "owner_stop");
+      if (!view) return reply.code(404).send({ error: "Активного плана нет" });
+      broadcastToUsers(memberIds(chatId).concat(ownerIdsForChat(chatId)), { type: "chat:work_plan", chat_id: chatId, plan: view });
+      const stopped = await cancelChatRunsFor(chatId, roleId);
+      return { plan: view, stopped };
+    },
+  );
 
   // Новая сессия без удаления истории (владелец 25.09.2026, docs/ПЛАН
   // Супер Помощник владельца/): сбрасывает pi_session_id роли в этом чате — агент

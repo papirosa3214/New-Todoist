@@ -5186,6 +5186,33 @@ const migrations: Migration[] = [
       }
     },
   },
+
+  // 25.10.2026, карточка b504958a (контракт note://115ba2ac-6a1d-45ac-a92f-2081c6ecf0c2):
+  // чатовый чек-лист перестаёт быть подсказкой модели. `items_json` остаётся
+  // тем, что пишет роль (порядок и названия), а состояние пунктов и самого
+  // плана хранит сервер в `outcomes_json` и `status`. Только ADD COLUMN:
+  // таблицу не пересобираем и CHECK не добавляем (старые строки читаются как
+  // активный план без сдач).
+  {
+    id: "176_chat_work_plan_outcomes",
+    description:
+      "chat_work_plans: серверное состояние плана (status/stop_reason/stopped_at) и записи сдачи пунктов (outcomes_json)",
+    up: () => {
+      const cols = new Set(
+        (
+          db.prepare("PRAGMA table_info(chat_work_plans)").all() as Array<{ name: string }>
+        ).map((c) => c.name),
+      );
+      const колонка = (имя: string, sql: string) => {
+        if (!cols.has(имя)) db.exec(`ALTER TABLE chat_work_plans ADD COLUMN ${sql}`);
+      };
+      колонка("status", "status TEXT NOT NULL DEFAULT 'active'");
+      колонка("stop_reason", "stop_reason TEXT");
+      колонка("stopped_at", "stopped_at TEXT");
+      колонка("source_message_id", "source_message_id TEXT");
+      колонка("outcomes_json", "outcomes_json TEXT NOT NULL DEFAULT '{}'");
+    },
+  },
 ];
 /**
  * Опции прогона миграций.

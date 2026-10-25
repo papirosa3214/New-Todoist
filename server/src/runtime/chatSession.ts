@@ -17,6 +17,7 @@ import {
   type MessageDelivery,
 } from "./chatQueue.js";
 import { currentChatGeneration } from "./chatQueue.js";
+import { markChatItemBlockedByServer } from "../lib/subtaskWorkPlan.js";
 import { logEvent } from "../agentState.js";
 
 // Хранилище живых онлайн-сессий Пи: одна строка на (чат, роль).
@@ -282,6 +283,10 @@ export function enqueueChatReply<T>(
       if (deliveryId) {
         if (scheduledDeliveries.get(deliveryId) === nextDone) scheduledDeliveries.delete(deliveryId);
         failPendingMessageDelivery(deliveryId, "queue_wait_timeout");
+        // Исчерпан срок ожидания очереди: текущий пункт честно помечаем
+        // заблокированным с причиной, а не оставляем «тихо не начатым»
+        // (карточка b504958a, контракт §7).
+        markChatItemBlockedByServer(chatId, roleId, "истёк срок ожидания очереди чата");
       }
       reject(Object.assign(new Error("Истёк срок ожидания очереди чата"), {code:"CHAT_QUEUE_WAIT_TIMEOUT"}));
       // Keep FIFO reserved until the previous writer exits. Never steal a live session.
