@@ -162,6 +162,13 @@ export function registerNotificationRoutes(app: FastifyInstance) {
     const privacyClause = isOwner(req.userId)
       ? "(t.id IS NULL OR p.id IS NULL OR p.archived_at IS NULL)"
       : "(t.id IS NULL OR p.id IS NULL OR (p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL)";
+    // `?unread=true` — только непрочитанные. Необязательный параметр:
+    // клиент без него получает полный список, как раньше (старые сборки
+    // не ломаются). Нужен телефону: лента уведомлений весит ~463 КБ
+    // (61 КБ в gzip), а на старте и при переподключении клиенту достаточно
+    // счётчика непрочитанных, а не всей ленты.
+    const unreadOnly = req.query?.unread === "true" || req.query?.unread === "1";
+    const unreadClause = unreadOnly ? "AND n.read = 0" : "";
     return db
       .prepare(
         `
@@ -174,6 +181,7 @@ export function registerNotificationRoutes(app: FastifyInstance) {
       LEFT JOIN projects p ON t.project_id = p.id
       LEFT JOIN users a ON n.actor_id = a.id
       WHERE n.user_id = ? AND ${privacyClause}
+        ${unreadClause}
         AND (n.task_id IS NULL OR t.archived_at IS NULL)
         AND NOT (n.type IN ('assigned','commented','reviewed','agent_state') AND EXISTS (SELECT 1 FROM users owner WHERE owner.id=n.user_id AND owner.role='owner'))
       ORDER BY n.created_at DESC
