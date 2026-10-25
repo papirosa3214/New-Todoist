@@ -93,18 +93,27 @@ export function ensureTaskChangesLedger(): void {
     .map((c) => `NEW."${c}" IS NOT OLD."${c}"`)
     .join(" OR ");
 
-  db.exec(`CREATE TRIGGER IF NOT EXISTS tf_task_changes_ins AFTER INSERT ON tasks BEGIN
+  // Триггеры пересоздаём, а не «если нет»: прежняя версия ставила условие
+  // «колонка изменилась» и на INSERT/DELETE, где строки OLD не существует, —
+  // SQLite отвергал такой триггер, и любая вставка в дочерние таблицы
+  // падала с «no such column: OLD.id». Поэтому DROP перед CREATE: иначе
+  // сломанный триггер, уже лежащий в базе, пережил бы исправление кода.
+  db.exec(`DROP TRIGGER IF EXISTS tf_task_changes_ins`);
+  db.exec(`DROP TRIGGER IF EXISTS tf_task_changes_upd`);
+  db.exec(`DROP TRIGGER IF EXISTS tf_task_changes_del`);
+
+  db.exec(`CREATE TRIGGER tf_task_changes_ins AFTER INSERT ON tasks BEGIN
     INSERT INTO task_changes(task_id, changed_at, creator_id, assignee_id, project_id)
     VALUES (new.id, datetime('now'), new.creator_id, new.assignee_id, new.project_id);
   END;`);
 
-  db.exec(`CREATE TRIGGER IF NOT EXISTS tf_task_changes_upd AFTER UPDATE ON tasks
+  db.exec(`CREATE TRIGGER tf_task_changes_upd AFTER UPDATE ON tasks
     WHEN ${changedCond || "1 = 1"} BEGIN
     INSERT INTO task_changes(task_id, changed_at, creator_id, assignee_id, project_id)
     VALUES (new.id, datetime('now'), new.creator_id, new.assignee_id, new.project_id);
   END;`);
 
-  db.exec(`CREATE TRIGGER IF NOT EXISTS tf_task_changes_del AFTER DELETE ON tasks BEGIN
+  db.exec(`CREATE TRIGGER tf_task_changes_del AFTER DELETE ON tasks BEGIN
     INSERT INTO task_changes(task_id, changed_at, deleted, creator_id, assignee_id, project_id)
     VALUES (old.id, datetime('now'), 1, old.creator_id, old.assignee_id, old.project_id);
   END;`);
@@ -123,12 +132,20 @@ export function ensureTaskChangesLedger(): void {
       db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
     ).map((c) => c.name);
     if (!cols.length) continue;
+    if (!cols.includes(key)) continue;
     const cond = cols.map((c) => `NEW."${c}" IS NOT OLD."${c}"`).join(" OR ");
     for (const op of ["INSERT", "UPDATE", "DELETE"]) {
       const row = op === "DELETE" ? "OLD" : "NEW";
-      db.exec(`CREATE TRIGGER IF NOT EXISTS tf_task_changes_${table}_${op.toLowerCase()}
+      const name = `tf_task_changes_${table}_${op.toLowerCase()}`;
+      db.exec(`DROP TRIGGER IF EXISTS ${name}`);
+      // Условие «что-то изменилось» ставим ТОЛЬКО на UPDATE: в триггере
+      // INSERT строки OLD нет, в триггере DELETE — нет NEW, и SQLite
+      // отвергает такую ссылку («no such column: OLD.id»). Вставка и
+      // удаление и без условия являются изменением.
+      const when = op === "UPDATE" ? `WHEN ${cond || "1 = 1"} ` : "";
+      db.exec(`CREATE TRIGGER ${name}
         AFTER ${op} ON ${table}
-        WHEN ${cond || "1 = 1"} BEGIN
+        ${when}BEGIN
           INSERT INTO task_changes(task_id, changed_at) VALUES (${row}.${key}, datetime('now'));
         END;`);
     }
