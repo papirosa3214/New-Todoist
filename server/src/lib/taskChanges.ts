@@ -78,6 +78,25 @@ export function ensureTaskChangesLedger(): void {
     assignee_id TEXT,
     project_id TEXT
   )`);
+  // Граница покрытия журнала: момент, с которого журнал ВЕДЁТ историю.
+  // Хранится в базе, а не в памяти процесса: перезапуск сервера не должен
+  // обнулять границу, иначе клиенты со старыми курсорами получили бы
+  // «журнал пуст» и перечитывали бы список целиком.
+  db.exec(`CREATE TABLE IF NOT EXISTS task_changes_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`);
+  // Если журнал уже наполнен (например, сервер обновился поверх прежней
+  // версии), граница покрытия — самая ранняя сохранившаяся запись, а не
+  // момент установки: иначе первые часы после обновления клиенты с
+  // курсорами чуть раньше получали бы «полную перечитку» вместо дельты.
+  db.exec(
+    `INSERT OR IGNORE INTO task_changes_meta(key, value)
+     VALUES ('started_at', COALESCE(
+       (SELECT MIN(changed_at) FROM task_changes),
+       datetime('now')
+     ))`,
+  );
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_task_changes_changed_at ON task_changes(changed_at)`,
   );
@@ -119,34 +138,62 @@ export function ensureTaskChangesLedger(): void {
   END;`);
 
   // Дочерние таблицы. Их правка меняет карточку (счётчик подзадач, лента
-  // комментариев, метки), но строку tasks не трогает — без этих триггеров
-  // дельта «потеряла» бы такие изменения.
-  const children: Array<[string, string]> = [
-    ["subtasks", "task_id"],
-    ["comments", "task_id"],
-    ["task_events", "task_id"],
-    ["task_labels", "task_id"],
+  // комментариев, метки, план совместной работы), но строку tasks не трогает —
+  // без этих триггеров дельта «потеряла» бы такие изменения.
+  //
+  // Набор таблиц и исключаемых колонок — ТОТ ЖЕ, что у реальтайма
+  // (`lib/realtimeInvalidation.ts`): если реальтайм считает правку важной,
+  // дельта обязана её увидеть, и наоборот. Расхождение в обе стороны
+  // ломает либо список (дельта молчит, а список изменился) либо журнал
+  // (записи нет, а карточка менялась).
+  const children: Array<{
+    table: string;
+    // Ключ — выражение, возвращающее task_id. Для прямых таблиц это
+    // колонка, для нодов плана — подзапрос к плану: у них task_id нет.
+    expr: (row: "OLD" | "NEW") => string;
+    excluded?: string[];
+  }> = [
+    { table: "subtasks", expr: (r) => `${r}.task_id`, excluded: ["updated_at", "agent_heartbeat_at", "lease_until"] },
+    { table: "comments", expr: (r) => `${r}.task_id` },
+    { table: "task_events", expr: (r) => `${r}.task_id` },
+    { table: "task_labels", expr: (r) => `${r}.task_id` },
+    { table: "task_reports", expr: (r) => `${r}.task_id` },
+    { table: "task_preparation_jobs", expr: (r) => `${r}.task_id`, excluded: ["updated_at", "worker_id", "lease_until"] },
+    { table: "task_collaboration_plans", expr: (r) => `${r}.task_id`, excluded: ["updated_at"] },
+    { table: "task_collaboration_plan_nodes", expr: (r) => `(SELECT task_id FROM task_collaboration_plans WHERE id = ${r}.plan_id)` },
+    { table: "task_collaboration_plan_edges", expr: (r) => `(SELECT task_id FROM task_collaboration_plans WHERE id = ${r}.plan_id)` },
+    { table: "role_run_jobs", expr: (r) => `${r}.task_id`, excluded: ["updated_at", "lease_expires_at", "lease_owner"] },
   ];
-  for (const [table, key] of children) {
+  for (const { table, expr, excluded = [] } of children) {
     const cols = (
       db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
     ).map((c) => c.name);
     if (!cols.length) continue;
-    if (!cols.includes(key)) continue;
-    const cond = cols.map((c) => `NEW."${c}" IS NOT OLD."${c}"`).join(" OR ");
+    const meaningful = cols.filter((c) => !excluded.includes(c));
+    const cond = meaningful
+      .map((c) => `NEW."${c}" IS NOT OLD."${c}"`)
+      .join(" OR ");
     for (const op of ["INSERT", "UPDATE", "DELETE"]) {
       const row = op === "DELETE" ? "OLD" : "NEW";
       const name = `tf_task_changes_${table}_${op.toLowerCase()}`;
+      const keyExpr = expr(row);
       db.exec(`DROP TRIGGER IF EXISTS ${name}`);
       // Условие «что-то изменилось» ставим ТОЛЬКО на UPDATE: в триггере
       // INSERT строки OLD нет, в триггере DELETE — нет NEW, и SQLite
       // отвергает такую ссылку («no such column: OLD.id»). Вставка и
       // удаление и без условия являются изменением.
-      const when = op === "UPDATE" ? `WHEN ${cond || "1 = 1"} ` : "";
+      //
+      // Второе условие — ключ должен быть непустым: у части записей
+      // (например, role_run_jobs без привязки к карточке) task_id пуст, и
+      // такая запись в журнале превратилась бы в «изменилась карточка ""».
+      const guards: string[] = [];
+      if (op === "UPDATE") guards.push(cond || "1 = 1");
+      guards.push(`(${keyExpr}) IS NOT NULL AND (${keyExpr}) <> ''`);
       db.exec(`CREATE TRIGGER ${name}
         AFTER ${op} ON ${table}
-        ${when}BEGIN
-          INSERT INTO task_changes(task_id, changed_at) VALUES (${row}.${key}, datetime('now'));
+        WHEN ${guards.join(" AND ")} BEGIN
+          INSERT INTO task_changes(task_id, changed_at)
+          VALUES (${keyExpr}, datetime('now'));
         END;`);
     }
   }
@@ -224,7 +271,22 @@ export function listTaskChanges(since: string | null): {
   const oldest = db
     .prepare("SELECT MIN(changed_at) AS m FROM task_changes")
     .get() as { m?: string | null };
-  if (oldest?.m && cursor < oldest.m) return { rows: [], full: true };
+  // Граница покрытия: журнал ведёт историю с момента установки. Записи
+  // журнала обрезаются по сроку хранения, поэтому покрытие начинается с
+  // более позднего из двух: «с установки» и «с самой старой сохранившейся
+  // записи».
+  const startedAt = (
+    db
+      .prepare("SELECT value FROM task_changes_meta WHERE key = 'started_at'")
+      .get() as { value?: string } | undefined
+  )?.value;
+  const coverageStart = [startedAt, oldest?.m]
+    .filter((v): v is string => typeof v === "string" && v.length > 0)
+    .sort()
+    .pop();
+  // Курсор старше границы покрытия (журнал обрезан по сроку хранения или
+  // его ещё не было) — полная перечитка.
+  if (!coverageStart || cursor < coverageStart) return { rows: [], full: true };
 
   const from = new Date(
     Date.parse(cursor.replace(" ", "T") + "Z") - CURSOR_MARGIN_SECONDS * 1000,
