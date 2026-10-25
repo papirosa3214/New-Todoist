@@ -19,6 +19,7 @@ import {
   type ChatWorkMode,
 } from "./chatWorkMode.js";
 import { getSetting } from "../lib/serverSettings.js";
+import { chatWorkPlanPrompt } from "../lib/subtaskWorkPlan.js";
 import {
   chatInstructionArgs,
   chatSystemPrompt,
@@ -1443,10 +1444,15 @@ export async function startChatRun(
       );
     if (!piModel) throw new ModelNotAvailableError(model, provider);
 
+    // Чек-лист чата ведёт сервер (владелец 25.10.2026): в начало хода кладём
+    // не просьбу «не забудь», а сам план с текущим этапом — роль не держит его
+    // в голове и не выбирает шаг по ощущению.
+    const chatPlanPrompt = chatWorkPlanPrompt(input.chatId, input.roleId);
     const systemPrompt =
       (await preparation.wait(chatSystemPrompt(role, mode, cwd))) + "\n\n" + chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)) +
       "\n\n" +
-      UNIVERSAL_INSTRUCTION;
+      UNIVERSAL_INSTRUCTION +
+      (chatPlanPrompt ? "\n\n" + chatPlanPrompt : "");
     const resourceLoader = await preparation.wait(createTaskResourceLoader(
       role,
       cwd,

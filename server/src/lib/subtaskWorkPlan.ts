@@ -60,3 +60,34 @@ export function saveChatWorkPlan(chatId: string, roleId: string, revision: numbe
 export function clearChatWorkPlan(chatId: string, roleId: string): void {
   db.prepare("DELETE FROM chat_work_plans WHERE chat_id=? AND role_id=?").run(chatId, roleId);
 }
+
+/** Плана нет: правило про чек-лист на этот ход (владелец 25.10.2026). */
+export const CHAT_PLAN_MISSING_PROMPT =
+  "ЧЕК-ЛИСТ В ЧАТЕ: плана на эту сессию пока нет. Если поручение больше одного шага — ПЕРВЫМ действием заведи его через taskflow_work_plan: 3–7 этапов, у каждого понятно, что считается сделанным, ровно один in_progress. Сервер сам читает твой план, выдаёт тебе текущий этап и закрывает план, когда все пункты done. Для простого вопроса или короткого ответа план не нужен.";
+
+/** Текст серверного ведения по чатовому плану. Чистая функция: без БД и без
+ *  состояния — так её видно в тесте. Пустая строка = плана нет либо он закрыт. */
+export function chatWorkPlanPromptText(items: WorkPlanItem[], revision: number): string {
+  if (!items.length) return CHAT_PLAN_MISSING_PROMPT;
+  if (isWorkPlanFinished(items)) return "";
+  const current = items.find((item) => item.state === "in_progress") ?? items.find((item) => item.state === "pending")!;
+  const list = items
+    .map((item) => `${item.state === "done" ? "✓" : item.id === current.id ? "▶" : "•"} ${item.title}`)
+    .join("\n");
+  return [
+    `ТВОЙ ЧЕК-ЛИСТ В ЧАТЕ (его ведёт сервер, revision ${revision}):`,
+    list,
+    "",
+    `Текущий этап — «${current.title}» (id ${current.id}). Работай по нему, остальные не бери.`,
+    `- начал этап — отметь in_progress, выполнил — done: taskflow_work_plan с полным списком и base_revision ${revision};`,
+    "- по ходу пиши владельцу коротко, что делаешь и что вышло по этапу;",
+    "- закрыл этап — сервер выдаст следующий на следующем ходу;",
+    "- когда все этапы done, сервер закроет план сам: полоска исчезнет, работа считается законченной и по ней даётся отчёт.",
+  ].join("\n");
+}
+
+/** Что сервер подкладывает роли в начало чатового хода: текущий этап её плана. */
+export function chatWorkPlanPrompt(chatId: string, roleId: string): string {
+  const plan = readChatWorkPlan(chatId, roleId);
+  return plan ? chatWorkPlanPromptText(plan.items, plan.revision) : CHAT_PLAN_MISSING_PROMPT;
+}
