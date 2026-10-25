@@ -102,15 +102,20 @@ export function createToolLoader(options: {
         : [];
       const toActivate = [...new Set([...wanted, ...matched])].filter((name) => !isActive(name));
       const activated = activate(toActivate);
+      const alreadyActive = [...new Set([...wanted, ...matched])].filter(
+        (name: string) => isActive(name) && !activated.includes(name),
+      );
       const payload = {
         activated,
-        already_active: [...new Set([...wanted, ...matched])].filter((name) => isActive(name) && !activated.includes(name)),
+        already_active: alreadyActive,
         unknown,
         matches: matched,
         available: index(),
         note: activated.length
           ? "Инструменты подключены — вызывай их по именам, схема придёт в следующем запросе."
-          : "Ничего не подключено: уточни запрос или назови операции из индекса.",
+          : alreadyActive.length
+            ? "Эти инструменты уже подключены — вызывай их по именам."
+            : "Ничего не подключено: уточни запрос или назови операции из индекса.",
       };
       return { content: [{ type: "text", text: JSON.stringify(payload) }], details: { activated } };
     },
