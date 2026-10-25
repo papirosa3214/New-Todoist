@@ -31,6 +31,7 @@ import {
   evidenceRefLooksValid,
   metricWindow,
 } from "../runtime/coordinationResolver.read.js";
+import { readChatTurns } from "../lib/roleLoadChatTurns.js";
 
 const MAX_EVIDENCE = 7;
 const MAX_NOTES = 500;
@@ -605,6 +606,20 @@ const openSlotsOut = openRows.map((t) => ({
   since: t.since ? toIsoString(t.since) : null,
 }));
 
+// 5.4 Ходы ролей в чате без карточки. Их нет в attempts (там task_id
+// обязателен), но по времени работы они — такая же нагрузка роли.
+// Название работы — из отчёта роли по ходу (см. lib/roleLoadChatTurns).
+const chatTurnsOut = readChatTurns(db, fromIso, toIso).map((t) => ({
+  id: t.id,
+  chat_id: t.chat_id,
+  chat_title: t.chat_title,
+  role_id: t.role_id,
+  role_key: t.role_key,
+  started_at: toIsoString(t.started_at),
+  ended_at: toIsoString(t.ended_at),
+  title: t.title,
+}));
+
 return {
   window: windowKey,
   from: fromIso,
@@ -612,6 +627,7 @@ return {
   now: nowIso,
   roles: rolesOut,
   attempts: attemptsOut,
+  chat_turns: chatTurnsOut,
   active_now: activeNowOut,
   open_slots: openSlotsOut,
 };

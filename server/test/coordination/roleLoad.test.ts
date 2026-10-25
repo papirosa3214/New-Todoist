@@ -158,6 +158,14 @@ describe("GET /api/coordination/role-load", () => {
         role_key: string | null;
       }>;
       open_slots: Array<{ id: string; task_title: string; role_key: string | null }>;
+      chat_turns: Array<{
+        id: string;
+        chat_id: string;
+        role_key: string | null;
+        started_at: string;
+        ended_at: string;
+        title: string;
+      }>;
     };
     expect(body.window).toBe("24h");
     expect(typeof body.from).toBe("string");
@@ -167,6 +175,7 @@ describe("GET /api/coordination/role-load", () => {
     expect(Array.isArray(body.attempts)).toBe(true);
     expect(Array.isArray(body.active_now)).toBe(true);
     expect(Array.isArray(body.open_slots)).toBe(true);
+    expect(Array.isArray(body.chat_turns)).toBe(true);
     // builder включена и идёт сразу — должен быть в roles.
     const builder = body.roles.find((r) => r.key === "builder");
     expect(builder).toBeTruthy();
