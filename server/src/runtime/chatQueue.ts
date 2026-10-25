@@ -415,3 +415,31 @@ export function _resetChatQueueForTests(): void {
   db.prepare("DELETE FROM chat_message_queue").run();
   db.prepare("DELETE FROM chat_session_generation").run();
 }
+
+/**
+ * Fence every unfinished delivery of a pair (chat, role) whose generation is
+ * older than `generation`. Both `pending` and `picked` rows are affected: a
+ * picked row is a run that was in flight when the boundary happened, and its
+ * late result must not be replayed after a restart.
+ *
+ * Used by the owner-interrupt boundary (card 252c400e): after the boundary the
+ * old generation is dead, so its deliveries are closed as superseded instead
+ * of being picked up again by the recovery sweep.
+ */
+export function fencePairDeliveries(input: {
+  chatId: string;
+  roleId: string;
+  generation: number;
+}): number {
+  const changed = (
+    db
+      .prepare(
+        `UPDATE chat_message_queue
+            SET status='superseded', finished_at=datetime('now'), updated_at=datetime('now')
+          WHERE chat_id=? AND role_id=? AND status IN ('pending','picked')
+            AND session_generation < ?`,
+      )
+      .run(input.chatId, input.roleId, input.generation).changes ?? 0
+  );
+  return changed;
+}

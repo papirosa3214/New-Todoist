@@ -125,6 +125,10 @@ export function formatChatMessage(message: any) {
     attachments: attachmentsOf.all(message.id),
     quick_replies: quickReplies,
     is_session_marker: Boolean(message.is_session_marker),
+    // Прерванный ответ помечен явно: почему прерван и сохранён ли частично
+    // (карточка 252c400e, §2.1). Поля аддитивные — старый клиент их игнорирует.
+    stop_reason: message.stop_reason ?? null,
+    partial: message.partial ? 1 : 0,
     steps: parsedSteps ? stepDetails(parsedSteps) : null,
     handoff: chatHandoff(message),
     role_envelope: storedEnvelope

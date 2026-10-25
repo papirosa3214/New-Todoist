@@ -106,6 +106,7 @@ import {
 import {
   enqueueChatReply,
   getChatSessionId,
+  getChatSessionGeneration,
   recordDurableDelivery,
   pickDurableDelivery,
   completeDurableDelivery,
@@ -114,10 +115,20 @@ import {
 import {
   currentChatGeneration,
   fenceMessageDelivery,
+  fencePairDeliveries,
   observeDeliveryActivity,
 } from "../runtime/chatQueue.js";
+import { applyOwnerBoundary } from "../runtime/chatOwnerBoundary.js";
+import {
+  buildCheckpointForChat,
+  carryCheckpoint,
+  planChatResume,
+  renderCheckpointPrompt,
+  takeCarriedCheckpoint,
+} from "../runtime/chatCheckpoint.js";
 import {
   cancelChatRunsFor,
+  waitChatRunsIdle,
   startChatRun,
 } from "../runtime/PiRuntimeAdapter.js";
 import {
@@ -1075,6 +1086,28 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         console.warn(`[chats] свод ветки в основной чат не удался:`, error instanceof Error ? error.message : error);
       }
 
+      // Новое сообщение владельца останавливает текущий ход роли: отвечать
+      // надо на новое, а не доканчивать старое (владелец 23.10.2026).
+      //
+      // Граница ставится ДО раскладки по веткам: пока роль занята прежней
+      // работой, новое сообщение уходило в параллельную ветку, и прежняя
+      // работа продолжалась — уточнение не мешало старому ходу. Теперь
+      // прежняя работа останавливается, а роль отвечает в этой же комнате
+      // на новое сообщение, со свежим контекстом (выжимка прежней работы).
+      // В теме задачи и в теме-потоке это не делается: там сообщение идёт
+      // в работу слота.
+      if (isOwner(req.userId) && !chatTaskId && !chat.parent_chat_id) {
+        try {
+          const stopped = await interruptChatTurnForOwner(chatId, req.userId);
+          // В чате пауза не нужна (владелец 23.10.2026: схема с паузой и
+          // веткой-срезом — только для режима задачи): ход просто
+          // останавливается, роль отвечает здесь же на новое сообщение.
+          if (stopped) console.log(`[chats] ход остановлен новым сообщением владельца chat=${chatId}`);
+        } catch (error) {
+          console.warn(`[chats] остановка хода не удалась chat=${chatId}:`, error instanceof Error ? error.message : error);
+        }
+      }
+
       // Ветка на каждое сообщение владельца (22.10.2026): «принял — открыл
       // ветку — работаю там». Основная комната остаётся разговором, каждая
       // просьба живёт отдельным потоком и не ждёт конца чужого хода.
@@ -1093,20 +1126,6 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           `[chats] ветка по сообщению ${id} не создалась:`,
           error instanceof Error ? error.message : error,
         );
-      }
-
-      // Новое сообщение владельца останавливает текущий ход роли: отвечать
-      // надо на новое, а не доканчивать старое (владелец 23.10.2026).
-      if (!handledByBranch && isOwner(req.userId) && !chatTaskId && !chat.parent_chat_id) {
-        try {
-          const stopped = await interruptChatTurnForOwner(chatId, req.userId);
-          // В чате пауза не нужна (владелец 23.10.2026: схема с паузой и
-          // веткой-срезом — только для режима задачи): ход просто
-          // останавливается, роль отвечает здесь же на новое сообщение.
-          if (stopped) console.log(`[chats] ход остановлен новым сообщением владельца chat=${chatId}`);
-        } catch (error) {
-          console.warn(`[chats] остановка хода не удалась chat=${chatId}:`, error instanceof Error ? error.message : error);
-        }
       }
 
       // Этап 2: авто-ответ ролей. «Best effort»: ошибки НЕ откатывают уже
@@ -2044,18 +2063,59 @@ function chatModelChoice(value: unknown): string | null {
  *  Подмешивание держало ответ на полчаса: роль продолжала гонять инструменты,
  *  а сообщение лежало в её контексте без ответа. Останавливаем ход и запускаем
  *  новый — по новому сообщению. */
+/** Корневая комната разговора: ветка ведёт к ней (ветки — части одного
+ *  разговора, а не отдельные чаты). */
+function rootChatIdOf(chatId: string): string {
+  const row = db.prepare("SELECT branch_of_chat_id FROM chats WHERE id=?").get(chatId) as
+    | { branch_of_chat_id: string | null }
+    | undefined;
+  return row?.branch_of_chat_id ?? chatId;
+}
+
+/** Комнаты разговора: корень и все его ветки. Роль работает в ветке, а
+ *  прерывает её владелец из корня — значит граница проходит по всем. */
+function roomChatIds(chatId: string): string[] {
+  const root = rootChatIdOf(chatId);
+  const branches = db
+    .prepare("SELECT id FROM chats WHERE branch_of_chat_id=?")
+    .all(root) as Array<{ id: string }>;
+  return [root, ...branches.map((b) => b.id)];
+}
+
 async function interruptChatTurnForOwner(chatId: string, ownerId: string): Promise<boolean> {
   if (!isMember(chatId, ownerId) || !isOwner(ownerId)) return false;
   const roleIds = chatMemberRoles(chatId)
     .map((role) => roleAccountId(role))
     .filter((id): id is string => Boolean(id));
   if (!roleIds.length) return false;
-  const live = liveTurnsOfChat(chatId);
+  // Живой ход роли может идти в ветке разговора, а не в корне.
+  const live = roomChatIds(chatId).flatMap((roomChat) => liveTurnsOfChat(roomChat));
   const running = roleIds.filter((roleId) => live.some((turn) => turn.user_id === roleId));
   if (!running.length) return false;
+  const rootChat = rootChatIdOf(chatId);
   for (const roleId of running) {
     try {
-      await cancelChatRunsFor(chatId, roleId);
+      // Граница применяется в той комнате, где реально идёт ход.
+      const turnChatId = live.find((turn) => turn.user_id === roleId)?.chat_id ?? chatId;
+      // Граница прерывания (карточка 252c400e): поколение → отмена →
+      // ожидание фактической остановки. Порядок зафиксирован архитектором:
+      // без границы старый ход сохранил бы право опубликовать свой итог.
+      const result = await applyOwnerBoundary(
+        { chatId: turnChatId, roleId, reason: "owner_interrupt" },
+        {
+          bumpGeneration: ({ chatId: c, roleId: r, reason }) =>
+            bumpChatGeneration({ chatId: c, roleId: r, reason }).generation,
+          cancelRuns: (c, r) => cancelChatRunsFor(c, r),
+          waitIdle: (c, r, timeoutMs) => waitChatRunsIdle(c, r, timeoutMs).then(() => undefined),
+        },
+      );
+      // Ходы старого поколения закрыты: поднятый заново после перезапуска
+      // сервера он не должен ни начать новое действие, ни повторить эффект.
+      fencePairDeliveries({ chatId: turnChatId, roleId, generation: result.generation });
+      // Выжимка прежней работы — для свежего хода с новым контекстом.
+      // Сама собирается в начале следующего хода: прерванный ход дописывает
+      // частичный ответ в историю после остановки.
+      carryCheckpoint({ roleId, rootChatId: rootChat, sourceChatId: turnChatId });
     } catch (error) {
       console.warn(`[chats] не удалось остановить ход ${roleId} в ${chatId}:`, error instanceof Error ? error.message : error);
     }
@@ -2591,8 +2651,62 @@ async function deliverAgentReply(args: {
   }
   const roleTitle = titleOfRole(role);
   const previousSessionId = slot ? null : getChatSessionId(chatId, roleUserId);
+  // Поколение сессии против текущего поколения пары (чат, роль). Если они
+  // разошлись (прерывание владельцем, /new-session) — файл прежней сессии
+  // больше не источник правды: продолжать его нельзя, сырая история с
+  // прежними размышлениями в новый ход не идёт. Вместо неё — свежая
+  // сессия с трёхсекционной выжимкой (карточка 252c400e).
+  const currentGeneration = currentChatGeneration(chatId, roleUserId);
+  const sessionGeneration = previousSessionId
+    ? getChatSessionGeneration(chatId, roleUserId)
+    : null;
+  // Выжимка прежней работы: три раздела (что было / цель и задача / что выполнить).
+  // Размышления модели в неё не попадают (см. chatCheckpoint.ts).
+  const checkpoint = (() => {
+    try {
+      // Перенос из прерванной работы того же разговора — он важнее
+      // локальной истории ветки: он несёт контекст того, что было сделано.
+      const carried = takeCarriedCheckpoint(roleUserId, rootChatIdOf(chatId));
+      if (carried) return carried;
+      if (sessionGeneration === null || sessionGeneration >= currentGeneration) return null;
+      return buildCheckpointForChat({ chatId, roleId: roleUserId });
+    } catch (error) {
+      console.warn(
+        `[chats] выжимка чата не собрана chat=${chatId} role=${role}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return null;
+    }
+  })();
+  const resumePlan = planChatResume({
+    savedGeneration: sessionGeneration,
+    currentGeneration,
+    hasCheckpoint: checkpoint !== null,
+  });
+  // Перенесённая выжимка — всегда свежий ход: прежняя сессия не продолжается.
+  const staleSession = resumePlan.mode === "fresh" || (checkpoint !== null && sessionGeneration === null);
+  // Без выжимки продолжать нельзя: сырая история запрещена, молчаливый
+  // возврат к ней — тоже. Ход не запускаем, владельцу сообщаем почему.
+  if (resumePlan.mode === "blocked") {
+    console.warn(`[chats] свежий ход без выжимки не запущен chat=${chatId} role=${role}: ${resumePlan.reason}`);
+    return null;
+  }
   let prompt: string;
   if(slot){prompt=userText;}
+  else if (staleSession && checkpoint) {
+    // Свежая сессия: выжимка вместо прежней истории. Дословные уточнения
+    // владельца — в userText (он идёт в промпт как есть).
+    const roleInstruction = teamStructureText(role);
+    prompt = renderInstruction(role, "chat.wrapper", {
+      roleInstruction,
+      localPolicy: composeLayer(role, "local_policy")!.effective,
+      roleTitle,
+      role,
+      participants: participantsText(chatId, roleUserId),
+      history: renderCheckpointPrompt(checkpoint),
+      userText,
+    });
+  }
   else if (previousSessionId) {
     const since = db
       .prepare(
@@ -2715,7 +2829,9 @@ async function deliverAgentReply(args: {
       roleId: roleUserId,
       prompt,
       model: (db.prepare("SELECT model FROM chat_messages WHERE id = ?").get(trigger.id) as { model: string | null } | undefined)?.model ?? undefined,
-      sessionId: previousSessionId,
+      // Свежий ход после прерырования: прежняя сессия не продолжается —
+      // стартует новая, с выжимкой в промпте.
+      sessionId: staleSession ? undefined : previousSessionId,
       onStep: (tool) => typing(true, tool),
       onEvent: (event) => { observeDeliveryActivity(chatId,roleUserId,event); live.onEvent(event); },
       // «Цель»: промежуточный итог роли сразу ложится в чат отдельным
@@ -2742,8 +2858,12 @@ async function deliverAgentReply(args: {
   const cancelled = (failure as { code?: string } | null)?.code === "CHAT_RUN_CANCELLED";
   let storedRoleEnvelope: string | null = null;
   let quickReplies: string[] | null = null;
-  replyText = cancelled && partial
-    ? `${partial}\n\n_Остановлено._`
+  // Прерванный ход оставляет след: написанное ролью сохраняется (частичным
+  // ответом), а сам факт прерывания помечается stop_reason/partial.
+  replyText = cancelled
+    ? partial
+      ? `${partial}\n\n_Остановлено._`
+      : "_Остановлено._"
     : failure
       ? chatRunFailureText(failure)
       : "";
@@ -2815,10 +2935,19 @@ async function deliverAgentReply(args: {
       overflow=compacted.overflow;
     }
     replyId = uid();
+    // Прерванный ответ помечается явно: stop_reason — почему ответ прерван,
+    // partial — что ответ сохранён частично (карточка 252c400e, §2.1).
+    const stopReason = cancelled
+      ? "owner_interrupt"
+      : failure
+        ? (failure as { code?: string } | null)?.code === "CHAT_RUN_CANCELLED"
+          ? "owner_interrupt"
+          : "error"
+        : null;
     db.prepare(
-      `INSERT INTO chat_messages (id, from_user_id, text, role_envelope_json, channel, chat_id, quick_replies, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id)
-       VALUES (?, ?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(replyId, roleUserId, replyText, storedRoleEnvelope, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(trimThinkingItems(steps)) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null);
+      `INSERT INTO chat_messages (id, from_user_id, text, role_envelope_json, channel, chat_id, quick_replies, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id,stop_reason,partial)
+       VALUES (?, ?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(replyId, roleUserId, replyText, storedRoleEnvelope, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(trimThinkingItems(steps)) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null,stopReason,cancelled ? 1 : 0);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
     traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure));
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });

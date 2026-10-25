@@ -5186,6 +5186,59 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "173_chat_messages_stop_markers",
+    description:
+      "Признаки прерванного ответа в чате: chat_messages.stop_reason (почему ответ прерван) " +
+      "и chat_messages.partial (ответ сохранён частично). Колонки аддитивные, CHECK не расширяем: " +
+      "набор message_type остаётся прежним (системное сообщение / предложение задачи).",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!cols.has("stop_reason")) {
+        db.exec("ALTER TABLE chat_messages ADD COLUMN stop_reason TEXT");
+      }
+      if (!cols.has("partial")) {
+        db.exec("ALTER TABLE chat_messages ADD COLUMN partial INTEGER NOT NULL DEFAULT 0");
+      }
+      // Поколение, которому принадлежит сохранённая сессия Pi. Поколение
+      // уехало (прерывание, /new-session) — значит файл сессии больше не
+      // источник правды: следующий ход идёт в свежую сессию с выжимкой.
+      const sessionCols = new Set(
+        (db.prepare("PRAGMA table_info(chat_sessions)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!sessionCols.has("generation")) {
+        db.exec("ALTER TABLE chat_sessions ADD COLUMN generation INTEGER NOT NULL DEFAULT 1");
+      }
+    },
+  },
+  {
+    id: "174_chat_checkpoints",
+    description:
+      "Выжимка чата: chat_checkpoints(chat_id, role_id, generation, sections_json) — " +
+      "трёхсекционная выжимка (что было / цель и задача / что выполнить) для свежего хода " +
+      "после прерывания. PRIMARY KEY (chat_id, role_id, generation) — на поколение одна выжимка.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_checkpoints (
+          chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          generation INTEGER NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          sections_json TEXT NOT NULL,
+          source_run_id TEXT,
+          source_leaf_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (chat_id, role_id, generation)
+        );
+      `);
+    },
+  },
 
   // 25.10.2026, карточка b504958a (контракт note://115ba2ac-6a1d-45ac-a92f-2081c6ecf0c2):
   // чатовый чек-лист перестаёт быть подсказкой модели. `items_json` остаётся
