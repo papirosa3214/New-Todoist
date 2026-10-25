@@ -1,4 +1,5 @@
 import db from "../db.js";
+import { currentChatGeneration } from "../runtime/chatQueue.js";
 export type WorkPlanItem = { id: string; title: string; state: "pending" | "in_progress" | "done" };
 export const WORK_PLAN_INSTRUCTION = "РАБОЧИЙ ЧЕК-ЛИСТ — это твой рабочий план, а не отчёт. Заведи его ДО начала работы через taskflow_work_plan, из того, как ТЫ сам видишь путь к результату: обычно 3–7 этапов, у каждого понятно, что считается сделанным. Он нужен тебе, чтобы не теряться и не закрутиться: следующий шаг берёшь по нему, а не по ощущению «ещё чуть-чуть». ГРАНИЦА: работа закончена, когда выполнены «Результат» и «Критерии приёмки» карточки. Всё, что сверх этого, — уже не твой этап: не раздувай объём и не уходи в перфекционизм. В начале прочитай сохранённый план (инструмент без items), при продолжении используй его и не обнуляй выполненное. Перед этапом отметь его in_progress, по факту выполнения — done, при необходимости дополни список. Передавай весь актуальный список с устойчивыми id и base_revision из последнего ответа. Чек-лист не запрещает сдачу: галочки не сдача и не ревью, обычную сдачу делай через taskflow_subtask_done, после успешной сдачи сервер сам закроет последний пункт. Честность: не заводи пункты, которые не собираешься выполнять, и не дописывай план перед самой сдачей лишь бы он выглядел заполненным — владелец смотрит на него, чтобы видеть ход работы.";
 export function validateWorkPlan(raw: unknown): WorkPlanItem[] {
@@ -294,11 +295,12 @@ export function chatDeliveryRow(chatId: string, roleId: string, messageId?: stri
         .get(chatId, roleId);
   return (row as any) ?? null;
 }
+/** Поколение пары (чат, роль) — тот же счётчик, что и у очереди доставки.
+ *  Источник один: иначе сдача пункта сравнивала бы с «поколением 0» против
+ *  записанного «поколения 1» и поздний ответ проходил как свежий
+ *  (карточка b504958a, доработка D1). */
 export function chatSessionGeneration(chatId: string, roleId: string): number {
-  const row = db.prepare("SELECT generation FROM chat_session_generation WHERE chat_id=? AND role_id=?").get(chatId, roleId) as
-    | { generation: number }
-    | undefined;
-  return row?.generation ?? 0;
+  return currentChatGeneration(chatId, roleId);
 }
 /** Различение «сообщение сохранено» и «передано исполнителю» (контракт §10):
  *  считается по очереди доставки, отдельного хранилища нет. */
