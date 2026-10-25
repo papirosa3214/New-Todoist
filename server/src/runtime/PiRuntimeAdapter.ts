@@ -21,7 +21,7 @@ import {
   type ChatWorkMode,
 } from "./chatWorkMode.js";
 import { getSetting } from "../lib/serverSettings.js";
-import { configuredChatActionLimit, guardChatActions } from "./chatActionBudget.js";
+import { reserveChatItemAction, guardChatActions } from "./chatActionBudget.js";
 import { chatWorkPlanPrompt, stopChatWorkPlan } from "../lib/subtaskWorkPlan.js";
 import {
   chatInstructionArgs,
@@ -1538,7 +1538,7 @@ export async function startChatRun(
         // («у меня нет инструментов», владелец 02.10.2026). Встроенные с
         // описаниями владельца — через customTools: одноимённый перекрывает.
         tools: [...builtin.map((t) => t.name), ...toolCatalog.registeredNames],
-        customTools: guardChatActions([...builtin, ...toolCatalog.customTools], configuredChatActionLimit(), () => {
+        customTools: guardChatActions([...builtin, ...toolCatalog.customTools], callId => reserveChatItemAction({chatId:input.chatId,roleId:input.roleId,messageId:input.messageId,callId:runId+":"+callId}), () => {
           stopChatWorkPlan(input.chatId, input.roleId, "budget_exhausted");
           void session?.abort().catch(() => {});
         }),

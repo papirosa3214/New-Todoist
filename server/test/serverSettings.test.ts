@@ -62,6 +62,24 @@ describe("Реестр серверных параметров (MAK-95)", () => 
     loadServerSettingsFromDb();
   });
 
+
+  it("лимит действий пункта доступен владельцу, сохраняется через API и сбрасывается к 10",async()=>{
+    const headers={authorization:`Bearer ${ownerToken}`};
+    const snapshot=await app.inject({method:"GET",url:"/api/admin/server-settings",headers});
+    const setting=snapshot.json().settings.find((row:any)=>row.key==="chat_item_max_actions");
+    expect(setting.default).toBe(10);expect(setting.description).toContain("пункт");
+    const update=await app.inject({method:"PUT",url:"/api/admin/server-settings/chat_item_max_actions",headers,payload:{value:15}});
+    expect(update.statusCode,update.body).toBe(200);expect(getSetting("chat_item_max_actions")).toBe(15);
+    loadServerSettingsFromDb();expect(getSetting("chat_item_max_actions")).toBe(15);
+    for(const value of [0,2.5,1001]){
+      const bad=await app.inject({method:"PUT",url:"/api/admin/server-settings/chat_item_max_actions",headers,payload:{value}});
+      expect(bad.statusCode).toBe(400);expect(getSetting("chat_item_max_actions")).toBe(15);
+    }
+    const denied=await app.inject({method:"PUT",url:"/api/admin/server-settings/chat_item_max_actions",headers:{authorization:`Bearer ${nonOwnerToken}`},payload:{value:20}});
+    expect(denied.statusCode).toBe(403);expect(getSetting("chat_item_max_actions")).toBe(15);
+    const reset=await app.inject({method:"POST",url:"/api/admin/server-settings/chat_item_max_actions/reset",headers,payload:{}});
+    expect(reset.statusCode).toBe(200);expect(getSetting("chat_item_max_actions")).toBe(10);
+  });
   it("отклоняет дробный счётчик без записи", () => {
     expect(() => setSetting("role_run_concurrency", 2.5 as never, ownerId)).toThrow("целое");
     expect(getSetting("role_run_concurrency")).toBe(3);

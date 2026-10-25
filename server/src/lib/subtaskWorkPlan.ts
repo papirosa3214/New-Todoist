@@ -284,6 +284,8 @@ export function saveChatWorkPlan(
       ON CONFLICT(chat_id,role_id) DO UPDATE SET revision=excluded.revision,items_json=excluded.items_json,updated_at=excluded.updated_at,
         status='active',stop_reason=NULL,stopped_at=NULL,source_message_id=excluded.source_message_id,outcomes_json=excluded.outcomes_json`)
       .run(chatId, roleId, nextRevision, JSON.stringify(nextItems), now, sourceMessageId, outcomes);
+    if (!existing || replaceable)
+      db.prepare("UPDATE chat_work_plans SET action_budget_json=? WHERE chat_id=? AND role_id=?").run("{}",chatId,roleId);
     return readChatWorkPlan(chatId, roleId)!;
   })();
 }

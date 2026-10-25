@@ -5279,6 +5279,15 @@ const migrations: Migration[] = [
       )`);
     },
   },
+  {
+    id: "178_chat_item_action_budget",
+    description: "Durable action accounting per checklist item",
+    up: () => {
+      const columns=db.prepare("PRAGMA table_info(chat_work_plans)").all() as Array<{name:string}>;
+      if(!columns.some(column=>column.name==="action_budget_json"))
+        db.exec("ALTER TABLE chat_work_plans ADD COLUMN action_budget_json TEXT NOT NULL DEFAULT '{}'");
+    },
+  },
 ];
 /**
  * Опции прогона миграций.
