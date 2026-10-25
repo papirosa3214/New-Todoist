@@ -17,6 +17,7 @@
 
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
+import {getTaskForRead} from "../access.js";
 import { authOrApiToken } from "../auth.js";
 import { logEvent } from "../agentState.js";
 import {
@@ -116,25 +117,12 @@ function defaultLinksForCause(subtaskId: string, taskId: string, cause: string):
   // `action`».
   const subtaskRestart = `/api/subtasks/${encodeURIComponent(subtaskId)}/restart`;
   const subtaskCancel = `/api/subtasks/${encodeURIComponent(subtaskId)}/cancel`;
-  const taskLift = `/api/tasks/${encodeURIComponent(taskId)}/lift-dependency-blocks`;
-  const taskRetry = `/api/tasks/${encodeURIComponent(taskId)}/retry`;
-  const reviewAccept = `/api/reviews/${encodeURIComponent(taskId)}/accept`;
-  const finalReview = `/api/tasks/${encodeURIComponent(taskId)}/final-review`;
   switch (cause) {
     case "stalled_manual_review":
     case "step_stalled":
-      return [{ href: subtaskRestart, rel: "replace", note: "запустить новую попытку вручную" }];
-    case "blocked_dependency":
-      return [{ href: taskLift, rel: "lift", note: "снять блок-зависимость" }];
+      return subtaskId ? [{ href: subtaskRestart, rel: "replace", note: "запустить новую попытку вручную" }] : [];
     case "durable_queued_wake":
-      return [{ href: subtaskCancel, rel: "cancel", note: "снять задание из очереди" }];
-    case "review":
-    case "completed_pending_review":
-      return [{ href: reviewAccept, rel: "accept", note: "принять вердикт проверяющего" }];
-    case "awaiting_final_review":
-      return [{ href: finalReview, rel: "accept", note: "запустить финального проверяющего" }];
-    case "branch_rework":
-      return [{ href: taskRetry, rel: "retry", note: "продолжить после rework" }];
+      return subtaskId ? [{ href: subtaskCancel, rel: "cancel", note: "снять задание из очереди" }] : [];
     case "active_run":
     case "recovery_pending":
     case "waiting_transient":
@@ -150,6 +138,26 @@ function defaultLinksForCause(subtaskId: string, taskId: string, cause: string):
     default:
       return [];
   }
+}
+
+
+/** Owner-facing labels; diagnostic reads never start or mutate a step. */
+function readableResolution(r: Resolution, facts: ReturnType<typeof collectFacts>) {
+  const task = db.prepare("SELECT title,status,archived_at FROM tasks WHERE id=?").get(r.task_id) as any;
+  const sub = r.subtask_id ? db.prepare("SELECT title,done FROM subtasks WHERE id=?").get(r.subtask_id) as any : null;
+  const done = sub ? !!sub.done : task?.status === "completed";
+  const skipped = r.subtask_id ? !!(db.prepare("SELECT n.skipped_at FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key WHERE s.id=?").get(r.subtask_id) as any)?.skipped_at : false;
+  const assignee_name = r.assignee.kind === "role"
+    ? (db.prepare("SELECT title FROM roles WHERE key=?").get(r.assignee.key) as any)?.title
+    : (db.prepare("SELECT name FROM users WHERE id=?").get(r.assignee.key) as any)?.name;
+  const terminal = done || skipped || !!task?.archived_at || task?.status === "completed";
+  const waiting_for = (facts?.waitingPredecessors ?? []).map(w => {
+    const predecessor = db.prepare("SELECT title FROM subtasks WHERE task_id=? AND plan_node_key=? ORDER BY rowid DESC LIMIT 1").get(r.task_id,w.fromSlotKey) as any;
+    return predecessor?.title ?? w.fromSlotKey;
+  });
+  return {...r, title:sub?.title ?? task?.title ?? "Задача", done, skipped, assignee_name: assignee_name ?? null,
+    action:terminal ? "none" : r.action, links:terminal ? [] : r.links,
+    notes:skipped ? "Шаг пропущен" : done ? "Шаг завершён" : r.notes, waiting_for};
 }
 
 function logResolution(taskId: string, actorId: string | null, payload: Resolution): void {
@@ -193,8 +201,10 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
     { preHandler: authPre },
     async (req: any, reply) => {
       const taskId = req.params.id;
-      if (!readTaskExists(taskId)) return reply.code(404).send({ error: "task_not_found" });
-      const factsList = collectFactsForTask(taskId);
+      if (!getTaskForRead(taskId, req.userId)) return reply.code(404).send({ error: "task_not_found" });
+      const collected = collectFactsForTask(taskId);
+      const fallback = collected.length ? null : collectFacts(null, taskId);
+      const factsList = collected.length ? collected : fallback ? [fallback] : [];
       const resolutions: Resolution[] = factsList.map((facts) => {
         const r = buildResolution({
           facts,
@@ -206,7 +216,7 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
           ...r,
           links: defaultLinksForCause(facts.subtaskId ?? "", facts.taskId, r.cause),
         };
-        return withLinks;
+        return readableResolution(withLinks, facts);
       });
       // Одна запись в `task_events` на сам вызов — это и есть метрика
       // «сколько карточек запрашивали объяснение». Без payload'а
@@ -225,7 +235,7 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
     async (req: any, reply) => {
       const subtaskId = req.params.id;
       const sub = readSubtaskTask(subtaskId);
-      if (!sub.exists) return reply.code(404).send({ error: "subtask_not_found" });
+      if (!sub.exists || !getTaskForRead(sub.taskId, req.userId)) return reply.code(404).send({ error: "subtask_not_found" });
       const facts = collectFacts(subtaskId, sub.taskId);
       if (!facts) return reply.code(404).send({ error: "task_not_found" });
       const evidence = clampEvidence(req.query?.evidence);
@@ -241,7 +251,7 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
         links: built.links.length > 0 ? built.links : defaultLinksForCause(subtaskId, sub.taskId, built.cause),
       };
       logResolution(sub.taskId, req.userId ?? null, withDefaults);
-      return reply.send(withDefaults);
+      return reply.send(readableResolution(withDefaults, facts));
     },
   );
 
@@ -252,7 +262,7 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
     async (req: any, reply) => {
       const attemptId = req.params.id;
       const att = readAttemptSubtask(attemptId);
-      if (!att.exists) return reply.code(404).send({ error: "attempt_not_found" });
+      if (!att.exists || !getTaskForRead(att.taskId, req.userId)) return reply.code(404).send({ error: "attempt_not_found" });
       if (!att.subtaskId) {
         // Попытка без подзадачи — отдаём «облегчённый» Resolution по самой
         // задаче. Это редкий случай (task-level attempt), но контракт
@@ -261,7 +271,7 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
         if (!facts) return reply.code(404).send({ error: "task_not_found" });
         const built = buildResolution({ facts });
         logResolution(att.taskId, req.userId ?? null, built);
-        return reply.send(built);
+        return reply.send(readableResolution(built, facts));
       }
       const facts = collectFacts(att.subtaskId, att.taskId);
       if (!facts) return reply.code(404).send({ error: "task_not_found" });
@@ -270,7 +280,7 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
         evidence: [{ kind: "attempt", ref: `attempts.${attemptId}`, note: "источник вызова" }],
       });
       logResolution(att.taskId, req.userId ?? null, built);
-      return reply.send(built);
+      return reply.send(readableResolution(built, facts));
     },
   );
 
