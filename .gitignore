@@ -134,3 +134,6 @@ server/backups/
 *.db-shm
 *.db-wal
 scripts/orchestrator/__pycache__/
+
+# Пустая база, которую оставляют локальные прогоны сервера
+server/data.db
