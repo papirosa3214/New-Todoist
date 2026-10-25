@@ -1,5 +1,6 @@
 import {reportReviewBlockForTask} from "../lib/jevAssist.js";
 import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
+import { COMPACTION_SETTINGS, compactSessionSafely } from "./compactionFallback.js";
 import {oneShotReviewInstruction} from "../lib/integrationResponsibility.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
 import {queueWorkCoordination,markDeliveredToWork,traceCoordination} from "./chatCoordination.js";
@@ -1599,7 +1600,9 @@ try {
     tools: [...builtinTools.map(t=>t.name), ...toolCatalog.registeredNames],
     customTools: [...builtinTools, ...customTools],
     sessionManager: manager,
-    settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
+    // Явные пределы выжимки: короткий ответ (Pi берёт 0.8*reserveTokens) и
+    // небольшой оставленный хвост — иначе summarization-запрос раздувается.
+    settingsManager: SettingsManager.inMemory({ compaction: { ...COMPACTION_SETTINGS }, retry: { enabled: true, maxRetries: 2 } }),
   } as any)).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await infra.close(); throw error; });
 
   installNativeToolSchemas(session, toolCatalog);
@@ -1620,11 +1623,15 @@ try {
   // закапывается ещё глубже. Сжимаем историю в выжимку ДО первого промпта,
   // чтобы ход начинался с сути, а не с прошлого монолога.
   if (resumed) {
-    try {
-      await (session as any).compact();
-    } catch (error) {
-      console.warn(`[compact] ${role} ${taskId}: не удалось сжать сессию, идём на сырой истории:`, error instanceof Error ? error.message : String(error));
-    }
+    // Тяжёлая история (25.10.2026): запрос выжимки уходит одним большим текстом
+    // и падает по таймауту провайдера («Request timed out.») — раньше мы тогда
+    // шли дальше на сырой истории, и ход роли умирал уже на запросе к модели.
+    // Теперь историю ужимаем, а если выжимка не вышла — режем локально и
+    // продолжаем ход на небольшой истории.
+    await compactSessionSafely(session, {
+      label: `${role} ${taskId}`,
+      log: message => console.warn(message),
+    });
   }
   // Манифест — в справочник по содержимому (instructionManifestStore), а в
   // событие кладём ссылку: полный манифест в каждом событии раздувал

@@ -3,6 +3,7 @@ import { ChatPreparationDeadline } from "./chatPreparationDeadline.js";
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
 import {ThrashGuard, stepDigest} from "./thrashGuard.js";
+import { COMPACTION_SETTINGS, compactSessionSafely } from "./compactionFallback.js";
 import {registerChatSteering,_resetChatSteeringForTests} from "./chatSteering.js";
 import {
   buildRoleToolCatalog,
@@ -1544,7 +1545,10 @@ export async function startChatRun(
         }),
         sessionManager,
         settingsManager: SettingsManager.inMemory({
-          compaction: { enabled: true },
+          // Явные пределы выжимки: короткий ответ (Pi берёт 0.8*reserveTokens)
+          // и небольшой оставленный хвост — иначе summarization-запрос
+          // раздувается и не укладывается в таймаут провайдера.
+          compaction: { ...COMPACTION_SETTINGS },
           retry: { enabled: true, maxRetries: 2 },
         }),
       } as any), resource => resource.session.dispose()));
@@ -1571,11 +1575,15 @@ export async function startChatRun(
     // их и закапывается. Сжимаем до первого промпта; на короткой истории SDK
     // сам вернёт no-op (prepareCompaction пуст).
     if (known) {
-      try {
-        await session.compact();
-      } catch (error) {
-        console.warn(`[compact] ${role} chat ${input.chatId}: не удалось сжать сессию, идём на сырой истории:`, error instanceof Error ? error.message : String(error));
-      }
+      // Тяжёлая история (25.10.2026): запрос выжимки уходит одним большим
+      // текстом и падает по таймауну провайдера («Request timed out.») — раньше
+      // мы тогда шли дальше на сырой истории, и ход роли умирал уже на запросе
+      // к модели. Теперь историю ужимаем, а если выжимка не вышла — режем
+      // локально и продолжаем ход на небольшой истории.
+      await compactSessionSafely(session, {
+        label: `${role} chat ${input.chatId}`,
+        log: message => console.warn(message),
+      });
     }
 
     const run: ActiveChatRun = {
@@ -1701,7 +1709,14 @@ export async function startChatRun(
       };
       if (input.compactOnly) {
         // «Сжать» (владелец 20.10.2026): сжатие сохранённой сессии по кнопке.
-        await Promise.race([session.compact(), armCeiling()]);
+        // Тот же безопасный путь: тяжёлая история не должна ронять сжатие.
+        await Promise.race([
+          compactSessionSafely(session, {
+            label: `${role} chat ${input.chatId} (сжатие)`,
+            log: message => console.warn(message),
+          }),
+          armCeiling(),
+        ]);
       } else {
         await promptOnce(
           input.mode
