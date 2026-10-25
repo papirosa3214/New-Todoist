@@ -9,6 +9,12 @@ import { persistPreparedPlan } from "../lib/taskPreparationPersistence.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import { purgeTasks } from "../lib/taskPurge.js";
+import {
+  ensureTaskChangesLedger,
+  ledgerCursor,
+  ledgerSeq,
+  listTaskChanges,
+} from "../lib/taskChanges.js";
 import { archiveTask, restoreTask, purgeArchivedTask, listArchivedTasks } from "../lib/taskArchive.js";
 import db from "../db.js";
 import { autoProposeCollaborationPlanIfNeeded, autoProposeCollaborationPlanWithJev, autoProposeFromSubtasksOnCreate } from "./task-collaboration-plans.js";
@@ -437,9 +443,46 @@ function agentStartedAt(task: any): string | null {
 
 // ═══════ TASKS CRUD ═══════
 
+/**
+ * ETag полного списка задач: «изменилось ли что-то для этого набора».
+ *
+ * Считается по тому же набору строк, что уходит в ответе, поэтому 304
+ * честный: если карточка изменилась — отпечаток другой. В отпечаток входит
+ * и порядковый номер журнала изменений (`ledgerSeq`): правка подзадачи или
+ * комментария не трогает строку tasks, но меняет то, что видит список.
+ */
+function tasksListETag(rows: any[], session: string | null): string {
+  let maxUpdated = "";
+  let hash = 5381;
+  for (const row of rows) {
+    const updated = String(row?.updated_at ?? "");
+    if (updated > maxUpdated) maxUpdated = updated;
+    const key = `${row?.id}|${updated}`;
+    for (let i = 0; i < key.length; i++) {
+      hash = ((hash * 33) ^ key.charCodeAt(i)) >>> 0;
+    }
+  }
+  return `W/"${rows.length}-${maxUpdated}-${hash.toString(36)}-${ledgerSeq()}-${session ?? ""}"`;
+}
+
+/** Сравнение ETag по правилам HTTP: список значений и слабая форма W/"". */
+function etagMatches(header: string, etag: string): boolean {
+  const strip = (v: string) => v.trim().replace(/^W\//, "");
+  const target = strip(etag);
+  return header
+    .split(",")
+    .map((v) => v.trim())
+    .some((v) => v === "*" || strip(v) === target);
+}
+
 export function registerTaskRoutes(app: FastifyInstance) {
   registerIntegrationResponsibilityRoutes(app);
   const authPre = authOrApiToken;
+  // Журнал изменений задач (дельты, вариант B трафика iOS-клиента) должен
+  // быть готов ДО первого запроса: иначе клиент, пришедший с курсором,
+  // получит «журнал не покрывает этот момент» и будет перечитывать список
+  // целиком — то есть вернётся к прежней цене.
+  ensureTaskChangesLedger();
 
   // Список задач. Кому что видно — правило в access.ts (шапка файла):
   // владельцу и его агентам видны ВСЕ задачи, самостоятельно
@@ -665,6 +708,23 @@ export function registerTaskRoutes(app: FastifyInstance) {
 
     // Батч вместо N+1 (владелец 24.10.2026): подзадачи, дети, метки и время
     // взятия собираются за 4 запроса на весь список, а не на каждую карточку.
+    // ETag и курсор синхронизации (вариант B трафика iOS-клиента, владелец
+    // 25.10.2026). Клиент, у которого список не менялся, присылает свой
+    // ETag — сервер отвечает 304 без тела и клиент не качает 402 КБ gzip
+    // впустую. Курсор нужен для ДЕЛЬТ: по нему клиент спрашивает «что
+    // изменилось с прошлого раза» вместо полной перечитки.
+    //
+    // В отпечаток входит и метка сессии: список помечает карточки как
+    // «мои» по сессии вызывающего, и смена сессии должна ломать кэш.
+    const session = sessionOf(req);
+    const listEtag = tasksListETag(tasks, session);
+    reply.header("ETag", listEtag);
+    reply.header("X-TaskFlow-Sync-Cursor", ledgerCursor());
+    const ifNoneMatch = req.headers["if-none-match"];
+    if (typeof ifNoneMatch === "string" && etagMatches(ifNoneMatch, listEtag)) {
+      return reply.code(304).send();
+    }
+
     const taskIds = tasks.map((t: any) => t.id) as string[];
     const ph = taskIds.map(() => "?").join(",");
     const subtaskMap = new Map<string, any[]>();
@@ -699,7 +759,6 @@ export function registerTaskRoutes(app: FastifyInstance) {
     // реагирует на неё как на собственную (Максим 20.08.2026: «другие
     // сессии к этой задаче отношения не имеют»). Пометка справочная:
     // ничего не фильтрует и не прячет — владелец по-прежнему видит всё.
-    const session = sessionOf(req);
     return tasks.map((t: any) => {
       const subtasks = (subtaskMap.get(t.id) ?? []).map(withSubtaskState);
       const children = childMap.get(t.id) ?? [];
@@ -737,6 +796,157 @@ export function registerTaskRoutes(app: FastifyInstance) {
         agent_started_at: t.id && t.agent_state ? (startedMap.get(t.id) ?? null) : null,
       };
     });
+  });
+
+  // ДЕЛЬТЫ (вариант B трафика iOS-клиента, владелец 25.10.2026).
+  //
+  // Проблема, которую это закрывает: полный список задач — 127 карточек,
+  // 1,83 МБ без сжатия (402 КБ в gzip). Клиент тянул его целиком на КАЖДЫЙ
+  // разрыв связи (30 675 реконнектов за неделю) — платил полную цену, чтобы
+  // узнать, что изменилась одна-две карточки.
+  //
+  // Контракт: `GET /api/tasks/changes?since=<курсор>` →
+  //   { server_time, changed_ids: string[], removed_ids: string[], full: boolean }
+  //
+  // Почему именно id, а не готовые карточки: у клиента УЖЕ есть проверенный
+  // путь «взять одну карточку» (`GET /api/tasks/:id` → upsert в стор), и он
+  // же используется для событий сокета. Взяв его и для дельты, мы не
+  // размножаем форму ответа списка (у списка и одиночной карточки РАЗНЫЕ
+  // формы — список отдаёт счётчики детей, одиночная — массив детей), а
+  // значит не размножаем и риск рассинхрона.
+  //
+  // `full: true` — журнал не покрывает запрошенный момент (курсор старше
+  // семи дней или не задан): клиент делает обычную полную перечитку.
+  app.get("/api/tasks/changes", { preHandler: authPre }, async (req: any) => {
+    const userId = req.userId;
+    const since = typeof req.query.since === "string" ? req.query.since : "";
+    const cursor = ledgerCursor();
+    const { rows, full } = listTaskChanges(since);
+    if (full) {
+      return { server_time: cursor, changed_ids: [], removed_ids: [], full: true };
+    }
+
+    const asOwner = isOwner(userId);
+    const seesAll = seesEveryTask(userId);
+
+    // Сводим журнал к последнему состоянию по каждой карточке: удаление
+    // перебивает правку (карточки уже нет), а признаки видимости берём из
+    // первой непустой записи — дочерние таблицы пишут в журнал без
+    // создателя.
+    type JournalState = {
+      deleted: boolean;
+      creator_id: string | null;
+      assignee_id: string | null;
+      project_id: string | null;
+    };
+    const state = new Map<string, JournalState>();
+    for (const r of rows) {
+      const prev = state.get(r.task_id);
+      state.set(r.task_id, {
+        deleted: (prev?.deleted ?? false) || r.deleted === 1,
+        creator_id: r.creator_id ?? prev?.creator_id ?? null,
+        assignee_id: r.assignee_id ?? prev?.assignee_id ?? null,
+        project_id: r.project_id ?? prev?.project_id ?? null,
+      });
+    }
+    const ids = [...state.keys()];
+    if (!ids.length) {
+      return { server_time: cursor, changed_ids: [], removed_ids: [], full: false };
+    }
+
+    // Живые карточки — текущее состояние (в журнале может лежать уже
+    // устаревшая запись: карточку переписали дважды).
+    const present = new Map<string, any>();
+    {
+      const ph = ids.map(() => "?").join(",");
+      for (const row of db
+        .prepare(
+          `SELECT t.id, t.archived_at, t.creator_id, t.assignee_id,
+                  p.id AS project_id, p.archived_at AS project_archived_at,
+                  p.is_private AS project_private, p.owner_id AS project_owner_id
+             FROM tasks t LEFT JOIN projects p ON t.project_id = p.id
+            WHERE t.id IN (${ph})`,
+        )
+        .all(...ids) as any[]) {
+        present.set(row.id, row);
+      }
+    }
+
+    // Проекты — по тем id, что встречались в журнале И в живых карточках:
+    // по ним решаем видимость (приватный проект, архив проекта, владелец
+    // проекта). Журнал знает проект не всегда: запись из дочерней таблицы
+    // (подзадача, комментарий) приходит без него.
+    const projectIds = [
+      ...new Set(
+        [
+          ...ids.map((id) => state.get(id)?.project_id),
+          ...[...present.values()].map((row) => row.project_id),
+        ].filter((v): v is string => typeof v === "string" && v.length > 0),
+      ),
+    ];
+    const projectInfo = new Map<string, any>();
+    if (projectIds.length) {
+      const pph = projectIds.map(() => "?").join(",");
+      for (const p of db
+        .prepare(
+          `SELECT id, owner_id, is_private, archived_at FROM projects WHERE id IN (${pph})`,
+        )
+        .all(...projectIds) as any[]) {
+        projectInfo.set(p.id, p);
+      }
+    }
+
+    const visible = (
+      creatorId: string | null,
+      assigneeId: string | null,
+      projectId: string | null,
+    ): boolean => {
+      const proj = projectId ? projectInfo.get(projectId) : null;
+      if (proj?.archived_at) return false;
+      if (proj && proj.is_private && !asOwner) return false;
+      if (seesAll) return true;
+      if (creatorId === userId || assigneeId === userId) return true;
+      if (proj && proj.owner_id === userId) return true;
+      return false;
+    };
+
+    const changedIds: string[] = [];
+    const removedIds: string[] = [];
+    for (const id of ids) {
+      const st = state.get(id)!;
+      const row = present.get(id);
+      if (st.deleted || !row) {
+        if (visible(st.creator_id, st.assignee_id, st.project_id)) {
+          removedIds.push(id);
+        }
+        continue;
+      }
+      if (row.archived_at) {
+        // Ушла в архив: из списка её убрать надо, в архив — отдельная ручка.
+        if (visible(row.creator_id, row.assignee_id, row.project_id)) {
+          removedIds.push(id);
+        }
+        continue;
+      }
+      if (!visible(row.creator_id, row.assignee_id, row.project_id)) {
+        removedIds.push(id);
+        continue;
+      }
+      changedIds.push(id);
+    }
+
+    // Большая дельта — признак того, что клиент отстал сильнее, чем
+    // выгодно догонять по одной карточке. Дешевле один полный список.
+    if (changedIds.length + removedIds.length > 60) {
+      return { server_time: cursor, changed_ids: [], removed_ids: [], full: true };
+    }
+
+    return {
+      server_time: cursor,
+      changed_ids: changedIds,
+      removed_ids: removedIds,
+      full: false,
+    };
   });
 
   // Агрегат по дням — данные для виджетов heatmap и calendar_grid (галерея
