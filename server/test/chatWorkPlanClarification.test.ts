@@ -265,5 +265,18 @@ describe("уточнение владельца во время пункта ч�
       }),
     ).toThrow(/устаревшего|закрытого хода/);
     expect(chatPlanView(chatId, roleUserId)!.current_item_id).toBe("p1");
+
+    // 6. Сдача из нового хода принимается и открывает следующий пункт.
+    const secondMessageId = messageIdByText(CLARIFICATION);
+    const accepted = submitChatWorkItem({
+      chatId,
+      roleId: roleUserId,
+      itemId: "p1",
+      result: "Изучил контракт.",
+      outcome: "done",
+      messageId: secondMessageId,
+    });
+    expect(accepted.next_item?.id).toBe("p2");
+    expect(chatPlanView(chatId, roleUserId)!.current_item_id).toBe("p2");
   });
 });
