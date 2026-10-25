@@ -11,6 +11,8 @@ export function visibleTaskComments<T extends {user_id?: string|null; text?: unk
 export function isQuietSystemMessage(row:any): boolean {
   if (!row) return false;
   if (row.is_session_marker) return true;
+  // Обращение к коллеге — раскрываемая карточка с вопросом/ответом, не шум.
+  if (row.coordination && typeof row.coordination === "object") return false;
   if (row.message_type !== "system" && row.kind !== "system") return false;
   // Ошибки доставки и запросы решения владельцу остаются видимыми.
   return !/не удалось|ошибка|нужен ваш|нужно ваше|требуется|укажите|выберите|approve\/reject/i.test(String(row.text ?? ""));
@@ -21,5 +23,6 @@ export function visibleChatSql(alias = ""): string {
   const p = alias ? `${alias}.` : "";
   const phrases = ["не удалось", "Не удалось", "ошибка", "Ошибка", "нужен ваш", "Нужен ваш", "нужно ваше", "Нужно ваше", "требуется", "Требуется", "укажите", "Укажите", "выберите", "Выберите", "approve/reject"];
   const actionable = phrases.map(text=>`instr(${p}text, '${text}') > 0`).join(" OR ");
-  return `(COALESCE(${p}is_session_marker, 0) = 0 AND (COALESCE(${p}message_type, '') != 'system' OR ${actionable}))`;
+  const coordination = `CASE WHEN json_valid(${p}steps) THEN json_type(${p}steps, '$.coordination') = 'object' ELSE 0 END`;
+  return `(COALESCE(${p}is_session_marker, 0) = 0 AND (COALESCE(${p}message_type, '') != 'system' OR (${coordination}) OR ${actionable}))`;
 }

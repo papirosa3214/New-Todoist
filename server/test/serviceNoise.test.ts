@@ -59,3 +59,27 @@ it("does not put a hidden system event in the chat list preview",async()=>{
   expect(JSON.stringify(chat.last_message)).toContain("Готов результат");
   expect(chat.unread_count).toBe(0);
 });
+
+it("keeps coordination cards in history and SQL previews for every lifecycle status", async()=>{
+  const {visibleChatSql}=await import("../src/lib/serviceNoise.js");
+  for(const status of ["queued","thinking","answered","cancelled","error"]){
+    const id=`coord-visible-${status}`;
+    const coordination={question_id:id,recipient_id:owner,requester_name:"Разработчик",recipient_name:"Архитектор",question:"Уточни контракт",status,activity:"Ответ получен",created_at:"2026-10-26T00:00:00Z",last_activity_at:"2026-10-26T00:00:01Z",answer:"Контракт согласован",terminal:["answered","cancelled","error"].includes(status)};
+    db.prepare("INSERT INTO chat_messages(id,chat_id,from_user_id,text,channel,message_type,steps) VALUES(?,?,?,?,'chat','system',?)").run(id,"quiet-chat",owner,"Разработчик → Архитектор: Ответ получен",JSON.stringify({duration_ms:0,items:[],coordination}));
+    try {
+      const response=await app.inject({method:"GET",url:"/api/chats/quiet-chat/messages",headers:{authorization:`Bearer ${token}`}});
+      const card=response.json().messages.find((m:any)=>m.id===id);
+      expect(card?.coordination?.question).toBe("Уточни контракт");
+      expect(card?.coordination?.answer).toBe("Контракт согласован");
+      expect(db.prepare(`SELECT id FROM chat_messages m WHERE m.id=? AND ${visibleChatSql("m")}`).get(id)).toEqual({id});
+      expect(isQuietSystemMessage({kind:"system",text:"Ответ получен",coordination})).toBe(false);
+    } finally {db.prepare("DELETE FROM chat_messages WHERE id=?").run(id);}
+  }
+});
+
+it("does not treat malformed or scalar coordination metadata as a visible card",async()=>{
+  const {visibleChatSql}=await import("../src/lib/serviceNoise.js");
+  for(const steps of ["{broken", JSON.stringify({coordination:"noise"}), JSON.stringify({coordination:null})]){
+    expect(db.prepare(`SELECT ${visibleChatSql("m")} AS visible FROM (SELECT 'system' AS message_type, 'Шаг запущен' AS text, 0 AS is_session_marker, ? AS steps) m`).get(steps)).toEqual({visible:0});
+  }
+});
