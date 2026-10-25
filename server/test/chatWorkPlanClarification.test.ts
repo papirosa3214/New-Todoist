@@ -244,14 +244,16 @@ describe("уточнение владельца во время пункта ч�
     expect(view.current_item_id).toBe("p1");
     const planText = chatWorkPlanPrompt(chatId, roleUserId);
     expect(planText).toContain("Текущий пункт — «Изучить контракт» (id p1)");
-    const systemPrompt = capture.prompts[capture.prompts.length - 1] ?? "";
-    expect(systemPrompt).toContain("Текущий пункт — «Изучить контракт» (id p1)");
 
     // 4. Уточнение дошло до следующего хода.
     for (let i = 0; i < 100 && sessions.length < 2; i += 1) await sleep(20);
     expect(sessions.length).toBeGreaterThanOrEqual(2);
     const nextPrompt = sessions[sessions.length - 1].prompts.join("\n");
     expect(nextPrompt).toContain("разберись с контрактом");
+    // Задание именно СЛЕДУЮЩЕГО хода (последняя поднятая системная
+    // инструкция) называет тот же текущий пункт.
+    const systemPrompt = capture.prompts[capture.prompts.length - 1] ?? "";
+    expect(systemPrompt).toContain("Текущий пункт — «Изучить контракт» (id p1)");
 
     // 5. Поздняя сдача из прежнего хода не принимается.
     expect(() =>
