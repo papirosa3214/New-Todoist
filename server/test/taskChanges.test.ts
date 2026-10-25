@@ -60,6 +60,33 @@ describe("журнал изменений задач", () => {
     ).n;
     expect(sub).toBeGreaterThanOrEqual(3); // вставка карточки + подзадача + комментарий
   });
+
+  it("ловит удаление дочерней строки (триггер читает OLD, а не NEW)", () => {
+    const before = (
+      db.prepare("SELECT COUNT(*) AS n FROM task_changes WHERE task_id = 'delta-a'").get() as { n: number }
+    ).n;
+    db.prepare("DELETE FROM subtasks WHERE id = ?").run("delta-sub");
+    const after = (
+      db.prepare("SELECT COUNT(*) AS n FROM task_changes WHERE task_id = 'delta-a'").get() as { n: number }
+    ).n;
+    expect(after).toBe(before + 1);
+  });
+
+  it("ловит правку ноды плана совместной работы (ключ — подзапрос к плану)", () => {
+    db.prepare(
+      "INSERT INTO task_collaboration_plans (id,task_id,revision,profile,created_by) VALUES (?,?,?,?,?)",
+    ).run("delta-plan", "delta-a", 1, "standard", owner);
+    const before = (
+      db.prepare("SELECT COUNT(*) AS n FROM task_changes WHERE task_id = 'delta-a'").get() as { n: number }
+    ).n;
+    db.prepare(
+      "INSERT INTO task_collaboration_plan_nodes (id,plan_id,slot_key,role_key) VALUES (?,?,?,?)",
+    ).run("delta-node", "delta-plan", "slot-1", "builder");
+    const after = (
+      db.prepare("SELECT COUNT(*) AS n FROM task_changes WHERE task_id = 'delta-a'").get() as { n: number }
+    ).n;
+    expect(after).toBe(before + 1); // в журнал — карточка плана, а не id плана
+  });
 });
 
 describe("GET /api/tasks/changes", () => {

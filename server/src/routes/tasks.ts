@@ -446,23 +446,19 @@ function agentStartedAt(task: any): string | null {
 /**
  * ETag полного списка задач: «изменилось ли что-то для этого набора».
  *
- * Считается по тому же набору строк, что уходит в ответе, поэтому 304
- * честный: если карточка изменилась — отпечаток другой. В отпечаток входит
- * и порядковый номер журнала изменений (`ledgerSeq`): правка подзадачи или
- * комментария не трогает строку tasks, но меняет то, что видит список.
+ * Считается по САМОМУ ответу, а не по строкам tasks: список показывает
+ * счётчики детей, метки, подзадачи и «кто ведёт карточку», и всё это меняется
+ * без правки строки tasks. Отпечаток ответа честен по определению — тот же
+ * ответ даёт тот же ETag, другой ответ — другой.
+ *
+ * Отпечаток входа в журнал (`ledgerSeq`) в ETag НЕ входит намеренно: он
+ * общий для всего трекера, и на живой системе (агенты пишут карточки
+ * постоянно) он менялся бы каждые секунды — 304 не наступал бы никогда.
+ * Дельты для «изменилось вот это» ведёт отдельный журнал.
  */
-function tasksListETag(rows: any[], session: string | null): string {
-  let maxUpdated = "";
-  let hash = 5381;
-  for (const row of rows) {
-    const updated = String(row?.updated_at ?? "");
-    if (updated > maxUpdated) maxUpdated = updated;
-    const key = `${row?.id}|${updated}`;
-    for (let i = 0; i < key.length; i++) {
-      hash = ((hash * 33) ^ key.charCodeAt(i)) >>> 0;
-    }
-  }
-  return `W/"${rows.length}-${maxUpdated}-${hash.toString(36)}-${ledgerSeq()}-${session ?? ""}"`;
+function tasksListETag(body: string, session: string | null): string {
+  const hash = crypto.createHash("sha1").update(body).digest("hex").slice(0, 16);
+  return `W/"${hash}-${session ?? ""}"`;
 }
 
 /** Сравнение ETag по правилам HTTP: список значений и слабая форма W/"". */
@@ -714,16 +710,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
     // впустую. Курсор нужен для ДЕЛЬТ: по нему клиент спрашивает «что
     // изменилось с прошлого раза» вместо полной перечитки.
     //
-    // В отпечаток входит и метка сессии: список помечает карточки как
-    // «мои» по сессии вызывающего, и смена сессии должна ломать кэш.
+    // Отпечаток считается по телу ответа (список собирается ниже), поэтому
+    // проверка 304 стоит ПОСЛЕ сборки: дешевле отдать 0 байт, чем повторно
+    // собирать то же самое ради хеша.
     const session = sessionOf(req);
-    const listEtag = tasksListETag(tasks, session);
-    reply.header("ETag", listEtag);
     reply.header("X-TaskFlow-Sync-Cursor", ledgerCursor());
-    const ifNoneMatch = req.headers["if-none-match"];
-    if (typeof ifNoneMatch === "string" && etagMatches(ifNoneMatch, listEtag)) {
-      return reply.code(304).send();
-    }
 
     const taskIds = tasks.map((t: any) => t.id) as string[];
     const ph = taskIds.map(() => "?").join(",");
@@ -759,7 +750,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     // реагирует на неё как на собственную (Максим 20.08.2026: «другие
     // сессии к этой задаче отношения не имеют»). Пометка справочная:
     // ничего не фильтрует и не прячет — владелец по-прежнему видит всё.
-    return tasks.map((t: any) => {
+    const items = tasks.map((t: any) => {
       const subtasks = (subtaskMap.get(t.id) ?? []).map(withSubtaskState);
       const children = childMap.get(t.id) ?? [];
       const bySubtask = subtasks.some(
@@ -796,6 +787,30 @@ export function registerTaskRoutes(app: FastifyInstance) {
         agent_started_at: t.id && t.agent_state ? (startedMap.get(t.id) ?? null) : null,
       };
     });
+
+    // ETag по телу ответа (вариант B трафика iOS-клиента, владелец
+    // 25.10.2026). Клиент, у которого список не менялся, присылает свой
+    // ETag — сервер отвечает 304 без тела и клиент не качает 402 КБ gzip
+    // впустую.
+    //
+    // Отпечаток считается по САМОМУ ответу, а не по строкам tasks: список
+    // показывает счётчики детей, метки, подзадачи и «кто ведёт карточку»,
+    // и всё это меняется без правки строки tasks. Отпечаток ответа честен
+    // по определению: тот же ответ — тот же ETag, другой — другой.
+    //
+    // Общий счётчик журнала (ledgerSeq) в отпечаток НЕ входит: он общий
+    // для всего трекера, и на живой системе (агенты пишут карточки
+    // постоянно) менялся бы каждые секунды — 304 не наступал бы никогда.
+    // «Что изменилось» ведёт отдельный журнал дельт.
+    const body = JSON.stringify(items);
+    const listEtag = tasksListETag(body, session);
+    reply.header("ETag", listEtag);
+    const ifNoneMatch = req.headers["if-none-match"];
+    if (typeof ifNoneMatch === "string" && etagMatches(ifNoneMatch, listEtag)) {
+      return reply.code(304).send();
+    }
+    reply.type("application/json; charset=utf-8");
+    return reply.send(body);
   });
 
   // ДЕЛЬТЫ (вариант B трафика iOS-клиента, владелец 25.10.2026).
