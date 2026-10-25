@@ -73,6 +73,14 @@ it("загрузчик не предлагает закрытые роли оп�
   expect(deniedPayload.unknown).toContain("taskflow_subtask_done");
 });
 
+it("загрузчик умеет подключать операцию без вызова модели",async()=>{
+ const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"loading"});
+ const session=fakeSession();
+ catalog.attachSession(session);
+ const target=catalog.registeredNames.find(name=>name!==TOOL_LOADER_NAME&&!catalog.activeNames.includes(name))!;
+ catalog.loader.activate([target]);
+ expect(session.names()).toContain(target);
+});
 it("allowlist оставляет инструменты в реестре — иначе подключить их нечем",async()=>{
   const probe=(name:string)=>({name,label:name,description:"probe",parameters:Type.Object({id:Type.Optional(Type.String())}),
     execute:async()=>({content:[{type:"text",text:"ok"}],details:{}})});

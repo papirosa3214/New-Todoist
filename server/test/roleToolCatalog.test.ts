@@ -3,10 +3,21 @@ import db,{migrate} from "../src/db.js";
 import {runMigrations} from "../src/migrations.js";
 import {seedRoleAccounts} from "./helpers/seedOwner.js";
 import {allRoles} from "../src/roleRouting.js";
-import {buildRoleToolCatalog} from "../src/runtime/roleToolCatalog.js";
+import {buildRoleToolCatalog,installNativeToolCore} from "../src/runtime/roleToolCatalog.js";
 import {secretaryThings3Tools} from "../src/runtime/secretaryThings3Tools.js";
 beforeAll(()=>{migrate();runMigrations();seedRoleAccounts(db);});
 const decode=(r:any)=>JSON.parse(r.content[0].text);
+/** Живая сессия в тесте: активный набор видят и загрузчик, и обработчик. */
+function fakeSession(){
+ let active:string[]=[];
+ return {
+  getActiveToolNames:()=>[...active],
+  setActiveToolsByName:(names:string[])=>{active=[...new Set(names)];},
+  names:()=>[...active],
+ };
+}
+/** Операция в реестре роли, но не в активном наборе (ядро + загрузчик). */
+const inactiveTarget=(catalog:any)=>catalog.registeredNames.find((name:string)=>name!=="taskflow_tools"&&!catalog.activeNames.includes(name))!;
 it("every configured role exposes native schemas from the common registry in chat/work/discussion",()=>{
  for(const role of allRoles()){
   const make=(mode:string,extra:any={})=>buildRoleToolCatalog({role:role.key,mode,runId:"test",...extra});
@@ -44,6 +55,40 @@ it("missing message context is explained rather than silently removing attachmen
  const c=buildRoleToolCatalog({role:"builder",mode:"work",runId:"test",taskId:"task"});
  const result=decode(await c.customTools[0].execute("x",{action:"describe",operation:"taskflow_chat_attach_file"}));
  expect(result.data.restriction.code).toBe("CONTEXT_REQUIRED");
+});
+it("отказ «инструмент не подключён» не роняет ход и пишет отдельный код аудита",()=>{
+ const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"not-connected"});
+ const target=inactiveTarget(catalog);
+ const before=db.prepare("SELECT COUNT(*) AS n FROM role_tool_audit WHERE error_code='TOOL_NOT_CONNECTED'").get() as {n:number};
+ // Pi отвечает «Tool X not found», когда операция не подключена к сессии.
+ const stopped=catalog.onToolExecutionEnd({type:"tool_execution_end",toolCallId:"missing-1",toolName:target,isError:true,result:{content:[{type:"text",text:`Tool ${target} not found`}]}});
+ expect(stopped).toBe(false);
+ const rows=db.prepare("SELECT operation FROM role_tool_audit WHERE error_code='TOOL_NOT_CONNECTED' ORDER BY rowid DESC").all() as any[];
+ expect(rows.length).toBe(before.n+1);
+ expect(rows[0].operation).toBe(target);
+ // Неверным вызовом это не считается — иначе три отказа роняли ход роли.
+ const invalid=db.prepare("SELECT COUNT(*) AS n FROM role_tool_audit WHERE run_id='not-connected' AND error_code='INVALID_ARGUMENTS'").get() as {n:number};
+ expect(invalid.n).toBe(0);
+});
+it("автоподключение возвращает операцию в активный набор",()=>{
+ const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"auto-connect"});
+ const target=inactiveTarget(catalog);
+ const session=fakeSession();
+ catalog.attachSession(session);
+ catalog.onToolExecutionEnd({type:"tool_execution_end",toolCallId:"missing-2",toolName:target,isError:true,result:{content:[{type:"text",text:`Tool ${target} not found`}]}});
+ expect(session.names()).toContain(target);
+});
+it("подключённая по требованию операция снова активна в новом ходе",()=>{
+ const first=buildRoleToolCatalog({role:"builder",mode:"work",runId:"turn-1",chatId:"chat-on-demand",messageId:"msg"});
+ const target=inactiveTarget(first);
+ const session=fakeSession();
+ first.attachSession(session);
+ first.onToolExecutionEnd({type:"tool_execution_end",toolCallId:"missing-3",toolName:target,isError:true,result:{content:[{type:"text",text:`Tool ${target} not found`}]}});
+ // Новый ход — новая сессия Pi и новый каталог той же роли и чата.
+ const next=buildRoleToolCatalog({role:"builder",mode:"work",runId:"turn-2",chatId:"chat-on-demand",messageId:"msg"});
+ const nextSession=fakeSession();
+ installNativeToolCore(nextSession,next,[]);
+ expect(nextSession.names()).toContain(target);
 });
 it("one adapter appears through the same catalog in every entry point",async()=>{
  const execute=vi.fn(async()=>({content:[{type:"text",text:"status"}]}));

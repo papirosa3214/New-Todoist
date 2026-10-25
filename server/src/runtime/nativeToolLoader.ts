@@ -16,12 +16,34 @@ import type { Tool } from "./universalTaskflow.js";
 
 export const TOOL_LOADER_NAME = "taskflow_tools";
 
+/** Операции, подключённые по требованию, должны пережить новый ход: ход роли
+ *  создаёт новую сессию Pi, и без этой памяти активный набор снова сужается
+ *  до ядра — роль теряет инструмент на каждом ходу. */
+const onDemandByScope = new Map<string, Set<string>>();
+
+/** Ключ памяти: роль + чат/задача. */
+export function onDemandScopeKey(scope: {role:string;chatId?:string;taskId?:string}): string {
+ return [scope.role,scope.chatId??"",scope.taskId??""].join("|");
+}
+
+export function rememberOnDemandTool(scope: string, name: string): void {
+ const set=onDemandByScope.get(scope)??new Set<string>();
+ set.add(name);
+ onDemandByScope.set(scope,set);
+}
+
+export function onDemandTools(scope: string): string[] {
+ return [...(onDemandByScope.get(scope)??[])];
+}
+
 const INDEX_DESCRIPTION_LIMIT = 160;
 
 export type ToolLoader = {
   tool: Tool;
   /** Привязать живую сессию: до этого подключать нечем. */
   attach: (session: any) => void;
+  /** Подключить операции к живой сессии (автоподключение по требованию). */
+  activate: (names: string[]) => void;
 };
 
 function words(text: string): string[] {
@@ -55,7 +77,7 @@ export function createToolLoader(options: {
   const activeNames = (): string[] => (session?.getActiveToolNames?.() ?? []) as string[];
   const isActive = (name: string): boolean => activeNames().includes(name);
 
-  const activate = (names: string[]): string[] => {
+  const activateNames = (names: string[]): string[] => {
     if (!session) throw new Error("Загрузчик без сессии: подключать инструменты нечем.");
     const current = activeNames();
     const next = [...new Set([...current, ...names])];
@@ -101,7 +123,7 @@ export function createToolLoader(options: {
             .map((row) => row.tool.name)
         : [];
       const toActivate = [...new Set([...wanted, ...matched])].filter((name) => !isActive(name));
-      const activated = activate(toActivate);
+      const activated = activateNames(toActivate);
       const alreadyActive = [...new Set([...wanted, ...matched])].filter(
         (name: string) => isActive(name) && !activated.includes(name),
       );
@@ -125,6 +147,11 @@ export function createToolLoader(options: {
     tool,
     attach: (next: any) => {
       session = next;
+    },
+    activate: (names: string[]) => {
+      if (!session) return;
+      // Подключать можно только то, что роль и так имеет право: реестр роли.
+      activateNames(names.filter((name) => known.has(name)));
     },
   };
 }
