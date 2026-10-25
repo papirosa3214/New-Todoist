@@ -1,0 +1,118 @@
+import {beforeAll,it,expect,vi} from "vitest";
+import {Type} from "typebox";
+import db,{migrate} from "../src/db.js";
+import {runMigrations} from "../src/migrations.js";
+import {seedRoleAccounts} from "./helpers/seedOwner.js";
+import {buildRoleToolCatalog} from "../src/runtime/roleToolCatalog.js";
+import {TOOL_LOADER_NAME} from "../src/runtime/nativeToolLoader.js";
+import {createAgentSession,SessionManager,SettingsManager} from "@earendil-works/pi-coding-agent";
+beforeAll(()=>{migrate();runMigrations();seedRoleAccounts(db);});
+
+/** Живая сессия в тесте: активный набор виден загрузчику. */
+function fakeSession(){
+  let active:string[]=[];
+  return {
+    getActiveToolNames:()=>[...active],
+    setActiveToolsByName:(names:string[])=>{active=[...new Set(names)];},
+    names:()=>[...active],
+  };
+}
+
+it("в модель уходит ядро, а не весь каталог",()=>{
+  const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"loading"});
+  expect(catalog.activeNames).toContain(TOOL_LOADER_NAME);
+  expect(catalog.activeNames).toContain("taskflow_task");
+  expect(catalog.activeNames).toContain("taskflow_work_plan");
+  expect(catalog.activeNames).not.toContain("taskflow");
+  // Ядро — меньше половины операций: остальное подключается по требованию.
+  expect(catalog.activeNames.length).toBeLessThan(catalog.registeredNames.length/2);
+  // Всё, что роль имеет право, остаётся в реестре сессии.
+  expect(catalog.registeredNames).toContain(TOOL_LOADER_NAME);
+  expect(catalog.customTools.map(tool=>tool.name)).toContain("taskflow");
+});
+
+it("загрузчик подключает операцию по имени и отдаёт индекс остальных",async()=>{
+  const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"loading"});
+  const session=fakeSession();
+  catalog.attachSession(session);
+  const target=catalog.registeredNames.find(name=>name!==TOOL_LOADER_NAME && !catalog.activeNames.includes(name))!;
+  expect(target).toBeTruthy();
+  const loader=catalog.customTools.find(tool=>tool.name===TOOL_LOADER_NAME)!;
+  const out=await loader.execute("call-1",{names:[target]});
+  const payload=JSON.parse(out.content[0].text);
+  expect(payload.activated).toContain(target);
+  expect(session.names()).toContain(target);
+  // Индекс — чтобы модель знала, что ещё можно подключить; подключённое из
+  // индекса уходит (оно уже в списке инструментов).
+  expect(payload.available.length).toBeGreaterThan(0);
+  expect(payload.available.map((row:any)=>row.name)).not.toContain(target);
+});
+
+it("загрузчик подбирает операцию по смыслу запроса",async()=>{
+  const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"loading"});
+  const session=fakeSession();
+  catalog.attachSession(session);
+  const loader=catalog.customTools.find(tool=>tool.name===TOOL_LOADER_NAME)!;
+  const out=await loader.execute("call-2",{query:"taskflow_doc_write"});
+  const payload=JSON.parse(out.content[0].text);
+  expect(payload.matches).toContain("taskflow_doc_write");
+  expect(session.names()).toContain("taskflow_doc_write");
+});
+
+it("загрузчик не предлагает закрытые роли операции",async()=>{
+  const catalog=buildRoleToolCatalog({role:"critic_verifier",mode:"work",runId:"loading",taskId:"task"});
+  const session=fakeSession();
+  catalog.attachSession(session);
+  const loader=catalog.customTools.find(tool=>tool.name===TOOL_LOADER_NAME)!;
+  const out=await loader.execute("call-3",{});
+  const payload=JSON.parse(out.content[0].text);
+  expect(payload.available.map((row:any)=>row.name)).not.toContain("taskflow_subtask_done");
+  const denied=await loader.execute("call-4",{names:["taskflow_subtask_done"]});
+  const deniedPayload=JSON.parse(denied.content[0].text);
+  expect(deniedPayload.activated).not.toContain("taskflow_subtask_done");
+  expect(deniedPayload.unknown).toContain("taskflow_subtask_done");
+});
+
+it("allowlist оставляет инструменты в реестре — иначе подключить их нечем",async()=>{
+  const probe=(name:string)=>({name,label:name,description:"probe",parameters:Type.Object({id:Type.Optional(Type.String())}),
+    execute:async()=>({content:[{type:"text",text:"ok"}],details:{}})});
+  const {session}=await createAgentSession({
+    cwd:".", customTools:[probe("op_a"),probe("op_b")], tools:["op_a","op_b"],
+    sessionManager:SessionManager.inMemory(), settingsManager:SettingsManager.inMemory({compaction:{enabled:false}}),
+  });
+  expect(session.getAllTools().map(tool=>tool.name)).toEqual(expect.arrayContaining(["op_a","op_b"]));
+  session.setActiveToolsByName(["op_a"]);
+  expect(session.getActiveToolNames()).toEqual(["op_a"]);
+  // Сузили набор — и расширили обратно: реестр это позволяет.
+  session.setActiveToolsByName(["op_a","op_b"]);
+  expect(session.getActiveToolNames()).toEqual(["op_a","op_b"]);
+  session.dispose();
+});
+
+it("сужение активного набора не меняет системный промпт",async()=>{
+  const probe=(name:string)=>({name,label:name,description:"probe",parameters:Type.Object({id:Type.Optional(Type.String())}),
+    execute:async()=>({content:[{type:"text",text:"ok"}],details:{}})});
+  const {session}=await createAgentSession({
+    cwd:".", customTools:[probe("op_a"),probe("op_b")], tools:["op_a","op_b"],
+    sessionManager:SessionManager.inMemory(), settingsManager:SettingsManager.inMemory({compaction:{enabled:false}}),
+  });
+  const before=session.systemPrompt;
+  session.setActiveToolsByName(["op_a"]);
+  expect(session.systemPrompt).toBe(before);
+  session.dispose();
+});
+
+it("подключённая операция проходит прежние проверки прав и идемпотентности",async()=>{
+  const execute=vi.fn(async(_id:string,args:any)=>({content:[{type:"text",text:JSON.stringify({answer:args.query})}]}));
+  const parameters=Type.Object({query:Type.String()},{additionalProperties:false});
+  const catalog=buildRoleToolCatalog({role:"infra_engineer",mode:"work",runId:"loading"},[{name:"mcp__infra__probe",description:"probe",parameters,execute}]);
+  const session=fakeSession();
+  catalog.attachSession(session);
+  const loader=catalog.customTools.find(tool=>tool.name===TOOL_LOADER_NAME)!;
+  await loader.execute("call-5",{names:["mcp__infra__probe"]});
+  expect(session.names()).toContain("mcp__infra__probe");
+  const tool=catalog.customTools.find(t=>t.name==="mcp__infra__probe")!;
+  const out=await tool.execute("call-6",{query:"health"});
+  expect(execute).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(out.content[0].text)).toEqual({answer:"health"});
+});

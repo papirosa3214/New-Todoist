@@ -1,6 +1,6 @@
 import { roleInstructionText } from "./roleHome.js";
 import {connectRoleMcp} from "./graftMcp.js";
-import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
+import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import crypto from "node:crypto";
 import { createAgentSession,createReadOnlyTools,SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -49,7 +49,7 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
     if(!model)throw new Error(`модель «${modelId}» недоступна`);
     const manager=openSlotSession(input.taskId,input.role,input.subtaskId,slotWorkspace(input.taskId));
     const cwd=manager.getCwd();
-    const policy=UNIVERSAL_INSTRUCTION+"\n\n"+ "Сейчас разговорный ход того же рабочего этапа. Отвечай с учётом сохранённой истории работы. Не возобновляй работу, не выполняй рабочие операции, не меняй файлы проекта, статусы, назначения, план и настройки. Доступны чтение, обсуждение, консультация и чтение документов. Для записи нужен рабочий ход. До 100 слов; блок до 50. Полный отчёт не повторяй, ссылайся на документы. Предыдущие рабочие команды истории в этом ходе не выполняй.";
+    const policy=ROLE_TOOL_INSTRUCTION+"\n\n"+ "Сейчас разговорный ход того же рабочего этапа. Отвечай с учётом сохранённой истории работы. Не возобновляй работу, не выполняй рабочие операции, не меняй файлы проекта, статусы, назначения, план и настройки. Доступны чтение, обсуждение, консультация и чтение документов. Для записи нужен рабочий ход. До 100 слов; блок до 50. Полный отчёт не повторяй, ссылайся на документы. Предыдущие рабочие команды истории в этом ходе не выполняй.";
     // AGENTS.md роли подключает сам загрузчик — сюда только общий шаблон.
     resources=await createTaskResourceLoader(input.role,cwd,[roleInstructionText(input.role,{withAgents:false}),policy].join("\n\n"));
     const builtin=createReadOnlyTools(cwd).filter(tool=>["read","grep","find","ls"].includes(tool.name));
@@ -60,8 +60,14 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
   const catalog=buildRoleToolCatalog({role:input.role,model:model.id??modelId,taskId:input.taskId,subtaskId:input.subtaskId,chatId:input.chatId,messageId:input.messageId,mode:"discussion",runId},[...infra.tools,...secretary]);
     const custom=catalog.customTools;
     ({session}=await createAgentSession({cwd,model,thinkingLevel:resolveThinkingLevel(model as any, input.role) ?? undefined,modelRuntime:runtime,resourceLoader:resources,
-      tools:[...builtin.map(tool=>tool.name),...catalog.activeNames],customTools:[...builtin,...custom],sessionManager:manager,
+      tools:[...builtin.map(tool=>tool.name),...catalog.registeredNames],customTools:[...builtin,...custom],sessionManager:manager,
       settingsManager:SettingsManager.inMemory({compaction:{enabled:true},retry:{enabled:true,maxRetries:2}})} as any));
+    installNativeToolSchemas(session, catalog);
+    // Активно только ядро операций: остальное подключает taskflow_tools по
+    // требованию (setActiveToolsByName). Реестр сессии полный — подключать можно
+    // всё, что роль имеет право вызывать.
+    installNativeToolCore(session, catalog, builtin.map((t:any)=>t.name));
+
     const roleThinking = resolveThinkingLevel(model as any, input.role);
     if (roleThinking && session.thinkingLevel !== roleThinking && typeof session.setThinkingLevel === "function") {
       session.setThinkingLevel(roleThinking);

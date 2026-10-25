@@ -6,7 +6,9 @@ import {ThrashGuard, stepDigest} from "./thrashGuard.js";
 import {registerChatSteering,_resetChatSteeringForTests} from "./chatSteering.js";
 import {
   buildRoleToolCatalog,
-  UNIVERSAL_INSTRUCTION,
+  installNativeToolCore,
+  installNativeToolSchemas,
+  ROLE_TOOL_INSTRUCTION,
 } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import { connectRoleMcp } from "./graftMcp.js";
@@ -1451,7 +1453,7 @@ export async function startChatRun(
     const systemPrompt =
       (await preparation.wait(chatSystemPrompt(role, mode, cwd))) + "\n\n" + chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)) +
       "\n\n" +
-      UNIVERSAL_INSTRUCTION +
+      ROLE_TOOL_INSTRUCTION +
       (chatPlanPrompt ? "\n\n" + chatPlanPrompt : "");
     const resourceLoader = await preparation.wait(createTaskResourceLoader(
       role,
@@ -1528,7 +1530,7 @@ export async function startChatRun(
         // нельзя: ни одно имя не совпадёт, и роль останется без инструментов
         // («у меня нет инструментов», владелец 02.10.2026). Встроенные с
         // описаниями владельца — через customTools: одноимённый перекрывает.
-        tools: [...builtin.map((t) => t.name), ...toolCatalog.activeNames],
+        tools: [...builtin.map((t) => t.name), ...toolCatalog.registeredNames],
         customTools: [...builtin, ...toolCatalog.customTools],
         sessionManager,
         settingsManager: SettingsManager.inMemory({
@@ -1541,6 +1543,12 @@ export async function startChatRun(
       throw error;
     }
     preparation.transfer();
+
+    installNativeToolSchemas(session, toolCatalog);
+    // Активно только ядро операций: остальное подключает taskflow_tools по
+    // требованию (setActiveToolsByName). Реестр сессии полный — подключать можно
+    // всё, что роль имеет право вызывать.
+    installNativeToolCore(session, toolCatalog, builtin.map((t:any)=>t.name));
 
     installSteeringBoundary(session);
     // Role policy also replaces the level restored from an older session.

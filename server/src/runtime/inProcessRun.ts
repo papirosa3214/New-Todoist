@@ -5,7 +5,7 @@ import {installSteeringBoundary} from "./steeringBoundary.js";
 import {queueWorkCoordination,markDeliveredToWork,traceCoordination} from "./chatCoordination.js";
 import { reserveReviewRun, assertReviewRunAllowed, finishReviewRun } from "./reviewRunBudget.js";
 import { chatTools } from "./chatTools.js";
-import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
+import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION } from "./roleToolCatalog.js";
 import { teamReadTools } from "./teamReadTools.js";
 import { allRoles } from "../roleRouting.js";
 import { roleToolAllowed } from "../lib/roleToolScope.js";
@@ -1505,7 +1505,7 @@ async function runRoleInProcessUnserialized(input: {
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
     teamStructureText(role),
     clockLine(),
-    UNIVERSAL_INSTRUCTION,
+    ROLE_TOOL_INSTRUCTION,
     (role==="critic_verifier" ? oneShotReviewInstruction(taskId) : null) ?? ROLE_REPORT_INSTRUCTION,
     ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, SUBMISSION_POLICY] : []),
     // Срез знаний роли (шаг 4 схемы базы знаний, заметка cfa5cdcd): чтобы
@@ -1583,11 +1583,17 @@ try {
     // `tools` у SDK — список ИМЁН. Раньше сюда шли объекты, и роль на задаче
     // оставалась без единого инструмента (владелец 02.10.2026). Встроенные с
     // описаниями владельца — через customTools: одноимённый перекрывает.
-    tools: [...builtinTools.map(t=>t.name), ...toolCatalog.activeNames],
+    tools: [...builtinTools.map(t=>t.name), ...toolCatalog.registeredNames],
     customTools: [...builtinTools, ...customTools],
     sessionManager: manager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
   } as any)).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await infra.close(); throw error; });
+
+  installNativeToolSchemas(session, toolCatalog);
+  // Активно только ядро операций: остальное подключает taskflow_tools по
+  // требованию (setActiveToolsByName). Реестр сессии полный — подключать можно
+  // всё, что роль имеет право вызывать.
+  installNativeToolCore(session, toolCatalog, builtinTools.map((t:any)=>t.name));
 
   installSteeringBoundary(session);
   const roleThinking = resolveThinkingLevel(model as any, role);

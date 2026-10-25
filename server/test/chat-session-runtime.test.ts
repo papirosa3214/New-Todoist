@@ -75,6 +75,7 @@ function makeFakeSession(options: any): FakeSession {
   const index = fakeSessions.length;
   const listeners: Array<(event: unknown) => void> = [];
   let aborted: (() => void) | null = null;
+  let activeTools: string[] = [];
   const session: FakeSession = {
     options,
     sessionId: options?.sessionManager?.getSessionId?.() ?? `sess-${index + 1}`,
@@ -96,6 +97,8 @@ function makeFakeSession(options: any): FakeSession {
     abort: vi.fn(async () => { aborted?.(); }),
     dispose: vi.fn(() => {}),
     getLastAssistantText: vi.fn(() => "какой-то ответ"),
+    getActiveToolNames: vi.fn(() => [...activeTools]),
+    setActiveToolsByName: vi.fn((names: string[]) => { activeTools = [...new Set(names)]; }),
     emit: (event: unknown) => {
       for (const listener of listeners) listener(event);
     },

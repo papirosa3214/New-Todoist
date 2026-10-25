@@ -2,7 +2,7 @@ import {beforeAll,afterAll,it,expect,vi} from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-const harness=vi.hoisted(()=>({cwd:"",options:[] as any[],events:[] as string[]}));
+const harness=vi.hoisted(()=>({cwd:"",options:[] as any[],events:[] as string[],active:[] as string[]}));
 vi.mock("../src/runtime/PiRuntimeAdapter.js",async original=>({...await original<typeof import("../src/runtime/PiRuntimeAdapter.js")>(),getModelRuntime:async()=>({getModel:(_provider:string,id:string)=>({id})})}));
 vi.mock("../src/runtime/inProcessRun.js",async original=>({...await original<typeof import("../src/runtime/inProcessRun.js")>(),slotWorkspace:()=>harness.cwd,deliverTopicToWork:async()=>"idle"}));
 vi.mock("../src/runtime/instructionResources.js",async original=>({...await original<typeof import("../src/runtime/instructionResources.js")>(),createTaskResourceLoader:async()=>({disposeResources:()=>{}})}));
@@ -11,6 +11,7 @@ vi.mock("@earendil-works/pi-coding-agent",async original=>{
  return {...actual,createAgentSession:async(options:any)=>{
   harness.options.push(options);let listener=(event:any)=>{};
   return {session:{subscribe:(fn:any)=>{listener=fn;},abort:async()=>{},dispose:()=>{},
+   getActiveToolNames:()=>[...harness.active],setActiveToolsByName:(names:string[])=>{harness.active=[...new Set(names)];},
    state:{messages:[]},prompt:async(text:string)=>{
     options.sessionManager.appendMessage({role:"user",content:text,timestamp:Date.now()});
     const answer={role:"assistant",content:[{type:"text",text:"Ответ по сохранённому этапу"}],stopReason:"stop",api:"test",provider:"test",model:"test",usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},timestamp:Date.now()};
@@ -76,5 +77,7 @@ it("conversation continues work file without changing slot state or creating att
  expect(reply.text).toBe('Ответ по сохранённому этапу');expect(reply.sessionId).toBe(saved.session_id);
  expect(db.prepare("SELECT * FROM subtasks WHERE id='slot_a'").get()).toEqual(before);expect((db.prepare("SELECT count(*) n FROM attempts").get() as any).n).toBe(attempts);
  expect((db.prepare("SELECT session_file FROM slot_sessions WHERE subtask_id='slot_a'").get() as any).session_file).toBe(saved.session_file);
- expect(harness.options.at(-1).tools).toContain('taskflow');expect(harness.options.at(-1).tools).not.toContain('taskflow_task');expect(harness.options.at(-1).tools).not.toContain('bash');expect(harness.options.at(-1).tools).not.toContain('write');
+ expect(harness.options.at(-1).tools).not.toContain('taskflow');expect(harness.options.at(-1).tools).toContain('taskflow_task');expect(harness.options.at(-1).tools).not.toContain('bash');expect(harness.options.at(-1).tools).not.toContain('write');
+ // Активно ядро и загрузчик: полный каталог в запрос не уходит.
+ expect(harness.active).toContain('taskflow_tools');expect(harness.active).toContain('taskflow_task');expect(harness.active).not.toContain('taskflow');expect(harness.active).not.toContain('bash');expect(harness.active).not.toContain('write');
 });

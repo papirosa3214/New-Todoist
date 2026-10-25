@@ -7,14 +7,19 @@ import {buildRoleToolCatalog} from "../src/runtime/roleToolCatalog.js";
 import {secretaryThings3Tools} from "../src/runtime/secretaryThings3Tools.js";
 beforeAll(()=>{migrate();runMigrations();seedRoleAccounts(db);});
 const decode=(r:any)=>JSON.parse(r.content[0].text);
-it("every configured role uses one active tool with a unique common registry in chat/work/discussion",()=>{
+it("every configured role exposes native schemas from the common registry in chat/work/discussion",()=>{
  for(const role of allRoles()){
   const make=(mode:string,extra:any={})=>buildRoleToolCatalog({role:role.key,mode,runId:"test",...extra});
   const chat=make("work",{chatId:"chat",messageId:"msg"});
   const work=make("work",{taskId:"task",subtaskId:"slot"});
   const discussion=make("discussion",{taskId:"task",subtaskId:"slot",chatId:"chat",messageId:"msg"});
   for(const c of [chat,work,discussion]){
-   expect(c.activeNames).toEqual(["taskflow"]);
+   expect(c.activeNames).not.toContain("taskflow");
+   // Активно ядро и загрузчик; полный каталог живёт в реестре и подключается
+   // по требованию (setActiveToolsByName) — в каждый запрос он не уходит.
+   expect(c.activeNames).toContain("taskflow_tools");
+   expect(c.activeNames.length).toBeLessThan(c.registeredNames.length);
+   expect(c.registeredNames).toEqual(c.customTools.filter(t=>t.name!=="taskflow").map(t=>t.name));
    expect(new Set(c.operations.map(t=>t.name)).size).toBe(c.operations.length);
   }
   expect(chat.operations.map(t=>t.name)).toEqual(work.operations.map(t=>t.name));
