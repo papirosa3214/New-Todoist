@@ -17,6 +17,7 @@ import {
   type MessageDelivery,
 } from "./chatQueue.js";
 import { currentChatGeneration } from "./chatQueue.js";
+import { markChatItemBlockedByServer } from "../lib/subtaskWorkPlan.js";
 import { logEvent } from "../agentState.js";
 
 // Хранилище живых онлайн-сессий Пи: одна строка на (чат, роль).
@@ -48,6 +49,10 @@ interface ChatSessionRow {
   chat_id: string;
   role_id: string;
   pi_session_id: string;
+  /** Поколение сессии: пока оно совпадает с текущим, файл сессии — источник
+   *  правды для продолжения. Уехало — значит продолжать нельзя, нужен свежий
+   *  ход с выжимкой (карточка 252c400e). */
+  generation: number;
   updated_at: string;
 }
 
@@ -64,6 +69,16 @@ export function getChatSessionId(chatId: string, roleId: string): string | null 
   return row?.pi_session_id ?? null;
 }
 
+/** Поколение, которому принадлежит сохранённая сессия (1 — по умолчанию). */
+export function getChatSessionGeneration(chatId: string, roleId: string): number {
+  const row = db
+    .prepare(
+      "SELECT generation FROM chat_sessions WHERE chat_id = ? AND role_id = ?",
+    )
+    .get(chatId, roleId) as { generation: number } | undefined;
+  return row?.generation ?? 1;
+}
+
 /** Полная строка сессии (chat_id, role_id, sessionId, updated_at) или null,
  *  если её ещё нет. Используется в тестах и при отладке. */
 export function getChatSession(
@@ -72,7 +87,7 @@ export function getChatSession(
 ): ChatSessionRow | null {
   const row = db
     .prepare(
-      "SELECT chat_id, role_id, pi_session_id, updated_at FROM chat_sessions " +
+      "SELECT chat_id, role_id, pi_session_id, generation, updated_at FROM chat_sessions " +
         "WHERE chat_id = ? AND role_id = ?",
     )
     .get(chatId, roleId) as ChatSessionRow | undefined;
@@ -83,13 +98,19 @@ export function getChatSession(
  *  и updated_at: продолжаем ту же сессию — обновляем «последний раз видели»;
  *  переезжаем на новую (например, после падения старой) — пишем новый id и
  *  тоже поднимаем updated_at, чтобы админ мог видеть свежесть. */
-export function upsertChatSession(chatId: string, roleId: string, piSessionId: string): void {
+export function upsertChatSession(
+  chatId: string,
+  roleId: string,
+  piSessionId: string,
+  generation = 1,
+): void {
   db.prepare(
-    "INSERT INTO chat_sessions (chat_id, role_id, pi_session_id, updated_at) " +
-      "VALUES (?, ?, ?, datetime('now')) " +
+    "INSERT INTO chat_sessions (chat_id, role_id, pi_session_id, generation, updated_at) " +
+      "VALUES (?, ?, ?, ?, datetime('now')) " +
       "ON CONFLICT(chat_id, role_id) DO UPDATE SET " +
-      "pi_session_id = excluded.pi_session_id, updated_at = datetime('now')",
-  ).run(chatId, roleId, piSessionId);
+      "pi_session_id = excluded.pi_session_id, generation = excluded.generation, " +
+      "updated_at = datetime('now')",
+  ).run(chatId, roleId, piSessionId, generation);
 }
 
 /** Снять сессию для пары (chat, role). Используется при отмене и при
@@ -282,6 +303,10 @@ export function enqueueChatReply<T>(
       if (deliveryId) {
         if (scheduledDeliveries.get(deliveryId) === nextDone) scheduledDeliveries.delete(deliveryId);
         failPendingMessageDelivery(deliveryId, "queue_wait_timeout");
+        // Исчерпан срок ожидания очереди: текущий пункт честно помечаем
+        // заблокированным с причиной, а не оставляем «тихо не начатым»
+        // (карточка b504958a, контракт §7).
+        markChatItemBlockedByServer(chatId, roleId, "истёк срок ожидания очереди чата");
       }
       reject(Object.assign(new Error("Истёк срок ожидания очереди чата"), {code:"CHAT_QUEUE_WAIT_TIMEOUT"}));
       // Keep FIFO reserved until the previous writer exits. Never steal a live session.

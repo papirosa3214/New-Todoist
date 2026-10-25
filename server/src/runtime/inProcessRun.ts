@@ -647,7 +647,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const s = await asRole(role, "POST", `/api/tasks/${p.task_id}/subtasks`, body);
         return { "шаг добавлен": s.title, id: s.id };
       }),
-    T("taskflow_work_plan", WORK_PLAN_INSTRUCTION + "\nПрочитать или обновить свой внутренний рабочий чек-лист. Без items — чтение. Для записи: весь список items {id,title,state: pending|in_progress|done} и base_revision из последнего ответа. Обычно 3–7 конкретных этапов; только один in_progress. Сохраняй id этапов при обновлении. Это отображение твоего плана, оно не меняет состояние и сдачу подзадачи. В ЧАТЕ (без слота) план — на эту сессию чата и виден владельцу над полем ввода: заводи его только для многошаговой работы, на простой ответ или вопрос — не нужен. Когда все этапы done, план закрыт и из полоски пропадает; на следующее поручение заводи новый план — его можно записать поверх закрытого без base_revision.",
+    T("taskflow_work_plan", subtaskId ? WORK_PLAN_INSTRUCTION + "\nПрочитать или обновить свой внутренний рабочий чек-лист. Без items — чтение. Для записи: весь список items {id,title,state: pending|in_progress|done} и base_revision из последнего ответа. Обычно 3–7 конкретных этапов; только один in_progress. Сохраняй id этапов при обновлении. Это отображение твоего плана, оно не меняет состояние и сдачу подзадачи. В ЧАТЕ (без слота) план — на эту сессию чата и виден владельцу над полем ввода: заводи его только для многошаговой работы, на простой ответ или вопрос — не нужен. Когда все этапы done, план закрыт и из полоски пропадает; на следующее поручение заводи новый план — его можно записать поверх закрытого без base_revision." : "Чек-лист одной роли в чате. Без items — прочитай сохранённый план. Для работы заведи один пункт, если результат простой, или несколько законченных результатов; на короткий вопрос план не нужен. Для записи передавай полный список items {id,title,state} с устойчивыми id и base_revision последнего ответа. Текущий пункт и состояния определяет сервер: не меняй done вручную, сдай текущий результат через taskflow_work_item_submit. Следующий пункт доступен только после успешной сдачи текущего; ответ submit содержит следующий пункт. Начатый пункт нельзя удалить, переименовать или обойти перестановкой. Дополняй план только нужными результатами. Остановленный план продолжать нельзя; новый план — только по новому поручению владельца.",
       Type.Object({base_revision:Type.Optional(Type.Number()), items:Type.Optional(Type.Array(Type.Object({id:Type.String(),title:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("in_progress"),Type.Literal("done")])})))}),
       async (p) => {
         // Без слота, но в чате — чек-лист этой чатовой сессии роли (21.10.2026).
@@ -655,7 +655,20 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           : chatContext?.chatId ? `/api/chats/${chatContext.chatId}/work-plan` : null;
         if (!planPath) throw new ToolError("Рабочий план относится к текущему слоту подзадачи или к чату");
         return await asRole(role, p.items === undefined ? "GET" : "PUT", planPath,
-          p.items === undefined ? undefined : {base_revision:p.base_revision,items:p.items});
+          p.items === undefined ? undefined : {base_revision:p.base_revision,items:p.items,...(!subtaskId && chatContext?.messageId ? {message_id:chatContext.messageId} : {})});
+      }),
+    T("taskflow_work_item_submit", "Сдать текущий пункт чатового чек-листа: result — 1–2 предложения, что сделано. Сервер отметит пункт и только после этого выдаст следующий. Пункт — законченный результат, а не вызов инструмента; пункт вне очереди не принимается. Пункт заблокирован — outcome blocked и block_type (dependency | needs_input | capability | transient).",
+      Type.Object({item_id:Type.String(),result:Type.Optional(Type.String()),outcome:Type.Optional(Type.Union([Type.Literal("done"),Type.Literal("blocked")])),block_type:Type.Optional(Type.String()),reason:Type.Optional(Type.String())}),
+      async (p) => {
+        if (!chatContext?.chatId) throw new ToolError("Сдача пункта относится к чатовому ходу: в карточке шаг сдают через taskflow_subtask_done");
+        const body: Json = { item_id: p.item_id, outcome: p.outcome ?? "done" };
+        if (p.result !== undefined) body.result = p.result;
+        if (p.block_type) body.block_type = p.block_type;
+        if (p.reason) body.reason = p.reason;
+        // Ключ идемпотентности и поколение выводит сервер из доставки: модель
+        // не придумывает ключи и не может подделать повтор.
+        if (chatContext.messageId) body.message_id = chatContext.messageId;
+        return await asRole(role, "POST", `/api/chats/${chatContext.chatId}/work-plan/submit`, body);
       }),
     T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. blocked принимается только с block_type: dependency | needs_input | capability | transient; для needs_input укажи changes_result=true, если меняет «Результат», «Критерии приёмки» или «Границы». При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния. Перед blocked по решаемой причине укажи help_attempt (кого звал, что ответили) или help_skip_reason (почему никто не решит). Пока работа идёт, технический снимок сервер пишет сам; при прогрессе и сдаче снимок от тебя не нужен.",
       Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()), block_type: Type.Optional(Type.String()), changes_result: Type.Optional(Type.Boolean()), snapshot: Type.Optional(SNAPSHOT_SHAPE), help_attempt: Type.Optional(Type.String()), help_skip_reason: Type.Optional(Type.String()) }),

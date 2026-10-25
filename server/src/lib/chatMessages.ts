@@ -27,6 +27,9 @@ let slotTitleOf: import("better-sqlite3").Statement | null = null;
 let messageSequenceOf: import("better-sqlite3").Statement | null = null;
 let replySenderNameOf: import("better-sqlite3").Statement | null = null;
 let reactionsOf: import("better-sqlite3").Statement | null = null;
+let roleKeyOfUser: import("better-sqlite3").Statement | null = null;
+let deliveryRowsOf: import("better-sqlite3").Statement | null = null;
+let roleMemberOf: import("better-sqlite3").Statement | null = null;
 
 /** Подпись по имени для шагов из БД; инструментам трекера без подписи. */
 function stepDetails(steps: SavedSteps): SavedSteps {
@@ -57,7 +60,11 @@ export function formatChatMessage(message: any) {
   messageSequenceOf ??= db.prepare("SELECT rowid AS sequence FROM chat_messages WHERE id=?");
   replySenderNameOf ??= db.prepare("SELECT u.name FROM chat_messages m JOIN users u ON u.id=m.from_user_id WHERE m.id=?");
   reactionsOf ??= db.prepare("SELECT user_id,emoji FROM chat_message_reactions WHERE message_id=? ORDER BY user_id");
-
+  roleKeyOfUser ??= db.prepare("SELECT role_key FROM users WHERE id=?");
+  deliveryRowsOf ??= db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=? AND message_id=? ORDER BY created_at DESC");
+  roleMemberOf ??= db.prepare(
+    "SELECT 1 FROM chat_members m JOIN users u ON u.id=m.member_id WHERE m.chat_id=? AND u.role_key IS NOT NULL LIMIT 1",
+  );
   const event = message.message_type === "system" || !!planTopicEventOf.get(message.id);
   // role_envelope_json — уже нормализованный конверт (JSON.stringify при записи):
   // парсим напрямую, а не через parseRoleContractV1 (там регекс + полная валидация
@@ -94,6 +101,34 @@ export function formatChatMessage(message: any) {
   if (typeof message.quick_replies === "string") {
     try { quickReplies = JSON.parse(message.quick_replies); } catch { quickReplies = null; }
   }
+  // Различение «сообщение сохранено» и «передано исполнителю» (карточка
+  // b504958a, контракт §10): считается по очереди доставки, отдельного
+  // хранилища нет.
+  //
+  // Признак несёт СООБЩЕНИЕ ВЛАДЕЛЬЦА, которому роль должна ответить: у
+  // ответа роли доставки «исполнителю» нет вовсе, и прежний код навешивал
+  // на каждый ответ роли «Сохранено» — владелец читал это как «мой запрос
+  // ещё не дошёл». Очередь доставки живёт на сообщении владельца: в
+  // chat_message_queue роль-получатель лежит в role_id, а сообщение — в
+  // message_id. Имя поля не `delivery_state`: так уже называется колонка
+  // chat_messages про доставку адресного сообщения человеку (миграция 130) —
+  // это другое.
+  let deliveryState: string | undefined;
+  const senderIsRole = Boolean(
+    (roleKeyOfUser!.get(message.from_user_id) as { role_key: string | null } | undefined)?.role_key,
+  );
+  if (message.chat_id && !senderIsRole && roleMemberOf!.get(message.chat_id)) {
+    const statuses = (deliveryRowsOf!.all(message.chat_id, message.id) as Array<{ status: string }>).map(
+      (row) => row.status,
+    );
+    deliveryState = statuses.includes("picked") || statuses.includes("done")
+      ? "accepted"
+      : statuses.includes("pending")
+        ? "queued"
+        : statuses.length
+          ? "stale"
+          : "saved";
+  }
   return {
     ...messageFields,
     sequence: message.sequence ?? (messageSequenceOf!.get(message.id) as { sequence: number } | undefined)?.sequence ?? null,
@@ -101,10 +136,15 @@ export function formatChatMessage(message: any) {
     ...(event ? { from_user_id: "taskflow_system", from_user_name: "Система", from_user_initials: "С", from_user_avatar_url: null } : {}),
     reply_to_sender_name: message.reply_to_message_id ? (replySenderNameOf!.get(message.reply_to_message_id) as { name: string } | undefined)?.name : null,
     reactions: reactionsOf!.all(message.id),
+    ...(deliveryState ? { queue_delivery_state: deliveryState } : {}),
     checklist_state: checklistStateOfMessage(message.id),
     attachments: attachmentsOf.all(message.id),
     quick_replies: quickReplies,
     is_session_marker: Boolean(message.is_session_marker),
+    // Прерванный ответ помечен явно: почему прерван и сохранён ли частично
+    // (карточка 252c400e, §2.1). Поля аддитивные — старый клиент их игнорирует.
+    stop_reason: message.stop_reason ?? null,
+    partial: message.partial ? 1 : 0,
     steps: parsedSteps ? stepDetails(parsedSteps) : null,
     handoff: chatHandoff(message),
     role_envelope: storedEnvelope

@@ -116,3 +116,20 @@ it("подключённая операция проходит прежние п
   expect(execute).toHaveBeenCalledTimes(1);
   expect(JSON.parse(out.content[0].text)).toEqual({answer:"health"});
 });
+
+
+it("чатовый конвейер может сдать текущий пункт нативным инструментом из ядра",()=>{
+  const catalog=buildRoleToolCatalog({role:"builder",mode:"chat",runId:"conveyor-core",chatId:"chat",messageId:"owner-message"});
+  expect(catalog.activeNames).toContain("taskflow_work_item_submit");
+  const submit=catalog.customTools.find(tool=>tool.name==="taskflow_work_item_submit")!;
+  expect(submit.parameters.properties.item_id.type).toBe("string");
+  expect(submit.parameters.required).toContain("item_id");
+});
+
+
+it("нативный план чата не требует минимум этапов и объясняет явную сдачу",()=>{
+ const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"description",chatId:"chat",messageId:"message"});
+ const plan=catalog.customTools.find(tool=>tool.name==="taskflow_work_plan")!;
+ expect(plan.description).not.toContain("3–7");
+ expect(plan.description).toContain("taskflow_work_item_submit");
+});

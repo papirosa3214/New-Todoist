@@ -5,7 +5,20 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { ensureDirectRoom, ensurePersonalRoom, roomsSnapshot } from "../src/lib/chatRooms.js";
-import { readChatWorkPlan, saveChatWorkPlan, validateWorkPlan } from "../src/lib/subtaskWorkPlan.js";
+import { readChatWorkPlan, saveChatWorkPlan, submitChatWorkItem, validateWorkPlan } from "../src/lib/subtaskWorkPlan.js";
+import crypto from "node:crypto";
+
+/** Живой ход роли в комнате: сдача принимается только в ходе чата. */
+function liveRun(chatId: string, roleId = "role_builder"): string {
+  const messageId = crypto.randomUUID();
+  db.prepare("INSERT INTO chat_messages(id,chat_id,from_user_id,text,created_at) VALUES(?,?,?,?,datetime('now'))").run(messageId, chatId, "u1", "Работай");
+  const deliveryId = crypto.randomUUID();
+  db.prepare(
+    `INSERT INTO chat_message_queue(id,chat_id,role_id,delivery_id,message_id,session_generation,payload_json,status,updated_at)
+     VALUES(?,?,?,?,?,1,'{}','picked',datetime('now'))`,
+  ).run(deliveryId, chatId, roleId, deliveryId, messageId);
+  return messageId;
+}
 
 vi.mock("../src/lib/embeddingClient.js", () => ({
   getEmbeddings: vi.fn(async () => ({ embeddings: [], dim: 0, durationMs: 0 })),
@@ -127,18 +140,23 @@ describe("комнаты ролей и лички", () => {
   it("чек-лист роли в чате: сохраняется, виден участнику, владелец не пишет, новая сессия сбрасывает", async () => {
     const room = ensurePersonalRoom("role_builder")!;
     const plan = saveChatWorkPlan(room, "role_builder", 0, validateWorkPlan([
-      { id: "a", title: "Разобрать", state: "done" }, { id: "b", title: "Сделать", state: "in_progress" },
+      { id: "a", title: "Разобрать", state: "pending" }, { id: "b", title: "Сделать", state: "pending" },
     ]));
     expect(plan.revision).toBe(1);
-    expect(() => saveChatWorkPlan(room, "role_builder", 0, plan.items)).toThrow("revision_conflict");
+    expect(() => saveChatWorkPlan(room, "role_builder", 0, plan.items)).toThrow(/revision/);
     const list = await app.inject({ method: "GET", url: `/api/chats/${room}/work-plans`, headers: ownerAuth });
     expect(list.json().plans[0]).toMatchObject({ role_id: "role_builder", revision: 1 });
     const ownerPut = await app.inject({ method: "PUT", url: `/api/chats/${room}/work-plan`, headers: ownerAuth, payload: { base_revision: 1, items: plan.items } });
     expect(ownerPut.statusCode).toBe(403);
-    // Выполнен целиком — закрыт: в полоске нет, новый план ложится без сверки revision.
-    const done = saveChatWorkPlan(room, "role_builder", 1, validateWorkPlan([
+    // Пункт закрывает сервер: пометка done без сдачи не принимается (25.10.2026).
+    expect(() => saveChatWorkPlan(room, "role_builder", 1, validateWorkPlan([
       { id: "a", title: "Разобрать", state: "done" }, { id: "b", title: "Сделать", state: "done" },
-    ]));
+    ]))).toThrow(/сервер/);
+    // Выполнен целиком — закрыт: в полоске нет, новый план ложится без сверки revision.
+    const messageId = liveRun(room);
+    for (const [itemId, text] of [["a", "Разобрал."], ["b", "Сделал."]] as const)
+      submitChatWorkItem({ chatId: room, roleId: "role_builder", itemId, result: text, outcome: "done", messageId });
+    const done = readChatWorkPlan(room, "role_builder")!;
     expect((await app.inject({ method: "GET", url: `/api/chats/${room}/work-plans`, headers: ownerAuth })).json().plans).toHaveLength(0);
     const fresh = saveChatWorkPlan(room, "role_builder", 0, validateWorkPlan([{ id: "c", title: "Новое", state: "in_progress" }]));
     expect(fresh.revision).toBe(done.revision + 1);

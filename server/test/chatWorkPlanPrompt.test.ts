@@ -6,14 +6,17 @@ import { seedRoleAccounts } from "./helpers/seedOwner.js";
 import { setInProcessApp } from "../src/runtime/inProcessRun.js";
 import {
   CHAT_PLAN_MISSING_PROMPT,
+  chatPlanView,
   chatWorkPlanPrompt,
   chatWorkPlanPromptText,
   saveChatWorkPlan,
+  stopChatWorkPlan,
+  submitChatWorkItem,
 } from "../src/lib/subtaskWorkPlan.js";
 
 const items = [
-  { id: "inspect", title: "Изучить контракт", state: "done" as const },
-  { id: "implement", title: "Реализовать", state: "in_progress" as const },
+  { id: "inspect", title: "Изучить контракт", state: "pending" as const },
+  { id: "implement", title: "Реализовать", state: "pending" as const },
   { id: "verify", title: "Проверить", state: "pending" as const },
 ];
 
@@ -28,36 +31,65 @@ beforeAll(async () => {
 });
 afterAll(async () => { await app.close(); });
 
+function chatWithRun() {
+  const chatId = crypto.randomUUID();
+  db.prepare("INSERT INTO chats(id,kind,created_by) VALUES(?,'group','u1')").run(chatId);
+  for (const member of ["u1", role])
+    db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)").run(chatId, member);
+  db.prepare("INSERT INTO chat_session_generation(chat_id,role_id,generation) VALUES(?,?,1)").run(chatId, role);
+  const messageId = crypto.randomUUID();
+  db.prepare("INSERT INTO chat_messages(id,chat_id,from_user_id,text,created_at) VALUES(?,?,'u1','Работай',datetime('now'))").run(messageId, chatId);
+  const deliveryId = crypto.randomUUID();
+  db.prepare(
+    `INSERT INTO chat_message_queue(id,chat_id,role_id,delivery_id,message_id,session_generation,payload_json,status,updated_at)
+     VALUES(?,?,?,?,?,1,'{}','picked',datetime('now'))`,
+  ).run(deliveryId, chatId, role, deliveryId, messageId);
+  return { chatId, messageId };
+}
+
 it("без плана — правило завести чек-лист, а не пустота", () => {
-  expect(chatWorkPlanPromptText([], 0)).toBe(CHAT_PLAN_MISSING_PROMPT);
+  expect(chatWorkPlanPromptText(null)).toBe(CHAT_PLAN_MISSING_PROMPT);
   expect(CHAT_PLAN_MISSING_PROMPT).toContain("taskflow_work_plan");
+  // Простая работа — один пункт: минимум «3–7 этапов» больше не требуется.
+  expect(CHAT_PLAN_MISSING_PROMPT).toContain("один пункт для простой работы");
+});
+
+it("выдаёт ровно текущий пункт, его id и способ сдачи", () => {
+  const { chatId, messageId } = chatWithRun();
+  saveChatWorkPlan(chatId, role, 0, items as any);
+  submitChatWorkItem({ chatId, roleId: role, itemId: "inspect", result: "Изучил.", outcome: "done", messageId });
+  const text = chatWorkPlanPrompt(chatId, role);
+  expect(text).toContain("✓ Изучить контракт");
+  expect(text).toContain("▶ Реализовать");
+  expect(text).toContain("• Проверить");
+  expect(text).toContain("Текущий пункт — «Реализовать» (id implement)");
+  expect(text).toContain("taskflow_work_item_submit с item_id implement");
+  expect(text).not.toContain("Текущий пункт — «Проверить»");
+  expect(text).toContain("revision 2");
 });
 
 it("на закрытом плане сервер молчит: вести больше не по чему", () => {
-  expect(chatWorkPlanPromptText(items.map((i) => ({ ...i, state: "done" as const })), 7)).toBe("");
+  const { chatId, messageId } = chatWithRun();
+  saveChatWorkPlan(chatId, role, 0, [{ id: "only", title: "Сделать", state: "pending" }] as any);
+  submitChatWorkItem({ chatId, roleId: role, itemId: "only", result: "Сделал.", outcome: "done", messageId });
+  expect(chatPlanView(chatId, role)!.status).toBe("finished");
+  expect(chatWorkPlanPrompt(chatId, role)).toBe("");
 });
 
-it("выдаёт ровно текущий этап и его id, остальные не предлагает", () => {
-  const text = chatWorkPlanPromptText(items, 3);
-  expect(text).toContain("▶ Реализовать");
-  expect(text).toContain("✓ Изучить контракт");
-  expect(text).toContain("• Проверить");
-  expect(text).toContain("Текущий этап — «Реализовать» (id implement)");
-  expect(text).toContain("base_revision 3");
-  expect(text).not.toContain("Текущий этап — «Проверить»");
-});
-
-it("ведущий этап берётся из сохранённого плана чата, а не из головы роли", () => {
-  const chatId = crypto.randomUUID();
-  db.prepare("INSERT INTO chats(id,kind,created_by) VALUES(?,'direct','u1')").run(chatId);
-  db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)").run(chatId, "u1");
-  db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)").run(chatId, role);
-  saveChatWorkPlan(chatId, role, 0, items);
-
+it("на остановленном плане роль видит запрет начинать следующие пункты", () => {
+  const { chatId } = chatWithRun();
+  saveChatWorkPlan(chatId, role, 0, items as any);
+  stopChatWorkPlan(chatId, role, "owner_stop");
   const text = chatWorkPlanPrompt(chatId, role);
-  expect(text).toContain("Текущий этап — «Реализовать» (id implement)");
-  expect(text).toContain("revision 1");
+  expect(text).toContain("ОСТАНОВЛЕН");
+  expect(text).toContain("остановил владелец");
+  expect(text).toContain("Следующие пункты не начинай");
+});
 
+it("ведущий пункт берётся из сохранённого плана чата, а не из головы роли", () => {
+  const { chatId } = chatWithRun();
+  saveChatWorkPlan(chatId, role, 0, items as any);
+  expect(chatWorkPlanPrompt(chatId, role)).toContain("Текущий пункт — «Изучить контракт» (id inspect)");
   // План для другой роли в том же чате не подмешивается.
   expect(chatWorkPlanPrompt(chatId, "role_critic_verifier")).toBe(CHAT_PLAN_MISSING_PROMPT);
 });

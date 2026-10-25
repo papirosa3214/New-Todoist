@@ -21,7 +21,8 @@ import {
   type ChatWorkMode,
 } from "./chatWorkMode.js";
 import { getSetting } from "../lib/serverSettings.js";
-import { chatWorkPlanPrompt } from "../lib/subtaskWorkPlan.js";
+import { configuredChatActionLimit, guardChatActions } from "./chatActionBudget.js";
+import { chatWorkPlanPrompt, stopChatWorkPlan } from "../lib/subtaskWorkPlan.js";
 import {
   chatInstructionArgs,
   chatSystemPrompt,
@@ -90,6 +91,7 @@ import {
   upsertChatSession,
   makeChatRunId,
 } from "./chatSession.js";
+import { currentChatGeneration } from "./chatQueue.js";
 import { authSessionManager, type AuthSessionView } from "./AuthSession.js";
 import { prepareRoleRunAccess, releaseRoleRunAccess } from "./roleRunAccess.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
@@ -1237,6 +1239,11 @@ interface ActiveChatRun {
   roleId: string;
   /** Прервать ход: сессия Pi внутри сервера (`session.abort`). */
   abort: () => Promise<void>;
+  /** Дождаться фактической остановки хода (`session.waitForIdle`).
+   *  `abort()` просит остановиться; `waitForIdle` — дождаться, пока
+   *  выполняемое действие действительно завершилось. Без него «остановленный»
+   *  ход может ещё секунду-другую работать в фоне. */
+  waitIdle?: () => Promise<void>;
   startedAt: string;
   cancelled: boolean;
 }
@@ -1531,7 +1538,10 @@ export async function startChatRun(
         // («у меня нет инструментов», владелец 02.10.2026). Встроенные с
         // описаниями владельца — через customTools: одноимённый перекрывает.
         tools: [...builtin.map((t) => t.name), ...toolCatalog.registeredNames],
-        customTools: [...builtin, ...toolCatalog.customTools],
+        customTools: guardChatActions([...builtin, ...toolCatalog.customTools], configuredChatActionLimit(), () => {
+          stopChatWorkPlan(input.chatId, input.roleId, "budget_exhausted");
+          void session?.abort().catch(() => {});
+        }),
         sessionManager,
         settingsManager: SettingsManager.inMemory({
           compaction: { enabled: true },
@@ -1574,6 +1584,7 @@ export async function startChatRun(
       role,
       roleId: input.roleId,
       abort: () => session.abort(),
+      waitIdle: () => session.waitForIdle?.() ?? Promise.resolve(),
       startedAt: new Date().toISOString(),
       cancelled: false,
     };
@@ -1656,6 +1667,7 @@ export async function startChatRun(
       clearTimeout(ceilingTimer);
       const ceiling = new Promise<never>((_, reject) => {
         ceilingTimer = setTimeout(() => {
+          stopChatWorkPlan(input.chatId, input.roleId, "budget_exhausted");
           session.abort().catch(() => {});
           reject(new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs));
         }, timeoutMs);
@@ -1668,6 +1680,7 @@ export async function startChatRun(
         if (idleMs <= 0 || watchdogFired || runningTools.size > 0) return;
         if (Date.now() - lastActivity < idleMs) return;
         watchdogFired = new ChatRunTimeoutError("CHAT_RUN_IDLE", idleMs);
+        stopChatWorkPlan(input.chatId, input.roleId, "budget_exhausted");
         session.abort().catch(() => {});
         rejectWatchdog(watchdogFired);
       },
@@ -1745,7 +1758,14 @@ export async function startChatRun(
       // Сохраняем pi_session_id ДЛЯ СЛЕДУЮЩЕГО СООБЩЕНИЯ. Это
       // единственная запись в БД, которую делает онлайн-сессия —
       // tasks/attempts/agent_state остаются нетронутыми.
-      upsertChatSession(input.chatId, input.roleId, finalSessionId);
+      // Поколение пишется рядом с сессией: поколение уехало (прерывание,
+      // /new-session) — значит файл сессии больше не источник правды.
+      upsertChatSession(
+        input.chatId,
+        input.roleId,
+        finalSessionId,
+        currentChatGeneration(input.chatId, input.roleId),
+      );
     }
 
     return { runId, sessionId: finalSessionId, text: finalText };
@@ -1817,6 +1837,9 @@ async function runExternalChat(
     role,
     roleId: input.roleId,
     abort: () => session.abort(),
+    // Внешний CLI-агент не отдаёт waitForIdle: ждать нечего, его abort
+    // завершает процесс.
+    waitIdle: async () => undefined,
     startedAt: new Date().toISOString(),
     cancelled: false,
   };
@@ -1862,7 +1885,12 @@ async function runExternalChat(
       ).trim(),
     );
     if (session.sessionId)
-      upsertChatSession(input.chatId, input.roleId, session.sessionId);
+      upsertChatSession(
+        input.chatId,
+        input.roleId,
+        session.sessionId,
+        currentChatGeneration(input.chatId, input.roleId),
+      );
     return { runId, sessionId: session.sessionId, text };
   } finally {
     steering?.close();
@@ -1916,6 +1944,44 @@ export async function cancelChatRunsFor(
     if (await cancelChatRun(run.runId)) stopped += 1;
   }
   return stopped;
+}
+
+/** Дождаться фактической остановки ходов роли в чате (после abort).
+ *
+ *  Граница прерывания (карточка 252c400e) требует именно этого: «ход
+ *  остановлен» должно означать «действие уже прекратилось», иначе частичный
+ *  ответ собирается на ходу, а внешняя работа продолжает жить в фоне.
+ *  Предел времени обязателен: ход, который не встаёт, не должен висеть
+ *  вечно. */
+export async function waitChatRunsIdle(
+  chatId: string,
+  roleId: string | undefined,
+  timeoutMs: number,
+): Promise<boolean> {
+  const runs = [...activeChatRuns.values()].filter(
+    (run) => run.chatId === chatId && (!roleId || run.roleId === roleId),
+  );
+  if (!runs.length) return true;
+  const wait = Promise.all(
+    runs.map(async (run) => {
+      try {
+        await run.waitIdle?.();
+      } catch {
+        /* ход мог завершиться вместе с отменой */
+      }
+    }),
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), Math.max(1, timeoutMs));
+    timer.unref?.();
+  });
+  try {
+    const outcome = await Promise.race([wait.then(() => "idle" as const), limit]);
+    return outcome === "idle";
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Тестовая утилита: сбросить in-memory карту активных чат-сессий и
