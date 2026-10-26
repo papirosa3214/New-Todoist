@@ -1,3 +1,4 @@
+import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
 import {visibleChatSql} from "../lib/serviceNoise.js";
 import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
 import {compactChatReportMaterials} from "../lib/chatReportMaterials.js";
@@ -1342,6 +1343,27 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // сообщений: список чатов сортируется и показывает превью по нему, и без
   // пересчёта удаление последнего сообщения оставляло бы в строке списка то,
   // чего в чате уже нет.
+  // Withdrawal differs from administrative history deletion.
+  app.post<{Params:{id:string;messageId:string}}>("/api/chats/:id/messages/:messageId/withdraw", {preHandler:authPre}, async(req:any,reply)=>{
+    const chatId=req.params.id, messageId=req.params.messageId;
+    if(!isMember(chatId,req.userId))return reply.code(404).send({error:"Чат не найден"});
+    const message=db.prepare("SELECT from_user_id FROM chat_messages WHERE chat_id=? AND id=?").get(chatId,messageId) as {from_user_id:string}|undefined;
+    if(!message)return reply.code(404).send({error:"Сообщение не найдено"});
+    if(message.from_user_id!==req.userId)return reply.code(403).send({error:"Убрать можно только своё сообщение"});
+    const removed=db.transaction(()=>{
+      if(!canWithdrawChatMessage(chatId,messageId))return false;
+      // No await between recheck, fencing pending deliveries and removal.
+      db.prepare("UPDATE chat_message_queue SET status='superseded',finished_at=datetime('now'),updated_at=datetime('now') WHERE chat_id=? AND message_id=? AND status='pending'").run(chatId,messageId);
+      db.prepare("UPDATE attachments SET chat_message_id=NULL WHERE chat_message_id=?").run(messageId);
+      db.prepare("DELETE FROM chat_messages WHERE chat_id=? AND id=?").run(chatId,messageId);
+      db.prepare("UPDATE chats SET updated_at=COALESCE((SELECT created_at FROM chat_messages WHERE chat_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1),updated_at) WHERE id=?").run(chatId,chatId);
+      return true;
+    })();
+    if(!removed)return reply.code(409).send({error:"Роль уже взяла сообщение в работу. Убрать его нельзя."});
+    broadcastToUsers(memberIds(chatId),{type:"chat:withdrawn",chat_id:chatId,message_id:messageId});
+    return {ok:true};
+  });
+
   app.delete<{ Params: { id: string }; Querystring: { ids?: string } }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
@@ -2610,6 +2632,8 @@ async function dispatchRoleReplies(args: {
 
   const topic=chatExecutionMode(chatId,args.messageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
   for (const role of targets) {
+    // Role selection may have awaited preparation while the author withdrew.
+    if(!db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=?").get(args.messageId,chatId))return;
     let selectedSlot:string|undefined;
     if(topic){
       const recipient=(db.prepare("SELECT recipient_subtask_id FROM chat_messages WHERE id=?").get(args.messageId) as {recipient_subtask_id:string|null}|undefined)?.recipient_subtask_id;
@@ -2659,6 +2683,7 @@ async function dispatchRoleReplies(args: {
     const selected=selectedSlot ? resolveTopicSlot(topic!.task_id,role,undefined,selectedSlot) : null;
     const delivery=chatExecutionMode(chatId,args.messageId) === "chat" ? "idle" : selected ? await deliverTopicToWork(selected.task_id,role,args.messageId,text,selected.plan_node_key)
       : await deliverChatToWork(role,chatId,args.messageId,text,message?.recipient_subtask_id ?? undefined);
+    if(!db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=?").get(args.messageId,chatId))return;
     if(delivery!=="idle"){
       // Pending survives a process crash. The recipient's linked reply (or
       // persisted processing of an answer) completes the obligation.

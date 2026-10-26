@@ -1,3 +1,4 @@
+import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
 import {isQuietSystemMessage} from "./serviceNoise.js";
 import { chatBlocksCached, withTextBlocks } from "./chatBlocks.js";
 import {compactChatReportMaterials} from "./chatReportMaterials.js";
@@ -151,6 +152,7 @@ export function formatChatMessage(message: any) {
     reply_to_sender_name: message.reply_to_message_id ? (replySenderNameOf!.get(message.reply_to_message_id) as { name: string } | undefined)?.name : null,
     reactions: reactionsOf!.all(message.id),
     ...(deliveryState ? { queue_delivery_state: deliveryState } : {}),
+    can_withdraw: !senderIsRole && !event && canWithdrawChatMessage(message.chat_id, message.id),
     checklist_state: checklistStateOfMessage(message.id),
     attachments: attachmentsOf.all(message.id),
     quick_replies: quickReplies,

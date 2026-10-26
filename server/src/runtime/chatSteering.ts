@@ -51,6 +51,7 @@ interface Input {
 }
 interface Registration {
   chatId: string;
+  hasInput: (id: string) => boolean;
   offer: (id: string, source: SteeringOffer) => Promise<SteeringReceipt | null>;
 }
 /** roleId → chatId → регистрация активного хода роли. */
@@ -62,6 +63,7 @@ export function registerChatSteering(input: Input) {
   let inputTail:Promise<unknown>=Promise.resolve();
   const registration: Registration = {
     chatId: input.chatId,
+    hasInput: (id) => entries.has(id),
     async offer(id: string, source: SteeringOffer): Promise<SteeringReceipt | null> {
       if (closed) return null;
       if ((source.executionMode ?? "chat") !== (input.executionMode ?? "chat") || (source.workMode ?? "work") !== (input.workMode ?? "work")) return null;
@@ -143,4 +145,9 @@ export async function offerChatSteering(chatId: string, roleId: string, messageI
 /** Для тестов: сбросить реестр активных ходов. */
 export function _resetChatSteeringForTests(): void {
   active.clear();
+}
+
+/** Includes SDK acceptance in flight: it cannot safely be retracted. */
+export function hasChatSteeringInput(messageId: string): boolean {
+  return [...active.values()].some(byChat => [...byChat.values()].some(run => run.hasInput(messageId)));
 }
