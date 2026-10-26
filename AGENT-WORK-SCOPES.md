@@ -325,3 +325,7 @@
 | LOCK-CHAT-COORDINATION-RESTORE-20261026 | REVIEW | CHAT-COORDINATION | Карточки обращений не являются служебным шумом | `AGENT-WORK-SCOPES.md`, `server/src/lib/serviceNoise.ts`, `server/test/serviceNoise.test.ts`, `docs/2026-10-26-chat-coordination-restore.md` | Владелец: восстановить карточки | Codex | RED/GREEN HTTP и SQL |
 
 | LOCK-COORDINATION-INTEGRATION-20261026 | REVIEW | COORDINATION | Реальный диагностический контракт и доступ | `AGENT-WORK-SCOPES.md`, `server/src/routes/coordination.ts`, `server/test/coordination/integration.test.ts`, `docs/2026-10-26-coordination-integration.md` | Владелец: доработать координацию до эксперимента | Codex | HTTP RED/GREEN |
+
+| LOCK-UNIVERSAL-OWNER-ASSISTANT-20261026 | REVIEW | OWNER-ASSISTANT | Аудит и предложение минимальной настройки универсального помощника | AGENT-WORK-SCOPES.md, docs/2026-10-26-universal-owner-assistant.md | Поручение владельца | Codex | Чтение текущего кода и инструкций; без изменения продукта |
+
+| LOCK-OWNER-ASSISTANT-APPLY-20261026 | REVIEW | OWNER-ASSISTANT | Согласованные личность и персональные правила универсальной помощницы через штатный applyOverride с историей | AGENT-WORK-SCOPES.md, docs/2026-10-26-universal-owner-assistant.md, /home/maksim/taskflow/roles/secretary/ROLE.md, /home/maksim/taskflow/roles/secretary/AGENTS.md, /home/maksim/taskflow/roles/secretary/behavior.json | Прямое согласие владельца | Codex | Тесты существующих сервисов, чтение собранного промпта; без изменения прав/модели/перезапуска |
