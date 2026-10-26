@@ -18,34 +18,29 @@ function plan(){
  return {chatId,roleId:"role_builder",messageId};
 }
 const reserve=(context:ReturnType<typeof plan>,callId:string)=>reserveChatItemAction({...context,callId});
-it("по умолчанию десять действий; одиннадцатое отвергается до эффекта",async()=>{
- const context=plan(),execute=vi.fn(async()=>"ok"),exhausted=vi.fn();
- const [tool]=guardChatActions([{name:"bash",execute}],id=>reserve(context,id),exhausted);
- expect(getSetting("chat_item_max_actions")).toBe(10);
- for(let i=0;i<10;i++)await tool.execute("call-"+i);
- await expect(tool.execute("call-10")).rejects.toThrow(/исчерпан/);
- expect(execute).toHaveBeenCalledTimes(10);expect(exhausted).toHaveBeenCalledOnce();
+it("по умолчанию 100 действий, затем остановка до эффекта и новая попытка на 50",async()=>{
+ const context=plan(),execute=vi.fn(async()=>"ok"),exhausted=vi.fn(),restart=vi.fn();
+ const [oldTool]=guardChatActions([{name:"bash",execute}],id=>reserve(context,id),exhausted,restart);
+ expect(getSetting("chat_item_max_actions")).toBe(100);
+ for(let i=0;i<100;i++)await oldTool.execute("call-"+i);
+ await expect(oldTool.execute("boundary")).rejects.toMatchObject({code:"CHAT_ACTION_CONTINUE"});
+ await expect(oldTool.execute("late-old-session")).rejects.toMatchObject({code:"CHAT_ACTION_CONTINUE"});
+ expect(execute).toHaveBeenCalledTimes(100);expect(restart).toHaveBeenCalledOnce();
+ const [freshTool]=guardChatActions([{name:"bash",execute}],id=>reserve(context,id),exhausted);
+ for(let i=0;i<50;i++)await freshTool.execute("fresh-"+i);
+ await expect(freshTool.execute("beyond-50")).rejects.toMatchObject({code:"CHAT_ACTION_BUDGET"});
+ expect(execute).toHaveBeenCalledTimes(150);expect(exhausted).toHaveBeenCalledOnce();
 });
-it("успешная сдача открывает независимые десять действий следующего пункта",()=>{
- const context=plan();
- for(let i=0;i<10;i++)reserve(context,"first-"+i);
+it("успешная сдача открывает независимые сто действий следующего пункта",()=>{
+ const context=plan();for(let i=0;i<100;i++)reserve(context,"first-"+i);
  submitChatWorkItem({...context,itemId:"one",result:"Готово",outcome:"done"});
- for(let i=0;i<10;i++)reserve(context,"second-"+i);
- expect(()=>reserve(context,"second-10")).toThrow(/исчерпан/);
+ for(let i=0;i<100;i++)reserve(context,"second-"+i);
+ expect(()=>reserve(context,"boundary")).toThrow(/новой сессии/);
 });
 it("новый ход и перезагрузка настроек не обнуляют расход текущего пункта",()=>{
- const context=plan();
- for(let i=0;i<7;i++)reserve(context,"before-"+i);
- reloadServerSettings();
- for(let i=0;i<3;i++)reserve(context,"after-"+i);
- expect(()=>reserve(context,"extra")).toThrow(/исчерпан/);
-});
-it("повышение и снижение лимита действуют на следующий вызов, сброс возвращает десять",()=>{
- const context=plan();for(let i=0;i<10;i++)reserve(context,"used-"+i);
- setSetting("chat_item_max_actions",12,null);reserve(context,"more-1");reserve(context,"more-2");
- expect(()=>reserve(context,"more-3")).toThrow(/исчерпан/);
- resetSetting("chat_item_max_actions",null);expect(getSetting("chat_item_max_actions")).toBe(10);
- expect(()=>reserve(context,"after-reset")).toThrow(/исчерпан/);
+ const context=plan();for(let i=0;i<70;i++)reserve(context,"before-"+i);
+ reloadServerSettings();for(let i=0;i<30;i++)reserve(context,"after-"+i);
+ expect(()=>reserve(context,"boundary")).toThrow(/новой сессии/);
 });
 it("повтор прежнего действия не повторяет побочный эффект вслепую",()=>{
  const context=plan();reserve(context,"same");
@@ -65,15 +60,15 @@ it("новое поручение после стопа получает нов�
 });
 
 it("правка будущего плана и отклонённая сдача не сбрасывают текущий бюджет",()=>{
- const context=plan();for(let i=0;i<10;i++)reserve(context,"used-"+i);
+ const context=plan();for(let i=0;i<100;i++)reserve(context,"used-"+i);
  expect(()=>submitChatWorkItem({...context,itemId:"two",result:"Пропустить",outcome:"done"})).toThrow();
  saveChatWorkPlan(context.chatId,context.roleId,1,[{id:"one",title:"Первый",state:"pending"},{id:"two",title:"Уточнённый второй",state:"pending"}]);
- expect(()=>reserve(context,"after-edit")).toThrow(/исчерпан/);
+ expect(()=>reserve(context,"after-edit")).toThrow(/новой сессии/);
 });
 it("корень и ветка разговора расходуют один бюджет текущего пункта",()=>{
  const context=plan(),branch=crypto.randomUUID();
  db.prepare("INSERT INTO chats(id,kind,created_by,branch_of_chat_id) VALUES(?,?,?,?)").run(branch,"direct","u1",context.chatId);
- for(let i=0;i<6;i++)reserve(context,"root-"+i);
- for(let i=0;i<4;i++)reserveChatItemAction({chatId:branch,roleId:context.roleId,callId:"branch-"+i});
- expect(()=>reserveChatItemAction({chatId:branch,roleId:context.roleId,callId:"branch-extra"})).toThrow(/исчерпан/);
+ for(let i=0;i<60;i++)reserve(context,"root-"+i);
+ for(let i=0;i<40;i++)reserveChatItemAction({chatId:branch,roleId:context.roleId,callId:"branch-"+i});
+ expect(()=>reserveChatItemAction({chatId:branch,roleId:context.roleId,callId:"branch-extra"})).toThrow(/новой сессии/);
 });

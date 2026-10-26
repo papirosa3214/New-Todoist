@@ -1,3 +1,6 @@
+import {saveChatWorkPlan} from "../src/lib/subtaskWorkPlan.js";
+import {reserveChatItemAction} from "../src/runtime/chatActionBudget.js";
+import {setSetting,resetSetting} from "../src/lib/serverSettings.js";
 // Прямой тест startChatRun: поднимаем онлайн-сессию через адаптер и
 // проверяем, что RpcClient получает правильные аргументы, что sessionId
 // пишется в chat_sessions, что attempts/tasks не трогаются. Без HTTP —
@@ -55,6 +58,7 @@ interface FakeSession {
 
 interface WaiterSlot { resolve: () => void; }
 const fakeSessions: FakeSession[] = [];
+let budgetPromptHook: ((session:FakeSession,index:number)=>Promise<void>)|null=null;
 /** Следующий prompt упадёт этой ошибкой. */
 let failNextPrompt: Error | null = null;
 const promptWaiters: WaiterSlot[] = [];
@@ -80,6 +84,7 @@ function makeFakeSession(options: any): FakeSession {
     options,
     sessionId: options?.sessionManager?.getSessionId?.() ?? `sess-${index + 1}`,
     prompt: vi.fn(async () => {
+      if(budgetPromptHook)await budgetPromptHook(session,index);
       if (failNextPrompt) {
         const error = failNextPrompt;
         failNextPrompt = null;
@@ -161,6 +166,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  budgetPromptHook=null;
   fakeSessions.length = 0;
   promptWaiters.length = 0;
   blockedPromptIndexes.clear();
@@ -583,4 +589,31 @@ it("HTTP: уточнение в текущем чате не создаёт ка
   await vi.waitFor(()=>expect(fakeSessions[0].dispose).toHaveBeenCalled());
   expect(card()).toBeUndefined();
  }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
+});
+
+it("budget overflow aborts/disposes the old SDK session before a single fresh 50-action attempt",async()=>{
+ const ctx={chatId:"chat-direct",roleId:"role_architect"};
+ setSetting("chat_item_max_actions",100,null);
+ saveChatWorkPlan(ctx.chatId,ctx.roleId,0,[{id:"budget-one",title:"Бюджет",state:"pending"}]);
+ for(let i=0;i<100;i++)reserveChatItemAction({...ctx,callId:"pre-"+i});
+ budgetPromptHook=async(session,index)=>{
+  if(index===0){
+   const tool=session.options.customTools.find((t:any)=>t.name==="bash");
+   try{await tool.execute("blocked-before-effect",{command:"exit 99"});}catch{}
+  }else{
+   expect(fakeSessions[0].abort).toHaveBeenCalledOnce();
+   expect(fakeSessions[0].dispose).toHaveBeenCalledOnce();
+   expect(session.sessionId).not.toBe(fakeSessions[0].sessionId);
+   for(let i=0;i<50;i++)reserveChatItemAction({...ctx,callId:"fresh-"+i});
+   const tool=session.options.customTools.find((t:any)=>t.name==="bash");
+   try{await tool.execute("beyond-50",{command:"exit 99"});}catch{}
+  }
+ };
+ try{
+  await expect(startChatRun({...ctx,role:"architect",prompt:"Исходная работа"})).rejects.toMatchObject({code:"CHAT_ACTION_BUDGET"});
+  expect(fakeSessions).toHaveLength(2);
+  expect(fakeSessions[1].prompt).toHaveBeenCalledWith(expect.stringContaining("новая сессия"));
+  const row=db.prepare('SELECT state,used FROM chat_budget_cases WHERE chat_id=? AND role_id=?').get(ctx.chatId,ctx.roleId) as any;
+  expect(row.state).toBe("exhausted");expect(row.used).toBe(150);
+ }finally{resetSetting("chat_item_max_actions",null);budgetPromptHook=null;}
 });
