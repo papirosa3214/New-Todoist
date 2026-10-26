@@ -4,7 +4,10 @@ import db from "../db.js";
 import {getSetting} from "../lib/serverSettings.js";
 import {readChatWorkPlan,chatPlanViewOf,chatDeliveryRow} from "../lib/subtaskWorkPlan.js";
 import {currentChatGeneration} from "./chatQueue.js";
-const CONTROL = new Set(["taskflow_work_plan", "taskflow_work_item_submit", "taskflow_chat_reply", "taskflow_tools"]);
+// Вопрос владельцу (taskflow_ask_user_question) — не действие пункта, а
+// развилка: закрытый план не должен его глушить, иначе роль уходит в
+// needs_human без вариантов ответа (26.10.2026).
+const CONTROL = new Set(["taskflow_work_plan", "taskflow_work_item_submit", "taskflow_chat_reply", "taskflow_tools", "taskflow_ask_user_question"]);
 type BudgetEntry={used:number;calls:string[];caseId?:string};
 export type BudgetReservation={restart?:boolean};
 /** Reserve before execution. Counts belong to the server item, not the model turn. */
