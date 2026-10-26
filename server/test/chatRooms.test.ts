@@ -141,6 +141,7 @@ describe("комнаты ролей и лички", () => {
     const room = ensurePersonalRoom("role_builder")!;
     const plan = saveChatWorkPlan(room, "role_builder", 0, validateWorkPlan([
       { id: "a", title: "Разобрать", state: "pending" }, { id: "b", title: "Сделать", state: "pending" },
+      { id: "c", title: "Проверить", state: "pending" },
     ]));
     expect(plan.revision).toBe(1);
     expect(() => saveChatWorkPlan(room, "role_builder", 0, plan.items)).toThrow(/revision/);
@@ -151,16 +152,19 @@ describe("комнаты ролей и лички", () => {
     // Пункт закрывает сервер: пометка done без сдачи не принимается (25.10.2026).
     expect(() => saveChatWorkPlan(room, "role_builder", 1, validateWorkPlan([
       { id: "a", title: "Разобрать", state: "done" }, { id: "b", title: "Сделать", state: "done" },
+      { id: "c", title: "Проверить", state: "done" },
     ]))).toThrow(/сервер/);
     // Выполнен целиком — закрыт: в полоске нет, новый план ложится без сверки revision.
     const messageId = liveRun(room);
-    for (const [itemId, text] of [["a", "Разобрал."], ["b", "Сделал."]] as const)
+    for (const [itemId, text] of [["a", "Разобрал."], ["b", "Сделал."], ["c", "Проверил."]] as const)
       submitChatWorkItem({ chatId: room, roleId: "role_builder", itemId, result: text, outcome: "done", messageId });
     const done = readChatWorkPlan(room, "role_builder")!;
     expect((await app.inject({ method: "GET", url: `/api/chats/${room}/work-plans`, headers: ownerAuth })).json().plans).toHaveLength(0);
-    const fresh = saveChatWorkPlan(room, "role_builder", 0, validateWorkPlan([{ id: "c", title: "Новое", state: "in_progress" }]));
+    // План из одного-двух пунктов роль ведёт, но владельцу он не виден.
+    const fresh = saveChatWorkPlan(room, "role_builder", 0, validateWorkPlan([{ id: "d", title: "Новое", state: "in_progress" }]));
     expect(fresh.revision).toBe(done.revision + 1);
-    expect((await app.inject({ method: "GET", url: `/api/chats/${room}/work-plans`, headers: ownerAuth })).json().plans).toHaveLength(1);
+    expect((await app.inject({ method: "GET", url: `/api/chats/${room}/work-plans`, headers: ownerAuth })).json().plans).toHaveLength(0);
+    expect(readChatWorkPlan(room, "role_builder")!.items).toHaveLength(1);
     const reset = await app.inject({ method: "POST", url: `/api/chats/${room}/new-session`, headers: ownerAuth, payload: { role_id: "role_builder" } });
     expect(reset.statusCode).toBeLessThan(300);
     expect(readChatWorkPlan(room, "role_builder")).toBeNull();

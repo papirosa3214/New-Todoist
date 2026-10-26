@@ -200,6 +200,9 @@ function extractQuickReplies(text: string): { clean: string; replies: string[] |
   return { clean, replies };
 }
 
+/** Сколько пунктов должно быть в чек-листе роли, чтобы владелец его видел. */
+export const OWNER_VISIBLE_PLAN_MIN_ITEMS = 3;
+
 type ChatKind = "direct" | "group";
 const KINDS: ChatKind[] = ["direct", "group"];
 
@@ -1411,7 +1414,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     return {
       plans: readChatWorkPlans(req.params.id)
         .map((plan) => chatPlanViewOf(plan))
-        .filter((plan) => plan.items.length && plan.status !== "finished"),
+        // План из одного-двух пунктов владельцу не показываем (26.10.2026):
+        // роль ведёт его у себя, полоска для такой мелочи — шум.
+        .filter((plan) => plan.items.length >= OWNER_VISIBLE_PLAN_MIN_ITEMS && plan.status !== "finished"),
     };
   });
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
