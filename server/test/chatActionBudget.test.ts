@@ -52,9 +52,9 @@ it("управление планом, сдача и сообщение влад
  for(const tool of tools)await tool.execute("control");
  expect(reservation).not.toHaveBeenCalled();expect(execute).toHaveBeenCalledTimes(4);
 });
-it("вопрос владельцу проходит и после закрытого плана",async()=>{
+it("закрытый план не ограничивает действия — как без плана",async()=>{
  const context=plan();stopChatWorkPlan(context.chatId,context.roleId);
- expect(()=>reserve(context,"after-stop")).toThrow(/План завершён/);
+ expect(reserve(context,"after-stop")).toBeUndefined();
  const execute=vi.fn(async()=>"ok");
  const [ask]=guardChatActions([{name:"taskflow_ask_user_question",execute}],(callId)=>reserve(context,callId),vi.fn());
  await expect(ask.execute("ask")).resolves.toBe("ok");

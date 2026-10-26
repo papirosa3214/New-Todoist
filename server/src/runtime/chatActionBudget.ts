@@ -16,8 +16,10 @@ export function reserveChatItemAction(input:{chatId:string;roleId:string;callId:
     const plan=readChatWorkPlan(input.chatId,input.roleId);
     if(!plan)return;
     const view=chatPlanViewOf(plan);
-    if(view.status!=="active" || !view.current_item_id)
-      throw Object.assign(new Error("План завершён или остановлен: новые действия не выполняются"),{code:"CHAT_PLAN_CLOSED"});
+    // Закрытый план — как отсутствие плана (владелец 26.10.2026): считать не
+    // к чему, но и глушить роль нельзя — иначе на новое сообщение владельца
+    // она не может даже прочитать документ.
+    if(view.status!=="active" || !view.current_item_id)return;
     if(input.messageId){
       const delivery=chatDeliveryRow(input.chatId,input.roleId,input.messageId);
       if(!delivery || !["picked","done"].includes(delivery.status) || delivery.session_generation<currentChatGeneration(input.chatId,input.roleId))
