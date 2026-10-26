@@ -12,12 +12,26 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import {registerInstructionBlock, composeLayer, LAYER_CATALOG, type RunMode} from '../lib/roleContextResolver.js';
 import {INSTRUCTION_DEFAULTS} from './instructionDefaults.js';
-import {ensureRoleHome, roleHomeInstruction, systemPromptSourceFile, renderSystemPrompt, renderPromptAddendum} from './roleHome.js';
+import {ensureRoleHome, roleHome, roleHomeInstruction, systemPromptSourceFile, renderSystemPrompt, renderPromptAddendum} from './roleHome.js';
 import { withObservationContext } from "../lib/contextObservability.js";
 import { selectSkillsByJev } from "../lib/memorySkillsJev.js";
 const ROLE_RESOURCE_MODES: RunMode[] = ['work','resume','reply','review','subtask','chat'];
 const keyFor=(file:string)=>path.basename(file)==='AGENTS.md'?'role.prompt':file===systemPromptSourceFile()?'role.system':'resource.'+crypto.createHash('sha256').update(file).digest('hex').slice(0,20);
 const builtinTools=(cwd:string)=>[...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()];
+/**
+ * Папки навыков для загрузчика. Помощнице владельца подключаются и
+ * исследовательские навыки: глубокое исследование она ведёт сама
+ * (карточка e11eae7a, пункт 3) — тот же загрузчик, тот же код навыков.
+ */
+function skillPathsFor(role:string, sharedChatSkills:boolean):string[]{
+ const home=ensureRoleHome(role);
+ const paths=sharedChatSkills?[path.resolve(process.cwd(),'scripts','shared-skills'),home.skills]:[home.skills];
+ if(role==='secretary'){
+  const researchSkills=roleHome('researcher').skills;
+  if(fs.existsSync(researchSkills))paths.push(researchSkills);
+ }
+ return paths.filter(dir=>fs.existsSync(dir));
+}
 export function instructionResources(cwd=process.cwd()) {
  const specs:Array<{key:string;text:string;title:string;source:string;editable:boolean}>=[];
  for(const [key,text] of Object.entries(INSTRUCTION_DEFAULTS)) {
@@ -99,7 +113,7 @@ export async function discoverChatResources(role:string, sharedChatSkills=false)
  const loader=new DefaultResourceLoader({
   cwd:home.workspace,agentDir:home.dir,settingsManager:SettingsManager.inMemory(),
   noExtensions:true,noThemes:true,noSkills:true,noPromptTemplates:true,noContextFiles:true,
-  additionalSkillPaths:sharedChatSkills ? [path.resolve(process.cwd(),'scripts','shared-skills'),home.skills] : [home.skills],additionalPromptTemplatePaths:[home.prompts],
+  additionalSkillPaths:skillPathsFor(role,sharedChatSkills),additionalPromptTemplatePaths:[home.prompts],
   agentsFilesOverride:()=>({agentsFiles:[{path:home.agents,content:fs.readFileSync(home.agents,'utf8')}]}),
  });
  await loader.reload();
@@ -124,6 +138,35 @@ export async function discoverChatResources(role:string, sharedChatSkills=false)
  }
  registerInstructionBlock({key:'runtime.role_home.'+role,title:'Папка и инструментарий роли',group:'Контекст',scope:'role',roles:[role],modes:ROLE_RESOURCE_MODES,sourceKind:'code',originRef:home.dir,readOnly:true},roleHomeInstruction(role));
  return {skills,diagnostics:loader.getSkills().diagnostics,agentsFiles:loader.getAgentsFiles().agentsFiles,systemPromptSource:loader.getSystemPromptSource(),appendSources:loader.getAppendSystemPromptSources(),prompts};
+}
+
+/**
+ * Реальные навыки роли (те же пути, что и в чате) — для списка команд.
+ * Без регистрации слоёв инструкций: вызов только читает.
+ */
+export async function listRoleSkills(role: string) {
+  const home = ensureRoleHome(role, { refreshSystem: true });
+  const loader = new DefaultResourceLoader({
+    cwd: home.workspace,
+    agentDir: home.dir,
+    settingsManager: SettingsManager.inMemory(),
+    noExtensions: true,
+    noThemes: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noContextFiles: true,
+    additionalSkillPaths: skillPathsFor(role, true),
+    additionalPromptTemplatePaths: [home.prompts],
+    agentsFilesOverride: () => ({ agentsFiles: [] }),
+  });
+  await loader.reload();
+  return loader.getSkills().skills.map((skill) => ({
+    name: skill.name,
+    description: skill.description ?? "",
+    filePath: skill.filePath,
+    baseDir: skill.baseDir,
+    content: composeLayer(role, keyFor(skill.filePath))!.effective,
+  }));
 }
 
 /** Тот же набор файлов роли; cwd задачи не меняется, executable extensions отключены. */

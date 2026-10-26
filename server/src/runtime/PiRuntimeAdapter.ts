@@ -31,6 +31,8 @@ import {
   createTaskResourceLoader,
 } from "./instructionResources.js";
 import { parseModelRef } from "../lib/attemptModel.js";
+import { resolveCatalogModel } from "./modelCatalog.js";
+import { closeChatSession, measureChatSession, openChatSession } from "./chatContextUsage.js";
 import { providerAvailable } from "../lib/modelLadder.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import {
@@ -1403,13 +1405,10 @@ async function startChatRunOnce(
     // «opencode-go/deepseek-…» в каталоге Pi лежит как id «deepseek-…» +
     // provider «opencode-go»: без разбора ссылки модели с префиксом в чате
     // не находились никогда — ни основная, ни запасные (20.10.2026).
-    const findInCatalog = (id: string) => {
-      const ref = parseModelRef(id);
-      return (
-        catalog.find((m) => m.id === ref.id && m.provider === ref.provider) ??
-        catalog.find((m) => m.id === id)
-      );
-    };
+    const findInCatalog = (id: string) =>
+      // Явный выбор «провайдер/модель» не подменяется моделью с тем же
+      // именем у другого провайдера (карточка e11eae7a, пункт 1).
+      resolveCatalogModel(catalog as any, id, providerOfModel(model));
     // Владелец 12.10.2026: «у нас должен был быть настроен запасной провайдер…
     // лимиты кончились и не переключаются». ХОД ЧАТА вообще не смотрел на
     // цепочку: бралась только основная модель роли, поэтому в чате не
@@ -1590,6 +1589,17 @@ async function startChatRunOnce(
     // всё, что роль имеет право вызывать.
     installNativeToolCore(session, toolCatalog, builtin.map((t:any)=>t.name));
 
+    // Актуальное окно контекста живой сессии для панели чата
+    // (карточка e11eae7a, пункт 4): замеряем по настоящей сессии Pi.
+    openChatSession({
+      chatId: input.chatId,
+      roleId: input.roleId,
+      session,
+      sessionId: session.sessionId ?? input.sessionId ?? null,
+      provider: resolvedProvider,
+      model: resolvedModel,
+    });
+
     installSteeringBoundary(session);
     // Role policy also replaces the level restored from an older session.
     const roleThinking = resolveThinkingLevel(piModel, role);
@@ -1729,6 +1739,7 @@ async function startChatRunOnce(
         try {
           await Promise.race([session.prompt(text), watchdog, armCeiling()]);
           assertChatBudgetAtTurnEnd(input);
+          measureChatSession(input.chatId, input.roleId);
         } catch (error) {
           if((error as {code?:string}).code==="CHAT_ACTION_BUDGET"){
             budgetFailure=error as Error;
@@ -1792,6 +1803,7 @@ async function startChatRunOnce(
     } finally {
       safelyCaptureBudgetCases(input.chatId,input.roleId,{sessionFile:sessionManager.getSessionFile(),systemPrompt,events:budgetEvents,error:budgetFailure});
       steering?.close();
+      closeChatSession(input.chatId, input.roleId);
       clearInterval(idleTimer);
       clearTimeout(ceilingTimer);
       unsubscribe?.();

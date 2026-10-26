@@ -3,7 +3,7 @@ import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
 import {compactChatReportMaterials} from "../lib/chatReportMaterials.js";
 import {preparedReportMaterials} from "../runtime/chatPreparedMaterials.js";
 import { prepareChatValue } from "../runtime/chatPreparationDeadline.js";
-import {chatExecutionMode,parseChatExecutionMode,isCardHandoffCommand} from "../runtime/chatExecutionMode.js";
+import {chatExecutionMode,parseChatExecutionMode,isCardHandoffCommand,type ChatExecutionMode} from "../runtime/chatExecutionMode.js";
 import {offerChatSteering} from "../runtime/chatSteering.js";
 import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
 import {
@@ -43,6 +43,8 @@ import { nudgeTaskPlan } from "../runtime/taskNudge.js";
 import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
 import { externalRuntime } from "../roleRouting.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
+import { listChatCommands, parseSlashInvocation, resolveSlashCommand, type SlashInvocation } from "../runtime/chatCommands.js";
+import { readChatContext } from "../runtime/chatContextUsage.js";
 import { renderInstruction } from "../lib/roleContextResolver.js";
 // Чаты с ролями-агентами (владелец 21.09.2026, план
 // docs/superpowers/plans/2026-09-21-chat-online-pi-runtime.md, этапы 1–2).
@@ -858,9 +860,37 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({error:"Способ выполнения выбирает владелец"});
     let mode;
     try {mode=parseChatExecutionMode(req.body?.execution_mode);} catch(error) {return reply.code(400).send({error:(error as Error).message});}
+    // Помощник владельца в личной переписке работает только в чате:
+    // переключение «По карточке» ему недоступно (карточка e11eae7a, пункт 2).
+    if (mode === "card" && secretaryChatOnly(req.params.id))
+      return reply.code(403).send({error:"С Помощником владельца работа идёт в чате: «По карточке» недоступно"});
     db.prepare("UPDATE chats SET execution_mode=?,updated_at=datetime('now') WHERE id=?").run(mode,req.params.id);
     return {chat:chatRow(req.params.id)};
   });
+
+  // Панель чата: актуальное окно контекста живой сессии и команды роли
+  // (карточка e11eae7a, пункты 4 и 5). Список команд НИЧЕГО не выполняет:
+  // это только то, что у роли реально есть.
+  app.get<{ Params: { id: string }; Querystring: { role_id?: string } }>(
+    "/api/chats/:id/controls",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const chatId = req.params.id;
+      if (!isMember(chatId, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+      const roleId = String(req.query?.role_id ?? "").trim();
+      if (!roleId) return reply.code(400).send({ error: "Нужен role_id участника чата" });
+      if (!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(chatId, roleId))
+        return reply.code(404).send({ error: "Участник чата не найден" });
+      const role = roleFromUserId(roleId);
+      if (!role) return reply.code(400).send({ error: "Участник не является ролью" });
+      const executionMode = effectiveExecutionMode(chatId);
+      let context = readChatContext(chatId, roleId);
+      // Внешний агент — не Pi: живой сессии Pi у него нет, окно не измеряется.
+      if (externalRuntime(role)) context = { ...context, status: "unavailable" };
+      const commands = await listChatCommands({ role, executionMode, mode: "work", chatId });
+      return { context, commands };
+    },
+  );
 
   app.post<{
     Params: { id: string };
@@ -881,6 +911,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (req.body?.execution_mode !== undefined) {
         if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({error:"Способ выполнения выбирает владелец"});
         try {requestedExecutionMode=parseChatExecutionMode(req.body.execution_mode);} catch {return reply.code(400).send({error:"Неизвестный способ выполнения"});}
+        // С Помощником владельца «По карточке» недоступно (карточка e11eae7a).
+        if (requestedExecutionMode === "card" && secretaryChatOnly(req.params.id))
+          return reply.code(403).send({error:"С Помощником владельца работа идёт в чате: «По карточке» недоступно"});
       }
       const text = String(req.body?.text || "").trim();
       // MAK-98 и гейт формата ниже используют отправителя — считаем один раз.
@@ -916,8 +949,15 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // иначе агент падает на 400 посреди работы (владелец 04.10.2026).
       // Лимит остаётся только для финального ответа роли (см. ниже,
       // truncateAgentText): сообщение в чат всегда доходит, просто короче.
-      if (mode === "deep_research" && (!chatMemberRoles(req.params.id).includes("researcher") || parseRoleMentions(text).some(r => r !== "researcher"))) {
-        return reply.code(400).send({error: "Глубокое исследование доступно в чате с Исследователем"});
+      if (mode === "deep_research") {
+        // Глубокое исследование ведут Исследователь и Помощница владельца
+        // (карточка e11eae7a, пункт 3): Помощница отвечает сама своим
+        // именем, исследователь ей не нужен.
+        const members = chatMemberRoles(req.params.id);
+        const allowed = members.includes("researcher") || members.includes("secretary");
+        const foreignMention = parseRoleMentions(text).some((r) => r !== "researcher" && r !== "secretary");
+        if (!allowed || foreignMention)
+          return reply.code(400).send({error: "Глубокое исследование доступно в чате с Исследователем или с Помощником владельца"});
       }
       // Вложения без подписи — то же правило, что в /api/chat: пустой
       // текст ок, когда есть файлы («вот голосовое» без комментария),
@@ -1000,8 +1040,28 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const id = uid();
       const sourceMessage = senderRole && parentMessage ? db.prepare("SELECT chat_id FROM chat_messages WHERE id=?").get(parentMessage) as {chat_id:string}|undefined : undefined;
       const executionMode = senderRole
-        ? sourceSlot ? "card" : sourceMessage && isMember(sourceMessage.chat_id,req.userId) ? chatExecutionMode(sourceMessage.chat_id,parentMessage) : "chat"
-        : isOwner(req.userId) && isCardHandoffCommand(text) ? "card" : requestedExecutionMode ?? chatExecutionMode(chatId);
+        ? sourceSlot ? "card" : sourceMessage && isMember(sourceMessage.chat_id,req.userId) ? effectiveExecutionMode(sourceMessage.chat_id,parentMessage) : "chat"
+        : isOwner(req.userId) && isCardHandoffCommand(text) && !secretaryChatOnly(chatId) ? "card" : requestedExecutionMode ?? effectiveExecutionMode(chatId);
+      // Явный вызов команды («/skill:имя » или «/mcp:имя ») проверяется при
+      // отправке: неизвестное имя отклоняется и НЕ исполняется; известный
+      // навык подключается настоящим текстом, инструмент — реальным вызовом
+      // в правах режима (карточка e11eae7a, пункт 5).
+      let roleText = storedText;
+      const slash = parseSlashInvocation(storedText);
+      if (slash) {
+        const targetRole = slashTargetRole(req.params.id, req.userId, slash, storedText);
+        if (!targetRole)
+          return reply.code(400).send({error:"Явную команду можно отправить роли, которая есть в чате: укажи @роль"});
+        const resolution = await resolveSlashCommand({
+          role: targetRole,
+          invocation: slash,
+          executionMode,
+          mode,
+          chatId: req.params.id,
+        });
+        if (!resolution.ok) return reply.code(400).send({ error: resolution.error });
+        roleText = resolution.text;
+      }
       db.transaction(()=>{
       db.prepare(
         `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id,quick_replies)
@@ -1142,7 +1202,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           chatId,
           messageId: id,
           fromUserId: req.userId,
-          text,
+          text: roleText,
           hop: coordinationHop,
           mode,
           idempotencyKey: readIdempotencyKey(req),
@@ -2370,7 +2430,22 @@ async function dispatchRoleReplies(args: {
   let targets: RoleName[];
   if (args.mode === "plan" && senderRole) return;
   if (args.mode === "deep_research") {
-    targets = candidates.includes("researcher") ? ["researcher"] : [];
+    // Глубокое исследование ведёт тот, кто в чате и есть: Помощница владельца
+    // отвечает САМА своим именем (без передачи исследователю), Исследователь —
+    // если Помощницы в чате нет (карточка e11eae7a, пункт 3). Ответ роли
+    // никуда не передаётся: роль уже отвечает сама.
+    if (senderRole) {
+      targets = [];
+    } else {
+      const allMembers = chatMemberRoles(chatId);
+      const mentionedResearch = mentioned.includes("researcher");
+      const secretary = allMembers.includes("secretary") ? "secretary" : null;
+      const researcher = allMembers.includes("researcher") ? "researcher" : null;
+      if (mentionedResearch && researcher) targets = [researcher];
+      else if (secretary) targets = [secretary];
+      else if (researcher) targets = [researcher];
+      else targets = [];
+    }
   } else if (senderRole) {
     if (args.hop > MAX_AGENT_HOPS) return;
     // Replies return to the question author once. An answer to that answer
@@ -2573,6 +2648,35 @@ function isDirectRoleChat(chatId: string): boolean {
     | { kind: string }
     | undefined;
   return row?.kind === "direct";
+}
+
+/**
+ * Помощник владельца в личной переписке — всегда работа в чате.
+ * Старый «card» в комнате или в запросе карточку не запускает, а
+ * переключение в «card» недоступно (карточка e11eae7a, пункт 2).
+ */
+function secretaryChatOnly(chatId: string): boolean {
+  return isDirectRoleChat(chatId) && chatMemberRoles(chatId).includes("secretary");
+}
+
+/** Способ выполнения с учётом правила Помощника: в её чате всегда «в чате». */
+function effectiveExecutionMode(chatId: string, messageId?: string): ChatExecutionMode {
+  return secretaryChatOnly(chatId) ? "chat" : chatExecutionMode(chatId, messageId);
+}
+
+/** Роль для явной команды: названная перед вызовом, упомянутая в тексте или единственная в чате. */
+function slashTargetRole(
+  chatId: string,
+  senderId: string,
+  slash: SlashInvocation,
+  text: string,
+): RoleName | null {
+  const members = chatMemberRoles(chatId);
+  if (slash.role && members.includes(slash.role as RoleName)) return slash.role as RoleName;
+  const mentioned = parseRoleMentions(text).find((role) => members.includes(role));
+  if (mentioned) return mentioned;
+  const others = members.filter((role) => role !== roleFromUserId(senderId));
+  return others.length === 1 ? others[0] : null;
 }
 
 interface HistoryRow {
