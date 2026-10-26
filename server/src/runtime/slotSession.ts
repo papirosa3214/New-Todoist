@@ -60,6 +60,51 @@ export function slotSessionDirectory(taskId:string,role:string,subtaskId:string)
   const root=process.env.TASKFLOW_RUNS_DIR || path.join(os.homedir(),".local","state","taskflow-runs");
   return path.join(root,"sessions",`${taskId}-${role}-${subtaskId}`);
 }
+
+/* ── Обсуждение карточки: своя аренда и своя сессия ───────────────────────
+ *
+ * Обсуждение НЕ берёт аренду рабочего слота (контракт архитектора
+ * f3ada2e0, §1.4): иначе обсуждение блокирует работу исполнителя, а
+ * требование — «работа продолжается во время обсуждения». Аренда
+ * обсуждения отдельная и keyed по discussion_id.
+ */
+const discussionTails=new Map<string,Promise<void>>();
+export function isDiscussionSessionHeld(discussionId:string):boolean{return discussionTails.has(discussionId);}
+export function forceReleaseDiscussionSession(discussionId:string):boolean{return discussionTails.delete(discussionId);}
+/** Аренда обсуждения: один ход обсуждения за раз, рабочий слот не трогаем. */
+export async function acquireDiscussionSession(discussionId:string,signal?:AbortSignal):Promise<()=>void>{
+  const previous=discussionTails.get(discussionId) ?? Promise.resolve();
+  let releaseGate!:()=>void;
+  const next=new Promise<void>(resolve=>{releaseGate=resolve;});
+  discussionTails.set(discussionId,next);
+  let released=false;
+  const release=()=>{if(released)return;released=true;releaseGate();if(discussionTails.get(discussionId)===next)discussionTails.delete(discussionId);};
+  let abort=()=>{};
+  try{
+    await new Promise<void>((resolve,reject)=>{
+      abort=()=>reject(signal?.reason ?? new Error("Обсуждение отменено"));
+      if(signal?.aborted){abort();return;}
+      signal?.addEventListener("abort",abort,{once:true});
+      void previous.then(()=>{signal?.removeEventListener("abort",abort);resolve();});
+    });
+  }catch(error){void previous.then(release);throw error;}
+  finally{signal?.removeEventListener("abort",abort);}
+  return release;
+}
+/** Каталог сессии обсуждения: свой, рабочий файл сюда не попадает. */
+export function discussionSessionDirectory(taskId:string,role:string,subtaskId:string,discussionId:string):string {
+  const root=process.env.TASKFLOW_RUNS_DIR || path.join(os.homedir(),".local","state","taskflow-runs");
+  return path.join(root,"sessions",`${taskId}-${role}-${subtaskId}-discussion`,discussionId);
+}
+/** Сессия обсуждения: отдельный файл, рабочая история не наследуется. */
+export function openDiscussionSession(taskId:string,role:string,subtaskId:string,discussionId:string,fallbackCwd:string):SessionManager {
+  const dir=discussionSessionDirectory(taskId,role,subtaskId,discussionId);
+  fs.mkdirSync(dir,{recursive:true});
+  const candidates=fs.readdirSync(dir).filter(name=>name.endsWith(".jsonl")).map(name=>path.join(dir,name)).sort((a,b)=>fs.statSync(b).mtimeMs-fs.statSync(a).mtimeMs);
+  const file=candidates[0];
+  const manager=file ? SessionManager.open(file,dir) : SessionManager.create(fallbackCwd,dir);
+  return manager;
+}
 /** Adopt the original work file, regardless of its cwd; never fork to a chat session. */
 export function openSlotSession(taskId:string,role:string,subtaskId:string,fallbackCwd:string,fresh=false):SessionManager {
   const dir=slotSessionDirectory(taskId,role,subtaskId);

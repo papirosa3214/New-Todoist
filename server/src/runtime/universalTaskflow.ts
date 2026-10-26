@@ -31,6 +31,8 @@ export type Context = {
   /** Модель хода — пишется в учёт вызовов вместе с провайдером. */
   model?: string | null;
   authorize?: (name: string) => boolean;
+  /** Isolated discussion guard: never abort or block the work slot. */
+  onErrorLoop?: () => void;
 };
 export type RequestRecord = {
   actor: string;
@@ -132,6 +134,15 @@ export function operationRestriction(
     return {
       code: "MODE_RESTRICTED",
       message: "Для изменения нужен режим Работа",
+    };
+  // Обсуждение работающей карточки — ТОЛЬКО чтение (контракт архитектора
+  // f3ada2e0, §5.2). Это ЯВНО ПОМЕЧЕННЫЙ новый режим «task_discussion»:
+  // обычный чат в режиме «discussion» (владелец 20.10.2026) — работа по
+  // задаче без ограничений, его политика здесь не меняется.
+  if (c.mode === "task_discussion" && (!isReadOperation(name) || name.startsWith("mcp__infra__")))
+    return {
+      code: "MODE_RESTRICTED",
+      message: "Обсуждение карточки — только чтение: запись недоступна",
     };
   if (c.executionMode === "chat" && CARD_WORK_OPERATIONS.has(name))
     return {code:"EXECUTION_MODE_RESTRICTED", message:"Выбран режим «В чате»: выполни поручение здесь без карточки. Только владелец может выбрать «По карточке» или явно поручить «Оформить как карточку»."};
@@ -1325,7 +1336,9 @@ function withMistakeCoach(api: Tool, registry: Map<string, Tool>, context: Conte
       // Стоп хода. Счётчик живёт в памяти процесса — этого достаточно:
       // вместе с ним умирает и сам ход (in-process run), а его ошибки
       // остаются в журнале вызовов, где их видно и сторож, и владелец.
-      const stop = await stopRoleOnErrorLoop({
+      const stop = context.mode === "task_discussion"
+        ? (context.onErrorLoop?.(), {stopped: true, blocked: false})
+        : await stopRoleOnErrorLoop({
         taskId: context.taskId,
         subtaskId: context.subtaskId,
         role: context.role,
@@ -1335,7 +1348,7 @@ function withMistakeCoach(api: Tool, registry: Map<string, Tool>, context: Conte
       });
       env.error.coach = {
         attempts: n,
-        stopped: stop.blocked,
+        stopped: stop.stopped || stop.blocked,
         message:
           `СТОП. Это ${n}-й неверный вызов ${key} подряд — ты повторяешь одну и ту же ошибку. ` +
           "Не отправляй тот же вызов снова. " +

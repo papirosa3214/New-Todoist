@@ -98,6 +98,8 @@ import { registerStructureRoutes } from "./routes/structure.js";
 import { registerReportRoutes } from "./routes/reports.js";
 import { registerResearchRoutes } from "./routes/research.js";
 import { registerChatsRoutes } from "./routes/chats.js";
+import { registerTaskDiscussionRoutes } from "./routes/task-discussions.js";
+import { resumePendingHandoffs } from "./runtime/taskDiscussion.js";
 import { ensureCommonChat } from "./lib/chatCommon.js";
 import { registerWidgetsRoutes } from "./routes/widgets.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
@@ -611,6 +613,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerReportRoutes(app);
   registerResearchRoutes(app);
   registerChatsRoutes(app);
+  registerTaskDiscussionRoutes(app);
   registerWidgetsRoutes(app);
   registerMemoryRoutes(app);
   registerTranscribeRoutes(app);
@@ -1058,6 +1061,7 @@ if (isMain) {
     // идёт через живой /messages, который кладёт delivery_id в
     // pending и поднимает in-memory очередь сам.
     if (!sandbox && process.env.TASKFLOW_QUEUE_RECOVERY !== "off") {
+      void resumePendingHandoffs().catch(error => console.error("[discussion] восстановление доставки не удалось:", error));
       const queueRecovery = startChatQueueRecovery();
       if (queueRecovery.recovered > 0) {
         console.log(`[chatQueue] recovered ${queueRecovery.recovered} pending deliveries`);
