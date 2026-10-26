@@ -354,7 +354,9 @@ let usagePersistenceWarning = false;
 export function liveTurnForClient(turn: LiveTurnSnapshot): LiveTurnSnapshot {
   return {
     ...turn,
-    items: turn.items.map((it) => (it.kind === "text" ? { ...it, blocks: sourcedChatBlocks(it.text, true) } : it)),
+    items: turn.items.map((it) =>
+      it.kind === "text" || it.kind === "thinking" ? { ...it, blocks: sourcedChatBlocks(it.text, true) } : it,
+    ),
   };
 }
 

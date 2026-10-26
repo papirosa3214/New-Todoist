@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatBlocks, chatBlocksCached, sourcedChatBlocks } from "../src/lib/chatBlocks.js";
+import { chatBlocks, chatBlocksCached, jsonWithTextBlocks, sourcedChatBlocks, withTextBlocks } from "../src/lib/chatBlocks.js";
 
 describe("chatBlocks: ответ готовыми блоками (правило ChatRichContent из iOS)", () => {
   it("обычный текст — один документ TipTap с разметкой", () => {
@@ -47,5 +47,23 @@ describe("chatBlocks: ответ готовыми блоками (правило
     expect(blocks.map((b) => b.type)).toEqual(["doc", "widget", "table", "doc"]);
     expect(blocks.map((b) => b.source)).toEqual(["Итог:", "```widget\n{\"type\":\"metrics\"}\n```", "| a | b |\n|---|---|\n| 1 | 2 |", "конец"]);
     expect(chatBlocks(text).some((b) => "source" in b)).toBe(false);
+  });
+
+  it("размеченный текст внутри JSON получает готовые блоки, исходные поля не меняются", () => {
+    const envelope = { output: [{ type: "text", text: "**да**" }, { type: "list", items: ["a"] }] };
+    const out = withTextBlocks(envelope) as any;
+    expect(out.output[0].text).toBe("**да**");
+    expect(out.output[0].text_blocks[0].type).toBe("doc");
+    expect(out.output[1].text_blocks).toBeUndefined();
+    expect((withTextBlocks({ summary: "итог", note_id: "n" }, ["summary"]) as any).summary_blocks[0].type).toBe("doc");
+    expect((withTextBlocks({ summary: "итог" }) as any).summary_blocks).toBeUndefined();
+    expect(withTextBlocks(null)).toBeNull();
+    expect(envelope.output[0]).not.toHaveProperty("text_blocks");
+  });
+
+  it("виджет и tf-json в ответе несут блоки для body и текстовых блоков", () => {
+    const [w] = chatBlocks("```widget\n{\"type\":\"card\",\"body\":\"**жирно**\"}\n```");
+    expect(JSON.parse((w as any).json).body_blocks[0].type).toBe("doc");
+    expect(jsonWithTextBlocks("{не json")).toBe("{не json");
   });
 });

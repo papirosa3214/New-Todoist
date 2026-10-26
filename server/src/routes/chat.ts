@@ -27,6 +27,7 @@
 // Внутри своего канала сообщение по-прежнему видит каждый его участник:
 // to_user_id остаётся адресным намёком (кого будить/кому отвечают), а не
 // приватным ЛС.
+import { chatBlocksCached } from "../lib/chatBlocks.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
@@ -72,7 +73,9 @@ function withAttachments(message: any) {
     `SELECT id, file_name, mime, size FROM attachments
       WHERE chat_message_id = ? ORDER BY created_at`,
   );
-  return { ...message, attachments: attachmentsOf.all(message.id) };
+  // Готовые блоки текста (lib/chatBlocks.ts): клиент рисует, не разбирает.
+  const blocks = typeof message.text === "string" && message.text ? chatBlocksCached(message.text) : [];
+  return { ...message, attachments: attachmentsOf.all(message.id), blocks };
 }
 
 // Сообщения-объявления правил (Этап B) отделены от человеческих видов:

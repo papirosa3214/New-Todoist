@@ -1,5 +1,5 @@
 import {isQuietSystemMessage} from "./serviceNoise.js";
-import { chatBlocksCached } from "./chatBlocks.js";
+import { chatBlocksCached, withTextBlocks } from "./chatBlocks.js";
 import {compactChatReportMaterials} from "./chatReportMaterials.js";
 import {coordinationCardData} from "../runtime/chatCoordination.js";
 // Сообщение чата с ролями в том виде, в каком его видит клиент.
@@ -147,14 +147,14 @@ export function formatChatMessage(message: any) {
     stop_reason: message.stop_reason ?? null,
     partial: Boolean(message.partial),
     steps: parsedSteps ? stepDetails(parsedSteps) : null,
-    handoff: chatHandoff(message),
-    role_envelope: storedEnvelope
+    handoff: withTextBlocks(chatHandoff(message), ["summary"]),
+    role_envelope: withTextBlocks(storedEnvelope
       ? compactChatReportMaterials(storedEnvelope).envelope
-      : parsed?.structuredEnvelope ? compactChatReportMaterials(parsed.structuredEnvelope).envelope : parsed?.envelope ?? null,
+      : parsed?.structuredEnvelope ? compactChatReportMaterials(parsed.structuredEnvelope).envelope : parsed?.envelope ?? null, ["output"]),
     text: displayText,
     // Ответ готовыми блоками: клиент рисует их, сам текст не разбирает (lib/chatBlocks.ts).
     blocks: typeof displayText === "string" && displayText ? chatBlocksCached(displayText) : [],
-    ...(parsedSteps?.coordination ? { kind: "coordination", coordination: coordinationCardData(message) } : {}),
+    ...(parsedSteps?.coordination ? { kind: "coordination", coordination: withTextBlocks(coordinationCardData(message), ["question", "answer"]) } : {}),
   };
 }
 

@@ -125,8 +125,8 @@ export function sourcedChatBlocks(text: string, streaming = false): SourcedChatB
         if (!closed && streaming) {
           blocks.push(special === "structured_json" ? { type: "structured_json_streaming", json: body, source } : { type: "pending", kind: special, source });
         } else if (special === "html") blocks.push({ type: "html", html: body, source });
-        else if (special === "widget") blocks.push({ type: "widget", json: body, source });
-        else blocks.push({ type: "structured_json", json: body, source });
+        else if (special === "widget") blocks.push({ type: "widget", json: jsonWithTextBlocks(body), source });
+        else blocks.push({ type: "structured_json", json: jsonWithTextBlocks(body), source });
         i = closed ? j + 1 : lines.length;
         continue;
       }
@@ -175,4 +175,42 @@ export function chatBlocksCached(text: string): ChatBlock[] {
   if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
   cache.set(text, blocks);
   return blocks;
+}
+
+
+/**
+ * Добавить готовые блоки к размеченному тексту внутри JSON: у текстового
+ * блока (`type: "text"`) — `text_blocks`, у названных полей верхнего уровня
+ * (`fields`) — `<поле>_blocks`. Только те поля, что клиент рисует как
+ * Markdown. Исходные поля не меняются. Возвращает новую копию.
+ */
+export function withTextBlocks<T>(value: T, fields: string[] = []): T {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return walkTextBlocks(value);
+  const out = walkTextBlocks(value) as Record<string, unknown>;
+  const src = value as Record<string, unknown>;
+  for (const field of fields) {
+    const v = src[field];
+    if (typeof v === "string" && v.trim()) out[`${field}_blocks`] = chatBlocksCached(v);
+  }
+  return out as T;
+}
+
+/** Текстовые блоки (`type: "text"`) на любой глубине. */
+function walkTextBlocks<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => walkTextBlocks(v)) as T;
+  if (!value || typeof value !== "object") return value;
+  const src = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(src)) out[key] = walkTextBlocks(v);
+  if (src.type === "text" && typeof src.text === "string" && src.text) out.text_blocks = chatBlocksCached(src.text);
+  return out as T;
+}
+
+/** Та же разметка внутри JSON-строки (виджет — `body`, tf-json — текстовые блоки и `output`). */
+export function jsonWithTextBlocks(json: string): string {
+  try {
+    return JSON.stringify(withTextBlocks(JSON.parse(json), ["body", "output"]));
+  } catch {
+    return json;
+  }
 }
