@@ -42,6 +42,29 @@ export function ensurePersonalRoom(roleId: string): string | null {
   })();
 }
 
+/** Название сессии по первому сообщению (владелец 26.10.2026): первая
+ * непустая строка без разметки, до 60 знаков с обрезкой по слову — как у
+ * «Ветки». Пусто — `null`. */
+export function autoTitleFromText(text: string): string | null {
+  const line = text.split("\n").map((l) => l.replace(/[#*_`>~]+/g, "").replace(/\s+/g, " ").trim()).find(Boolean);
+  if (!line) return null;
+  if (line.length <= 60) return line;
+  const cut = line.slice(0, 59);
+  const space = cut.lastIndexOf(" ");
+  return (space > 20 ? cut.slice(0, space) : cut).replace(/[\s,.;:—-]+$/, "") + "…";
+}
+
+/** Сессия без названия получает его от первого сообщения человека. Комнаты,
+ * темы задач, проектные группы и ветки не трогаем: у них своё имя. */
+export function autoTitleChat(chatId: string, text: string): void {
+  const title = autoTitleFromText(text);
+  if (!title) return;
+  db.prepare(`UPDATE chats SET title=? WHERE id=? AND (title IS NULL OR title='') AND room_kind IS NULL
+      AND task_id IS NULL AND project_id IS NULL AND parent_chat_id IS NULL AND branch_of_chat_id IS NULL
+      AND (SELECT COUNT(*) FROM chat_messages m JOIN users u ON u.id=m.from_user_id
+           WHERE m.chat_id=chats.id AND u.type!='ai' AND COALESCE(m.is_session_marker,0)=0)=1`).run(title, chatId);
+}
+
 /** Личка двух ролей: одна постоянная переписка на пару. */
 export function ensureDirectRoom(a: string, b: string): string {
   return db.transaction(() => {

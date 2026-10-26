@@ -5,7 +5,7 @@ import {preparedReportMaterials} from "../runtime/chatPreparedMaterials.js";
 import { prepareChatValue } from "../runtime/chatPreparationDeadline.js";
 import {chatExecutionMode,parseChatExecutionMode,isCardHandoffCommand,type ChatExecutionMode} from "../runtime/chatExecutionMode.js";
 import {offerChatSteering} from "../runtime/chatSteering.js";
-import { ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
+import { autoTitleChat, ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
 import {
   ChatItemSubmitError,
   ChatPlanWriteRejection,
@@ -1092,6 +1092,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);
       }
       })();
+      if (!senderRole) autoTitleChat(chatId, text);
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
         chatId,
       );
