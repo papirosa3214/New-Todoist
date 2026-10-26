@@ -52,11 +52,15 @@ it("управление планом, сдача и сообщение влад
  for(const tool of tools)await tool.execute("control");
  expect(reservation).not.toHaveBeenCalled();expect(execute).toHaveBeenCalledTimes(4);
 });
-it("закрытый план не ограничивает действия — как без плана",async()=>{
+it("закрытый план: ход, где его закрыли, доигрывается; следующий — только с новым чек-листом",async()=>{
  const context=plan();stopChatWorkPlan(context.chatId,context.roleId);
- expect(reserve(context,"after-stop")).toBeUndefined();
+ saveChatWorkPlan(context.chatId,context.roleId,2,[{id:"one",title:"Первый",state:"pending"}],{sourceMessageId:context.messageId});
+ stopChatWorkPlan(context.chatId,context.roleId);
+ expect(reserve(context,"same-turn")).toBeUndefined();
+ const next={...context,messageId:crypto.randomUUID()};
+ expect(()=>reserve(next,"next-turn")).toThrow(/заведи новый чек-лист/);
  const execute=vi.fn(async()=>"ok");
- const [ask]=guardChatActions([{name:"taskflow_ask_user_question",execute}],(callId)=>reserve(context,callId),vi.fn());
+ const [ask]=guardChatActions([{name:"taskflow_ask_user_question",execute}],(callId)=>reserve(next,callId),vi.fn());
  await expect(ask.execute("ask")).resolves.toBe("ok");
 });
 it("новое поручение после стопа получает новый бюджет",()=>{
