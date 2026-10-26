@@ -39,7 +39,8 @@ import {
   roleHome,
 } from "./roleHome.js";
 import { homedir } from "node:os";
-import { createCliAgentSession } from "./cliAgentSession.js";
+import type { CliAgentSession } from "./cliAgentSession.js";
+import { createExternalAgentSession } from "./externalAgentSession.js";
 import {
   actionTurnHandler,
   externalAgentBoost,
@@ -1863,9 +1864,9 @@ async function runExternalChat(
   );
   const token = roleRunToken(role);
   const preparation = new ChatPreparationDeadline();
-  let session: Awaited<ReturnType<typeof createCliAgentSession>>;
+  let session: CliAgentSession;
   try {
-  session = await preparation.wait(createCliAgentSession({
+  session = await preparation.wait(createExternalAgentSession(runtimeKey, {
     cwd,
     command,
     env: token ? { TASKFLOW_TOKEN: token } : undefined,

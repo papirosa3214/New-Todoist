@@ -88,7 +88,7 @@ import { recordTaskDocument } from "../lib/taskOutcome.js";
 import { isProviderLimitText, lastAssistantEmptyAnswer, lastAssistantLimitError, lastAssistantError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 import { logStepOutcome } from "./stepOutcome.js";
 import { withTestRunBudget } from "./testRunBudget.js";
-import { createCliAgentSession } from "./cliAgentSession.js";
+import { createExternalAgentSession } from "./externalAgentSession.js";
 import { actionTurnHandler, externalAgentBoost } from "./externalAgentActions.js";
 import { agentBinary } from "../lib/externalAgents.js";
 import { externalRuntime } from "../roleRouting.js";
@@ -1581,7 +1581,7 @@ try {
         const operations = customTools.filter((t: any) => t.name !== "taskflow");
         // Пропуск участника: его собственный MCP TaskFlow (если подключён) ходит от имени участника.
         const token = roleRunToken(role);
-        return createCliAgentSession({
+        return createExternalAgentSession(external, {
           cwd, command, env: token ? { TASKFLOW_TOKEN: token } : undefined,
           // Только буст и задание (в первом сообщении): правила внутренних ролей не передаются.
           systemPrompt: externalAgentBoost(roleTitle(role), operations, "card"),

@@ -17,7 +17,9 @@ import db from "../db.js";
 import { refreshRoles, roleUserId } from "../roleRouting.js";
 import { AVATAR_DIR } from "../routes/avatars.js";
 
-export type AgentAdapter = "claude-stream-json";
+/** claude-stream-json — Claude Code (`-p --output-format stream-json`, по подписке);
+ *  acp — агент сам говорит по Agent Client Protocol (runtime/acpAgentSession.ts). */
+export type AgentAdapter = "claude-stream-json" | "acp";
 
 export interface KnownAgent {
   /** Значение roles.runtime. */
@@ -28,6 +30,8 @@ export interface KnownAgent {
   summary: string;
   binary: string;
   adapter: AgentAdapter | null;
+  /** Аргументы запуска в режиме ACP (для adapter = "acp"). */
+  acpArgs?: string[];
   color: string;
   initials: string;
   /** Иконка из установки самого агента (первый существующий путь). */
@@ -69,7 +73,8 @@ export const KNOWN_AGENTS: KnownAgent[] = [
     key: "gemini",
     title: "Gemini CLI",
     binary: "gemini",
-    adapter: null,
+    adapter: "acp",
+    acpArgs: ["--acp"],
     summary: "внешний агент Gemini CLI в своём окружении.",
     color: "#4285F4",
     initials: "GM",
@@ -80,13 +85,25 @@ export const KNOWN_AGENTS: KnownAgent[] = [
     key: "hermes",
     title: "Гермес",
     binary: "hermes",
-    adapter: null,
+    adapter: "acp",
+    acpArgs: ["acp"],
     summary: "внешний агент Hermes в своём окружении.",
     color: "#8E7CC3",
     initials: "HM",
     localIcons: [
       path.join(HOME, ".hermes/hermes-agent/assets/icon-master.svg"),
     ],
+  },
+  {
+    runtime: "opencode",
+    key: "opencode",
+    title: "OpenCode",
+    binary: "opencode",
+    adapter: "acp",
+    acpArgs: ["acp"],
+    summary: "внешний агент OpenCode в своём окружении.",
+    color: "#211E1E",
+    initials: "OC",
   },
 ];
 

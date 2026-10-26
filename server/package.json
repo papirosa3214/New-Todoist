@@ -15,6 +15,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^2.0.2",
     "@composio/core": "0.22.0",
     "@earendil-works/pi-coding-agent": "^0.84.4",
     "@fastify/compress": "^9.2.2",
