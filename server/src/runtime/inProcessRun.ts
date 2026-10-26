@@ -275,7 +275,7 @@ const RESEARCH_TOOL_TIMEOUT_MS = 90_000; // web_get/youtube/ocr реально �
  * из ЕДИНОГО systemd-уровневого источника (см. итог разговора) — все
  * дочерние процессы, в том числе этот, подхватят его сами, без своей копии.
  */
-async function callResearchTool(name: string, args: unknown): Promise<unknown> {
+async function callResearchTool(name: string, args: unknown, role = "researcher"): Promise<unknown> {
   // Обвязка серверного журнала (карточка e87cd93f). Даже при тайм-ауте и
   // нестарте подпроцесса финальное событие записывается — без этого
   // operation_id висит без терминального исхода и цепочка вызовов рвётся.
@@ -292,7 +292,7 @@ async function callResearchTool(name: string, args: unknown): Promise<unknown> {
     // execFileSync — аргументы пишем в stdin самого child вручную, до
     // ожидания результата (PromiseWithChild даёт доступ к процессу через
     // .child, не дожидаясь await).
-    const home = ensureRoleHome("researcher");
+    const home = ensureRoleHome(role);
     const pending = execFileAsync("python3", [path.join(home.scripts, "research_server.py"), "--call", name], {
       cwd: home.workspace,
       timeout: RESEARCH_TOOL_TIMEOUT_MS,
@@ -302,7 +302,9 @@ async function callResearchTool(name: string, args: unknown): Promise<unknown> {
         // Ролевой ключ — НЕ общий TASKFLOW_AGENT_TOKEN (он сознательно
         // отозван, см. CLAUDE.md §5.1), а свой, для собственных запросов
         // роли к API (например, скачать вложение задачи под ocr).
-        TASKFLOW_VAULT_KEY: "TASKFLOW_AGENT_TOKEN_RESEARCHER",
+        // Ключ берётся по роли: Помощница владельца работает своим
+        // учёткой/токеном, а не исследовательским (карточка e11eae7a).
+        TASKFLOW_VAULT_KEY: `TASKFLOW_AGENT_TOKEN_${role.toUpperCase()}`,
       },
     });
     pending.child.stdin?.end(JSON.stringify(args ?? {}));
@@ -392,7 +394,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   ) => {
     const key = "tool.runtime." + name;
     registerInstructionBlock({key,title:name,group:"Возможности",scope:"command",modes:["work","resume","reply","review","subtask"],sourceKind:"code",originRef:"inProcessRun.ts:taskflowTools:"+name,readOnly:false,
-      ...(["web_search","web_get"].includes(name)?{roles:["researcher","secretary"]}:["ocr","youtube","local_model","taskflow_report"].includes(name)?{roles:["researcher"]}:{})},description);
+      ...(["web_search","web_get","ocr","youtube","local_model"].includes(name)?{roles:["researcher","secretary"]}:["taskflow_report"].includes(name)?{roles:["researcher"]}:{})},description);
     return defineTool({
       name,
       label: name,
@@ -872,27 +874,38 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   // (владелец 19.10.2026: «у него нет инструмента для веб-поиска, сделай
   // ему его»). Остальные инструменты исследования — только Исследователю:
   // они не нужны помощнику и не были для него заведены.
+  //
+  // Карточка e11eae7a (пункт 3): Помощница владельца отвечает на глубокое
+  // исследование САМА и отвечает своим именем — исследователь ей не нужен.
+  // Поэтому ей подключается тот же набор исследователя (web_search, web_get,
+  // ocr, youtube, local_model) через тот же загрузчик и тот же код
+  // research_server.py. Карточный taskflow_report остаётся только у
+  // Исследователя: документ с выводами Помощница пишет сама.
   if (role === "researcher" || role === "secretary") {
     tools.push(
       T("web_search", "Найти в интернете: сначала Tavily, при недоступности — Brave. Возвращает список результатов со ссылками и выжимками. Текст страницы потом бери через web_get.",
         Type.Object({ query: Type.String(), max_results: Type.Optional(Type.Number()) }),
-        (p) => callResearchTool("web_search", p)),
+        (p) => callResearchTool("web_search", p, role)),
       T("web_get", "Скачать страницу и вернуть её основное содержимое чистым markdown — без меню, рекламы и скриптов. Для PDF и сканов — ocr.",
         Type.Object({ url: Type.String(), max_chars: Type.Optional(Type.Number()) }),
-        (p) => callResearchTool("web_get", p)),
+        (p) => callResearchTool("web_get", p, role)),
+    );
+  }
+  if (role === "researcher" || role === "secretary") {
+    tools.push(
+      T("ocr", "Распознать текст из изображения или PDF (в том числе скан без текстового слоя), русский+английский. Источник — attachment_id вложения задачи или path файла на машине.",
+        Type.Object({ attachment_id: Type.Optional(Type.String()), path: Type.Optional(Type.String()), langs: Type.Optional(Type.String()), max_chars: Type.Optional(Type.Number()) }),
+        (p) => callResearchTool("ocr", p, role)),
+      T("youtube", "Транскрипт видео YouTube в текст (сначала ручные субтитры, иначе авто). Источник-видео для исследования.",
+        Type.Object({ url: Type.String(), langs: Type.Optional(Type.String()), max_chars: Type.Optional(Type.Number()) }),
+        (p) => callResearchTool("youtube", p, role)),
+      T("local_model", "ЛОКАЛЬНАЯ модель на сервере (Ollama, бесплатно, без интернета). Этап «синтез»: отдай собранные фрагменты и задание — вернёт связный черновик или сводку.",
+        Type.Object({ prompt: Type.String(), system: Type.Optional(Type.String()), max_tokens: Type.Optional(Type.Number()), num_ctx: Type.Optional(Type.Number()) }),
+        (p) => callResearchTool("local_model", p, role)),
     );
   }
   if (role === "researcher") {
     tools.push(
-      T("ocr", "Распознать текст из изображения или PDF (в том числе скан без текстового слоя), русский+английский. Источник — attachment_id вложения задачи или path файла на машине.",
-        Type.Object({ attachment_id: Type.Optional(Type.String()), path: Type.Optional(Type.String()), langs: Type.Optional(Type.String()), max_chars: Type.Optional(Type.Number()) }),
-        (p) => callResearchTool("ocr", p)),
-      T("youtube", "Транскрипт видео YouTube в текст (сначала ручные субтитры, иначе авто). Источник-видео для исследования.",
-        Type.Object({ url: Type.String(), langs: Type.Optional(Type.String()), max_chars: Type.Optional(Type.Number()) }),
-        (p) => callResearchTool("youtube", p)),
-      T("local_model", "ЛОКАЛЬНАЯ модель на сервере (Ollama, бесплатно, без интернета). Этап «синтез»: отдай собранные фрагменты и задание — вернёт связный черновик или сводку.",
-        Type.Object({ prompt: Type.String(), system: Type.Optional(Type.String()), max_tokens: Type.Optional(Type.Number()), num_ctx: Type.Optional(Type.Number()) }),
-        (p) => callResearchTool("local_model", p)),
       T("taskflow_report", "Собрать отчёт по задаче: markdown → HTML и PDF, зеркало в документации проекта и секция «Отчёты» карточки.",
         Type.Object({ task_id: Type.String(), title: Type.Optional(Type.String()), markdown: Type.String() }),
         async (p) => asRole(role,"POST",`/api/tasks/${p.task_id}/reports`,{title:p.title ?? "Отчёт",markdown:p.markdown})),
