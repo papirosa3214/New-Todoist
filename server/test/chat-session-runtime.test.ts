@@ -31,7 +31,7 @@ import {
   _resetChatRoleLocksForTests,
 } from "../src/runtime/chatSession.js";
 import {offerChatSteering} from "../src/runtime/chatSteering.js";
-import { liveModelOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
+import { liveCatalogEntryOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
 // === Замоканный Pi SDK ===
 
@@ -187,7 +187,8 @@ afterEach(async () => {
 
 describe("startChatRun (ход чата внутри сервера)", () => {
   it.each([["architect", "max"], ["qa", "medium"]])("owner thinking policy reaches chat SDK for %s", async (role, expected) => {
-    const entry = CATALOG.find(m => m.id === liveModelOf(role))!;
+    // id в каталоге — без префикса провайдера, как у настоящего Pi.
+    const entry = CATALOG.find(m => m.id === liveCatalogEntryOf(role).id && m.provider === liveCatalogEntryOf(role).provider)!;
     const prior = { ...entry };
     Object.assign(entry, {reasoning:true, thinkingLevelMap:{max:"max"}});
     try {
@@ -210,7 +211,7 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     expect(fakeSessions).toHaveLength(1);
     const session = fakeSessions[0];
     expect(session.options.cwd).toBe(ensureRoleHome("architect").workspace);
-    expect(session.options.model.id).toBe(liveModelOf("architect"));
+    expect(session.options.model.id).toBe(liveCatalogEntryOf("architect").id);
     // Инструменты трекера и чата — внутри сервера, отдельного процесса нет.
     // `tools` — имена (иначе SDK отключает все инструменты), каждое имя
     // разрешённого инструмента есть среди определений.
