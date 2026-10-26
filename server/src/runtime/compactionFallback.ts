@@ -22,6 +22,13 @@ export const DEFAULT_COMPACTION_LIMITS = {
   thinkingChars: 1_000,
   toolCallArgsChars: 400,
   localKeepMessages: 24, // столько последних сообщений оставляет локальная выжимка
+  // Порог, выше которого запрос выжимки к модели не отправляем вовсе: он идёт
+  // одним большим текстом и на тяжёлой истории роняется по таймауту провайдера
+  // или по «410 ModelDeprecated». Лучше локальный урез, чем минуты тишины.
+  maxCompactInputChars: 120_000,
+  summaryTailMessages: 4, // столько последних реплик диалога попадает в локальную выжимку
+  summaryTailChars: 600,
+  summaryTools: 12, // сколько разных инструментов перечисляем в локальной выжимке
 };
 export type CompactionLimits = typeof DEFAULT_COMPACTION_LIMITS;
 
@@ -170,11 +177,40 @@ export function buildLocalSummary(messages: any[] | undefined, limits: Compactio
   };
   const goalText = text(list.find((message) => message?.role === "user")).trim();
   const lastText = text([...list].reverse().find((message) => message?.role === "assistant")).trim();
+  // Хвост диалога: без него роль после уреза не знает, на чём остановилась.
+  const tail = list
+    .filter((message) => message?.role === "user" || message?.role === "assistant")
+    .slice(-limits.summaryTailMessages)
+    .map((message) => {
+      const who = message?.role === "user" ? "владелец" : "роль";
+      const body = text(message).trim();
+      return body ? `${who}: ${truncateText(body, limits.summaryTailChars)}` : "";
+    })
+    .filter(Boolean);
+  // Инструменты: что роль делала в этом ходе — один взгляд вместо всех выдач.
+  const tools = new Map<string, number>();
+  let toolCalls = 0;
+  for (const message of list) {
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (block?.type !== "toolCall") continue;
+      toolCalls += 1;
+      const name = String(block.name ?? "инструмент");
+      tools.set(name, (tools.get(name) ?? 0) + 1);
+    }
+  }
+  const toolLine = [...tools.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limits.summaryTools)
+    .map(([name, count]) => `${name}×${count}`)
+    .join(", ");
   return [
     "[Локальная выжимка истории: LLM-компакция не прошла, ход продолжается на урезанной истории.]",
-    `Сообщений: ${stats.count}, объём: ${stats.chars} симв.`,
+    `Сообщений: ${stats.count}, объём: ${stats.chars} симв., вызовов инструментов: ${toolCalls}.`,
     goalText ? `Цель: ${truncateText(goalText, limits.goalChars)}` : "",
     lastText ? `Последний ответ роли: ${truncateText(lastText, limits.roleChars.assistant)}` : "",
+    tail.length ? `Хвост диалога:\n${tail.join("\n")}` : "",
+    toolLine ? `Инструменты: ${toolLine}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -276,6 +312,22 @@ export async function compactSessionSafely(
   const limits = ctx.limits ?? DEFAULT_COMPACTION_LIMITS;
   const log = ctx.log ?? ((message: string) => console.warn(message));
   const before = measureMessages(readContextMessages(session)).chars;
+  // Тяжёлый вход: запрос выжимки к модели не отправляем (он уйдёт одним
+  // большим текстом и уронит ход по таймауту или «410 ModelDeprecated»).
+  // Режем локально — ход продолжается на маленькой истории.
+  if (before > limits.maxCompactInputChars) {
+    const local = applyLocalCompaction(session, limits);
+    log(
+      `[compact] ${ctx.label}: контекст ${before} симв. > порога ${limits.maxCompactInputChars} — ` +
+        `локальный урез без модели, тяжёлый запрос выжимки не отправляем.`,
+    );
+    return {
+      mode: local.ok ? "fallback" : "skipped",
+      charsBefore: before,
+      charsAfter: local.charsAfter || before,
+      error: `input too large for model compaction (${before} > ${limits.maxCompactInputChars})`,
+    };
+  }
   try {
     await session.compact(COMPACTION_INSTRUCTIONS);
     return { mode: "compacted", charsBefore: before, charsAfter: trimContext(session, limits) };

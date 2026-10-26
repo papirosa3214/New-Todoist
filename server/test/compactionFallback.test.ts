@@ -146,6 +146,23 @@ describe("локальная выжимка без модели", () => {
     expect(summary).toContain("ЦЕЛЬ: починить компакцию сессии");
     expect(summary).toContain("сделал часть работы");
   });
+
+  it("в выжимку попадают хвост диалога и перечень инструментов", () => {
+    const summary = buildLocalSummary(
+      [
+        user("ЦЕЛЬ: разобрать выжимку"),
+        { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: {} }] },
+        { role: "toolResult", toolCallId: "t1", toolName: "bash", content: [{ type: "text", text: "вывод" }] },
+        assistant("проверил лог, нашёл причину"),
+        user("дальше что"),
+      ],
+      LIMITS,
+    );
+    expect(summary).toContain("Хвост диалога");
+    expect(summary).toContain("проверил лог, нашёл причину");
+    expect(summary).toContain("bash×1");
+    expect(summary).toContain("вызовов инструментов: 1");
+  });
 });
 
 describe("безопасная компакция", () => {
@@ -185,6 +202,27 @@ describe("безопасная компакция", () => {
     const outcome = await compactSessionSafely(session, { label: "тест", limits: LIMITS });
     expect(outcome.mode).toBe("skipped");
     expect(session.sessionManager.entries.some((entry: any) => entry.type === "compaction")).toBe(false);
+  });
+
+  it("тяжёлый вход: запрос выжимки к модели не отправляем, режем локально", async () => {
+    const messages = [
+      user("ЦЕЛЬ: разобрать выжимку"),
+      assistant("старое рассуждение".repeat(50)),
+      toolResult("вывод инструмента".repeat(200)),
+      assistant("свежий ответ роли"),
+    ];
+    const session = makeSession(messages);
+    const outcome = await compactSessionSafely(session, {
+      label: "тест",
+      limits: { ...LIMITS, maxCompactInputChars: 2_000 },
+    });
+    expect(outcome.mode).toBe("fallback");
+    expect(session.compactCalls).toBe(0); // модель не дёргали вообще
+    expect(outcome.error).toContain("too large");
+    const compaction = session.sessionManager.entries.find((entry: any) => entry.type === "compaction");
+    expect(compaction).toBeTruthy();
+    expect(compaction.summary).toContain("ЦЕЛЬ: разобрать выжимку");
+    expect(measureMessages(session.agent.state.messages).chars).toBeLessThan(measureMessages(messages).chars);
   });
 });
 
