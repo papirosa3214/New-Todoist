@@ -41,14 +41,10 @@ import {
 import { homedir } from "node:os";
 import type { CliAgentSession } from "./cliAgentSession.js";
 import { createExternalAgentSession } from "./externalAgentSession.js";
-import {
-  actionTurnHandler,
-  externalAgentBoost,
-  stripActions,
-} from "./externalAgentActions.js";
+import { externalAgentBoost } from "./externalAgentActions.js";
 import { agentBinary } from "../lib/externalAgents.js";
 import { roleRunToken } from "./roleRunAccess.js";
-import { externalRuntime } from "../roleRouting.js";
+import { externalRuntime, roleUserId } from "../roleRouting.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -1830,9 +1826,8 @@ async function startChatRunOnce(
 
 /**
  * Ход внешнего агента (Claude Code и т. п.) в живом чате. Агент работает в
- * своём окружении; от TaskFlow — инструкция-буст, правила чата, пропуск
- * участника (его собственный MCP TaskFlow действует от его имени) и блок
- * taskflow-actions, который сервер исполняет шлюзом ролей. Сессия агента
+ * своём окружении; от TaskFlow — инструкция-буст, правила чата и MCP-сервер
+ * taskflow_run с операциями чата от имени участника. Сессия агента
  * продолжается между сообщениями: её id хранится в chat_sessions, как у Pi.
  */
 async function runExternalChat(
@@ -1880,7 +1875,8 @@ async function runExternalChat(
     },
     // Только буст: правила внутренних ролей (песочница, назначение, host-инструменты) внешнему агенту не передаются.
     systemPrompt: externalAgentBoost(roleTitle(role), operations, "chat") + "\n\n" + chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)),
-    onTurnEnd: actionTurnHandler(operations, runId),
+    // Операции чата — инструментами MCP-сервера taskflow_run от имени участника.
+    runTools: token ? { runId, userId: roleUserId(role), token, tools: operations } : undefined,
   }), resource => resource.dispose());
   preparation.transfer();
   } finally { preparation.dispose(); }
@@ -1933,9 +1929,7 @@ async function runExternalChat(
         { code: "CHAT_RUN_MODEL_ERROR" },
       );
     const text = stripGoalMark(
-      stripActions(
-        (last?.content ?? []).map((c: any) => c?.text ?? "").join("\n"),
-      ).trim(),
+      (last?.content ?? []).map((c: any) => c?.text ?? "").join("\n").trim(),
     );
     if (session.sessionId)
       upsertChatSession(

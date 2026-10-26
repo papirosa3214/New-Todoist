@@ -1,7 +1,7 @@
 import {beforeAll,afterAll,describe,expect,it,vi} from "vitest";
 import {Type} from "typebox";
 import {createUniversalTaskflow} from "../src/runtime/universalTaskflow.js";
-import {actionTurnHandler} from "../src/runtime/externalAgentActions.js";
+import {callRunTool} from "../src/runtime/runToolRegistry.js";
 import {buildApp} from "../src/index.js";
 import {taskflowTools} from "../src/runtime/inProcessRun.js";
 import db from "../src/db.js";
@@ -15,10 +15,8 @@ describe("runtime audit: real adapter and external turn results",()=>{
   const op={name:"fixture_write",description:"fixture",parameters:Type.Object({text:Type.String()}),execute:vi.fn(async(_id:string,args:any)=>{writes.push(args.text);return {content:[{type:"text",text:"saved"}]};})};
   const gateway=createUniversalTaskflow([op],{actor:"role_builder",role:"builder",mode:"work",runId:"external-audit"});
   const alias={name:op.name,execute:async(id:string,args:any)=>gateway.execute(id,{operation:op.name,arguments:args})};
-  const handler=actionTurnHandler([alias],"session-audit");
-  const block=(text:string)=>"```taskflow-actions\n"+JSON.stringify([{operation:op.name,arguments:{text}}])+"\n```";
-  await handler(block("first"));
-  await handler(block("second"));
+  await callRunTool([alias],"session-audit",op.name,{text:"first"});
+  await callRunTool([alias],"session-audit",op.name,{text:"second"});
   expect(writes).toEqual(["first","second"]);
  });
  it("preserves a real route refusal as REJECTED rather than unknown outcome",async()=>{

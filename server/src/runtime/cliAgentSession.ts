@@ -7,9 +7,8 @@
 // «Обновить» из каталога externalAgents.ts), а не подмена модели во внутренней
 // роли (владелец 19.10.2026). Он работает в своём окружении целиком: своя
 // модель, память, CLAUDE.md, скиллы, свои MCP — TaskFlow ничего не отключает
-// и не подменяет. От TaskFlow он получает только инструкцию-буст и задание;
-// действия на доске отдаёт блоком `taskflow-actions` (externalAgentActions.ts),
-// сервер выполняет их сам и возвращает итог следующим сообщением.
+// и не подменяет. От TaskFlow он получает инструкцию-буст, задание и MCP-сервер
+// `taskflow_run` (`--mcp-config`) с операциями запуска (externalAgentSession.ts).
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -71,6 +70,8 @@ export interface CliSessionInput {
   onModel?: (model: string) => void;
   /** Продолжить прежнюю сессию агента (чат между сообщениями). */
   resumeSessionId?: string | null;
+  /** JSON для `--mcp-config`: MCP-сервер операций запуска (taskflow_run). */
+  mcpConfig?: string;
 }
 
 export interface CliAgentSession {
@@ -354,6 +355,7 @@ export async function createCliAgentSession(
       "bypassPermissions",
     ];
     if (input.model) args.push("--model", input.model);
+    if (input.mcpConfig) args.push("--mcp-config", input.mcpConfig);
     // Следующий prompt той же сессии (например, резюме при остановке) продолжает разговор.
     if (sessionId) args.push("--resume", sessionId);
     const proc = spawn(input.command ?? "claude", args, {

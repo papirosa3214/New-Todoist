@@ -99,6 +99,7 @@ import { registerReportRoutes } from "./routes/reports.js";
 import { registerResearchRoutes } from "./routes/research.js";
 import { registerChatsRoutes } from "./routes/chats.js";
 import { registerTaskDiscussionRoutes } from "./routes/task-discussions.js";
+import { registerRunToolsRoutes } from "./routes/run-tools.js";
 import { resumePendingHandoffs } from "./runtime/taskDiscussion.js";
 import { ensureCommonChat } from "./lib/chatCommon.js";
 import { registerWidgetsRoutes } from "./routes/widgets.js";
@@ -614,6 +615,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerResearchRoutes(app);
   registerChatsRoutes(app);
   registerTaskDiscussionRoutes(app);
+  registerRunToolsRoutes(app);
   registerWidgetsRoutes(app);
   registerMemoryRoutes(app);
   registerTranscribeRoutes(app);

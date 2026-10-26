@@ -31,3 +31,16 @@
 - Шаг 2: агент работает с доской через MCP `taskflow`, а не текстовым блоком `taskflow-actions`.
 - Gemini — вход владельцем (`gemini`, вход Google). OpenCode — выбрать существующую модель в его конфиге.
 - Участники появятся в «Команде» после «Найти агентов» (`syncExternalAgents`).
+
+## Шаг 2: один набор действий через MCP (26.10.2026)
+
+Было: сервер разрешал внешнему агенту около 90 операций, но отдавал их только текстом. Агент писал блок `taskflow-actions`, сервер его разбирал. Параллельно у Claude Code был свой глобальный MCP `taskflow` из 35 инструментов: без ответа в теме, без чата, без плана.
+
+Стало:
+- `server/src/runtime/runToolRegistry.ts` — реестр «запуск → разрешённые операции → участник».
+- `server/src/routes/run-tools.ts` — `GET /api/runs/:runId/tools` и `POST /api/runs/:runId/tools/:name`, только по пропуску участника своего запуска (чужой запуск — 404).
+- `server/scripts/run-mcp-bridge.mjs` — stdio MCP-сервер `taskflow_run`, пересылает `tools/list` и `tools/call` на сервер. Именно stdio: Hermes не умеет MCP по HTTP.
+- `externalAgentSession.ts` регистрирует операции запуска и подключает мост: ACP-агентам — в `session/new`, Claude Code — через `--mcp-config`. При `dispose` регистрация снимается.
+- Разбор `taskflow-actions` удалён. Инструкция агенту — без `CLAUDE.md` и без «если подключён свой MCP».
+
+Проверено: `runTools.test.ts` 2/2 (маршрут, чужой запуск, stdio-мост). Вживую на отдельном экземпляре сервера: **Hermes и Claude Code сами вызвали `taskflow_subtask_done` через `taskflow_run`**, сервер получил аргументы. Полный прогон — без новых падений относительно main: тест про Chromium падает из-за окружения временной копии, `chats-common-lifecycle` плавает и на main.

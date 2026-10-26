@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { StreamJsonTranslator, piToolName } from "../src/runtime/cliAgentSession.js";
-import { actionTurnHandler, parseActions, stripActions } from "../src/runtime/externalAgentActions.js";
 import { findBinary } from "../src/lib/externalAgents.js";
 
 describe("StreamJsonTranslator", () => {
@@ -41,25 +40,6 @@ describe("StreamJsonTranslator", () => {
   });
 });
 
-
-describe("действия внешнего агента", () => {
-  it("разбирает блок taskflow-actions и выполняет операции, итоги возвращает агенту", async () => {
-    const calls: any[] = [];
-    const tools = [{ name: "taskflow_subtask_done", execute: async (_id: string, a: any) => { calls.push(a); return { content: [{ type: "text", text: "сдано" }] }; } }];
-    const handler = actionTurnHandler(tools, "run1");
-    const answer = "Готово.\n```taskflow-actions\n[{\"operation\":\"taskflow_subtask_done\",\"arguments\":{\"subtask_id\":\"s1\",\"done\":true,\"result\":\"ок\"}},{\"operation\":\"taskflow_nope\"}]\n```";
-    const feedback = await handler(answer);
-    expect(calls).toEqual([{ subtask_id: "s1", done: true, result: "ок" }]);
-    expect(feedback).toContain("taskflow_subtask_done: ок — сдано");
-    expect(feedback).toContain("taskflow_nope: операции нет");
-    expect(stripActions(answer)).toBe("Готово.");
-    expect(await handler("просто ответ")).toBeNull();
-  });
-
-  it("битый блок — ошибка для агента, а не тишина", () => {
-    expect(parseActions("```taskflow-actions\n{oops\n```").errors[0]).toContain("не JSON");
-  });
-});
 
 describe("каталог внешних агентов", () => {
   it("находит бинарник в доп. папках при коротком PATH сервиса", () => {

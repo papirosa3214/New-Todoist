@@ -89,7 +89,7 @@ import { isProviderLimitText, lastAssistantEmptyAnswer, lastAssistantLimitError,
 import { logStepOutcome } from "./stepOutcome.js";
 import { withTestRunBudget } from "./testRunBudget.js";
 import { createExternalAgentSession } from "./externalAgentSession.js";
-import { actionTurnHandler, externalAgentBoost } from "./externalAgentActions.js";
+import { externalAgentBoost } from "./externalAgentActions.js";
 import { agentBinary } from "../lib/externalAgents.js";
 import { externalRuntime } from "../roleRouting.js";
 import { roleRunToken } from "./roleRunAccess.js";
@@ -1576,16 +1576,15 @@ try {
     ? (() => {
         const command = agentBinary(external);
         if (!command) throw new Error(`внешний агент «${roleTitle(role)}» не найден на машине — нажми «Обновить» в списке агентов`);
-        // Операции TaskFlow агент вызывает блоком taskflow-actions, сервер исполняет их теми же
-        // обёртками шлюза, что у ролей (права и лента — от учётки участника).
+        // Операции TaskFlow — те же обёртки шлюза, что у ролей (права и лента — от учётки
+        // участника); агент получает их инструментами MCP-сервера taskflow_run.
         const operations = customTools.filter((t: any) => t.name !== "taskflow");
-        // Пропуск участника: его собственный MCP TaskFlow (если подключён) ходит от имени участника.
         const token = roleRunToken(role);
         return createExternalAgentSession(external, {
           cwd, command, env: token ? { TASKFLOW_TOKEN: token } : undefined,
           // Только буст и задание (в первом сообщении): правила внутренних ролей не передаются.
           systemPrompt: externalAgentBoost(roleTitle(role), operations, "card"),
-          onTurnEnd: actionTurnHandler(operations, manager.getSessionId()),
+          runTools: token ? { runId, userId: ROLE_USER, token, tools: operations } : undefined,
         }).then(s => ({ session: s as any }));
       })()
     : createAgentSession({
