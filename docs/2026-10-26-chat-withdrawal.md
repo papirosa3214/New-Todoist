@@ -9,3 +9,6 @@ can_withdraw в представлении сообщения запрещает
 Административное удаление истории не изменено. Сервер не перезапускался, push не выполнялся. Клиент реализован в /Users/max/Проекты/TaskFlowNativeBuild, отчёт docs/2026-10-26-chat-withdrawal.md.
 
 Перед сдачей: role_run_jobs queued/running=0, chat_message_queue pending=1. Живой процесс не перезапускать, ожидающее сообщение не трогать.
+
+## Выполненное обновление
+26.10.2026 npm run build PASS; резервная копия БД и старого dist: /home/maksim/.local/state/taskflow-backups/20261026-233300-chat-withdraw. Перед restart нет queued/running role_run_jobs и picked deliveries. Служба перезапущена: PID 3639102 → 3930297; health ok=true; withdraw route без авторизации отвечает ожидаемым 401. После запуска pending/picked=0. Штатный install-iphone.sh: BUILD SUCCEEDED, физический iPhone — установка и запуск PASS. Без UI-тестов, симулятора и push.
