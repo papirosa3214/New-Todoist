@@ -242,13 +242,35 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         assignee_id: S(),
         due_date: S("ГГГГ-ММ-ДД"),
         priority: Type.Optional(Type.Integer({ description: "1 срочный … 4 низкий" })),
+        label_ids: Type.Optional(Type.Array(Type.String(), { description: "id меток из taskflow_labels" })),
         preparation: Type.Optional(Type.Any()),
         subtasks: Type.Optional(Type.Array(Type.String())),
       }), async (p) => {
         const body: Record<string, unknown> = { title: p.title };
         for (const k of ["description", "project_id", "assignee_id", "due_date", "priority", "preparation"]) if (p[k] != null) body[k] = p[k];
         if (p.subtasks?.length) body.subtasks = p.subtasks;
+        // Метки — личная оснастка владельца: другим ролям инструмент не
+        // достаётся (roleToolScope), и в create_task метку принимает только
+        // Помощник владельца.
+        if (p.label_ids?.length && role === "secretary") body.label_ids = p.label_ids;
         return { "задача создана": short(unwrap(await asRole(role, "POST", "/api/tasks", body))) };
+      }),
+    T("taskflow_set_task_labels",
+      "Поставить метки на существующую задачу: PATCH /api/tasks/:id с полным списком label_ids (заменяет прежние). Список пустой — снять все метки.",
+      Type.Object({
+        id: S("id задачи"),
+        label_ids: Type.Optional(Type.Array(Type.String(), { description: "id меток из taskflow_labels" })),
+      }), async (p) => {
+        if (!p.id) throw new ToolError("нужен id задачи");
+        const body = { label_ids: Array.isArray(p.label_ids) ? p.label_ids : [] };
+        return { "метки обновлены": short(unwrap(await asRole(role, "PATCH", `/api/tasks/${p.id}`, body))) };
+      }),
+    T("taskflow_labels",
+      "Список меток, доступных владельцу (GET /api/labels) — id и название. Нужен, чтобы поставить метку на задачу.",
+      None, async () => {
+        const labels = (await asRole(role, "GET", "/api/labels")) as any[];
+        const rows = Array.isArray(labels) ? labels : [];
+        return { метки: rows.map((l: any) => ({ id: l.id, name: l.name, color: l.color })) };
       }),
     T("taskflow_suggest_subtasks",
       "Умная разбивка на подзадачи — тот же инструмент, что у владельца в форме задачи. id существующей задачи ЛИБО title черновика. Ничего не сохраняет.",

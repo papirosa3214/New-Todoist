@@ -22,6 +22,10 @@ const ONLY: Record<string, string[]> = {
   apple_calendar_agenda: ["secretary"],
   apple_calendar_create: ["secretary"],
   apple_calendar_update: ["secretary"],
+  // Метки задач (26.10.2026): личная оснастка владельца, доступна только
+  // Помощнику владельца.
+  taskflow_set_task_labels: ["secretary"],
+  taskflow_labels: ["secretary"],
   // Уборка чатов и тем задач (22.10.2026): сервер умел, роли не видели.
   taskflow_chat_archive: ["code_orchestrator", "secretary"],
   taskflow_chat_close: ["code_orchestrator", "secretary"],
