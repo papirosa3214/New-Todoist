@@ -19,7 +19,7 @@ import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 // открыть целиком после хода. `id`/`tool`/`status` у него есть нарочно —
 // клиент, который про размышления ещё не знает, разбирает его как шаг и не
 // роняет весь снимок.
-import { chatBlocks, type ChatBlock } from "../lib/chatBlocks.js";
+import { sourcedChatBlocks, type ChatBlock } from "../lib/chatBlocks.js";
 import { broadcastToUsers } from "../ws.js";
 import { unwrapRoleEnvelopeText } from "../lib/roleContractV1.js";
 import { emptyAssistantAnswer } from "./providerFailover.js";
@@ -354,7 +354,7 @@ let usagePersistenceWarning = false;
 export function liveTurnForClient(turn: LiveTurnSnapshot): LiveTurnSnapshot {
   return {
     ...turn,
-    items: turn.items.map((it) => (it.kind === "text" ? { ...it, blocks: chatBlocks(it.text, true) } : it)),
+    items: turn.items.map((it) => (it.kind === "text" ? { ...it, blocks: sourcedChatBlocks(it.text, true) } : it)),
   };
 }
 

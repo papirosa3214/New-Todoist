@@ -81,14 +81,23 @@ function docOf(markdown: string): ChatBlock {
   return { type: "doc", doc, chars: markdown.length + 1 };
 }
 
+/** Блок с исходным куском текста — для живого хода: клиент проявляет
+ *  исходный текст по словам и рисует блок, обрезанный по открытой части. */
+export type SourcedChatBlock = ChatBlock & { source: string };
+
 /** Разложить текст ответа на блоки. streaming — ответ ещё печатается. */
 export function chatBlocks(text: string, streaming = false): ChatBlock[] {
+  return sourcedChatBlocks(text, streaming).map(({ source: _source, ...block }) => block as ChatBlock);
+}
+
+/** То же, но у каждого блока — его исходный кусок текста. */
+export function sourcedChatBlocks(text: string, streaming = false): SourcedChatBlock[] {
   const lines = (text ?? "").replace(/\r\n/g, "\n").split("\n");
-  const blocks: ChatBlock[] = [];
+  const blocks: SourcedChatBlock[] = [];
   let buffer: string[] = [];
   const flush = () => {
     const joined = buffer.join("\n");
-    if (joined.trim()) blocks.push(docOf(joined));
+    if (joined.trim()) blocks.push({ ...docOf(joined), source: joined });
     buffer = [];
   };
 
@@ -112,11 +121,12 @@ export function chatBlocks(text: string, streaming = false): ChatBlock[] {
             : null;
       if (special) {
         flush();
+        const source = lines.slice(i, closed ? j + 1 : lines.length).join("\n");
         if (!closed && streaming) {
-          blocks.push(special === "structured_json" ? { type: "structured_json_streaming", json: body } : { type: "pending", kind: special });
-        } else if (special === "html") blocks.push({ type: "html", html: body });
-        else if (special === "widget") blocks.push({ type: "widget", json: body });
-        else blocks.push({ type: "structured_json", json: body });
+          blocks.push(special === "structured_json" ? { type: "structured_json_streaming", json: body, source } : { type: "pending", kind: special, source });
+        } else if (special === "html") blocks.push({ type: "html", html: body, source });
+        else if (special === "widget") blocks.push({ type: "widget", json: body, source });
+        else blocks.push({ type: "structured_json", json: body, source });
         i = closed ? j + 1 : lines.length;
         continue;
       }
@@ -141,7 +151,7 @@ export function chatBlocks(text: string, streaming = false): ChatBlock[] {
           j++;
         }
         const chars = [...header, ...rows.flat()].reduce((n, c) => n + c.length, 0);
-        blocks.push({ type: "table", header: header.map(parseInline), align, rows: rows.map((r) => r.map(parseInline)), chars });
+        blocks.push({ type: "table", header: header.map(parseInline), align, rows: rows.map((r) => r.map(parseInline)), chars, source: lines.slice(i, j).join("\n") });
         i = j;
         continue;
       }

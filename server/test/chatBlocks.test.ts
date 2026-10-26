@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatBlocks, chatBlocksCached } from "../src/lib/chatBlocks.js";
+import { chatBlocks, chatBlocksCached, sourcedChatBlocks } from "../src/lib/chatBlocks.js";
 
 describe("chatBlocks: ответ готовыми блоками (правило ChatRichContent из iOS)", () => {
   it("обычный текст — один документ TipTap с разметкой", () => {
@@ -39,5 +39,13 @@ describe("chatBlocks: ответ готовыми блоками (правило
   it("пустой текст — нет блоков; кэш отдаёт тот же результат", () => {
     expect(chatBlocks("  \n ")).toEqual([]);
     expect(chatBlocksCached("Текст")).toEqual(chatBlocks("Текст"));
+  });
+
+  it("в живом ходе у блока — исходный кусок; готовые сообщения его не несут", () => {
+    const text = "Итог:\n```widget\n{\"type\":\"metrics\"}\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nконец";
+    const blocks = sourcedChatBlocks(text, true);
+    expect(blocks.map((b) => b.type)).toEqual(["doc", "widget", "table", "doc"]);
+    expect(blocks.map((b) => b.source)).toEqual(["Итог:", "```widget\n{\"type\":\"metrics\"}\n```", "| a | b |\n|---|---|\n| 1 | 2 |", "конец"]);
+    expect(chatBlocks(text).some((b) => "source" in b)).toBe(false);
   });
 });
