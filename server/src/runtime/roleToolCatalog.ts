@@ -16,6 +16,7 @@ export const ROLE_TOOL_INSTRUCTION = "Инструменты доступны о
  * за 14 дней (role_tool_audit) и по обязательности шага. Остальное подключает
  * загрузчик по требованию: весь каталог в каждый запрос не уходит. */
 const CORE_OPERATIONS = new Set([
+  "taskflow_routines", "taskflow_routine_read",
   "taskflow_task", "taskflow_task_summary",
   "taskflow_work_plan", "taskflow_work_item_submit", "taskflow_plan_read", "taskflow_plan_ops", "taskflow_plan_request",
   "taskflow_subtask_work", "taskflow_subtask_done", "taskflow_subtask_add",

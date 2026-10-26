@@ -64,6 +64,7 @@ export function memoryRequestStore(): RequestStore {
   };
 }
 const READ = new Set([
+  "taskflow_routines", "taskflow_routine_read", "taskflow_routine_runs", "taskflow_routine_preview",
   "taskflow_team_read",
   "taskflow_plan_read",
   "taskflow_children",

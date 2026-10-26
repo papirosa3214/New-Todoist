@@ -339,3 +339,5 @@
 | LOCK-CHAT-WITHDRAW-20261026 | REVIEW | Отзыв сообщения до исполнения | server/src/routes/chats.ts, server/src/lib/chatMessages.ts, server/src/runtime/chatSteering.ts, server/src/runtime/chatMessageWithdrawal.ts, server/test/chatMessageWithdrawal.test.ts, docs/2026-10-26-chat-withdrawal.md | Codex | Изолированные RED/GREEN, typecheck; без рестарта/push |
 
 | LOCK-CHAT-WITHDRAW-DEPLOY-20261026 | REVIEW | Обновить сервер и iPhone по прямому поручению | AGENT-WORK-SCOPES.md, docs/2026-10-26-chat-withdrawal.md | Codex | Бэкап, build, restart, health и route smoke; без UI-тестов |
+
+| LOCK-SECRETARY-ROUTINES-20261026 | REVIEW | Все действия с рутинами для помощника владельца | AGENT-WORK-SCOPES.md, server/src/runtime/secretaryRoutineTools.ts, server/src/runtime/chatTools.ts, server/src/runtime/roleToolCatalog.ts, server/src/runtime/universalTaskflow.ts, server/src/lib/roleToolScope.ts, server/src/auth.ts, server/test/secretaryRoutines.test.ts, docs/2026-10-26-secretary-routines.md | Прямое поручение владельца | Codex | Изолированные RED/GREEN, точные схемы/права/цикл API, tsc |

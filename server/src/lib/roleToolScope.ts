@@ -45,6 +45,9 @@ const DENY: Record<string, string[]> = {
 };
 
 export function roleToolAllowed(role: string, tool: string): boolean {
+  // Владелец 26.10.2026 разрешил помощнице все действия с рутинами,
+  // включая удаление самой рутины; удаление её задач этим не разрешается.
+  if (tool === "taskflow_routines" || tool.startsWith("taskflow_routine_")) return role === "secretary";
   // Помощник владельца имеет общий набор TaskFlow-инструментов, кроме
   // операций удаления/физической очистки. Архивирование остаётся доступно.
   // things_delete лишь переносит дело в Корзину Things — как и до разделения операций.

@@ -5,10 +5,10 @@ import { isServiceUser } from "./serviceUser.js";
 import { touchActive } from "./activeAgent.js";
 
 /**
- * Делегированные роли не удаляют объекты. Единственный DELETE-маршрут,
- * который пропускаем, /api/projects/:id: его обработчик только архивирует
- * активный проект и никогда не удаляет данные. Purge и остальные DELETE
- * остаются закрытыми общей дверью авторизации.
+ * Делегированные роли не удаляют объекты. Для помощницы разрешены
+ * /api/projects/:id (архивирование) и /api/schedules/:id (удаление рутины
+ * по прямому поручению владельца, без удаления созданных задач).
+ * Purge и остальные DELETE остаются закрытыми общей дверью авторизации.
  */
 function deleteForbidden(
   req: FastifyRequest,
@@ -17,7 +17,9 @@ function deleteForbidden(
 ): boolean {
   const path = req.url.split("?")[0];
   const projectArchive = isSecretary(userId) && /^\/api\/projects\/[^/]+$/.test(path);
-  if (req.method !== "DELETE" || !isOrchestrator(userId) || projectArchive) return false;
+  // Explicit owner delegation: remove a routine, preserving its created tasks.
+  const routineDelete = isSecretary(userId) && /^\/api\/schedules\/[^/]+$/.test(path);
+  if (req.method !== "DELETE" || !isOrchestrator(userId) || projectArchive || routineDelete) return false;
   reply.code(403).send({
     error:
       "делегированная роль не удаляет объекты: архивирование разрешено, физическое удаление остаётся за владельцем",
