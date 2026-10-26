@@ -71,11 +71,13 @@ export function liveRoutingProviders(): FakeProvider[] {
 
 // Провайдер модели: «opencode-go/deepseek-…» — уже задан префиксом,
 // остальное угадывается по имени (та же эвристика, что в src).
+// Как в настоящем каталоге Pi: префикс — это провайдер, а id модели — без
+// него («opencode/deepseek-…» лежит как provider «opencode» + id «deepseek-…»).
 function catalogEntry(model: string): FakeModel {
   const slash = model.indexOf("/");
   const provider = slash > 0 ? model.slice(0, slash) : providerOfModel(model);
   return {
-    id: model,
+    id: slash > 0 ? model.slice(slash + 1) : model,
     provider,
     name: model,
     contextWindow: 200_000,

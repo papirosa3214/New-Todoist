@@ -19,6 +19,7 @@ import {
   type RoleName,
 } from "../roleRouting.js";
 import { inProcessToolNames, sweepPendingReviews, taskflowTools } from "../runtime/inProcessRun.js";
+import { qualifyModelRef, roleModelOptions } from "../runtime/modelCatalog.js";
 import { roleIntegrations } from "../runtime/roleIntegrations.js";
 
 type ProfileConfig = {
@@ -423,9 +424,11 @@ export function registerRoleRoutes(app: FastifyInstance): void {
     }
     const models = await piRuntime.listModels().catch(() => []);
     return {
-      current: loadRoleRouting().models[role] ?? null,
-      // Ход чата ищет модель по id без провайдера (findInCatalog) — так и отдаём.
-      models: [...new Map(models.filter((m) => m.available).map((m) => [m.id, { id: m.id, title: m.name ?? m.id }])).values()],
+      // Модель роли — тоже «провайдер/модель»: одинаковые имена у разных
+      // провайдеров иначе неразличимы (карточка e11eae7a, пункт 1).
+      current: qualifyModelRef(loadRoleRouting().models[role] ?? null),
+      // Модели разных провайдеров не сливаются: id всегда «провайдер/модель».
+      models: roleModelOptions(models),
     };
   });
 

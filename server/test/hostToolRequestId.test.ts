@@ -82,9 +82,12 @@ describe("веб-инструменты ролей", () => {
     expect(список).toContain("web_search");
     expect(список).toContain("web_get");
   });
-  it("остальные исследовательские инструменты помощнику не достаются", () => {
+  // Карточка e11eae7a: Помощница отвечает на глубокое исследование сама —
+  // у неё весь набор исследователя, кроме отчёта по карточке.
+  it("помощнику — весь набор исследования, кроме отчёта по карточке", () => {
     const список = имена("secretary");
-    for (const лишний of ["ocr", "youtube", "local_model"]) expect(список).not.toContain(лишний);
+    for (const нужный of ["web_search", "web_get", "ocr", "youtube", "local_model"]) expect(список).toContain(нужный);
+    expect(список).not.toContain("taskflow_report");
   });
   it("у Исследователя набор не изменился", () => {
     const список = имена("researcher");

@@ -223,7 +223,7 @@ export function ensureRoleHome(role: string, options: { refreshSystem?: boolean 
   writeOnce(home.role, `# Личность роли ${role}\n\nТы — ${roleTitle(role)}. Общайся ясно и уважительно.\n`);
   writeOnce(home.agents, `# Роль ${role} в TaskFlow\n\n${roleHomeInstruction(role)}\n`);
   writeOnce(path.join(home.scripts, "mcp_server.py"), scriptWrapper("mcp_server.py"));
-  if (role === "researcher") writeOnce(path.join(home.scripts, "research_server.py"), scriptWrapper("research_server.py"));
+  if (role === "researcher" || role === "secretary") writeOnce(path.join(home.scripts, "research_server.py"), scriptWrapper("research_server.py"));
   return home;
 }
 
