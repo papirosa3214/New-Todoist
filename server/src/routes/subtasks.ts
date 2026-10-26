@@ -1,3 +1,4 @@
+import { commentWithBlocks } from "../lib/chatBlocks.js";
 import {visibleTaskComments, isRoutineServiceComment} from "../lib/serviceNoise.js";
 import { wakeAndDeliver } from "../runtime/orchestratorWake.js";
 import { scheduleDraftRebuildFromSubtasks } from "./task-collaboration-plans.js";
@@ -1190,7 +1191,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
          FROM comments c LEFT JOIN users u ON c.user_id = u.id
          WHERE c.task_id = ? ORDER BY c.created_at`,
         )
-        .all(req.params.taskId) as any[]);
+        .all(req.params.taskId) as any[]).map(commentWithBlocks);
     },
   );
 

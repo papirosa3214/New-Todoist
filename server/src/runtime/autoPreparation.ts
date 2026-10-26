@@ -1,3 +1,4 @@
+import { preparationWithBlocks } from "../lib/chatBlocks.js";
 import { branchSnapshot,branchCards,branchRoot } from "./branchPlan.js";
 import { unlockDependencyPlans } from "./planSubtaskAdmission.js";
 import crypto from "node:crypto";
@@ -183,7 +184,7 @@ export function registerPreparationRoutes(app:FastifyInstance):void {
     if(!getTaskForRead(req.params.id,req.userId)) return reply.code(404).send({error:"Задача не найдена"});
     const job=db.prepare("SELECT id,input_version,status,plan_id,result_json,error,attempts,updated_at FROM task_preparation_jobs WHERE task_id=? ORDER BY id DESC LIMIT 1").get(req.params.id) as any;
     const plan=job?.plan_id?db.prepare("SELECT status FROM task_collaboration_plans WHERE id=?").get(job.plan_id) as {status:string}|undefined:undefined;
-    return {preparation:job?{...job,plan_status:plan?.status??null,branch_snapshot:job.plan_id && branchRoot(req.params.id)===req.params.id && branchCards(req.params.id).length>1 ? branchSnapshot(job.plan_id) : null,result:job.result_json?JSON.parse(job.result_json):null,result_json:undefined}:null};
+    return {preparation:job?{...job,plan_status:plan?.status??null,branch_snapshot:job.plan_id && branchRoot(req.params.id)===req.params.id && branchCards(req.params.id).length>1 ? branchSnapshot(job.plan_id) : null,result:job.result_json?preparationWithBlocks(JSON.parse(job.result_json)):null,result_json:undefined}:null};
   });
   app.post("/api/tasks/:id/preparation/approve-structure",{preHandler:authOrApiToken},async(req:any,reply)=>{
     const task=getTaskForRead(req.params.id,req.userId);

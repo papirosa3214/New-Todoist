@@ -1,3 +1,4 @@
+import { commentWithBlocks, ownerBlocks } from "../lib/chatBlocks.js";
 import {visibleTaskComments, isQuietSystemMessage} from "../lib/serviceNoise.js";
 import { registerIntegrationResponsibilityRoutes } from '../lib/integrationResponsibility.js';
 import { taskExecutionState } from "../runtime/taskExecutionState.js";
@@ -247,6 +248,8 @@ export function withSubtaskState(s: any) {
     ...s,
     done: !!s.done,
     agent_stale: stale,
+    // Результат роли готовыми блоками для владельца (lib/chatBlocks.ts).
+    display_result_blocks: ownerBlocks(s.result),
     // Готово важнее: подзадачу могли отметить сделанной, не сняв состояние.
     // Протухшая аренда возвращает её в «ждёт» — работы-то нет. review не
     // протухает как in_progress (агент сдал и ждёт решения владельца —
@@ -1097,7 +1100,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
            FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.task_id = ? ORDER BY c.created_at`,
         )
         .all(task.id) as any[];
-      comments.splice(0, comments.length, ...visibleTaskComments(comments));
+      comments.splice(0, comments.length, ...visibleTaskComments(comments).map(commentWithBlocks));
 
       // Вложения раскладываются по своим комментариям. Одним запросом на всю
       // задачу, а не по запросу на комментарий: файлов мало, а лишние

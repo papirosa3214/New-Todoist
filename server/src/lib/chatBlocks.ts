@@ -214,3 +214,39 @@ export function jsonWithTextBlocks(json: string): string {
     return json;
   }
 }
+
+/**
+ * Текст роли для показа владельцу (перенос `AgentTextSanitizer` из iOS,
+ * 26.10.2026): без служебного префикса «changes_requested:» и с понятным
+ * названием вместо имени инструмента. Сырой текст не меняется — на префиксе
+ * держится детект «вернуть на доработку».
+ */
+export function ownerText(text: string): string {
+  let s = text;
+  const at = s.indexOf("changes_requested:");
+  if (at >= 0) s = s.slice(at + "changes_requested:".length).replace(/^[ \t]+|[ \t]+$/g, "");
+  return s.split("taskflow_plan_request").join("команда добавить слот в план");
+}
+
+/** Готовые блоки текста роли для владельца; пустой текст — null. */
+export function ownerBlocks(text: string | null | undefined): ChatBlock[] | null {
+  return text && text.trim() ? chatBlocksCached(ownerText(text)) : null;
+}
+
+/** Комментарий задачи с готовыми блоками текста. */
+export function commentWithBlocks<T extends { text?: unknown }>(comment: T): T & { text_blocks: ChatBlock[] | null } {
+  return { ...comment, text_blocks: typeof comment.text === "string" && comment.text.trim() ? chatBlocksCached(comment.text) : null };
+}
+
+/** Рекомендация подготовки задачи: вопрос и результаты направлений — с блоками. */
+export function preparationWithBlocks(result: any): any {
+  if (!result || typeof result !== "object") return result;
+  const out = withTextBlocks(result, ["question"]) as any;
+  const proposal = result.card?.preparation;
+  if (proposal && typeof proposal === "object") {
+    const enriched = withTextBlocks(proposal, ["question"]) as any;
+    if (Array.isArray(proposal.workstreams)) enriched.workstreams = proposal.workstreams.map((w: any) => withTextBlocks(w, ["result"]));
+    out.card = { ...out.card, preparation: enriched };
+  }
+  return out;
+}

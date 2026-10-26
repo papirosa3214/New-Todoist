@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatBlocks, chatBlocksCached, jsonWithTextBlocks, sourcedChatBlocks, withTextBlocks } from "../src/lib/chatBlocks.js";
+import { chatBlocks, chatBlocksCached, jsonWithTextBlocks, ownerText, preparationWithBlocks, sourcedChatBlocks, withTextBlocks } from "../src/lib/chatBlocks.js";
 
 describe("chatBlocks: ответ готовыми блоками (правило ChatRichContent из iOS)", () => {
   it("обычный текст — один документ TipTap с разметкой", () => {
@@ -65,5 +65,18 @@ describe("chatBlocks: ответ готовыми блоками (правило
     const [w] = chatBlocks("```widget\n{\"type\":\"card\",\"body\":\"**жирно**\"}\n```");
     expect(JSON.parse((w as any).json).body_blocks[0].type).toBe("doc");
     expect(jsonWithTextBlocks("{не json")).toBe("{не json");
+  });
+
+  it("текст роли для владельца — как AgentTextSanitizer в iOS", () => {
+    expect(ownerText("changes_requested:  D1 нужен taskflow_plan_request")).toBe("D1 нужен команда добавить слот в план");
+    expect(ownerText("обычный текст")).toBe("обычный текст");
+  });
+
+  it("подготовка: вопрос и результаты направлений получают блоки", () => {
+    const out = preparationWithBlocks({ question: "Что **важнее**?", card: { preparation: { question: "q", workstreams: [{ key: "a", result: "- пункт" }] } } });
+    expect(out.question_blocks[0].type).toBe("doc");
+    expect(out.card.preparation.question_blocks[0].type).toBe("doc");
+    expect(out.card.preparation.workstreams[0].result_blocks[0].type).toBe("doc");
+    expect(preparationWithBlocks(null)).toBeNull();
   });
 });

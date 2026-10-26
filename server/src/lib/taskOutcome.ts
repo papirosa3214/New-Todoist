@@ -3,6 +3,7 @@
 // документация проекта, вердикт проверяющего (в приложении не виден вовсе),
 // ветка с кодом, отчёты. Итог собирает их и сам ложится заметкой в папку
 // документации проекта карточки — «как все документы сейчас туда сливаются».
+import { ownerBlocks, type ChatBlock } from "./chatBlocks.js";
 import { humanStepResult } from "./stepResults.js";
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -14,9 +15,9 @@ import { ensureTaskArtifactFolder } from "./taskArtifactFolder.js";
 import { markdownToTiptap } from "./markdownToTiptap.js";
 
 export type TaskOutcome = {
-  verdict: { verdict: string; findings: string; reviewer_id: string; created_at: string } | null;
+  verdict: { verdict: string; findings: string; reviewer_id: string; created_at: string; findings_blocks?: ChatBlock[] | null } | null;
   /** human_title / human_result — то же, что сдала роль, человеческим языком для владельца (lib/stepResults.ts). */
-  nodes: Array<{ slot_key: string | null; role: string | null; title: string; result: string | null; done: boolean; human_title: string | null; human_result: string | null }>;
+  nodes: Array<{ slot_key: string | null; role: string | null; title: string; result: string | null; done: boolean; human_title: string | null; human_result: string | null; display_result_blocks?: ChatBlock[] | null }>;
   documents: Array<{ id: string; title: string; updated_at: string | null; is_outcome: boolean }>;
   branch: { name: string; commit: string; subject: string; ahead: number } | null;
 };
@@ -92,9 +93,12 @@ export function buildTaskOutcome(taskId: string): TaskOutcome {
   const nodes = (nodeRows as Array<{ subtask_id?: string; slot_key: string | null; role: string | null; title: string; result: string | null; done: number }>)
     .map(({ subtask_id, ...n }) => {
       const human = subtask_id ? humanStepResult(subtask_id) : null;
-      return { ...n, done: Boolean(n.done), human_title: human?.title ?? null, human_result: human?.body || null };
+      const humanResult = human?.body || null;
+      // Что показать владельцу — пересказ, без него исходный текст; готовыми блоками.
+      return { ...n, done: Boolean(n.done), human_title: human?.title ?? null, human_result: humanResult,
+        display_result_blocks: ownerBlocks(humanResult?.trim() ? humanResult : n.result) };
     });
-  return { verdict: verdict ?? null, nodes, documents: taskDocuments(taskId), branch: taskBranch(taskId) };
+  return { verdict: verdict ? { ...verdict, findings_blocks: ownerBlocks(verdict.findings) } : null, nodes, documents: taskDocuments(taskId), branch: taskBranch(taskId) };
 }
 
 const VERDICT_RU: Record<string, string> = {
