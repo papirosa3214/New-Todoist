@@ -2652,11 +2652,17 @@ function isDirectRoleChat(chatId: string): boolean {
 
 /**
  * Помощник владельца в личной переписке — всегда работа в чате.
- * Старый «card» в комнате или в запросе карточку не запускает, а
- * переключение в «card» недоступно (карточка e11eae7a, пункт 2).
+ * Личная переписка с Помощником — это его личная комната: владелец и
+ * Помощник вдвоём. Старый «card» в комнате или в запросе карточку там не
+ * запускает, а переключение в «card» недоступно (карточка e11eae7a, пункт 2).
+ * Общие комнаты и лички других ролей правило не трогает.
  */
 function secretaryChatOnly(chatId: string): boolean {
-  return isDirectRoleChat(chatId) && chatMemberRoles(chatId).includes("secretary");
+  if (!isDirectRoleChat(chatId)) return false;
+  const members = memberIds(chatId);
+  const secretaryId = roleAccountId("secretary");
+  if (!secretaryId || members.length !== 2 || !members.includes(secretaryId)) return false;
+  return chatMemberRoles(chatId).every((role) => role === "secretary");
 }
 
 /** Способ выполнения с учётом правила Помощника: в её чате всегда «в чате». */
