@@ -119,6 +119,19 @@ export function resetChatContext(chatId: string, roleId: string): void {
   entries.delete(key(chatId, roleId));
 }
 
+/**
+ * Сжатие прошло, а нового ответа модели ещё не было: прежнее занятое окно
+ * больше не показатель — помечаем состояние явно (D1 карточки e11eae7a).
+ */
+export function markChatContextCompacted(chatId: string, roleId: string): void {
+  const entry = entries.get(key(chatId, roleId));
+  if (!entry) return;
+  entry.tokens = null;
+  entry.status = "after_compaction";
+  entry.isEstimate = false;
+  entry.measuredAt = new Date().toISOString();
+}
+
 export function readChatContext(chatId: string, roleId: string): ChatContextSnapshot {
   const entry = entries.get(key(chatId, roleId));
   if (!entry) {

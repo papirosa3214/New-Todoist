@@ -160,13 +160,20 @@ export async function listRoleSkills(role: string) {
     agentsFilesOverride: () => ({ agentsFiles: [] }),
   });
   await loader.reload();
-  return loader.getSkills().skills.map((skill) => ({
-    name: skill.name,
-    description: skill.description ?? "",
-    filePath: skill.filePath,
-    baseDir: skill.baseDir,
-    content: composeLayer(role, keyFor(skill.filePath))!.effective,
-  }));
+  // Слой навыка зарегистрирован не всегда: блоки ресурсов регистрирует
+  // discoverChatResources, а он до первого хода роли мог не выполняться.
+  // Тогда composeLayer отдаёт null — читаем текст навыка с диска (D2
+  // карточки e11eae7a: реальный навык должен быть доступен сразу).
+  return loader.getSkills().skills.map((skill) => {
+    const composed = composeLayer(role, keyFor(skill.filePath));
+    return {
+      name: skill.name,
+      description: skill.description ?? "",
+      filePath: skill.filePath,
+      baseDir: skill.baseDir,
+      content: composed?.effective ?? fs.readFileSync(skill.filePath, "utf8"),
+    };
+  });
 }
 
 /** Тот же набор файлов роли; cwd задачи не меняется, executable extensions отключены. */

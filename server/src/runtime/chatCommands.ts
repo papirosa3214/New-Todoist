@@ -65,7 +65,16 @@ export async function listChatCommands(params: {
   messageId?: string;
 }): Promise<ChatCommand[]> {
   const commands: ChatCommand[] = [];
-  const skills = await listRoleSkills(params.role).catch(() => [] as Awaited<ReturnType<typeof listRoleSkills>>);
+  const skills = await listRoleSkills(params.role).catch((error) => {
+    // Ошибку не глотаем молча: список команд без навыков вводит в
+    // заблуждение, а причина обязана быть видна в журнале (D2 карточки
+    // e11eae7a: реальный навык не должен выглядеть «не найден»).
+    console.warn(
+      `[chatCommands] навыки роли ${params.role} не загрузились:`,
+      error instanceof Error ? error.message : error,
+    );
+    return [] as Awaited<ReturnType<typeof listRoleSkills>>;
+  });
   for (const skill of skills) {
     commands.push({
       id: skill.name,
@@ -137,7 +146,13 @@ export async function resolveSlashCommand(params: {
   messageId?: string;
 }): Promise<SlashResolution> {
   if (params.invocation.kind === "skill") {
-    const skills = await listRoleSkills(params.role).catch(() => [] as Awaited<ReturnType<typeof listRoleSkills>>);
+    const skills = await listRoleSkills(params.role).catch((error) => {
+      console.warn(
+        `[chatCommands] навыки роли ${params.role} не загрузились:`,
+        error instanceof Error ? error.message : error,
+      );
+      return [] as Awaited<ReturnType<typeof listRoleSkills>>;
+    });
     const skill = skills.find((item) => item.name === params.invocation.name);
     if (!skill) {
       return { ok: false, error: `Навык «${params.invocation.name}» у роли ${params.role} не найден` };

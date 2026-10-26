@@ -44,7 +44,8 @@ import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
 import { externalRuntime } from "../roleRouting.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { listChatCommands, parseSlashInvocation, resolveSlashCommand, type SlashInvocation } from "../runtime/chatCommands.js";
-import { readChatContext } from "../runtime/chatContextUsage.js";
+import { markChatContextCompacted, readChatContext, resetChatContext } from "../runtime/chatContextUsage.js";
+import { ensureResearchDocument } from "../runtime/chatResearchDocument.js";
 import { renderInstruction } from "../lib/roleContextResolver.js";
 // Чаты с ролями-агентами (владелец 21.09.2026, план
 // docs/superpowers/plans/2026-09-21-chat-online-pi-runtime.md, этапы 1–2).
@@ -887,7 +888,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       let context = readChatContext(chatId, roleId);
       // Внешний агент — не Pi: живой сессии Pi у него нет, окно не измеряется.
       if (externalRuntime(role)) context = { ...context, status: "unavailable" };
-      const commands = await listChatCommands({ role, executionMode, mode: "work", chatId });
+      const commands = await listChatCommands({ role, executionMode, mode: chatWorkMode(chatId), chatId });
       return { context, commands };
     },
   );
@@ -1459,6 +1460,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         chatId,
         roleId,
       );
+      // Сброс замера контекста: после новой сессии прежнее занятое окно
+      // показывать нельзя (D1 карточки e11eae7a — «после reset/compaction
+      // нет старого контекста»).
+      resetChatContext(chatId, roleId);
       clearChatWorkPlan(chatId, roleId);
       broadcastToUsers(memberIds(chatId).concat(ownerIdsForChat(chatId)), { type: "chat:work_plan", chat_id: chatId, plan: { chat_id: chatId, role_id: roleId, revision: 0, items: [] } });
 
@@ -1500,6 +1505,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!saved) return reply.code(409).send({ error: "Сессии ещё нет — сжимать нечего" });
       try {
         await startChatRun({ chatId, role, roleId, prompt: "", sessionId: saved.pi_session_id, compactOnly: true });
+        // После сжатия прежнее занятое окно не показатель: нового ответа
+        // модели ещё не было (D1 карточки e11eae7a).
+        markChatContextCompacted(chatId, roleId);
       } catch (error) {
         const code = (error as { code?: string }).code;
         if (code === "CHAT_RUN_BUSY") return reply.code(409).send({ error: "Роль сейчас отвечает — сожмите после ответа" });
@@ -2135,6 +2143,26 @@ function messengerAmbiguityNotice(chatId:string,roleId:string,messageId:string):
   const id=uid();
   db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id,message_type) VALUES(?,?,?,'chat',?,?,'system')").run(id,roleId,"У адресата несколько работающих этапов. Укажите конкретный этап в теме задачи; исходное сообщение сохранено и ожидает доставки.",chatId,messageId);
   broadcastToUsers(memberIds(chatId),{type:"chat:new",message:loadChatMessage(id)});
+}
+
+/**
+ * Режим работы чата по последнему сообщению человека: «Планирование» и
+ * «Глубокое исследование» меняют доступный набор команд (D3 карточки
+ * e11eae7a). Ответы ролей режим не меняют — берём последнее человеческое
+ * сообщение чата.
+ */
+function chatWorkMode(chatId: string): ChatWorkMode {
+  const row = db
+    .prepare(
+      `SELECT m.work_mode FROM chat_messages m
+         JOIN users u ON u.id = m.from_user_id
+        WHERE m.chat_id = ? AND u.type != 'ai'
+        ORDER BY m.rowid DESC LIMIT 1`,
+    )
+    .get(chatId) as { work_mode: string | null } | undefined;
+  const value = row?.work_mode;
+  if (value === "plan" || value === "deep_research") return value;
+  return "work";
 }
 
 /** Модель из пилюли окна ввода: короткая строка или null («как у роли»). */
@@ -3067,6 +3095,18 @@ async function deliverAgentReply(args: {
   // Ответ пользователя остаётся без потери: валидный JSON v1 сохраняем
   // структурированным, а plain/invalid ответ — без изменений внутри text-блока.
   if (replyText) {
+    // Глубокое исследование обязано оставить документ с выводами (D4
+    // карточки e11eae7a). Если роль сама не записала документ, сервер
+    // сохраняет её ответ как документ и прикладывает ссылку в чате.
+    const researchDoc = args.mode === "deep_research" && !failure && !cancelled
+      ? ensureResearchDocument({
+          roleUserId,
+          text: replyText,
+          sinceIso: trigger.created_at ?? new Date().toISOString(),
+          taskId: topic?.task_id ?? trigger.task_id ?? null,
+          projectId: chatProject,
+        })
+      : null;
     const prepared=preparedReportMaterials(chatId,roleUserId,trigger.id);
     let overflow: import("../lib/chatReportMaterials.js").ChatMaterial[]=[];
     if(prepared.length){
@@ -3099,6 +3139,13 @@ async function deliverAgentReply(args: {
       db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES(?,?,?,'chat',?,?)")
         .run(materialId,roleUserId,"\`\`\`widget\n"+JSON.stringify(card)+"\n\`\`\`",chatId,trigger.id);
       broadcastToUsers(memberIds(chatId),{type:"chat:new",message:loadChatMessage(materialId)});
+    }
+    if(researchDoc){
+      const docId=uid();
+      const card={type:"card",title:researchDoc.document.title,link:{title:"Открыть документ с выводами",url:researchDoc.document.ref}};
+      db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES(?,?,?,'chat',?,?)")
+        .run(docId,roleUserId,"\`\`\`widget\n"+JSON.stringify(card)+"\n\`\`\`",chatId,replyId);
+      broadcastToUsers(memberIds(chatId),{type:"chat:new",message:loadChatMessage(docId)});
     }
     persistedReply=!failure;
     if (persistedReply && checkpoint) acknowledgeCarriedCheckpoint(roleUserId, rootChatIdOf(chatId), checkpoint);
