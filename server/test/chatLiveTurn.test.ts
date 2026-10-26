@@ -72,7 +72,8 @@ describe("живой ход", () => {
     vi.advanceTimersByTime(LIVE_BROADCAST_MS);
     expect(sent).toHaveLength(1);
     expect(sent[0].event.type).toBe("chats:live");
-    expect(sent[0].event.turn.items).toEqual([{ kind: "text", text: "Сейчас проверю." }]);
+    // Клиенту текст уходит вместе с готовыми блоками (lib/chatBlocks.ts).
+    expect(sent[0].event.turn.items).toMatchObject([{ kind: "text", text: "Сейчас проверю.", blocks: [{ type: "doc" }] }]);
 
     turn.onEvent(toolStart("t1", "bash", { command: "ls -la /home/maksim/x" }));
     expect(sent).toHaveLength(2);

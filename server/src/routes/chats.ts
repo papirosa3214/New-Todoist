@@ -82,6 +82,7 @@ import {
 import {
   chatRunFailureText,
   liveTurnsOfChat,
+  liveTurnForClient,
   startLiveTurn,
   unwrapRoleEnvelope,
   type SavedSteps,
@@ -766,7 +767,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     async (req: any, reply) => {
       if (!isMember(req.params.id, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
-      return { turns: liveTurnsOfChat(req.params.id) };
+      return { turns: liveTurnsOfChat(req.params.id).map(liveTurnForClient) };
     },
   );
 

@@ -23,7 +23,7 @@
 // экспортировали, можно импортировать обратно без потерь. Тесты на это
 // лежат рядом с клиентской версией конвертера.
 
-interface Node {
+export interface Node {
   type: string;
   attrs?: Record<string, unknown>;
   content?: Node[];
@@ -32,7 +32,7 @@ interface Node {
 }
 
 /** Инлайн-разметка: **жирный**, *курсив*, `код`, ==маркер==, [ссылка](url). */
-function parseInline(src: string): Node[] {
+export function parseInline(src: string): Node[] {
   const out: Node[] = [];
   // Порядок важен: код первым — внутри него разметка не действует.
   const re =

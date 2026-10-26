@@ -1,4 +1,5 @@
 import {isQuietSystemMessage} from "./serviceNoise.js";
+import { chatBlocksCached } from "./chatBlocks.js";
 import {compactChatReportMaterials} from "./chatReportMaterials.js";
 import {coordinationCardData} from "../runtime/chatCoordination.js";
 // Сообщение чата с ролями в том виде, в каком его видит клиент.
@@ -151,6 +152,8 @@ export function formatChatMessage(message: any) {
       ? compactChatReportMaterials(storedEnvelope).envelope
       : parsed?.structuredEnvelope ? compactChatReportMaterials(parsed.structuredEnvelope).envelope : parsed?.envelope ?? null,
     text: displayText,
+    // Ответ готовыми блоками: клиент рисует их, сам текст не разбирает (lib/chatBlocks.ts).
+    blocks: typeof displayText === "string" && displayText ? chatBlocksCached(displayText) : [],
     ...(parsedSteps?.coordination ? { kind: "coordination", coordination: coordinationCardData(message) } : {}),
   };
 }

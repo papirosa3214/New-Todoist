@@ -19,6 +19,7 @@ import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 // открыть целиком после хода. `id`/`tool`/`status` у него есть нарочно —
 // клиент, который про размышления ещё не знает, разбирает его как шаг и не
 // роняет весь снимок.
+import { chatBlocks, type ChatBlock } from "../lib/chatBlocks.js";
 import { broadcastToUsers } from "../ws.js";
 import { unwrapRoleEnvelopeText } from "../lib/roleContractV1.js";
 import { emptyAssistantAnswer } from "./providerFailover.js";
@@ -51,7 +52,7 @@ function ioOutput(result: unknown): string | undefined {
 }
 
 export type LiveItem =
-  | { kind: "text"; text: string }
+  | { kind: "text"; text: string; blocks?: ChatBlock[] }
   | {
       kind: "step";
       id: string;
@@ -348,6 +349,15 @@ export function unwrapRoleEnvelope(text: string): string {
 // ── Сам ход ─────────────────────────────────────────────────────────────
 
 let usagePersistenceWarning = false;
+/** Снимок для клиента: у текста — готовые блоки (lib/chatBlocks.ts), чтобы
+ *  клиент не раскладывал текст сам. В сохраняемый снимок блоки не входят. */
+export function liveTurnForClient(turn: LiveTurnSnapshot): LiveTurnSnapshot {
+  return {
+    ...turn,
+    items: turn.items.map((it) => (it.kind === "text" ? { ...it, blocks: chatBlocks(it.text, true) } : it)),
+  };
+}
+
 export class LiveTurn {
   readonly chatId: string;
   readonly userId: string;
@@ -598,7 +608,7 @@ export class LiveTurn {
       type: "chats:live",
       chat_id: this.chatId,
       user_id: this.userId,
-      turn: this.snapshot(),
+      turn: liveTurnForClient(this.snapshot()),
     });
   }
 

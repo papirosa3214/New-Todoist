@@ -1,0 +1,168 @@
+// Ответ в чате готовыми блоками — клиент только рисует (26.10.2026).
+//
+// Раньше каждый клиент сам раскладывал текст ответа: iOS — ChatRichContent +
+// MarkdownParser, веб — свои разборы. Теперь раскладывает сервер, один раз,
+// тем же правилом, что было в iOS (ChatRichContent.splitUncached):
+//   • doc — обычный текст, уже разобранный в документ TipTap (тот же формат,
+//     что у заметок; iOS его декодирует в NoteBlock);
+//   • table — таблица GitHub-вида, ячейки — строки TipTap;
+//   • widget — блок ```widget / ```tf-widget (JSON карточки);
+//   • structured_json — блок ```tf-json;
+//   • html — блок ```html / ```artifact;
+//   • pending / structured_json_streaming — такой блок ещё дописывается.
+import { markdownToTiptap, parseInline, type Node } from "./markdownToTiptap.js";
+
+export type TableAlignment = "leading" | "center" | "trailing";
+export type PendingKind = "widget" | "structured_json" | "html";
+
+export type ChatBlock =
+  | { type: "doc"; doc: Node; chars: number }
+  | { type: "table"; header: Node[][]; align: TableAlignment[]; rows: Node[][][]; chars: number }
+  | { type: "widget"; json: string }
+  | { type: "structured_json"; json: string }
+  | { type: "structured_json_streaming"; json: string }
+  | { type: "html"; html: string }
+  | { type: "pending"; kind: PendingKind };
+
+const HTML = new Set(["html", "artifact"]);
+const WIDGET = new Set(["widget", "tf-widget"]);
+const STRUCTURED = new Set(["tf-json"]);
+
+/** Ячейки строки таблицы: без крайних `|`, с учётом `\|`. */
+export function tableCells(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|") && !t.endsWith("\\|")) t = t.slice(0, -1);
+  const out: string[] = [];
+  let cur = "";
+  let escaped = false;
+  for (const ch of t) {
+    if (escaped) {
+      cur += ch;
+      escaped = false;
+    } else if (ch === "\\") escaped = true;
+    else if (ch === "|") {
+      out.push(cur.trim());
+      cur = "";
+    } else cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+function isTableRow(line: string): boolean {
+  const t = line.trim();
+  if (!t.includes("|")) return false;
+  return t.startsWith("|") || tableCells(t).length > 1;
+}
+
+function separatorAlignments(line: string): TableAlignment[] | null {
+  if (!line.includes("-")) return null;
+  const out: TableAlignment[] = [];
+  for (const part of tableCells(line)) {
+    const p = part.replace(/ /g, "");
+    if (!p || !/^[-:]+$/.test(p) || !p.includes("-")) return null;
+    const left = p.startsWith(":");
+    const right = p.endsWith(":");
+    out.push(left && right ? "center" : right ? "trailing" : "leading");
+  }
+  return out.length ? out : null;
+}
+
+function docOf(markdown: string): ChatBlock {
+  let doc: Node;
+  try {
+    doc = JSON.parse(markdownToTiptap(markdown)) as Node;
+  } catch {
+    doc = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: markdown }] }] };
+  }
+  // chars — сколько символов текста в куске: клиент проявляет хвост идущего
+  // ответа по всему тексту, как раньше (ChatRichContent.characterCount).
+  return { type: "doc", doc, chars: markdown.length + 1 };
+}
+
+/** Разложить текст ответа на блоки. streaming — ответ ещё печатается. */
+export function chatBlocks(text: string, streaming = false): ChatBlock[] {
+  const lines = (text ?? "").replace(/\r\n/g, "\n").split("\n");
+  const blocks: ChatBlock[] = [];
+  let buffer: string[] = [];
+  const flush = () => {
+    const joined = buffer.join("\n");
+    if (joined.trim()) blocks.push(docOf(joined));
+    buffer = [];
+  };
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("```")) {
+      const lang = trimmed.slice(3).trim().toLowerCase();
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim().startsWith("```")) j++;
+      const closed = j < lines.length;
+      const body = lines.slice(i + 1, Math.min(j, lines.length)).join("\n");
+      const special: PendingKind | null = HTML.has(lang)
+        ? "html"
+        : WIDGET.has(lang)
+          ? "widget"
+          : STRUCTURED.has(lang)
+            ? "structured_json"
+            : null;
+      if (special) {
+        flush();
+        if (!closed && streaming) {
+          blocks.push(special === "structured_json" ? { type: "structured_json_streaming", json: body } : { type: "pending", kind: special });
+        } else if (special === "html") blocks.push({ type: "html", html: body });
+        else if (special === "widget") blocks.push({ type: "widget", json: body });
+        else blocks.push({ type: "structured_json", json: body });
+        i = closed ? j + 1 : lines.length;
+        continue;
+      }
+      // Обычный код — целиком в текст, таблицы внутри не ищем.
+      const end = closed ? j : lines.length - 1;
+      buffer.push(...lines.slice(i, end + 1));
+      i = end + 1;
+      continue;
+    }
+
+    if (i + 1 < lines.length && isTableRow(line)) {
+      const align = separatorAlignments(lines[i + 1]);
+      const header = tableCells(line);
+      if (align && header.length === align.length) {
+        flush();
+        const rows: string[][] = [];
+        let j = i + 2;
+        while (j < lines.length && isTableRow(lines[j])) {
+          let row = tableCells(lines[j]);
+          if (row.length < header.length) row = [...row, ...Array(header.length - row.length).fill("")];
+          rows.push(row.slice(0, header.length));
+          j++;
+        }
+        const chars = [...header, ...rows.flat()].reduce((n, c) => n + c.length, 0);
+        blocks.push({ type: "table", header: header.map(parseInline), align, rows: rows.map((r) => r.map(parseInline)), chars });
+        i = j;
+        continue;
+      }
+    }
+
+    buffer.push(line);
+    i++;
+  }
+  flush();
+  return blocks;
+}
+
+/** Кэш разложения готовых сообщений: лента отдаётся часто, текст не меняется. */
+const cache = new Map<string, ChatBlock[]>();
+const CACHE_LIMIT = 500;
+
+export function chatBlocksCached(text: string): ChatBlock[] {
+  const hit = cache.get(text);
+  if (hit) return hit;
+  const blocks = chatBlocks(text, false);
+  if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
+  cache.set(text, blocks);
+  return blocks;
+}
