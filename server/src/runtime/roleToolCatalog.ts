@@ -44,7 +44,7 @@ function parseSchemaIssue(text:string):{field?:string;expected?:string}|undefine
  return {field:field||undefined,expected:match[2]};
 }
 
-export type CatalogContext={role:string;model?:string|null;mode:string;runId:string;taskId?:string;subtaskId?:string;chatId?:string;messageId?:string;executionMode?:ChatExecutionMode};
+export type CatalogContext={onErrorLoop?:()=>void;role:string;model?:string|null;mode:string;runId:string;taskId?:string;subtaskId?:string;chatId?:string;messageId?:string;executionMode?:ChatExecutionMode};
 export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const context:Context={...input,executionMode:input.taskId ? "card" : input.executionMode ?? (input.chatId ? chatExecutionMode(input.chatId,input.messageId) : undefined),actor:roleUserId(input.role),authorize:(name)=>
   roleToolAllowed(input.role,name) && (!input.subtaskId || name!=="taskflow_claim") &&
@@ -95,6 +95,10 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
   const attempts=(sdkMistakes.get(tool.name)??0)+1;
   sdkMistakes.set(tool.name,attempts);
   if(attempts<MISTAKE_LIMIT)return false;
+  if(input.mode==="task_discussion"){
+   input.onErrorLoop?.();
+   return true;
+  }
   void stopRoleOnErrorLoop({taskId:input.taskId,subtaskId:input.subtaskId,role:input.role,operation:tool.name,attempts,reason}).catch(error=>console.warn("[native-tools] error-loop stop failed:",error));
   return true;
  };

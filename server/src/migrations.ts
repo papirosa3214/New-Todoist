@@ -5248,6 +5248,54 @@ const migrations: Migration[] = [
   // таблицу не пересобираем и CHECK не добавляем (старые строки читаются как
   // активный план без сдач).
   {
+    id: "175_task_discussions",
+    description:
+      "Обсуждение работающей карточки: task_discussions (состояние open/closing/closed, " +
+      "снимок рабочего контекста, итог закрытия, handoff_id, состояние доставки) и " +
+      "task_discussion_handoffs (handoff на версию закрытия, получатель, квитанция). " +
+      "Колонки аддитивные, CHECK на enum задаёт только допустимые состояния.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_discussions (
+          discussion_id TEXT PRIMARY KEY,
+          chat_id TEXT NOT NULL UNIQUE REFERENCES chats(id) ON DELETE CASCADE,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          subtask_id TEXT REFERENCES subtasks(id) ON DELETE SET NULL,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','closing','closed')),
+          source_run_id TEXT,
+          source_leaf_id TEXT,
+          source_revision TEXT,
+          summary_id TEXT,
+          summary_sections_json TEXT,
+          handoff_id TEXT,
+          delivery_state TEXT NOT NULL DEFAULT 'not_ready'
+            CHECK (delivery_state IN ('not_ready','awaiting','delivered','failed','no_recipient')),
+          accepted_at TEXT,
+          accepted_by TEXT,
+          receipt_message_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_discussions_task ON task_discussions(task_id);
+        CREATE TABLE IF NOT EXISTS task_discussion_handoffs (
+          handoff_id TEXT PRIMARY KEY,
+          discussion_id TEXT NOT NULL REFERENCES task_discussions(discussion_id) ON DELETE CASCADE,
+          version INTEGER NOT NULL,
+          recipient_subtask_id TEXT REFERENCES subtasks(id) ON DELETE SET NULL,
+          recipient_role_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          state TEXT NOT NULL DEFAULT 'awaiting'
+            CHECK (state IN ('awaiting','delivered','failed','no_recipient')),
+          payload_json TEXT NOT NULL,
+          receipt_message_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          delivered_at TEXT,
+          UNIQUE (discussion_id, version)
+        );
+      `);
+    },
+  },
+  {
     id: "176_chat_work_plan_outcomes",
     description:
       "chat_work_plans: серверное состояние плана (status/stop_reason/stopped_at) и записи сдачи пунктов (outcomes_json)",

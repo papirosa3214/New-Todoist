@@ -28,7 +28,9 @@ import { branchMembership } from "../runtime/branchPlan.js";
 import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, branchSummaryLines, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
-import { deliverTopicToWork, deliverChatToWork } from "../runtime/inProcessRun.js";
+import { isDiscussionChat, discussionByChatId } from "../runtime/taskDiscussion.js";
+import { runDiscussionTurn } from "../runtime/taskDiscussionSession.js";
+import { deliverTopicToWork, deliverChatToWork, slotWorkspace } from "../runtime/inProcessRun.js";
 import { topicContext, taskTopicClosedAt, rehomeEmptyTopic } from "../lib/projectTopics.js";
 import {
   archiveChat,
@@ -941,6 +943,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         )
         .get(chatId);
       if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+      const taskDiscussion = discussionByChatId(chatId);
+      if (taskDiscussion && taskDiscussion.state !== "open")
+        return reply.code(409).send({ error: "Обсуждение закрывается или закрыто: новые реплики не принимаются" });
       // Закрытая тема задачи — read-only: история остаётся, новые сообщения не принимаем.
       if (taskTopicClosedAt(chat)) return reply.code(409).send({ error: "Чат задачи закрыт" });
       // Общий чат: сервер сюда не пишет. Владелец и роль через инструмент — можно.
@@ -1109,6 +1114,25 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      // Обсуждение карточки: ответ роли даёт отдельная discussion-сессия
+      // (read-only, своя аренга), а не рабочий ход. Промежуточные реплики
+      // в работу не уходят (контракт архитектора f3ada2e0, §5.2).
+      if (isDiscussionChat(chatId)) {
+        const discussion = discussionByChatId(chatId);
+        if (discussion) {
+          void runDiscussionTurn({
+            discussionId: discussion.discussion_id,
+            role: roleFromUserId(discussion.role_id) ?? "builder",
+            prompt: storedText,
+            cwd: slotWorkspace(discussion.task_id),
+          }).catch((error) =>
+            req.log?.warn?.({ err: error, discussion: discussion.discussion_id }, "обсуждение не ответило"),
+          );
+          return { message };
+        }
+      }
+
+
       // Ветка на каждое сообщение владельца (22.10.2026): «принял — открыл
       // ветку — работаю там». Основная комната остаётся разговором, каждая
       // просьба живёт отдельным потоком и не ждёт конца чужого хода.
@@ -1137,8 +1161,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // отдельная ветка: у него нет users.role_key. Его ходы тоже идут
       // через очередь: раньше второе сообщение подряд попадало на занятый
       // лок и молча терялось.
+
       try {
-        if (!handledByBranch) await dispatchRoleReplies({
+        if (!handledByBranch && !isDiscussionChat(chatId)) await dispatchRoleReplies({
           chatId,
           messageId: id,
           fromUserId: req.userId,
@@ -2359,6 +2384,10 @@ async function dispatchRoleReplies(args: {
   idempotencyKey?: string | null;
 }): Promise<void> {
   const { chatId, text } = args;
+  // Обсуждение карточки: реплики обсуждения в работу НЕ уходят
+  // (контракт архитектора f3ada2e0, §5.2). Ответ роли в обсуждении даёт
+  // отдельная discussion-сессия, а не рабочий ход.
+  if (isDiscussionChat(chatId)) return;
   const senderRole = roleFromUserId(args.fromUserId);
   const candidates = chatMemberRoles(chatId).filter((r) => r !== senderRole || /\[slot:\s*[a-z][a-z0-9_]{1,63}\]/.test(text));
   if (candidates.length === 0) return;
@@ -2672,6 +2701,8 @@ async function deliverAgentReply(args: {
   const userText = `${integrationContext ? integrationContext+"\n" : ""}${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}${intentGuidance}`;
 
   const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
+  // Обсуждение карточки — изолированная комната: доставки в работу нет.
+  if (isDiscussionChat(chatId)) return null;
   const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;
   if(topic && !slot && (args.subtaskId || trigger.recipient_subtask_id || topicSlotKey(trigger.text))){slotChoiceNotice(chatId,topic.task_id,role,args.triggerMessageId);return null;}
   const fromOwner = isOwner(trigger.from_user_id);
