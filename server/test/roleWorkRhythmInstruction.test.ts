@@ -53,6 +53,8 @@ describe("общая инструкция ролей: ритм работы", ()
   it("правило про развилку есть и в чате, где владелец ждёт кнопки", () => {
     const wrapper = String(INSTRUCTION_DEFAULTS["chat.wrapper"]);
     expect(wrapper).toContain("БЫСТРЫЕ ОТВЕТЫ ПОСЛЕДНЕЙ СТРОКОЙ");
+    expect(wrapper).toContain("ВОПРОС ВЛАДЕЛЬЦУ — ВСЕГДА С ВАРИАНТАМИ");
+    expect(wrapper).toContain("taskflow_ask_user_question");
     expect(wrapper.indexOf("БЫСТРЫЕ ОТВЕТЫ")).toBeLessThan(
       wrapper.indexOf("РИТМ РАБОТЫ РОЛИ"),
     );
