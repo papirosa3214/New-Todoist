@@ -31,6 +31,9 @@ const ONLY: Record<string, string[]> = {
   taskflow_chat_close: ["code_orchestrator", "secretary"],
   taskflow_chats_cleanup_preview: ["code_orchestrator"],
   taskflow_chats_cleanup: ["code_orchestrator"],
+  // Уточнение у владельца из чата (26.10.2026): спрашивает владелец, отвечает
+  // тоже он — инструмент только у Помощника владельца.
+  taskflow_ask_user_question: ["secretary"],
 };
 
 const DENY: Record<string, string[]> = {

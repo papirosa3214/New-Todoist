@@ -18,6 +18,7 @@ import {
 import { chatHandoff } from "./chatHandoff.js";
 import { parseRoleContractV1, structuredOutputText, type StructuredRoleEnvelopeV1 } from "./roleContractV1.js";
 import { checklistStateOfMessage } from "./chatChecklist.js";
+import { questionEnvelope } from "./chatQuestions.js";
 
 // Ленивая подготовка: db.prepare с колонкой chat_message_id не должен
 // падать на импорте, если миграция 053 ещё не прошла (index.ts импортирует
@@ -31,6 +32,8 @@ let reactionsOf: import("better-sqlite3").Statement | null = null;
 let roleKeyOfUser: import("better-sqlite3").Statement | null = null;
 let deliveryRowsOf: import("better-sqlite3").Statement | null = null;
 let roleMemberOf: import("better-sqlite3").Statement | null = null;
+let questionOf: import("better-sqlite3").Statement | null = null;
+let questionLookupTried = false;
 
 /** Подпись по имени для шагов из БД; инструментам трекера без подписи. */
 function stepDetails(steps: SavedSteps): SavedSteps {
@@ -66,6 +69,16 @@ export function formatChatMessage(message: any) {
   roleMemberOf ??= db.prepare(
     "SELECT 1 FROM chat_members m JOIN users u ON u.id=m.member_id WHERE m.chat_id=? AND u.role_key IS NOT NULL LIMIT 1",
   );
+  // Таблица вопросов появляется миграцией 180. До её прогона (или на старой
+  // БД без неё) лента не должна падать — вопрос просто не показываем.
+  if (!questionLookupTried) {
+    questionLookupTried = true;
+    try {
+      questionOf = db.prepare("SELECT * FROM chat_questions WHERE message_id = ?");
+    } catch {
+      questionOf = null;
+    }
+  }
   const event = message.message_type === "system" || !!planTopicEventOf.get(message.id);
   // role_envelope_json — уже нормализованный конверт (JSON.stringify при записи):
   // парсим напрямую, а не через parseRoleContractV1 (там регекс + полная валидация
@@ -141,6 +154,10 @@ export function formatChatMessage(message: any) {
     checklist_state: checklistStateOfMessage(message.id),
     attachments: attachmentsOf.all(message.id),
     quick_replies: quickReplies,
+    // Уточнение роли у владельца (26.10.2026): вопрос виден в ленте как
+    // карточка. Поля — как читает iOS-клиент (ChatQuestion.swift): дата
+    // `created_at`, варианты `multiSelect`, ответ — массив записей.
+    question: questionEnvelope(questionOf ? (questionOf.get(message.id) as any) : undefined),
     is_session_marker: Boolean(message.is_session_marker),
     // Прерванный ответ помечен явно: почему прерван и сохранён ли частично
     // (карточка 252c400e, §2.1). Поля аддитивные — старый клиент их игнорирует.

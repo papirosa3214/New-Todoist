@@ -100,6 +100,7 @@ const CHAT_CONTEXT = new Set([
   "taskflow_work_start",
   "taskflow_review_result",
   "taskflow_review_code",
+  "taskflow_ask_user_question",
 ]);
 const TASK_CONTEXT = new Set([
   "taskflow_topic_send",

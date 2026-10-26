@@ -7,6 +7,7 @@ import {prepareReportMaterial} from "./chatPreparedMaterials.js";
 // маршрутов сервера от имени учётки роли (`asRole`, app.inject): права,
 // лента и правила те же, процессов и MCP нет. Поведение и тексты ответов
 // перенесены из `scripts/mcp_server.py` один в один.
+import crypto from "node:crypto";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { asRole, asText, short, ToolError, unwrap } from "./inProcessRun.js";
@@ -16,6 +17,15 @@ import { restartSlotFromOwnerChat } from "./slotRestart.js";
 import { proposeWork } from "./chatWork.js";
 import { collectTaskSummary, parseSummaryRequest } from "../lib/secretaryTaskSummary.js";
 import { buildChatFile, chatFileName, CHAT_FILE_FORMATS, ChatFileError } from "../lib/chatFileExport.js";
+import { loadChatMessage } from "../lib/chatMessages.js";
+import {
+  createQuestionRow,
+  QuestionValidationError,
+  renderQuestionText,
+  validateQuestionPayload,
+  type QuestionPayload,
+} from "../lib/chatQuestions.js";
+import { broadcastToUsers } from "../ws.js";
 import { saveUploadedFile, UploadRejected } from "../routes/attachments.js";
 import { roleUserId } from "../roleRouting.js";
 
@@ -349,6 +359,49 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
     ...(ownerContext ? [T("taskflow_slot_restart",
       "По прямой просьбе владельца заменить зависшего исполнителя свежим агентом ТОЙ ЖЕ роли в существующем слоте и запустить. Не добавляет узлы и не меняет связи. Перед вызовом прочитай карточку; укажи точный subtask_id и неизменную роль. Если слотов несколько — уточни у владельца. Не вызывай для обычного сообщения, консультации или простого назначения. Сохраняет историю и передаёт снимок работы в новую сессию.",
       Type.Object({subtask_id:Type.String(),role:Type.String(),reason:Type.String()}),p=>restartSlotFromOwnerChat(ownerContext.chatId,ownerContext.messageId,p))] : []),
+    // Уточнение у владельца (26.10.2026). Ход НЕ ждёт ответа: вопрос
+    // записывается в БД и показывается в чате, ход завершается, а ответ
+    // владельца поднимает новый ход роли (POST /api/chats/:id/questions/:qid/answer).
+    ...(ownerContext ? [T("taskflow_ask_user_question",
+      "Задать владельцу уточняющий вопрос с вариантами ответа. Вопросов — от одного до четырёх, у каждого от двух до четырёх вариантов с коротким пояснением (description). header — короткая метка до 16 символов, label варианта — до 60. Свои варианты не называй «Other», «Type something.», «Next» — свой ответ владелец вводит сам. multiSelect — можно ли выбрать несколько вариантов. Инструмент записывает вопрос и показывает его владельцу в чате, а ход завершает: не жди ответа в этом ходу, не повторяй вопрос и не продолжай работу без ответа. Ответ придёт отдельным сообщением владельца, сервер поднимет новый ход роли.",
+      Type.Object({
+        questions: Type.Array(Type.Object({
+          question: Type.String({ description: "текст вопроса" }),
+          header: S("короткая метка вопроса, до 16 символов"),
+          options: Type.Array(Type.Object({
+            label: Type.String({ description: "метка варианта, до 60 символов" }),
+            description: S("что выбор значит"),
+          }), { minItems: 2, maxItems: 4 }),
+          multiSelect: Type.Optional(Type.Boolean()),
+        }), { minItems: 1, maxItems: 4 }),
+        note: S("пояснение для владельца, необязательно"),
+      }), async (p) => {
+        let payload: QuestionPayload;
+        try {
+          payload = validateQuestionPayload(p);
+        } catch (error) {
+          if (error instanceof QuestionValidationError) throw new ToolError(`${error.code}: ${error.message}`);
+          throw error;
+        }
+        const roleId = roleUserId(role);
+        const вопрос = createQuestionRow({ chatId: ownerContext.chatId, roleId, payload });
+        const messageId = crypto.randomUUID();
+        db.prepare(
+          `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id)
+           VALUES (?, ?, ?, 'chat', ?, ?)`,
+        ).run(messageId, roleId, renderQuestionText(payload), ownerContext.chatId, ownerContext.messageId);
+        db.prepare("UPDATE chat_questions SET message_id = ? WHERE id = ?").run(messageId, вопрос.id);
+        db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(ownerContext.chatId);
+        const участники = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(ownerContext.chatId) as Array<{ member_id: string }>)
+          .map((row) => row.member_id);
+        broadcastToUsers(участники, { type: "chat:new", message: loadChatMessage(messageId) });
+        return {
+          вопрос: вопрос.id,
+          статус: "open",
+          сообщение: messageId,
+          итог: "Вопрос задан и виден владельцу. Заверши ход: ответ придёт отдельным сообщением, сервер поднимет новый ход роли.",
+        };
+      })] : []),
     T("taskflow_weather",
       "Погода сейчас и на 4 дня для города — готовый блок виджета для ответа в чате. Блок из поля «виджет» вставить в ответ как есть, цифры не выдумывать.",
       Type.Object({ city: Type.String({ description: "Город, например «Москва»" }) }), async (p) => {

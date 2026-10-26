@@ -25,6 +25,7 @@ const CORE_OPERATIONS = new Set([
   "taskflow_doc_read", "taskflow_docs", "taskflow_kb_search", "taskflow_recall",
   "taskflow_status", "taskflow_agents", "taskflow_rules",
   "taskflow_review", "taskflow_tool_request", "taskflow_work_start",
+  "taskflow_ask_user_question",
 ]);
 
 /** Текст отказа Pi: args в событие tool_execution_end не кладутся, причина

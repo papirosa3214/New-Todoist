@@ -88,6 +88,15 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { formatChatMessage, formatChatHistory, loadChatMessage } from "../lib/chatMessages.js";
+import {
+  answerQuestionRow,
+  payloadOf,
+  QuestionValidationError,
+  questionById,
+  renderAnswerText,
+  validateAnswerPayload,
+  type AnswerPayload,
+} from "../lib/chatQuestions.js";
 import { trimThinkingItems } from "../lib/dataRetention.js";
 import {
   ChecklistItemError,
@@ -1181,6 +1190,73 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       }
 
       return { message };
+    },
+  );
+
+  // Ответ владельца на уточнение роли (26.10.2026). Один POST: сервер
+  // сохраняет ответ, кладёт его в чат обычным сообщением владельца и
+  // поднимает новый ход роли — работа продолжается с места остановки.
+  // Ответ клиенту — {message} в формате сообщения чата (RoleChatMessageEnvelope).
+  app.post<{
+    Params: { id: string; questionId: string };
+    Body: { answers?: unknown; note?: unknown };
+  }>(
+    "/api/chats/:id/questions/:questionId/answer",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const chatId = req.params.id;
+      if (!isMember(chatId, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      // Отвечает владелец-человек. Учётка Помощника владельца (u-secretary)
+      // в access.ts считается владельцем для прав, но вопрос задаёт она же —
+      // отвечать за него не должна.
+      const отправитель = db.prepare("SELECT role, type FROM users WHERE id = ?").get(req.userId) as
+        | { role: string; type: string }
+        | undefined;
+      if (!отправитель || отправитель.role !== "owner")
+        return reply.code(403).send({ error: "Отвечать на вопрос может владелец" });
+      const вопрос = questionById(String(req.params.questionId));
+      if (!вопрос || вопрос.chat_id !== chatId)
+        return reply.code(404).send({ error: "Вопрос не найден", code: "question_not_found" });
+      if (вопрос.status !== "open")
+        return reply.code(400).send({ error: "Вопрос уже отвечен", code: "question_closed" });
+      const payload = payloadOf(вопрос);
+      let answer: AnswerPayload;
+      try {
+        answer = validateAnswerPayload(payload, req.body?.answers, req.body?.note);
+      } catch (error) {
+        if (error instanceof QuestionValidationError)
+          return reply.code(400).send({ error: error.message, code: error.code });
+        throw error;
+      }
+      const текст = renderAnswerText(payload, answer);
+      const id = uid();
+      db.transaction(() => {
+        db.prepare(
+          `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id)
+           VALUES (?, ?, ?, 'chat', ?, ?)`,
+        ).run(id, req.userId, текст, chatId, вопрос.message_id);
+        answerQuestionRow(вопрос.id, answer);
+        db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
+      })();
+      broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(id) });
+      // Роль продолжает с места остановки: поднимаем её ход на ответ.
+      try {
+        await dispatchRoleReplies({
+          chatId,
+          messageId: id,
+          fromUserId: req.userId,
+          text: текст,
+          hop: 0,
+          mode: "work",
+        });
+      } catch (error) {
+        console.warn(
+          `[chats] ответ на вопрос не поднял ход роли chat=${chatId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+      return { message: loadChatMessage(id) };
     },
   );
 

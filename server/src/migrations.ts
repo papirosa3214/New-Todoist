@@ -5338,6 +5338,26 @@ const migrations: Migration[] = [
     },
   },
   {id:"179_chat_budget_cases",description:"Private manual review packets for 100+50 chat actions",up:()=>{db.exec(BUDGET_CASE_SCHEMA);}},
+  {
+    id: "180_chat_questions",
+    description: "Уточнение роли у владельца из чата: вопросы роли, их статус и ответ владельца",
+    up: () => {
+      db.exec(`CREATE TABLE IF NOT EXISTS chat_questions(
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        role_id TEXT NOT NULL,
+        message_id TEXT,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        answer_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        deadline_at TEXT,
+        answered_at TEXT
+      )`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_questions_chat_created
+        ON chat_questions(chat_id, created_at DESC)`);
+    },
+  },
 
 ];
 /**
