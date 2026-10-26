@@ -250,3 +250,16 @@ export function preparationWithBlocks(result: any): any {
   }
   return out;
 }
+
+/** Недельная сводка: приветствие и пункты списков — с готовыми блоками. */
+export function weeklySummaryWithBlocks<T>(summary: T): T {
+  if (!summary || typeof summary !== "object") return summary;
+  const s = summary as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...s };
+  if (typeof s.greeting === "string" && s.greeting.trim()) out.greeting_blocks = chatBlocksCached(s.greeting);
+  for (const key of ["accomplishments", "missed_or_overdue", "next_week_focus"]) {
+    const list = s[key];
+    if (Array.isArray(list)) out[`${key}_blocks`] = list.map((item) => (typeof item === "string" ? chatBlocksCached(item) : []));
+  }
+  return out as T;
+}

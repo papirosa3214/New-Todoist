@@ -1,3 +1,4 @@
+import { weeklySummaryWithBlocks } from "../lib/chatBlocks.js";
 import { NonTaskInputError } from "../lib/taskPreparation.js";
 import { structureTaskDraft } from "../lib/taskStructure.js";
 import { callUnifiedAi, OllamaError, parseJsonObject } from "../lib/aiClient.js";
@@ -646,7 +647,7 @@ export function registerAiRoutes(app: FastifyInstance) {
       const cacheKey = `${req.userId}:${provider}:${localModel}:${aiModel}`;
       const cached = summaryCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < 6 * 3600 * 1000) {
-        return cached.summary;
+        return weeklySummaryWithBlocks(cached.summary);
       }
       try {
         const summary = await generateWeeklySummary(
@@ -656,9 +657,9 @@ export function registerAiRoutes(app: FastifyInstance) {
           aiModel,
         );
         summaryCache.set(cacheKey, { summary, timestamp: Date.now() });
-        return summary;
+        return weeklySummaryWithBlocks(summary);
       } catch (err: any) {
-        if (cached) return cached.summary;
+        if (cached) return weeklySummaryWithBlocks(cached.summary);
         return reply.code(502).send({
           error: err?.message || "Не удалось сгенерировать недельную сводку",
         });
@@ -690,7 +691,7 @@ export function registerAiRoutes(app: FastifyInstance) {
           aiModel,
         );
         summaryCache.set(cacheKey, { summary, timestamp: Date.now() });
-        return summary;
+        return weeklySummaryWithBlocks(summary);
       } catch (err: any) {
         return reply.code(502).send({
           error: err?.message || "Не удалось обновить недельную сводку",

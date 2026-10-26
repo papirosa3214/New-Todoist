@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatBlocks, chatBlocksCached, jsonWithTextBlocks, ownerText, preparationWithBlocks, sourcedChatBlocks, withTextBlocks } from "../src/lib/chatBlocks.js";
+import { chatBlocks, chatBlocksCached, jsonWithTextBlocks, ownerText, preparationWithBlocks, weeklySummaryWithBlocks, sourcedChatBlocks, withTextBlocks } from "../src/lib/chatBlocks.js";
 
 describe("chatBlocks: ответ готовыми блоками (правило ChatRichContent из iOS)", () => {
   it("обычный текст — один документ TipTap с разметкой", () => {
@@ -78,5 +78,13 @@ describe("chatBlocks: ответ готовыми блоками (правило
     expect(out.card.preparation.question_blocks[0].type).toBe("doc");
     expect(out.card.preparation.workstreams[0].result_blocks[0].type).toBe("doc");
     expect(preparationWithBlocks(null)).toBeNull();
+  });
+
+  it("недельная сводка: приветствие и пункты списков — с блоками", () => {
+    const out = weeklySummaryWithBlocks({ greeting: "**Привет**", accomplishments: ["a", "b"], next_week_focus: [], productivity_score: 50 }) as any;
+    expect(out.greeting_blocks[0].type).toBe("doc");
+    expect(out.accomplishments_blocks).toHaveLength(2);
+    expect(out.next_week_focus_blocks).toEqual([]);
+    expect(out.productivity_score).toBe(50);
   });
 });
