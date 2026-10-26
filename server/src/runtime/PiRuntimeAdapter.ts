@@ -1,3 +1,4 @@
+import {safelyCaptureBudgetCases,budgetContinuationPrompt} from "./chatBudgetCases.js";
 import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
 import { ChatPreparationDeadline } from "./chatPreparationDeadline.js";
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
@@ -22,7 +23,7 @@ import {
   type ChatWorkMode,
 } from "./chatWorkMode.js";
 import { getSetting } from "../lib/serverSettings.js";
-import { reserveChatItemAction, guardChatActions } from "./chatActionBudget.js";
+import { reserveChatItemAction, guardChatActions, assertChatBudgetAtTurnEnd } from "./chatActionBudget.js";
 import { chatWorkPlanPrompt, stopChatWorkPlan } from "../lib/subtaskWorkPlan.js";
 import {
   chatInstructionArgs,
@@ -1343,7 +1344,24 @@ export async function stopAllChatRuns(): Promise<void> {
  *    6. Апсёртим sessionId в chat_sessions, отдаём результат.
  *    7. Освобождаем слот в любом исходе (finally) — чтобы ошибка одного
  *       хода не подвешивала дальнейшие. */
-export async function startChatRun(
+export async function startChatRun(input: StartChatRunInput): Promise<StartChatRunResult> {
+  const generation=currentChatGeneration(input.chatId,input.roleId);
+  let attempt=input;
+  // Each item may reset once. The durable item entry prevents another reset
+  // for that item, even across server restarts or later owner messages.
+  for(;;){
+    try { return await startChatRunOnce(attempt); }
+    catch(error){
+      if((error as {code?:string}).code!=="CHAT_ACTION_CONTINUE")throw error;
+      if(currentChatGeneration(input.chatId,input.roleId)!==generation)throw chatRunCancelledError();
+      const continuation=budgetContinuationPrompt(input.chatId,input.roleId);
+      if(!continuation)throw chatRunCancelledError();
+      attempt={...input,sessionId:undefined,prompt:continuation+"\n\nИсходный контекст поручения:\n"+input.prompt};
+    }
+  }
+}
+
+async function startChatRunOnce(
   input: StartChatRunInput,
 ): Promise<StartChatRunResult> {
   const role: RoleName = input.role;
@@ -1527,6 +1545,8 @@ export async function startChatRun(
     );
 
     let session: any;
+    let budgetFailure: Error | null = null;
+    const budgetEvents: unknown[] = [];
     try {
       ({ session } = await preparation.wait(createAgentSession({
         cwd,
@@ -1540,7 +1560,13 @@ export async function startChatRun(
         // описаниями владельца — через customTools: одноимённый перекрывает.
         tools: [...builtin.map((t) => t.name), ...toolCatalog.registeredNames],
         customTools: guardChatActions([...builtin, ...toolCatalog.customTools], callId => reserveChatItemAction({chatId:input.chatId,roleId:input.roleId,messageId:input.messageId,callId:runId+":"+callId}), () => {
+          budgetFailure=Object.assign(new Error("Дополнительные 50 действий исчерпаны; материалы сохранены в приватной карточке разбора"),{code:"CHAT_ACTION_BUDGET"});
           stopChatWorkPlan(input.chatId, input.roleId, "budget_exhausted");
+          db.prepare("UPDATE chat_sessions SET pi_session_id='' WHERE chat_id=? AND role_id=?").run(input.chatId,input.roleId);
+          void session?.abort().catch(() => {});
+        }, () => {
+          budgetFailure=Object.assign(new Error("Продолжение в новой сессии на 50 действий"),{code:"CHAT_ACTION_CONTINUE"});
+          safelyCaptureBudgetCases(input.chatId,input.roleId,{sessionFile:sessionManager.getSessionFile(),systemPrompt,events:budgetEvents});
           void session?.abort().catch(() => {});
         }),
         sessionManager,
@@ -1621,6 +1647,7 @@ export async function startChatRun(
     const turnState: { last: TurnResult | null } = { last: null };
 
     const unsubscribe = session.subscribe((event: any) => {
+      if(event?.type!=="message_update")budgetEvents.push(event);
       steering?.observe(event);
       lastActivity = Date.now();
       if (event?.type === "agent_end") {
@@ -1701,8 +1728,16 @@ export async function startChatRun(
       const promptOnce = async (text: string) => {
         try {
           await Promise.race([session.prompt(text), watchdog, armCeiling()]);
+          assertChatBudgetAtTurnEnd(input);
         } catch (error) {
+          if((error as {code?:string}).code==="CHAT_ACTION_BUDGET"){
+            budgetFailure=error as Error;
+            stopChatWorkPlan(input.chatId,input.roleId,"budget_exhausted");
+            db.prepare("UPDATE chat_sessions SET pi_session_id='' WHERE chat_id=? AND role_id=?").run(input.chatId,input.roleId);
+          }
+          if((error as {code?:string}).code==="CHAT_ACTION_CONTINUE")budgetFailure=error as Error;
           if (run.cancelled) throw chatRunCancelledError();
+          if (budgetFailure) throw budgetFailure;
           if (watchdogFired) throw watchdogFired;
           throw error;
         }
@@ -1746,6 +1781,7 @@ export async function startChatRun(
         : stripGoalMark((session.getLastAssistantText?.() ?? "").trim());
       finalSessionId = session.sessionId ?? finalSessionId;
       if (run.cancelled) throw chatRunCancelledError();
+      if (budgetFailure) throw budgetFailure;
       const lastTurn = turnState.last;
       if (!finalText && lastTurn?.stopReason === "error") {
         throw Object.assign(
@@ -1754,6 +1790,7 @@ export async function startChatRun(
         );
       }
     } finally {
+      safelyCaptureBudgetCases(input.chatId,input.roleId,{sessionFile:sessionManager.getSessionFile(),systemPrompt,events:budgetEvents,error:budgetFailure});
       steering?.close();
       clearInterval(idleTimer);
       clearTimeout(ceilingTimer);

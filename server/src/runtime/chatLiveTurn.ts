@@ -718,6 +718,7 @@ export function chatRunFailureText(error: unknown): string {
   // Ход этой роли уже идёт и ответит сам — писать нечего.
   if (code === "CHAT_RUN_BUSY") return "";
   if (code === "CHAT_RUN_CANCELLED") return "Остановлено.";
+  if (code === "CHAT_ACTION_BUDGET") return "Дополнительные 50 действий исчерпаны. Пункт остановлен; история и логи сохранены в приватной карточке проекта «Разбор превышений лимита». Автоматического перезапуска не будет.";
   if (code === "CHAT_RUN_IDLE") {
     const min = Math.round(((error as { limitMs?: number }).limitMs ?? 0) / 60_000);
     return `Остановил ход: ${min} мин не было никаких действий. Напишите, если продолжить.`;

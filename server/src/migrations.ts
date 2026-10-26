@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { BUDGET_CASE_SCHEMA } from "./runtime/chatBudgetCases.js";
 import { ROLE_TOOL_REQUEST_SCHEMA } from "./routes/role-tool-requests.js";
 import { OBSERVABILITY_SCHEMA } from "./lib/contextObservability.js";
 import { TOOL_REQUEST_SCHEMA } from "./runtime/toolRequestStore.js";
@@ -5288,6 +5289,8 @@ const migrations: Migration[] = [
         db.exec("ALTER TABLE chat_work_plans ADD COLUMN action_budget_json TEXT NOT NULL DEFAULT '{}'");
     },
   },
+  {id:"179_chat_budget_cases",description:"Private manual review packets for 100+50 chat actions",up:()=>{db.exec(BUDGET_CASE_SCHEMA);}},
+
 ];
 /**
  * Опции прогона миграций.

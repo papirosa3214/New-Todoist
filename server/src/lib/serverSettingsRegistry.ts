@@ -79,7 +79,7 @@ export const DEFAULTS = {
   snapshot_keep: 20,
   chat_short_limit: 600,
   chat_goal_max_turns: 10,
-  chat_item_max_actions: 10,
+  chat_item_max_actions: 100,
   role_run_concurrency: 3,
   task_context_timeout_ms: 15000,
   // Тишина
@@ -135,8 +135,8 @@ export type SettingOf<K extends DefaultsKey> = Defaults[K];
 export const SERVER_SETTINGS: readonly ServerSetting[] = [
   { key: "snapshot_keep", label: "Хранить снимков на шаг", group: "снимки", kind: "int", default: DEFAULTS.snapshot_keep, min: 1, max: 200, applies_to: ["runtime/slotWorkSnapshot.ts"] },
   { key: "chat_short_limit", label: "Длина сообщения до сокращения", group: "лимиты", kind: "int", default: DEFAULTS.chat_short_limit, min: 100, max: 10000, applies_to: ["lib/chatMessageShortening.ts"] },
-  { key: "chat_item_max_actions", label: "Действий на пункт чек-листа", group: "лимиты", kind: "int", default: DEFAULTS.chat_item_max_actions, min: 1, max: 1000,
-    description: "Один вызов инструмента — одно действие. Сдача пункта, управление планом и сообщение о ходе работы не расходуют лимит. После принятой сервером сдачи следующий пункт получает новый бюджет. Расход сохраняется при перезапуске хода. Изменение действует на следующие действия без рестарта сервера; уже выполненные не обнуляются.",
+  { key: "chat_item_max_actions", label: "Действий на пункт чек-листа", group: "лимиты", kind: "int", default: DEFAULTS.chat_item_max_actions, min: 1, max: 100,
+    description: "Один вызов инструмента — одно действие. Основной бюджет — не более 100, затем однократно ещё 50 с карточкой материалов в приватном проекте. После суммарного предела пункт останавливается. Карточка разбора не запускается автоматически. Сдача пункта, управление планом и сообщение о ходе работы не расходуют лимит. После принятой сервером сдачи следующий пункт получает новый бюджет. Расход сохраняется при перезапуске хода. Изменение действует на следующие действия без рестарта сервера; уже выполненные не обнуляются.",
     applies_to: ["runtime/chatActionBudget.ts"] },
   { key: "chat_goal_max_turns", label: "Потолок ходов в режиме «Цель»", group: "лимиты", kind: "int", default: DEFAULTS.chat_goal_max_turns, min: 1, max: 500, applies_to: ["runtime/PiRuntimeAdapter.ts"] },
   { key: "role_run_concurrency", label: "Одновременных запусков", group: "лимиты", kind: "int", default: DEFAULTS.role_run_concurrency, min: 1, max: 8, applies_to: ["runtime/roleRunWorker.ts"] },

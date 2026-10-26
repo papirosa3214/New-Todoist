@@ -1,3 +1,4 @@
+import {startBudgetCaptureWatcher} from "./runtime/chatBudgetCases.js";
 import { serverListenOptions } from "./runtime/systemdSocket.js";
 import {startToolRequestWatcher} from "./runtime/toolRequestStore.js";
 import {startChatCoordinationWatcher} from "./runtime/chatCoordination.js";
@@ -650,6 +651,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     app.addHook("onClose",async()=>stopToolRequestWatcher());
     const stopCoordinationWatcher=startChatCoordinationWatcher();
     app.addHook("onClose",async()=>stopCoordinationWatcher());
+    const stopBudgetCaptureWatcher=startBudgetCaptureWatcher();
+    app.addHook("onClose",async()=>stopBudgetCaptureWatcher());
     const stopWorkPlanWatcher = startWorkPlanWatcher();
     app.addHook("onClose", async () => stopWorkPlanWatcher());
     // Порог разбора заметок: набралось — заводим задачу Помощнику владельца.
