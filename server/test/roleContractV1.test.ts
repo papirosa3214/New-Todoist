@@ -287,7 +287,9 @@ describe("JSON-контракт роли v1: чат и сдача этапа", {
 
   it("конверт роли доезжает в сообщение чата отдельным полем, текст остаётся человеческим", () => {
     const v1 = formatChatMessage(chatRow(JSON.stringify({ ok: true, output: "Виджет нарисован.", artifacts: ["https://example.test/док"], needs_human: false })));
-    expect(v1.role_envelope).toEqual({ contract: "role.v1", ok: true, output: "Виджет нарисован.", artifacts: ["https://example.test/док"], error: null, next_hint: null, needs_human: false });
+    // Готовые блоки текста (output_blocks) сервер добавляет с c2640d9d — проверяем поля конверта и их наличие.
+    expect(v1.role_envelope).toMatchObject({ contract: "role.v1", ok: true, output: "Виджет нарисован.", artifacts: ["https://example.test/док"], error: null, next_hint: null, needs_human: false });
+    expect(Array.isArray((v1.role_envelope as any).output_blocks)).toBe(true);
     expect(v1.text).toBe("Виджет нарисован.");
 
     const structured = formatChatMessage(chatRow(JSON.stringify({
@@ -317,6 +319,11 @@ describe("JSON-контракт роли v1: чат и сдача этапа", {
     await app.inject({ method: "PATCH", url: `/api/tasks/${task.id}/integration-responsibility`, headers: { authorization: owner }, payload: { mode: "manual", owner_id: roleUserId("builder") } });
     await app.inject({ method: "POST", url: `/api/tasks/${task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: owner }, payload: {} });
     const step = (db.prepare("SELECT * FROM subtasks WHERE task_id=?").all(task.id) as any[]).find((s) => s.plan_node_key === "work");
+    // Шаг закрывается только взятым в работу своей ролью (правила сервера):
+    // назначаем, как это делает запуск плана, и берём в работу, как роль.
+    db.prepare("UPDATE subtasks SET agent_id=? WHERE id=?").run(roleUserId("builder"), step.id);
+    const started = await app.inject({ method: "POST", url: `/api/subtasks/${step.id}/work`, headers: { authorization: builder }, payload: { state: "in_progress" } });
+    expect(started.statusCode, started.body).toBe(200);
     return { task, step };
   }
 
@@ -342,7 +349,6 @@ describe("JSON-контракт роли v1: чат и сдача этапа", {
       report_markdown: REPORT,
       contract_v1: { ok: true, output: "Виджет нарисован, отчёт сдан.", artifacts: ["https://example.test/док"], needs_human: false },
     });
-    if (res.statusCode !== 200) console.log("DEBUG-DONE", JSON.stringify(res.json()));
     expect(res.statusCode).toBe(200);
     expect(res.json().role_contract_v1).toMatchObject({ contract: "role.v1", output: "Виджет нарисован, отчёт сдан." });
     expect((db.prepare("SELECT result, done FROM subtasks WHERE id=?").get(f.step.id) as any)).toMatchObject({ result: "Виджет нарисован, отчёт сдан.", done: 1 });
