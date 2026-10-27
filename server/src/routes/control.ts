@@ -78,7 +78,8 @@ function cancelSubtaskAttempt(subtaskId: string, reason: string, actorId: string
     }
   }
 
-  const leaseReleased = releaseSubtaskWork(subtask.task_id) > 0;
+  // Только этот шаг: соседние роли графа работают дальше (владелец 27.10.2026).
+  const leaseReleased = releaseOneSubtaskWork(subtaskId) > 0;
 
   logEvent({
     taskId: subtask.task_id,
@@ -95,6 +96,16 @@ function cancelSubtaskAttempt(subtaskId: string, reason: string, actorId: string
   });
 
   return { subtaskId, aborted, attemptClosed, leaseReleased };
+}
+
+/** Снять отметку работы с одного незакрытого шага. */
+function releaseOneSubtaskWork(subtaskId: string): number {
+  return db
+    .prepare(
+      `UPDATE subtasks SET agent_state = NULL, agent_id = NULL, agent_heartbeat_at = NULL
+        WHERE id = ? AND done = 0 AND agent_state IN ('in_progress', 'blocked')`,
+    )
+    .run(subtaskId).changes;
 }
 
 /** Сбросить текущую попытку шага без вызова abort(): сценарий — попытка
@@ -126,7 +137,8 @@ function resetSubtaskAttempt(subtaskId: string, reason: string, actorId: string)
     }
   }
 
-  const leaseReleased = releaseSubtaskWork(subtask.task_id) > 0;
+  // Только этот шаг: соседние роли графа работают дальше (владелец 27.10.2026).
+  const leaseReleased = releaseOneSubtaskWork(subtaskId) > 0;
 
   logEvent({
     taskId: subtask.task_id,

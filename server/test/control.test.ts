@@ -348,6 +348,27 @@ describe("control: прервать шаг / сбросить попытку / �
     });
   });
 
+  // ── Действие на одном шаге не трогает соседние ─────────────────────
+  // Владелец 27.10.2026: сброс шага одной роли сбрасывал всех в графе —
+  // ручки снимали отметку работы со всех незакрытых шагов карточки.
+
+  describe("сброс и прерывание касаются только выбранного шага", () => {
+    for (const action of ["reset", "cancel"] as const) {
+      it(`${action}: соседний шаг остаётся в работе`, async () => {
+        const { taskId, subtaskId } = seedTaskWithSubtask({ ownerId: owner.id, assigneeId: agent.id, title: "Два шага " + action });
+        const neighbourId = uid();
+        db.prepare("INSERT INTO subtasks (id, task_id, title, position) VALUES (?, ?, ?, 2)").run(neighbourId, taskId, "шаг 2");
+        for (const id of [subtaskId, neighbourId])
+          db.prepare("UPDATE subtasks SET agent_state = ?, agent_id = ?, agent_heartbeat_at = datetime(?) WHERE id = ?").run("in_progress", agent.id, "now", id);
+        const res = await app.inject({ method: "POST", url: `/api/subtasks/${subtaskId}/${action}`, headers: { authorization: owner.auth }, payload: {} });
+        expect(res.statusCode).toBe(200);
+        const state = (id: string) => (db.prepare("SELECT agent_state FROM subtasks WHERE id = ?").get(id) as { agent_state: string | null }).agent_state;
+        expect(state(subtaskId)).toBeNull();
+        expect(state(neighbourId)).toBe("in_progress");
+      });
+    }
+  });
+
   // ── Cancel task ───────────────────────────────────────────────────────
 
   describe("отмена задания целиком", () => {
