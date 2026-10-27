@@ -43,11 +43,14 @@ describe("нормализация финального ответа в JSON v1"
     expect(validateStructuredRoleContractV1(normalized.envelope).valid).toBe(true);
   });
 
-  it("сохраняет битый JSON буквально как текст, не теряя ответ", () => {
+  // Сырой конверт владельцу не показывается (владелец 27.10.2026): вместо
+  // него — что вынулось из полей text, иначе пометка о сбое контракта.
+  it("битый JSON не доходит владельцу сырым: пометка о сбое", () => {
     const raw = '{"schema_version":1,"output":';
     const normalized = normalizeRoleReplyV1(raw);
     expect(normalized.normalizedByServer).toBe(true);
-    expect(normalized.displayText).toBe(raw);
+    expect(normalized.displayText).not.toContain("schema_version");
+    expect(normalized.displayText).toContain("не прошёл проверку контракта");
     expect(validateStructuredRoleContractV1(normalized.envelope).valid).toBe(true);
   });
 

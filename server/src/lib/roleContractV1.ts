@@ -342,7 +342,30 @@ function extractEmbeddedEnvelope(text: string): { candidate: unknown; prefix: st
 /** Объект JSON с лишними закрывающими скобками в конце (владелец 27.10.2026:
  *  модель приписала «}]}» к верному конверту — ответ ушёл сырым JSON).
  *  Отбрасываем хвост, только если он состоит из одних `}`/`]` и пробелов. */
-function parseObjectLenient(trimmed: string): unknown {
+/** Убрать запятую перед `}` или `]` вне строк — частая ошибка модели в
+ *  конверте (27.10.2026: ответ Помощника пришёл владельцу сырым JSON). */
+function stripTrailingCommas(text: string): string {
+  let out = "", inString = false, escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === "\"") inString = false;
+    } else if (ch === "\"") inString = true;
+    else if (ch === "," && /^\s*[\]}]/.test(text.slice(i + 1))) continue;
+    out += ch;
+  }
+  return out;
+}
+
+function parseObjectLenient(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // ниже — разбор с починкой
+  }
+  const trimmed = stripTrailingCommas(raw);
   try {
     return JSON.parse(trimmed);
   } catch (error) {
@@ -809,7 +832,12 @@ export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
     : parsed.format === "plain"
       ? ["Ответ не содержит JSON v1 конверт"]
       : ["Ответ не удалось разобрать как JSON v1"];
-  const preservedText = text.trim() || "Ответ не содержит текста.";
+  // Сырой конверт владельцу не показываем ни при каких условиях (владелец
+  // 27.10.2026): что удалось вынуть из полей text — показываем, иначе пометка.
+  const rawEnvelope = /^\s*(?:```[a-z0-9]*\s*)?\{\s*"schema_version"/i.test(text);
+  const preservedText = rawEnvelope
+    ? partialStructuredText(text) ?? BROKEN_CONTRACT_NOTE
+    : text.trim() || "Ответ не содержит текста.";
   const envelope: StructuredRoleEnvelopeV1 = {
     schema_version: 1,
     ok: true,
