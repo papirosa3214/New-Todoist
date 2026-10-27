@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
 import { isOwner, getProjectForFiling } from "../access.js";
-import { listLinearIssues, fetchLinearSnapshot } from "../lib/linearSource.js";
+import { listLinearIssues, listLinearProjects, fetchLinearSnapshot } from "../lib/linearSource.js";
 import { createLinearPreview, commitLinearPreview } from "../lib/linearImport.js";
 import { linearAutoImportState, setLinearAutoImportEnabled, runLinearAutoImportPass } from "../lib/linearAutoImport.js";
 import { linearSyncHealth, setLinearSyncEnabled, runLinearSyncPass } from "../lib/linearSync.js";
@@ -27,7 +27,16 @@ export function registerLinearRoutes(app: FastifyInstance) {
   app.get("/api/integrations/linear/issues", { preHandler: ownerOnly }, async (req: any, reply) => {
     const cursor = req.query.cursor ?? null;
     if (cursor !== null && (typeof cursor !== "string" || cursor.length > 1000)) return reply.code(422).send({ error: "Некорректная страница Linear" });
-    try { return await listLinearIssues(req.userId, cursor); } catch (error) { return failure(reply, error); }
+    const project = req.query.project_id ?? null;
+    if (project !== null && (typeof project !== "string" || !UUID.test(project))) return reply.code(422).send({ error: "Некорректный проект Linear" });
+    try { return await listLinearIssues(req.userId, cursor, undefined, project); } catch (error) { return failure(reply, error); }
+  });
+  // Проекты Linear — выбрать, откуда забирать задачи в ручном импорте.
+  app.get("/api/integrations/linear/projects", { preHandler: ownerOnly }, async (req: any, reply) => {
+    try {
+      const { workspace, projects } = await listLinearProjects(req.userId);
+      return { workspace, projects: projects.map(p => ({ id: p.id, name: p.name, state: p.state })) };
+    } catch (error) { return failure(reply, error); }
   });
   app.post("/api/integrations/linear/preview", { preHandler: ownerOnly }, async (req: any, reply) => {
     const ids = req.body?.issue_ids, project = req.body?.project_id ?? null;

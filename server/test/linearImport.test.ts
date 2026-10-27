@@ -3,10 +3,10 @@ import {buildApp} from "../src/index.js";
 import db from "../src/db.js";
 import {createLinearPreview,commitLinearPreview,mergeLinearFields} from "../src/lib/linearImport.js";
 import type {LinearIssue,LinearSnapshot} from "../src/lib/linearSource.js";
-import {fetchLinearSnapshot,listLinearIssues} from "../src/lib/linearSource.js";
+import {fetchLinearSnapshot,listLinearIssues,listLinearProjects} from "../src/lib/linearSource.js";
 import crypto from "node:crypto";
 import { ROLE_NAMES } from "../src/roleRouting.js";
-vi.mock("../src/lib/linearSource.js", async original=>({...await original<any>(),fetchLinearSnapshot:vi.fn(),listLinearIssues:vi.fn()}));
+vi.mock("../src/lib/linearSource.js", async original=>({...await original<any>(),fetchLinearSnapshot:vi.fn(),listLinearIssues:vi.fn(),listLinearProjects:vi.fn()}));
 const uuid=()=>crypto.randomUUID();
 const issue=(id=uuid(),parent:string|null=null):LinearIssue=>({id,identifier:"TF-1",title:"Внешняя задача",description:"**Описание**",url:"https://linear.app/test/issue/TF-1",priority:2,dueDate:"2026-10-10",createdAt:"2026-10-01T10:00:00Z",updatedAt:"2026-10-01T11:00:00Z",archivedAt:null,parent:parent?{id:parent}:null,state:{id:"state",name:"In Progress",type:"started"},children:[],labels:[],comments:[],history:[],attachments:[],documents:[],relations:[],inverseRelations:[],assignee:{id:"outside",name:"Внешний агент"},project:{id:"outside-project",name:"Внешний проект"},team:{id:"team",name:"Команда"}});
 const snapshot=(issues:LinearIssue[]):LinearSnapshot=>({workspace:{id:"workspace",name:"Linear workspace"},selected_ids:[issues[0].id],issues,fetched_at:new Date().toISOString()});
@@ -88,6 +88,17 @@ describe("Linear import uses existing task semantics",()=>{
   const source=snapshot([issue()]);vi.mocked(fetchLinearSnapshot).mockResolvedValueOnce(source);const p=(await app.inject({method:"POST",url:"/api/integrations/linear/preview",headers:auth(),payload:{issue_ids:[source.issues[0].id]}})).json();
   const imported=await app.inject({method:"POST",url:"/api/integrations/linear/import",headers:auth(),payload:{preview_id:p.preview_id,issues:[{title:"Injected"}]}});expect(imported.statusCode).toBe(200);expect(imported.json().created).toBe(1);
   vi.mocked(listLinearIssues).mockResolvedValueOnce({workspace:source.workspace,issues:source.issues,cursor:null});expect((await app.inject({method:"GET",url:"/api/integrations/linear/issues",headers:auth()})).statusCode).toBe(200);
+ });
+ it("ручной импорт выбирает проект Linear: список проектов и задачи проекта",async()=>{
+  const project=uuid();
+  vi.mocked(listLinearProjects).mockResolvedValueOnce({workspace:{id:"workspace",name:"W"},projects:[{id:project,name:"TaskFlow (сервер + веб)",url:"u",state:"started",labels:[]}],cursor:null});
+  const list=await app.inject({method:"GET",url:"/api/integrations/linear/projects",headers:auth()});
+  expect(list.statusCode).toBe(200);expect(list.json()).toEqual({workspace:{id:"workspace",name:"W"},projects:[{id:project,name:"TaskFlow (сервер + веб)",state:"started"}]});
+  expect((await app.inject({method:"GET",url:"/api/integrations/linear/projects",headers:{authorization:`Bearer ${member}`}})).statusCode).toBe(403);
+  vi.mocked(listLinearIssues).mockResolvedValueOnce({workspace:{id:"workspace",name:"W"},issues:[],cursor:null});
+  expect((await app.inject({method:"GET",url:`/api/integrations/linear/issues?project_id=${project}`,headers:auth()})).statusCode).toBe(200);
+  expect(vi.mocked(listLinearIssues)).toHaveBeenLastCalledWith(owner,null,undefined,project);
+  expect((await app.inject({method:"GET",url:"/api/integrations/linear/issues?project_id=not-a-project",headers:auth()})).statusCode).toBe(422);
  });
  it("background preparation exposes a reviewed snapshot without creating cards",async()=>{
   const source=snapshot([issue()]);let finish!:(value:LinearSnapshot)=>void;

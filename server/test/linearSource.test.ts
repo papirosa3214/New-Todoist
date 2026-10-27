@@ -70,3 +70,18 @@ describe("fixed Composio Linear transport",()=>{
   expect(await readLinearComposio(fake,"owner",input)).toEqual({error:"query_failed"});
  });
 });
+
+describe("Linear manual list by project",()=>{
+ const conn=(nodes:any[],next:string|null=null)=>({nodes,pageInfo:{hasNextPage:!!next,endCursor:next}});
+ it("с проектом — незакрытые задачи только этого проекта, без архива",async()=>{
+  const r=await listLinearIssues("owner",null,async(_,q,v)=>{
+   expect(v).toEqual({after:null,projectId:"P1"});
+   expect(q).toMatch(/project: \{ id: \{ eq: \$projectId \} \}/);
+   expect(q).toMatch(/nin: \["completed", "canceled"\]/);
+   expect(q).toMatch(/includeArchived: false/);
+   expect(q).not.toMatch(/eq: "started"/);
+   return{organization:{id:"W"},issues:conn([{id:"issue"}])};
+  },"P1");
+  expect(r.issues.map((i:any)=>i.id)).toEqual(["issue"]);expect(r.cursor).toBeNull();
+ });
+});

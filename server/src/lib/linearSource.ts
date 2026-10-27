@@ -31,9 +31,16 @@ function connection(value: any) {
 
 /** Список для ручного импорта: задачи в работе (по state.type = started)
  * с включением архивных (includeArchived: true) — пользователь сам решает,
- * брать архивные или нет. Тест D3 проверяет ровно `includeArchived: true`. */
-export async function listLinearIssues(owner: string, after: string | null = null, read: LinearRead = linearQuery) {
-  const data = await read(owner, `query TaskFlowLinearList($after: String) {
+ * брать архивные или нет. Тест D3 проверяет ровно `includeArchived: true`.
+ * С `projectId` (владелец 27.10.2026: «не могу выбрать, с какого проекта
+ * забираю») — все незакрытые задачи одного проекта Linear, без архива. */
+export async function listLinearIssues(owner: string, after: string | null = null, read: LinearRead = linearQuery, projectId: string | null = null) {
+  const data = projectId
+    ? await read(owner, `query TaskFlowLinearProjectList($after: String, $projectId: String!) {
+    organization { id name }
+    issues(first: 50, after: $after, includeArchived: false, filter: { project: { id: { eq: $projectId } }, state: { type: { nin: ["completed", "canceled"] } } }, orderBy: createdAt) { nodes { ${CORE} } ${PAGE} }
+  }`, { after, projectId })
+    : await read(owner, `query TaskFlowLinearList($after: String) {
     organization { id name }
     issues(first: 50, after: $after, includeArchived: true, filter: { state: { type: { eq: "started" } } }, orderBy: createdAt) { nodes { ${CORE} } ${PAGE} }
   }`, { after });
