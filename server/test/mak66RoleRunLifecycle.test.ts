@@ -19,6 +19,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
+// Цикл импортов PiRuntimeAdapter → roleToolCatalog → inProcessRun (с 930d484d):
+// ход должен загрузиться первым, иначе он привяжется к настоящему адаптеру
+// мимо подмены ниже и увидит настоящий каталог моделей («модель недоступна»).
+import "../src/runtime/inProcessRun.js";
 
 // Подменяем SDK-сессию: роль «зависает» в script.steps, пока тест её
 // не отпустит — это даёт нам окно, в котором можно крутить sweeper
@@ -401,9 +405,10 @@ describe("MAK-66 — статус узла плана и общая очеред
     expect(todoAfter.agent_state).toBeNull();
     expect(blockedAfter.agent_state).toBeNull();
 
-    // В ленте карточки — заявка от роли: «после рестарта снят признак…».
+    // С 24.10.2026 (70ec3a7b) заметка ««узел»: после рестарта снят признак…» —
+    // служебный шум: в ленту карточки она не пишется.
     const notes = db.prepare("SELECT text FROM comments WHERE task_id = ? AND text LIKE '«%»: после рестарта%'").all(taskId) as Array<{ text: string }>;
-    expect(notes.length).toBeGreaterThanOrEqual(2);
+    expect(notes).toHaveLength(0);
 
     // Уборка
     db.prepare("DELETE FROM slot_sessions WHERE subtask_id IN (SELECT id FROM subtasks WHERE task_id = ?)").run(taskId);

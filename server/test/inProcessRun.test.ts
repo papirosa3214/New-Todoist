@@ -6,6 +6,10 @@ import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
 import { roleReport } from "./helpers/roleReport.js";
+// Цикл импортов PiRuntimeAdapter → roleToolCatalog → inProcessRun (с 930d484d):
+// ход должен загрузиться первым, иначе он привяжется к настоящему адаптеру
+// мимо подмены ниже и увидит настоящий каталог моделей («модель недоступна»).
+import "../src/runtime/inProcessRun.js";
 import { ensureRoleHome } from "../src/runtime/roleHome.js";
 
 const script = vi.hoisted(() => ({
@@ -401,7 +405,10 @@ describe("агент роли внутри сервера", () => {
       const options = script.sessions.at(-1);
       expect(options.cwd).toBe(project);
       expect(options.resourceLoader.getSkills().skills.map((s: any) => s.name)).toContain("task-probe");
-      expect(options.resourceLoader.getAgentsFiles().agentsFiles[0].content).toBe("Инструкции именно разработчика");
+      // С 20.10.2026 AGENTS.md роли входит в системную инструкцию задачи, а из
+      // отдельных файлов контекста убирается, чтобы не было дубля.
+      expect(options.resourceLoader.getSystemPrompt()).toContain("Инструкции именно разработчика");
+      expect(options.resourceLoader.getAgentsFiles().agentsFiles.some((f: any) => f.content === "Инструкции именно разработчика")).toBe(false);
       const write = options.customTools.find((t: any) => t.name === "write");
       await write.execute("probe", { path: "result.txt", content: "project result" });
       expect(fs.readFileSync(path.join(project, "result.txt"), "utf8")).toBe("project result");
@@ -470,7 +477,9 @@ describe("агент роли внутри сервера", () => {
     expect(script.systemPrompts.at(-1)).toContain("/home/maksim/Проекты/Хранилище");
   });
 
-  it("перед работой добавляет TaskContext v1 и пишет владельцу его человеческую сводку", async () => {
+  // С 24.10.2026 (70ec3a7b) сводка «Материал для работы собран…» — служебный шум:
+  // в комментарии задачи она не пишется, контекст уходит в задание роли.
+  it("перед работой добавляет TaskContext v1, служебную сводку в комментарии не пишет", async () => {
     const { taskId } = builderTask("Контекст для in-process запуска");
     const prompts: string[] = [];
     script.steps = async (_tools, prompt) => {
@@ -485,7 +494,7 @@ describe("агент роли внутри сервера", () => {
     const summary = db
       .prepare("SELECT text FROM comments WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
       .get(taskId) as { text: string } | undefined;
-    expect(summary?.text).toContain("База знаний:");
+    expect(summary?.text ?? "").not.toContain("Материал для работы собран");
   });
 
   it("A и B завершаются — C реально получает их итог в контекст запуска (этап 5)", async () => {

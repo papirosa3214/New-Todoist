@@ -13,6 +13,10 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
+// Цикл импортов PiRuntimeAdapter → roleToolCatalog → inProcessRun (с 930d484d):
+// ход должен загрузиться первым, иначе он привяжется к настоящему адаптеру
+// мимо подмены ниже и увидит настоящий каталог моделей («модель недоступна»).
+import "../src/runtime/inProcessRun.js";
 
 const script = vi.hoisted(() => ({
   steps: null as null | ((tools: Map<string, any>, prompt: string) => Promise<void>),
