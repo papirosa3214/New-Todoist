@@ -6,17 +6,20 @@
 сама — перезапуск оборвал бы её ход и чужие. Этот сторож живёт снаружи
 (таймер systemd `taskflow-deploy-idle.timer`, раз в 2 минуты):
 
-1. В рабочем дереве .110 (ветка main) есть коммиты после последней выкладки,
+1. Подтянуть `main` с GitHub (`git fetch` + fast-forward) — источник правды
+   теперь GitHub (AGENTS.md: «всё идёт на GitHub», решение 05.10.2026).
+   Только fast-forward: если локальный main ушёл вперёд, ничего не трогаем.
+2. В рабочем дереве .110 (ветка main) есть коммиты после последней выкладки,
    и они трогают `server/` — иначе ничего не делаем.
-2. Тихо: нет идущих попыток ролей (живой heartbeat за 10 минут) и
+3. Тихо: нет идущих попыток ролей (живой heartbeat за 10 минут) и
    недоставленных сообщений в очереди чата — дважды, с паузой 90 секунд,
    чтобы не влезть между шагами плана.
-3. Резервная копия базы → `tsc --noEmit` (ошибка — выкладки нет, сервер
+4. Резервная копия базы → `tsc --noEmit` (ошибка — выкладки нет, сервер
    работает на старом) → сборка `dist` → `systemctl --user restart` →
    `/api/health` = 200.
-4. Итог — владельцу в «Состояние системы» (уведомление deploy_watch), НЕ
+5. Итог — владельцу в «Состояние системы» (уведомление deploy_watch), НЕ
    карточкой. Сервер не поднялся — ещё и Telegram (приложение тогда молчит).
-   Одна тревога на коммит; «висит больше суток» — раз в сутки.
+   Одна тревога на коммит; «висит больше суток» — раз в суток.
 
 Состояние: ~/.local/state/taskflow-deploy/ (deployed — выложенный коммит).
 Реестр: docs/watchers.md, раздел «Отложенная выкладка сервера».
@@ -31,6 +34,10 @@ STATE = os.path.expanduser("~/.local/state/taskflow-deploy")
 DEPLOYED = os.path.join(STATE, "deployed")
 SEND = os.path.expanduser("~/.claude/skills/notify-telegram/send.sh")
 HEALTH = "http://127.0.0.1:3001/api/health"
+# Источник правды — GitHub (AGENTS.md, решение владельца 05.10.2026).
+# «origin» — локальный Gitea в Docker, он умирает вместе с машиной и бэкапом
+# не является; GitHub переживает смерть .110.
+GITHUB_REMOTE = "github"
 
 
 def log(msg):
@@ -47,6 +54,37 @@ def state(name, value=None):
         return open(path).read().strip() if os.path.exists(path) else ""
     with open(path, "w") as f:
         f.write(value)
+
+
+def sync_from_github():
+    """Подтянуть `main` с GitHub — источник правды (AGENTS.md, 05.10.2026).
+
+    Только fast-forward. Если локальный main ушёл вперёд (непушенные
+    коммиты) или рабочее дерево грязное — не трогаем ничего: выкладка
+    продолжит работать с локальным HEAD, как раньше. Сторож не имеет права
+    терять чужую работу, поэтому «не смог обновиться» — это не ошибка
+    выкладки, а повод записать в журнал и ждать следующего прохода.
+    """
+    fetch = sh("git", "fetch", "--quiet", GITHUB_REMOTE, "main", timeout=120)
+    if fetch.returncode != 0:
+        log(f"не удалось получить {GITHUB_REMOTE}/main: {(fetch.stderr or '').strip()[:160]}")
+        return
+    local = sh("git", "rev-parse", "HEAD").stdout.strip()
+    remote = sh("git", "rev-parse", f"{GITHUB_REMOTE}/main").stdout.strip()
+    if not remote or local == remote:
+        return
+    # Локальный main впереди удалённого — наш код не залит, обновлять нечем.
+    if sh("git", "merge-base", "--is-ancestor", remote, local).returncode == 0:
+        log(f"{GITHUB_REMOTE}/main отстаёт от локального main — не обновляю")
+        return
+    if sh("git", "status", "--porcelain").stdout.strip():
+        log("рабочее дерево грязное — не обновляю из GitHub")
+        return
+    merge = sh("git", "merge", "--ff-only", f"{GITHUB_REMOTE}/main", timeout=120)
+    if merge.returncode != 0:
+        log(f"fast-forward с GitHub не прошёл: {(merge.stderr or '').strip()[:160]}")
+        return
+    log(f"подтянут GitHub: {local[:8]} → {remote[:8]}")
 
 
 def telegram(text):
@@ -134,6 +172,10 @@ def main():
     if sh("git", "branch", "--show-current").stdout.strip() != "main":
         log("рабочее дерево не на main — выкладку пропускаю")
         return
+    # Источник правды — GitHub: подтянуть новый main ДО расчёта, что выкладывать.
+    # Если обновиться нельзя (грязное дерево, локальный main впереди) — работаем
+    # с локальным HEAD, как раньше: выкладка не должна вставать из-за сети.
+    sync_from_github()
     head = sh("git", "rev-parse", "HEAD").stdout.strip()
     deployed = state("deployed")
     if not deployed:

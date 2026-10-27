@@ -1,0 +1,33 @@
+{
+  "name": "TaskFlow — сервер и iOS-клиент",
+  "image": "mcr.microsoft.com/devcontainers/typescript:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers-contrib/features/docker-outside-of-docker:1": {}
+  },
+  "forwardPorts": [3001, 5180],
+  "portsAttributes": {
+    "3001": {
+      "label": "API TaskFlow",
+      "onAutoForward": "notify"
+    },
+    "5180": {
+      "label": "Веб-клиент (заморожен)",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "npm ci && npm ci --prefix server",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "typescript.enablePromptUseWorkspaceTsdk": true
+      }
+    }
+  },
+  "remoteUser": "node"
+}

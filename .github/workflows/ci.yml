@@ -1,0 +1,106 @@
+# CI сервера TaskFlow — проверки на GitHub.
+#
+# Правило проекта (AGENTS.md, 27.10.2026): на .110 витают живые сервисы,
+# полный набор тестов там не гонять (vitest без ограничения забирает все
+# ядра). Здесь — на отдельной машине GitHub — ограничение не нужно, но
+# `--maxWorkers` оставлен: лишние потоки на общих раннерах приводят к
+# таймаутам, а не к честному результату.
+#
+# Тесты изолированы: server/test/setup.ts поднимает отдельную БД во
+# временной папке (DB_PATH) и гасит сторожи, ходящие в боевые сервисы.
+# Боевые сервисы .110 прогон не трогает.
+#
+# ГЕЙТ — ПО РЕГРЕССИЯМ, А НЕ ПО ЦВЕТУ. У сервера своя красная база
+# (48 упавших файлов из 399 на снимке 28.10.2026) — она тянется давно и к
+# правкам отношения не имеет. Требовать «все зелёные» бессмысленно: прогоны
+# всегда красные, и CI перестаёт что-то значить. Тот же приём уже работает
+# для слияния ролей (server/src/lib/worktree/testGate.ts).
+name: CI — сервер TaskFlow
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: Типы (tsc --noEmit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Тесты читают файлы из рабочего дерева (scripts/role-routing.yaml
+          # и прочее) — нужен полный checkout содержимого коммита.
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+      # typescript лежит в корневом package.json (devDependencies) — tsc
+      # нужен и для сервера, поэтому ставим оба набора зависимостей.
+      - name: Установить зависимости (корень)
+        run: npm ci
+      - name: Установить зависимости (сервер)
+        run: npm ci --prefix server
+      - name: Проверить типы сервера
+        working-directory: server
+        run: npx tsc -p tsconfig.json --noEmit
+
+  test:
+    name: Тесты сервера (гейт по регрессиям)
+    runs-on: ubuntu-latest
+    needs: typecheck
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+      - name: Установить зависимости (корень)
+        run: npm ci
+      - name: Установить зависимости (сервер)
+        run: npm ci --prefix server
+      - name: Собрать сервер
+        working-directory: server
+        run: npx tsc -p tsconfig.json
+      - name: Прогнать тесты
+        working-directory: server
+        # Потолок потоков — по правилу проекта (AGENTS.md). Полный набор
+        # идёт долго, и лишние потоки на общем раннере дают таймауты.
+        # Вывод пишем в файл: его разбирает гейт (шаг ниже).
+        run: npx vitest run --maxWorkers=4 --reporter=dot 2>&1 | tee vitest-output.log
+      - name: Гейт — новые падения
+        working-directory: server
+        # Падает только если упали файлы, которых нет в эталоне
+        # (ci/baseline-failed-tests.json). Сама красная база — не провал.
+        run: node scripts/ci/test-gate.mjs vitest-output.log ci/baseline-failed-tests.json
+      - name: Сводка прогона
+        if: always()
+        working-directory: server
+        run: |
+          echo "### Итог прогона"
+          grep -E "Test Files|Tests  |Duration" vitest-output.log || true
+          echo
+          echo "### Файлы с падениями (для разбора)"
+          grep -oE "FAIL  test/[^ ]+\.test\.ts" vitest-output.log | sed 's/FAIL  //' | sort -u || true
+      - name: Выложить отчёт прогона
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-output
+          path: server/vitest-output.log
+          retention-days: 14
