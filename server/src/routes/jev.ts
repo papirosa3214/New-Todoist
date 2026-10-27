@@ -5,8 +5,10 @@
 //   PUT    /api/jev/settings  — сохранить (пустой apiKey ключ не стирает)
 //   DELETE /api/jev/settings  — сбросить всё и удалить ключ
 //   POST   /api/jev/test      — живая проверка сохранённого подключения
+//   GET    /api/jev/effectiveness — шаги с JEV против шагов без него
 import { readObservability, readJevUsage } from "../lib/contextObservability.js";
 import { currentJevKeyIdentity } from "../lib/jev.js";
+import { readJevEffectiveness } from "../lib/jevEffectiveness.js";
 import { startContextObservabilityWatcher } from "../lib/contextObservabilityWatcher.js";
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
@@ -31,6 +33,13 @@ export function registerJevRoutes(app: FastifyInstance): void {
     const window=req.query?.window??"24h";
     if(!["24h","3d","week","month"].includes(window))return reply.code(400).send({error:"invalid_window"});
     return url.endsWith("/usage")?readJevUsage(currentJevKeyIdentity(),window):readObservability(window);
+  });
+  // Эффективность по направлениям: шаги с JEV против шагов без него.
+  app.get("/api/jev/effectiveness",{preHandler:authOrApiToken},async(req:any,reply)=>{
+    if(!ownerOr403(req,reply))return;
+    const window=req.query?.window??"week";
+    if(!["24h","3d","week","month"].includes(window))return reply.code(400).send({error:"invalid_window"});
+    return readJevEffectiveness(window);
   });
   if(process.env.NODE_ENV!=="test"&&!process.env.VITEST){let stop=()=>{};app.addHook("onReady",async()=>{stop=startContextObservabilityWatcher();});app.addHook("onClose",async()=>stop());}
 
