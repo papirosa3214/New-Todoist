@@ -5005,6 +5005,13 @@ const migrations: Migration[] = [
       if (!cols.has(name)) db.exec(`ALTER TABLE jev_settings ADD COLUMN ${name} ${ddl}`);
     }
   } },
+  { id: "181_jev_thought_review", description: "JEV: разбор мыслей роли — непонимание, зацикливание, уход в сторону", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(jev_settings)").all() as {name:string}[]).map(c=>c.name));
+    // Включено сразу: владелец 27.10.2026 поручил направление в работу.
+    for (const [name, ddl] of Object.entries({thought_review_enabled:"INTEGER NOT NULL DEFAULT 1",thought_review_min_confidence:"REAL NOT NULL DEFAULT 0.7"})) {
+      if (!cols.has(name)) db.exec(`ALTER TABLE jev_settings ADD COLUMN ${name} ${ddl}`);
+    }
+  } },
   { id: "167_role_tool_gain_requests", description: "Заявки ролей на закрытые инструменты", up: () => db.exec(ROLE_TOOL_REQUEST_SCHEMA) },
   {
     // 24.10.2026 (аудит качества данных): каноническая учётка роли —

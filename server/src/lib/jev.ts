@@ -90,6 +90,7 @@ const SCENARIOS = [
   { flag: "skills_enabled", conf: null, key: "skills" },
   { flag: "report_review_enabled", conf: null, key: "reportReview" },
   { flag: "chat_intent_enabled", conf: "chat_intent_min_confidence", key: "chatIntent" },
+  { flag: "thought_review_enabled", conf: "thought_review_min_confidence", key: "thoughtReview" },
 ] as const;
 
 type ScenarioKey = (typeof SCENARIOS)[number]["key"];

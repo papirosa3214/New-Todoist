@@ -1,5 +1,6 @@
 import {reportReviewBlockForTask} from "../lib/jevAssist.js";
 import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
+import { reviewThoughts, thoughtNudge, REVIEW_EVERY, NUDGE_COOLDOWN } from "../lib/thoughtReviewJev.js";
 import { COMPACTION_SETTINGS, compactSessionSafely } from "./compactionFallback.js";
 import {oneShotReviewInstruction} from "../lib/integrationResponsibility.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
@@ -1691,6 +1692,31 @@ try {
   const availableToolNames = new Set<string>([...builtinTools.map((t: any) => t.name), ...customTools.map((t: any) => t.name)]);
   const missingLogged = new Set<string>();
   let lastAssistantThought = "";
+  // Разбор мыслей (JEV, владелец 27.10.2026): каждые REVIEW_EVERY ответов
+  // последние рассуждения уходят оценщику; непонимание, круг или уход в
+  // сторону получают конкретную подсказку прямо в ход. Не чаще раза за
+  // NUDGE_COOLDOWN ответов и без параллельных разборов.
+  const recentThoughts: string[] = [];
+  let thoughtCount = 0, lastNudgeAt = -NUDGE_COOLDOWN, reviewing = false;
+  const reviewRoleThoughts = (text: string) => {
+    recentThoughts.push(text);
+    if (recentThoughts.length > 4) recentThoughts.shift();
+    thoughtCount++;
+    if (reviewing || thoughtCount % REVIEW_EVERY || thoughtCount - lastNudgeAt < NUDGE_COOLDOWN) return;
+    reviewing = true;
+    const about = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title?: string; description?: string | null } | undefined;
+    const step = input.subtaskId ? ((db.prepare("SELECT title FROM subtasks WHERE id = ?").get(input.subtaskId) as { title?: string } | undefined)?.title ?? "") : "";
+    const task = [about?.title, about?.description].filter(Boolean).join("\n");
+    void reviewThoughts({ taskId, task, step, thoughts: [...recentThoughts] })
+      .then((state) => {
+        const nudge = state ? thoughtNudge(state, { task: about?.title ?? "", step }) : null;
+        if (!nudge) return;
+        lastNudgeAt = thoughtCount;
+        return runControl.steer(nudge);
+      })
+      .catch(() => {})
+      .finally(() => { reviewing = false; });
+  };
   const unsubscribeLive = session.subscribe((event: any) => {
     liveTurn.onEvent(event);
     if(event?.type==="message_start" && event.message?.role==="user"){
@@ -1704,7 +1730,10 @@ try {
       const text = event.message.content
         .map((c: any) => c?.type === "thinking" ? c.thinking : c?.type === "text" ? c.text : "")
         .filter(Boolean).join("\n").trim();
-      if (text) lastAssistantThought = text;
+      if (text) {
+        lastAssistantThought = text;
+        reviewRoleThoughts(text);
+      }
     }
     if(event?.type==="message_end" && runControl.unacknowledgedMessengerMessages.size){
       queueMicrotask(()=>{
