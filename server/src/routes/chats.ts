@@ -653,6 +653,8 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!closed && chat.archived_at)
         return reply.code(409).send({ error: "Убранный в архив чат вернуть нельзя" });
       db.prepare("UPDATE chats SET closed_at = CASE WHEN ? THEN COALESCE(closed_at, datetime('now')) ELSE NULL END WHERE id=?").run(closed ? 1 : 0, chat.id);
+      // Закрытая комната — ходы ролей в ней обрываем (владелец 27.10.2026).
+      if (closed) await stopRoomRuns(chat.id, "owner_close");
       // Ветка закрыта — её сводка уходит в комнату-родитель, к основной роли.
       const branch = db.prepare("SELECT branch_of_chat_id, title FROM chats WHERE id=?").get(chat.id) as
         | { branch_of_chat_id: string | null; title: string | null }
@@ -1542,6 +1544,22 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       }
     },
   );
+  // Оборвать ходы ролей в комнате: новое поколение сессии, старые доставки —
+  // в superseded, живые ходы — отмена (то же, что делает «Стоп»).
+  async function stopRoomRuns(chatId: string, reason: string, roleId?: string): Promise<number> {
+    const roles = roleId
+      ? [roleId]
+      : (db.prepare(`SELECT m.member_id AS id FROM chat_members m JOIN users u ON u.id=m.member_id
+          WHERE m.chat_id=? AND u.type='ai'`).all(chatId) as { id: string }[]).map((r) => r.id);
+    let stopped = 0;
+    for (const role of roles) {
+      const { generation } = bumpChatGeneration({ chatId, roleId: role, reason });
+      fencePairDeliveries({ chatId, roleId: role, generation });
+      stopped += await cancelChatRunsFor(chatId, role);
+    }
+    return stopped;
+  }
+
   // Стоп плана — не «пауза»: остановленный план новые пункты не принимает,
   // продолжить можно только новым планом. Живые ходы роли в этом чате гасим.
   app.post<{ Params: { id: string }; Body: { role_id?: unknown } }>(
@@ -1608,7 +1626,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // superseded — поздний ответ прежней Pi-сессии НЕ попадёт в
       // новую. Это критично, когда в чате висит ответ старой
       // модели и пользователь нажал «новая сессия».
-      bumpChatGeneration({ chatId, roleId, reason: "owner_new_session" });
+      // Идущий ход старой сессии обрываем, как «Стоп» (владелец 27.10.2026):
+      // иначе он доживал вхолостую, держал живую ленту комнаты, и новый ход
+      // получал немую — «думает» не показывалось до готового ответа.
+      await stopRoomRuns(chatId, "owner_new_session", roleId);
 
       const id = uid();
       db.prepare(
@@ -1787,6 +1808,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     if (isTaskTopic(chat) && !canArchiveTaskTopic(chat.task_id))
       return reply.code(409).send({ error: "Чат задачи в работе убрать нельзя" });
     archiveChat(chat.id);
+    await stopRoomRuns(chat.id, "owner_archive");
     return { ok: true, archived: true, chat: chatRow(chat.id) };
   };
 
