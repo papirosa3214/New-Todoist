@@ -3111,11 +3111,15 @@ async function deliverAgentReply(args: {
     });
   };
 
+  // Номер ответа выдаётся ДО хода (27.10.2026): клиент узнаёт его из
+  // chats:live:start, ответ ляжет в историю под ним же.
+  const plannedReplyId = uid();
   const live = startLiveTurn({
     chatId,
     userId: roleUserId,
     name: roleName,
     triggerMessageId: trigger.id,
+    messageId: plannedReplyId,
     audience: () => memberIds(chatId),
   });
 
@@ -3255,7 +3259,7 @@ async function deliverAgentReply(args: {
       storedRoleEnvelope=JSON.stringify(compacted.envelope);
       overflow=compacted.overflow;
     }
-    replyId = uid();
+    replyId = plannedReplyId;
     // Прерванный ответ помечается явно: stop_reason — почему ответ прерван,
     // partial — что ответ сохранён частично (карточка 252c400e, §2.1).
     const stopReason = cancelled

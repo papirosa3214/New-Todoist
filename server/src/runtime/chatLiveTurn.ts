@@ -19,7 +19,9 @@ import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 // открыть целиком после хода. `id`/`tool`/`status` у него есть нарочно —
 // клиент, который про размышления ещё не знает, разбирает его как шаг и не
 // роняет весь снимок.
+import crypto from "node:crypto";
 import { sourcedChatBlocks, type ChatBlock } from "../lib/chatBlocks.js";
+import { liveDeltaOps, type LiveView } from "./chatLiveDelta.js";
 import { broadcastToUsers } from "../ws.js";
 import { unwrapRoleEnvelopeText } from "../lib/roleContractV1.js";
 import { TurnFileTracker, type TurnCodeChanges } from "../lib/turnFileChanges.js";
@@ -53,7 +55,7 @@ function ioOutput(result: unknown): string | undefined {
 }
 
 export type LiveItem =
-  | { kind: "text"; text: string; blocks?: ChatBlock[] }
+  | { kind: "text"; id?: string; text: string; blocks?: ChatBlock[] }
   | {
       kind: "step";
       id: string;
@@ -83,6 +85,12 @@ export interface LiveTurnSnapshot {
   name: string;
   started_at: string;
   trigger_message_id?: string;
+  /** Ход дельтами (27.10.2026): id хода, номер ответа, выданный заранее
+   *  (null — не выдан), и последний разосланный номер дельты. Для
+   *  GET /api/chats/:id/live — с них клиент продолжает после обрыва. */
+  turn_id?: string;
+  message_id?: string | null;
+  seq?: number;
   items: LiveItem[];
   /** Роль сейчас думает (28.09.2026): последняя законченная фраза её
    *  размышлений, "" — думает, но фразы ещё нет; null — не думает. */
@@ -368,6 +376,12 @@ export class LiveTurn {
   readonly userId: string;
   readonly name: string;
   private readonly triggerMessageId?: string;
+  /** Ход дельтами: id хода, заранее выданный номер ответа, номер дельты и
+   *  последний разосланный клиенту вид хода. */
+  readonly turnId = crypto.randomUUID();
+  readonly messageId: string | null;
+  private seq = 0;
+  private sentView: LiveView | null = null;
   private readonly audience: () => string[];
   private readonly publish?: (turn: LiveTurnSnapshot | null) => void;
   private readonly startedAt = new Date();
@@ -395,6 +409,7 @@ export class LiveTurn {
     userId: string;
     name: string;
     triggerMessageId?: string;
+    messageId?: string | null;
     audience: () => string[];
     detached?: boolean;
     publish?: (turn: LiveTurnSnapshot | null) => void;
@@ -403,10 +418,24 @@ export class LiveTurn {
     this.userId = args.userId;
     this.name = args.name;
     this.triggerMessageId = args.triggerMessageId;
+    this.messageId = args.messageId ?? null;
     this.audience = args.audience;
     this.publish = args.publish;
     this.detached = args.detached ?? false;
     if (this.detached) this.closed = true;
+    if (!this.closed && !this.publish) {
+      broadcastToUsers(this.audience(), {
+        type: "chats:live:start",
+        chat_id: this.chatId,
+        user_id: this.userId,
+        turn_id: this.turnId,
+        message_id: this.messageId,
+        name: this.name,
+        started_at: this.startedAt.toISOString(),
+        ...(this.triggerMessageId ? { trigger_message_id: this.triggerMessageId } : {}),
+        seq: 0,
+      });
+    }
   }
 
   /** Событие рантайма роли. Всё незнакомое молча пропускаем. */
@@ -561,7 +590,7 @@ export class LiveTurn {
     if (last && last.kind === "text") {
       if (last.text.length < TEXT_MAX) last.text += delta;
     } else if (this.items.length < ITEMS_MAX) {
-      this.items.push({ kind: "text", text: delta });
+      this.items.push({ kind: "text", id: `text-${this.items.length}`, text: delta });
     }
     this.schedule(false);
   }
@@ -588,6 +617,7 @@ export class LiveTurn {
       name: this.name,
       started_at: this.startedAt.toISOString(),
       ...(this.triggerMessageId ? { trigger_message_id: this.triggerMessageId } : {}),
+      ...(this.publish ? {} : { turn_id: this.turnId, message_id: this.messageId, seq: this.seq }),
       items,
       thinking: this.thinkingItem
         ? lastThinkingPhrase(this.thinkingItem.text.slice(-THINKING_BUF_MAX))
@@ -612,11 +642,22 @@ export class LiveTurn {
     }
     if (this.closed) return;
     if (this.publish) { this.publish(this.snapshot()); return; }
-    broadcastToUsers(this.audience(), {
-      type: "chats:live",
+    const turn = liveTurnForClient(this.snapshot());
+    const audience = this.audience();
+    // Старый полный снимок — пока клиенты не переехали на дельты.
+    broadcastToUsers(audience, { type: "chats:live", chat_id: this.chatId, user_id: this.userId, turn });
+    const view: LiveView = { items: turn.items.map((it) => ({ ...it, id: (it as { id?: string }).id ?? "" })), thinking: turn.thinking };
+    const ops = liveDeltaOps(this.sentView, view);
+    if (!ops.length) return;
+    this.sentView = view;
+    this.seq += 1;
+    broadcastToUsers(audience, {
+      type: "chats:live:patch",
       chat_id: this.chatId,
       user_id: this.userId,
-      turn: liveTurnForClient(this.snapshot()),
+      turn_id: this.turnId,
+      seq: this.seq,
+      ops,
     });
   }
 
@@ -685,6 +726,15 @@ export class LiveTurn {
 
   private broadcastEnd(messageId: string | null): void {
     if (this.publish) { this.publish(null); return; }
+    this.seq += 1;
+    broadcastToUsers(this.audience(), {
+      type: "chats:live:end",
+      chat_id: this.chatId,
+      user_id: this.userId,
+      turn_id: this.turnId,
+      seq: this.seq,
+      message_id: messageId,
+    });
     broadcastToUsers(this.audience(), {
       type: "chats:live",
       chat_id: this.chatId,
@@ -721,6 +771,8 @@ export function startLiveTurn(args: {
   userId: string;
   name: string;
   triggerMessageId?: string;
+  /** Номер ответа роли, выданный до хода (27.10.2026). */
+  messageId?: string | null;
   audience: () => string[];
 }): LiveTurn {
   const key = keyOf(args.chatId, args.userId);

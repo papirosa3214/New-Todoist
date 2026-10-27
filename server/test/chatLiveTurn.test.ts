@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const sent: Array<{ ids: unknown; event: any }> = [];
 vi.mock("../src/ws.js", () => ({
   broadcastToUsers: vi.fn((ids: unknown, event: any) => {
+    // Дельты хода (chats:live:start/patch/end) проверяет chatLiveDelta.test.ts;
+    // здесь — прежний полный снимок chats:live.
+    if (String(event?.type ?? "").startsWith("chats:live:")) return;
     sent.push({ ids, event: JSON.parse(JSON.stringify(event)) });
   }),
 }));
