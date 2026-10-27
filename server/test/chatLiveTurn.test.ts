@@ -87,6 +87,26 @@ describe("живой ход", () => {
     expect(sent[2].event.turn.items[1].status).toBe("done");
   });
 
+  it("вызов инструмента — один шаг от toolcall_start до конца исполнения", () => {
+    const turn = newTurn();
+    // Pi в процессе: имя и id вызова лежат в partial.content[contentIndex].
+    turn.onEvent({ type: "message_update", assistantMessageEvent: { type: "toolcall_start", contentIndex: 0,
+      partial: { content: [{ type: "toolCall", id: "t1", name: "bash" }] } } });
+    expect(sent.at(-1)?.event.turn.items).toMatchObject([{ kind: "step", id: "t1", tool: "bash", status: "running" }]);
+    turn.onEvent(toolStart("t1", "bash", { command: "ls" }));
+    expect(sent.at(-1)?.event.turn.items).toHaveLength(1);
+    expect(sent.at(-1)?.event.turn.items[0]).toMatchObject({ id: "t1", status: "running", detail: "ls" });
+    turn.onEvent(toolEnd("t1"));
+    expect(sent.at(-1)?.event.turn.items).toMatchObject([{ id: "t1", status: "done" }]);
+  });
+
+  it("внешний агент: toolcall_start с id и toolName сверху", () => {
+    const turn = newTurn();
+    turn.onEvent({ type: "message_update", assistantMessageEvent: { type: "toolcall_start", id: "t2", toolName: "read" } });
+    turn.onEvent(toolStart("t2", "read", { path: "a" }));
+    expect(sent.at(-1)?.event.turn.items).toHaveLength(1);
+  });
+
   it("шаг несёт точные аргументы и ответ инструмента", () => {
     const turn = newTurn();
     turn.onEvent(toolStart("w1", "taskflow_work_plan", { items: [{ text: "a" }] }));

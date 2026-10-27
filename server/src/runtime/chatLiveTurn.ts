@@ -453,7 +453,7 @@ export class LiveTurn {
       args?: unknown;
       isError?: boolean;
       result?: unknown;
-      assistantMessageEvent?: { type?: string; delta?: string };
+      assistantMessageEvent?: { type?: string; delta?: string; id?: string; toolName?: string; contentIndex?: number; partial?: any };
     };
     const sub = e.type === "message_update" ? e.assistantMessageEvent?.type : undefined;
     if (sub && this.genStartedAt === null) this.genStartedAt = Date.now();
@@ -486,10 +486,41 @@ export class LiveTurn {
     } else if (sub === "text_delta") {
       this.endThinking();
       this.appendText(e.assistantMessageEvent?.delta ?? "");
-    } else if (e.type === "tool_execution_start" && e.toolName) {
+    } else if (sub === "toolcall_start") {
+      // Вызов инструмента — один поток, как TOOL_CALL_START/END в AG-UI
+      // (27.10.2026): шаг появляется, как только модель начала писать
+      // вызов, а tool_execution_start/end ведут тот же шаг дальше. Статус
+      // «running» — старые клиенты знают только running/done/error.
+      const ame = e.assistantMessageEvent ?? {};
+      const call = ame.partial?.content?.[ame.contentIndex ?? -1];
+      const id = ame.id ?? call?.id;
+      const toolName = ame.toolName ?? call?.name;
+      if (!id || !toolName || this.items.some((it) => it.kind === "step" && it.id === id)) return;
       this.endThinking();
       if (this.items.length >= ITEMS_MAX) return;
+      const presented = presentedToolCall(toolName, undefined);
+      this.items.push({
+        kind: "step",
+        id,
+        tool: presented.tool,
+        detail: stepDetail(presented.tool, presented.args),
+        args: ioArgs(presented.args),
+        status: "running",
+        started_at: new Date().toISOString(),
+      });
+      this.schedule(true);
+    } else if (e.type === "tool_execution_start" && e.toolName) {
+      this.endThinking();
       const presented=presentedToolCall(e.toolName,e.args);
+      const opened = e.toolCallId ? this.items.find((it) => it.kind === "step" && it.id === e.toolCallId) : undefined;
+      if (opened && opened.kind === "step") {
+        opened.tool = presented.tool;
+        opened.detail = stepDetail(presented.tool, presented.args);
+        opened.args = ioArgs(presented.args);
+        this.schedule(true);
+        return;
+      }
+      if (this.items.length >= ITEMS_MAX) return;
       this.items.push({
         kind: "step",
         id: e.toolCallId || `step-${this.items.length}`,
