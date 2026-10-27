@@ -9,7 +9,8 @@ import { deliverTopicToWork,slotWorkspace } from "./inProcessRun.js";
 import { getModelRuntime, resolveThinkingLevel } from "./PiRuntimeAdapter.js";
 import { createTaskResourceLoader } from "./instructionResources.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
-import { loadRoleRouting,providerOfModel,roleTitle,roleUserId } from "../roleRouting.js";
+import { loadRoleRouting,roleTitle,roleUserId } from "../roleRouting.js";
+import { findRuntimeModel } from "../lib/attemptModel.js";
 import db from "../db.js";
 
 type ConversationInput={taskId:string;subtaskId:string;role:string;chatId:string;messageId:string;prompt:string;onEvent?:(event:unknown)=>void;onStep?:(tool:string)=>void};
@@ -45,7 +46,7 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
     if(delivery!=="idle")return {sessionId:null,text:"",forwarded:true};
     const modelId=loadRoleRouting().models[input.role];
     const runtime:any=await getModelRuntime();
-    const model=runtime.getModel?.(providerOfModel(modelId),modelId) ?? ((await runtime.getAvailable?.())??[]).find((m:any)=>m.id===modelId);
+    const model=await findRuntimeModel(runtime,modelId);
     if(!model)throw new Error(`модель «${modelId}» недоступна`);
     const manager=openSlotSession(input.taskId,input.role,input.subtaskId,slotWorkspace(input.taskId));
     const cwd=manager.getCwd();

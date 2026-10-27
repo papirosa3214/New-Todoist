@@ -21,7 +21,8 @@ import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas }
 import { getModelRuntime, resolveThinkingLevel } from "./PiRuntimeAdapter.js";
 import { createTaskResourceLoader } from "./instructionResources.js";
 import { acquireDiscussionSession, openDiscussionSession } from "./slotSession.js";
-import { providerOfModel, loadRoleRouting, roleUserId } from "../roleRouting.js";
+import { loadRoleRouting, roleUserId } from "../roleRouting.js";
+import { findRuntimeModel } from "../lib/attemptModel.js";
 import db from "../db.js";
 import {
   TASK_DISCUSSION_MODE,
@@ -76,9 +77,7 @@ async function runDiscussionTurnInternal(input: DiscussionTurnInput): Promise<Di
   try {
     const modelId = loadRoleRouting().models[input.role];
     const runtime: any = await getModelRuntime();
-    const model =
-      runtime.getModel?.(providerOfModel(modelId), modelId) ??
-      ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === modelId);
+    const model = await findRuntimeModel(runtime, modelId);
     if (!model) return { ok: false, text: "", sessionId: null, error: `модель «${modelId}» недоступна` };
 
     const manager = openDiscussionSession(

@@ -57,3 +57,14 @@ export function recordAttemptModel(params: {
     )
     .run(params.modelId, params.provider, row.id).changes;
 }
+
+/** Модель роли в рантайме Pi по записи из routing. Запись «провайдер/модель»
+ *  разбирается: в каталоге id без приставки (владелец 27.10.2026 — обсуждение
+ *  карточки и беседа шага искали по полной записи и всегда получали
+ *  «модель недоступна»). */
+export async function findRuntimeModel(runtime: any, ref: string | undefined): Promise<any> {
+  if (!ref) return undefined;
+  const { provider, id } = parseModelRef(ref);
+  return runtime?.getModel?.(provider, id) ??
+    ((await runtime?.getAvailable?.()) ?? []).find((m: any) => m.id === id && (!m.provider || m.provider === provider));
+}
