@@ -6,7 +6,6 @@ import { ChatPreparationDeadline } from "./chatPreparationDeadline.js";
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
 import {ThrashGuard, stepDigest} from "./thrashGuard.js";
-import { COMPACTION_SETTINGS, compactSessionSafely } from "./compactionFallback.js";
 import {registerChatSteering,_resetChatSteeringForTests} from "./chatSteering.js";
 import {
   buildRoleToolCatalog,
@@ -1574,10 +1573,8 @@ async function startChatRunOnce(
         }),
         sessionManager,
         settingsManager: SettingsManager.inMemory({
-          // Явные пределы выжимки: короткий ответ (Pi берёт 0.8*reserveTokens)
-          // и небольшой оставленный хвост — иначе summarization-запрос
-          // раздувается и не укладывается в таймаут провайдера.
-          compaction: { ...COMPACTION_SETTINGS },
+          // Compaction uses Pi defaults and the actual model token window.
+          // Do not impose character limits or shorten the SDK summary template.
           retry: { enabled: true, maxRetries: 2 },
         }),
       } as any), resource => resource.session.dispose()));
@@ -1610,21 +1607,8 @@ async function startChatRunOnce(
     if (roleThinking && session.thinkingLevel !== roleThinking && typeof session.setThinkingLevel === "function") {
       session.setThinkingLevel(roleThinking);
     }
-    // Компактинг при возобновлении (владелец 24.10.2026): resumed-сессия чата
-    // грузит сырую историю вместе с прежними размышлениями — роль перечитывает
-    // их и закапывается. Сжимаем до первого промпта; на короткой истории SDK
-    // сам вернёт no-op (prepareCompaction пуст).
-    if (known) {
-      // Тяжёлая история (25.10.2026): запрос выжимки уходит одним большим
-      // текстом и падает по таймауну провайдера («Request timed out.») — раньше
-      // мы тогда шли дальше на сырой истории, и ход роли умирал уже на запросе
-      // к модели. Теперь историю ужимаем, а если выжимка не вышла — режем
-      // локально и продолжаем ход на небольшой истории.
-      await compactSessionSafely(session, {
-        label: `${role} chat ${input.chatId}`,
-        log: message => console.warn(message),
-      });
-    }
+    // Restoring a session is not a reason to compact. Pi checks the model's
+    // token window itself before prompts and between tool turns.
 
     const run: ActiveChatRun = {
       runId,
@@ -1761,15 +1745,9 @@ async function startChatRunOnce(
         }
       };
       if (input.compactOnly) {
-        // «Сжать» (владелец 20.10.2026): сжатие сохранённой сессии по кнопке.
-        // Тот же безопасный путь: тяжёлая история не должна ронять сжатие.
-        await Promise.race([
-          compactSessionSafely(session, {
-            label: `${role} chat ${input.chatId} (сжатие)`,
-            log: message => console.warn(message),
-          }),
-          armCeiling(),
-        ]);
+        // Manual compaction delegates to the SDK exactly once. A provider
+        // failure must not be replaced by a destructive local pseudo-summary.
+        await Promise.race([session.compact(), armCeiling()]);
       } else {
         await promptOnce(
           input.mode

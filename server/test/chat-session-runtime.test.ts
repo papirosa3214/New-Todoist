@@ -49,6 +49,7 @@ interface FakeSession {
   options: any;
   sessionId: string;
   prompt: ReturnType<typeof vi.fn>;
+  compact: ReturnType<typeof vi.fn>;
   steer: ReturnType<typeof vi.fn>;
   abort: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
@@ -61,6 +62,7 @@ const fakeSessions: FakeSession[] = [];
 let budgetPromptHook: ((session:FakeSession,index:number)=>Promise<void>)|null=null;
 /** Следующий prompt упадёт этой ошибкой. */
 let failNextPrompt: Error | null = null;
+let compactFailure: Error | null = null;
 const promptWaiters: WaiterSlot[] = [];
 /** Индексы сессий, у которых prompt должен зависнуть до releasePromptWaiter. */
 const blockedPromptIndexes = new Set<number>();
@@ -82,6 +84,7 @@ function makeFakeSession(options: any): FakeSession {
   let activeTools: string[] = [];
   const session: FakeSession = {
     options,
+    compact: vi.fn(async()=>{if(compactFailure)throw compactFailure;return {summary:"native summary"};}),
     sessionId: options?.sessionManager?.getSessionId?.() ?? `sess-${index + 1}`,
     prompt: vi.fn(async () => {
       if(budgetPromptHook)await budgetPromptHook(session,index);
@@ -169,6 +172,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   budgetPromptHook=null;
+  compactFailure=null;
   fakeSessions.length = 0;
   promptWaiters.length = 0;
   blockedPromptIndexes.clear();
@@ -188,6 +192,46 @@ afterEach(async () => {
 });
 
 describe("startChatRun (ход чата внутри сервера)", () => {
+
+  it("native compaction uses SDK token defaults instead of character limits",async()=>{
+    const sdk=await vi.importActual<any>("@earendil-works/pi-coding-agent");
+    const expected=sdk.SettingsManager.inMemory().getCompactionSettings();
+    await startChatRun({chatId:"chat-direct",role:"architect",roleId:"role_architect",prompt:"hello"});
+    expect(fakeSessions[0].options.settingsManager.getCompactionSettings()).toEqual(expected);
+  });
+
+  async function savedSession(large=false){
+    const first=await startChatRun({chatId:"chat-direct",role:"architect",roleId:"role_architect",prompt:"hello"});
+    const manager=fakeSessions[0].options.sessionManager;
+    manager.appendMessage({role:"user",content:[{type:"text",text:large?"x".repeat(150000):"user request"}],timestamp:Date.now()-1000});
+    manager.appendMessage({role:"assistant",content:[{type:"text",text:"answer"}],api:"openai-completions",
+      provider:liveCatalogEntryOf("architect").provider,model:liveCatalogEntryOf("architect").id,
+      usage:{input:40000,output:10,cacheRead:0,cacheWrite:0,totalTokens:40010,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},stopReason:"stop",timestamp:Date.now()});
+    return first.sessionId!;
+  }
+
+  it("native compaction resumes a 150k-character history without an eager cut",async()=>{
+    const sessionId=await savedSession(true);
+    await startChatRun({chatId:"chat-direct",role:"architect",roleId:"role_architect",prompt:"continue",sessionId});
+    const resumed=fakeSessions[1];
+    expect((resumed as any).compact).not.toHaveBeenCalled();
+    expect(resumed.options.sessionManager.getEntries().filter((e:any)=>e.type==="compaction")).toHaveLength(0);
+    const original=resumed.options.sessionManager.buildSessionContext().messages.find((m:any)=>m.role==="user");
+    expect(original.content[0].text).toHaveLength(150000);
+  });
+
+  it("native compaction button invokes SDK compact exactly once",async()=>{
+    const sessionId=await savedSession();
+    await startChatRun({chatId:"chat-direct",role:"architect",roleId:"role_architect",prompt:"",sessionId,compactOnly:true});
+    expect((fakeSessions[1] as any).compact).toHaveBeenCalledExactlyOnceWith();
+    expect(fakeSessions[1].prompt).not.toHaveBeenCalled();
+  });
+
+  it("native compaction failure propagates without a destructive local summary",async()=>{
+    compactFailure=new Error("Connection error.");
+    await expect(startChatRun({chatId:"chat-direct",role:"architect",roleId:"role_architect",prompt:"",compactOnly:true})).rejects.toThrow("Connection error.");
+    expect(fakeSessions[0].options.sessionManager.getEntries().filter((e:any)=>e.type==="compaction")).toHaveLength(0);
+  });
   it("explicit session thinking overrides the role policy in a new SDK session",async()=>{
     const entry = CATALOG.find(m => m.id === liveCatalogEntryOf("architect").id && m.provider === liveCatalogEntryOf("architect").provider)!;
     const prior = {...entry};
