@@ -1391,6 +1391,26 @@ def _vault_read(name: str) -> str:
     return r.stdout.strip()
 
 
+def _exa_search(query: str, n: int, key: str):
+    # С .110 напрямую Exa отвечает 403 от Cloudflare (блок по IP) — ходим
+    # через xray-claude, как к остальным зарубежным API.
+    import requests
+    proxy = "http://127.0.0.1:10811"
+    resp = requests.post(
+        "https://api.exa.ai/search",
+        json={"query": query, "numResults": n, "contents": {"highlights": True}},
+        headers={"x-api-key": key},
+        proxies={"http": proxy, "https": proxy},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return [
+        {"title": r.get("title"), "url": r.get("url"),
+         "snippet": " … ".join(r.get("highlights") or []) or (r.get("text") or "")[:500]}
+        for r in (resp.json().get("results") or [])
+    ]
+
+
 def _tavily_search(query: str, n: int, key: str):
     import requests
     resp = requests.post(
@@ -1422,7 +1442,7 @@ def _brave_search(query: str, n: int, key: str):
 
 
 def t_web_search(args):
-    """Найти в интернете: Tavily, при недоступности — Brave. Возвращает список
+    """Найти в интернете: Exa, при недоступности — Tavily, затем Brave. Возвращает список
     результатов со ссылками; текст страницы потом бери через taskflow_web_get."""
     global _TAVILY_USABLE
     query = str(args.get("query") or "").strip()
@@ -1430,6 +1450,13 @@ def t_web_search(args):
         raise TaskFlowError("нужен query")
     n = max(1, min(int(args.get("max_results") or 5), 10))
     errors = []
+
+    try:
+        key = _vault_read("EXA_API_KEY")
+        results = _exa_search(query, n, key)
+        return {"query": query, "provider": "exa", "results": results}
+    except Exception as e:  # noqa: BLE001
+        errors.append(f"exa: {e}")
 
     if _TAVILY_USABLE:
         try:
