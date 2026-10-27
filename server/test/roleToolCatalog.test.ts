@@ -70,6 +70,20 @@ it("отказ «инструмент не подключён» не роняе�
  const invalid=db.prepare("SELECT COUNT(*) AS n FROM role_tool_audit WHERE run_id='not-connected' AND error_code='INVALID_ARGUMENTS'").get() as {n:number};
  expect(invalid.n).toBe(0);
 });
+it("отказ самого сервера (уточнение посреди хода, режим планирования) не считается неверным вызовом",()=>{
+ const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"server-refusal"});
+ const target=catalog.registeredNames.find((name:string)=>name!=="taskflow_tools")!;
+ const reasons=[
+  "Действие не начато: поступило уточнение. Сначала учти новое сообщение, затем заново выбери нужные действия.",
+  "Планирование: разрешены только инструменты чтения. Для выполнения выберите режим Работа.",
+ ];
+ for(let i=0;i<4;i++){
+  const text=reasons[i%2];
+  expect(catalog.onToolExecutionEnd({type:"tool_execution_end",toolCallId:"refused-"+i,toolName:target,isError:true,result:{content:[{type:"text",text}]}})).toBe(false);
+ }
+ const invalid=db.prepare("SELECT COUNT(*) AS n FROM role_tool_audit WHERE run_id=? AND error_code=?").get("server-refusal","INVALID_ARGUMENTS") as {n:number};
+ expect(invalid.n).toBe(0);
+});
 it("автоподключение возвращает операцию в активный набор",()=>{
  const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"auto-connect"});
  const target=inactiveTarget(catalog);

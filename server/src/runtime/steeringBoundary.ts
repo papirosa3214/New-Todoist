@@ -1,3 +1,4 @@
+import {STEERING_REFUSAL} from "./serverRefusal.js";
 /** SDK drains steering after a tool batch. Defer not-yet-started calls so
  * the next model request can reconsider them with the new user message.
  * Every original toolCall still receives a result; no transcript holes.
@@ -11,10 +12,10 @@ export function installSteeringBoundary(session: any): void {
  const before=agent.beforeToolCall;
  agent.toolExecution="sequential";
  agent.beforeToolCall=async (...args:any[])=>{
-  if(session.getSteeringMessages().length)return {block:true,reason:"Действие не начато: поступило уточнение. Сначала учти новое сообщение, затем заново выбери нужные действия."};
+  if(session.getSteeringMessages().length)return {block:true,reason:STEERING_REFUSAL};
   const result=await before?.apply(agent,args);
   // A message may arrive while an existing async access/extension hook runs.
-  if(!result?.block && session.getSteeringMessages().length)return {block:true,reason:"Действие не начато: поступило уточнение. Сначала учти новое сообщение, затем заново выбери нужные действия."};
+  if(!result?.block && session.getSteeringMessages().length)return {block:true,reason:STEERING_REFUSAL};
   return result;
  };
 }

@@ -1,6 +1,7 @@
 import {chatExecutionMode,type ChatExecutionMode} from "./chatExecutionMode.js";
 import {roleHostAccessTools} from "./roleHostAccess.js";
 import {createHostRoleTools} from "./hostRoleTools.js";
+import {isServerRefusal} from "./serverRefusal.js";
 import {taskflowTools} from "./inProcessRun.js";
 import {roleToolAllowed} from "../lib/roleToolScope.js";
 import {roleUserId} from "../roleRouting.js";
@@ -91,6 +92,8 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
    return false;
   }
   if(!tool)return false;
+  // Отказ самого сервера — вызов верный, ошибкой роли не считается.
+  if(isServerRefusal(text))return false;
   const issue=parseSchemaIssue(text);
   const reason="SDK отклонил вызов до выполнения";
   recordToolAudit({...context,action:"invoke",tool:tool.name,operation:tool.name,outcome:"error",errorCode:"INVALID_ARGUMENTS",errorMessage:reason,errorField:issue?.field,errorExpected:issue?.expected});
