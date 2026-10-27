@@ -21,12 +21,12 @@ export type LiveDeltaOp =
 /** Поля шага, которые меняются по ходу. */
 const UPDATABLE = ["tool", "detail", "status", "args", "output", "started_at", "ended_at"];
 
-/** Состав блоков без растущей прозы в хвосте: её клиент дописывает сам из
- *  text_append, пересылать блоки ради неё — тот же полный текст заново. */
+/** Разметка куска пересылается при любой смене, включая рост прозы
+ *  (владелец 27.10.2026): экран рисует текст по последней разметке, и без
+ *  неё дописанное оставалось за кадром — «Добавляю кнопку «показать» и
+ *  тишина». Сам текст по-прежнему идёт добавками. */
 function blockShape(blocks: unknown[] | undefined): string {
-  const list = blocks ?? [];
-  return JSON.stringify(list.map((b, i) =>
-    i === list.length - 1 && (b as { type?: string })?.type === "doc" ? { type: "doc" } : b));
+  return JSON.stringify(blocks ?? []);
 }
 
 export function liveDeltaOps(prev: LiveView | null, next: LiveView): LiveDeltaOp[] {

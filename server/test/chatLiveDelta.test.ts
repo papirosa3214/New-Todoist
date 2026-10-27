@@ -37,15 +37,15 @@ describe("расчёт операций", () => {
     expect(liveDeltaOps({ items: [step], thinking: null }, { items: [{ ...step, status: "done", ended_at: "b", output: "ok" }], thinking: null }))
       .toEqual([{ op: "item_update", item_id: "s1", fields: { status: "done", ended_at: "b", output: "ok" } }]);
   });
-  it("blocks — только при смене состава, рост прозы в хвосте не пересылает", () => {
+  it("blocks — при любой их смене, включая рост прозы: иначе экран рисует обрезанное начало", () => {
+    // Владелец 27.10.2026: «Добавляю кнопку «показать» — и тишина»: разметка
+    // осталась от первого куска текста, а дописанное не попало на экран.
     const doc = (s: string) => ({ type: "doc", doc: { text: s }, chars: s.length, source: s });
     const a = { id: "x0", kind: "text", text: "Ab", blocks: [doc("Ab")] };
     const b = { id: "x0", kind: "text", text: "Abc", blocks: [doc("Abc")] };
-    expect(liveDeltaOps({ items: [a], thinking: null }, { items: [b], thinking: null })).toEqual([{ op: "text_append", item_id: "x0", text: "c" }]);
-    const table = { type: "table", header: [], align: [], rows: [], chars: 0, source: "|a|" };
-    const c = { ...b, text: "Abc\n|a|", blocks: [doc("Abc"), table] };
-    expect(liveDeltaOps({ items: [b], thinking: null }, { items: [c], thinking: null }))
-      .toEqual([{ op: "text_append", item_id: "x0", text: "\n|a|" }, { op: "blocks", item_id: "x0", blocks: c.blocks }]);
+    expect(liveDeltaOps({ items: [a], thinking: null }, { items: [b], thinking: null }))
+      .toEqual([{ op: "text_append", item_id: "x0", text: "c" }, { op: "blocks", item_id: "x0", blocks: b.blocks }]);
+    expect(liveDeltaOps({ items: [b], thinking: null }, { items: [b], thinking: null })).toEqual([]);
   });
   it("фраза размышлений — thinking", () => {
     expect(liveDeltaOps({ items: [], thinking: null }, { items: [], thinking: "Смотрю" })).toEqual([{ op: "thinking", phrase: "Смотрю" }]);
@@ -63,7 +63,8 @@ describe("рассылка хода", () => {
     const patches = of("chats:live:patch");
     expect(patches.map((p) => p.seq)).toEqual([1, 2]);
     expect(patches[0].ops[0]).toMatchObject({ op: "item_add", item: { kind: "text", text: "При" } });
-    expect(patches[1].ops).toEqual([{ op: "text_append", item_id: patches[0].ops[0].item.id, text: "вет" }]);
+    expect(patches[1].ops[0]).toEqual({ op: "text_append", item_id: patches[0].ops[0].item.id, text: "вет" });
+    expect(patches[1].ops.slice(1).map((o: any) => o.op)).toEqual(["blocks"]);
     expect(of("chats:live")).toHaveLength(2);
     live.finish({ deferAnnounce: true });
     expect(of("chats:live:end")).toHaveLength(0);
