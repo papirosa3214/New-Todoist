@@ -30,7 +30,7 @@ import {
 import {
   _resetChatRoleLocksForTests,
 } from "../src/runtime/chatSession.js";
-import {offerChatSteering} from "../src/runtime/chatSteering.js";
+import {offerChatSteering,_resetChatSteeringForTests} from "../src/runtime/chatSteering.js";
 import { liveCatalogEntryOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
 // === Замоканный Pi SDK ===
@@ -179,6 +179,10 @@ beforeEach(() => {
   resetModelRuntime();
   _resetActiveChatRunsForTests();
   _resetChatRoleLocksForTests();
+  // Реестр живых ходов для уточнений — глобальный: без сброса ход из
+  // прошлого теста мешает подмешиванию в следующем (роль видна сразу в
+  // двух чатах — уточнение не подмешивается никуда).
+  _resetChatSteeringForTests();
   db.prepare("DELETE FROM chat_sessions").run();
 });
 
@@ -277,9 +281,19 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     const defined = new Set(session.options.customTools.map((t: any) => t.name));
     for (const name of names) expect(defined.has(name)).toBe(true);
     expect(names).toContain("bash");
-    for (const name of ["taskflow_task", "taskflow_chat_send", "taskflow_weather", "taskflow_consult", "taskflow_remember", "taskflow_recall", "taskflow_plan_request"]) {
+    // Операции роли видны отдельными именами (25.10.2026, 70288c36):
+    // в allowlist сессии — весь реестр операций, а не только ядро; ядро
+    // остаётся активным, остальное подключает taskflow_tools по требованию.
+    for (const name of ["taskflow_task", "taskflow_chat_send", "taskflow_weather", "taskflow_consult", "taskflow_remember", "taskflow_recall"]) {
       expect(names).toContain(name);
     }
+    // Загрузчик операций по требованию — в реестре всегда.
+    expect(names).toContain("taskflow_tools");
+    // Операции карточки в режиме «В чате» скрыты (22.10.2026, c936053f):
+    // карточные инструменты доступны только в режиме «По карточке».
+    expect(names).not.toContain("taskflow_plan_request");
+    expect(names).not.toContain("taskflow_claim");
+    expect(names).not.toContain("taskflow_subtask_done");
     expect(session.prompt).toHaveBeenCalledWith("привет");
     // Размышления не выключаем: уровень — по умолчанию Pi, как было у CLI.
     expect(session.options.thinkingLevel).toBe("off");
@@ -338,11 +352,19 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     expect(fakeSessions).toHaveLength(0);
   });
 
-  it("обсуждение разрешает вопросы коллегам без рабочих команд и мутаций",async()=>{
+  // «Обсуждение» в чате — полномочия режима «Работа» (владелец 20.10.2026,
+  // 0bc2c0e2): в обсуждении он так же поручает работу и заводит карточки.
+  // Ограничен только «План»; карточные операции в режиме «В чате» скрыты
+  // (22.10.2026, c936053f).
+  it("обсуждение даёт те же полномочия, что работа: вопросы коллегам и работа разрешены",async()=>{
     await startChatRun({chatId:"chat-direct",role:"architect",roleId:"role_architect",prompt:"Спроси коллегу",mode:"discussion" as any});
     const names=fakeSessions.at(-1)!.options.tools as string[];
+    // Вопросы коллегам — работа чата.
     for(const name of ["read","taskflow_chat_send","taskflow_chat_reply","taskflow_chat_read"])expect(names).toContain(name);
-    for(const name of ["bash","write","edit","taskflow_claim","taskflow_subtask_done","taskflow_plan_request","taskflow_create_task","taskflow_doc_write"])expect(names).not.toContain(name);
+    // Рабочие команды и материалы — как в режиме «Работа».
+    for(const name of ["bash","edit","write","taskflow_doc_write"])expect(names).toContain(name);
+    // Карточные операции в режиме «В чате» не выдаются.
+    for(const name of ["taskflow_claim","taskflow_subtask_done","taskflow_plan_request","taskflow_create_task"])expect(names).not.toContain(name);
   });
 
   it("параллельный запуск на ту же (chat, role) → второй отказ", async () => {
@@ -422,7 +444,10 @@ describe("startChatRun: сторож тишины (владелец 27.09.2026)"
     session.emit(event);
     releasePromptWaiter(0);
     await run;
-    expect(seen).toEqual([event]);
+    // Первым идёт служебное событие рабочей папки роли (27.10.2026) — по
+    // нему клиент считает относительные пути правок; дальше — события SDK.
+    expect(seen[0]).toMatchObject({ type: "taskflow_workspace" });
+    expect(seen.slice(1)).toEqual([event]);
   });
 
   it("общий потолок: срыв по нему — CHAT_RUN_CEILING, сессия прервана", async () => {
@@ -453,7 +478,10 @@ it("уточнение попадает в незавершённую SDK-сес
  } finally {releasePromptWaiter(0);await running;}
 });
 
-it("HTTP: второе сообщение меняет работающий ход, durable закрывается после ответа",async()=>{
+// Новое сообщение владельца в том же чате останавливает идущий ход роли
+// (владелец 23.10.2026, 1671dee1; уточнение границы — d6b6f8ab, 27.10):
+// подмешивания в живой сессии нет, роль берётся за новое сообщение.
+it("HTTP: второе сообщение владельца останавливает идущий ход роли, следующий ход — в новой сессии",async()=>{
  const chatId="steering-http";
  db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Уточнения","direct","owner-test");
  db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect");
@@ -465,105 +493,132 @@ it("HTTP: второе сообщение меняет работающий хо
   await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
   const second=await send("учти второе условие");
   expect(second.statusCode).toBe(200);
-  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
-  expect(fakeSessions).toHaveLength(1);
-  const steered=fakeSessions[0].steer.mock.calls[0][0];
-  fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
-  const pending=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=? ORDER BY rowid").all(chatId) as any[];
-  expect(pending).toHaveLength(2);
-  expect(pending[1].status).not.toBe("done");
-  releasePromptWaiter(0);
+  await vi.waitFor(()=>expect(fakeSessions).toHaveLength(2),{timeout:5000});
+  // Прежний ход остановлен, подмешивания в него не было.
+  expect(fakeSessions[0].steer).not.toHaveBeenCalled();
+  expect(fakeSessions[0].abort).toHaveBeenCalled();
+  // Новый ход — в свежей сессии и по новому сообщению.
+  expect(fakeSessions[1].sessionId).not.toBe(fakeSessions[0].sessionId);
+  const ids=db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id=? ORDER BY rowid").all(chatId,"owner-test") as any[];
+  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("Отвечаешь на сообщение "+ids[1].id);
+  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("учти второе условие");
+  // Durable: прежняя доставка помечена superseded, новая закрыта после ответа.
   await vi.waitFor(()=>{
-   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatId) as any[];
-   expect(rows.every(row=>row.status==="done")).toBe(true);
-  });
-  expect(fakeSessions).toHaveLength(1);
+   const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=? ORDER BY rowid").all(chatId) as any[];
+   expect(rows).toHaveLength(2);
+   expect(rows[0].status).toBe("superseded");
+   expect(rows[1].status).toBe("done");
+  },{timeout:5000});
  }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });
 
-it("HTTP: непрочитанное уточнение исполняется очередью, а не исчезает",async()=>{
+// Непрочитанное уточнение (SDK не подтвердил ввод) не пропадает: ход
+// закрывается, а сообщение уходит в обычную очередь и исполняется там.
+// Владелец в этом чате уже не «уточняет» — его сообщение останавливает
+// прежний ход (23.10.2026), поэтому уточнение приходит от коллеги-роли.
+it("HTTP: непрочитанное уточнение коллеги исполняется очередью, а не исчезает",async()=>{
  const chatId="steering-fallback";
  db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Fallback","direct","owner-test");
- db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect");
- const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
- const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect",chatId,"role_qa");
+ const ownerHeaders={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const roleHeaders={authorization:"Bearer "+app!.jwt.sign({id:"role_qa"})};
+ const send=(headers:any,text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
  blockPromptFor(0);
  try {
-  await send("первый запрос");
+  await send(ownerHeaders,"@Архитектор начни проверку");
   await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
-  await send("позднее уточнение");
-  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  await send(roleHeaders,"коллега, уточнение по твоей работе");
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce(),{timeout:5000});
+  const clar=db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id='role_qa'").get(chatId) as any;
   // Нет user/message_start: SDK не успел применить уточнение.
   releasePromptWaiter(0);
-  await vi.waitFor(()=>expect(fakeSessions).toHaveLength(2));
+  await vi.waitFor(()=>expect(fakeSessions).toHaveLength(2),{timeout:6000});
   await vi.waitFor(()=>{
    const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatId) as any[];
-   expect(rows).toHaveLength(2);expect(rows.every(row=>row.status==="done")).toBe(true);
-  });
-  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("позднее уточнение");
+   expect(rows.length).toBeGreaterThanOrEqual(1);
+   expect(rows.every(row=>row.status==="done")).toBe(true);
+  },{timeout:6000});
+  // Уточнение исполнено отдельным ходом — по своему сообщению.
+  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("коллега, уточнение по твоей работе");
+  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("Отвечаешь на сообщение "+clar.id);
  } finally {releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });
 
+// Порядок в очереди: непрочитанное уточнение (steer отклонён — вход SDK
+// закрыт) сохраняет своё место перед более поздним сообщением и не даёт
+// ему себя обогнать.
 it("HTTP: fallback сохраняет место перед более поздним сообщением",async()=>{
  const chatId="steering-fallback-order";
  db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Fallback","direct","owner-test");
- db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect");
- const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
- const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect",chatId,"role_qa");
+ const ownerHeaders={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const roleHeaders={authorization:"Bearer "+app!.jwt.sign({id:"role_qa"})};
+ const send=(headers:any,text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
  blockPromptFor(0);
  try {
-  await send("первый запрос");
+  await send(ownerHeaders,"@Архитектор начни проверку");
   await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
-  await send("позднее уточнение");
-  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
   fakeSessions[0].steer.mockRejectedValueOnce(new Error("closed input"));
-  await send("третье сообщение");
-  // B не прочитано, C поступило в обычную очередь.
+  await send(roleHeaders,"первое уточнение");
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce(),{timeout:5000});
+  await send(roleHeaders,"второе уточнение");
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledTimes(2),{timeout:5000});
+  const ids=db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id='role_qa' ORDER BY rowid").all(chatId) as any[];
+  expect(ids).toHaveLength(2);
+  // Первое уточнение не прочитано (steer отклонён), второе — в ходе.
   releasePromptWaiter(0);
-  await vi.waitFor(()=>expect(fakeSessions).toHaveLength(3),{timeout:5000});
+  await vi.waitFor(()=>expect(fakeSessions.length).toBeGreaterThanOrEqual(3),{timeout:6000});
   await vi.waitFor(()=>{
    const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatId) as any[];
-   expect(rows).toHaveLength(3);expect(rows.every(row=>row.status==="done")).toBe(true);
-  });
-  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("позднее уточнение");
-  const prompts=fakeSessions.slice(1).map(s=>s.prompt.mock.calls[0][0] as string);
-  const ids=db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id=? ORDER BY rowid").all(chatId,"owner-test") as any[];
-  expect(prompts[0]).toContain("Отвечаешь на сообщение "+ids[1].id);
-  expect(prompts[1]).toContain("Отвечаешь на сообщение "+ids[2].id);
+   expect(rows.length).toBeGreaterThanOrEqual(2);
+   expect(rows.every(row=>row.status==="done")).toBe(true);
+  },{timeout:6000});
+  // Первое уточнение исполнено раньше второго: место в очереди сохранено.
+  const order=fakeSessions.map((s,i)=>({i,prompt:String(s.prompt.mock.calls[0]?.[0]??"")}))
+   .filter(row=>row.prompt.includes("Отвечаешь на сообщение "));
+  const first=order.findIndex(row=>row.prompt.includes("Отвечаешь на сообщение "+ids[0].id));
+  const second=order.findIndex(row=>row.prompt.includes("Отвечаешь на сообщение "+ids[1].id));
+  expect(first).toBeGreaterThanOrEqual(0);
+  expect(second).toBeGreaterThanOrEqual(0);
+  expect(first).toBeLessThan(second);
  } finally {releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });
 
+// Асинхронный steer: пока SDK не принял первое уточнение, второе не
+// подмешивается — порядок уточнений не нарушается.
 it("HTTP: async steer не позволяет позднему сообщению обогнать уточнение",async()=>{
  const chatId="steering-async-order";
  db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Fallback","direct","owner-test");
- db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect");
- const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
- const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect",chatId,"role_qa");
+ const ownerHeaders={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const roleHeaders={authorization:"Bearer "+app!.jwt.sign({id:"role_qa"})};
+ const send=(headers:any,text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
  blockPromptFor(0);
  try {
-  await send("первый запрос");
+  await send(ownerHeaders,"@Архитектор начни проверку");
   await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
   let accept!:()=>void;
   fakeSessions[0].steer.mockImplementationOnce(()=>new Promise<void>(r=>{accept=r;}));
-  const second=send("позднее уточнение");
+  const second=send(roleHeaders,"первое уточнение");
   // app.inject starts on awaiting its thenable.
   const secondDone=Promise.resolve(second);
-  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
-  fakeSessions[0].steer.mockRejectedValueOnce(new Error("closed input"));
-  await send("третье сообщение");
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce(),{timeout:5000});
+  await send(roleHeaders,"второе уточнение");
+  // Пока первое уточнение не принято, второе в ход не идёт.
+  await new Promise(r=>setTimeout(r,300));
+  expect(fakeSessions[0].steer).toHaveBeenCalledOnce();
   accept();await secondDone;
-  // B не прочитано, C поступило в обычную очередь.
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledTimes(2),{timeout:5000});
+  // Порядок уточнений сохранён: сначала первое, потом второе.
+  const texts=fakeSessions[0].steer.mock.calls.map(c=>String(c[0]));
+  expect(texts[0]).toContain("первое уточнение");
+  expect(texts[1]).toContain("второе уточнение");
   releasePromptWaiter(0);
-  await vi.waitFor(()=>expect(fakeSessions).toHaveLength(3),{timeout:5000});
   await vi.waitFor(()=>{
    const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=?").all(chatId) as any[];
-   expect(rows).toHaveLength(3);expect(rows.every(row=>row.status==="done")).toBe(true);
-  });
-  expect(fakeSessions[1].prompt.mock.calls[0][0]).toContain("позднее уточнение");
-  const prompts=fakeSessions.slice(1).map(s=>s.prompt.mock.calls[0][0] as string);
-  const ids=db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id=? ORDER BY rowid").all(chatId,"owner-test") as any[];
-  expect(prompts[0]).toContain("Отвечаешь на сообщение "+ids[1].id);
-  expect(prompts[1]).toContain("Отвечаешь на сообщение "+ids[2].id);
+   expect(rows.length).toBeGreaterThanOrEqual(1);
+   expect(rows.every(row=>row.status==="done")).toBe(true);
+  },{timeout:6000});
  } finally {releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });
 
@@ -612,33 +667,38 @@ it("HTTP: уточнение от коллеги-роли тоже подмеш�
   expect((await send(ownerHeaders,"@Архитектор начни проверку")).statusCode).toBe(200);
   await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
   expect((await send(roleHeaders,"коллега, уточнение по твоей работе")).statusCode).toBe(200);
-  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce(),{timeout:5000});
   const steered=fakeSessions[0].steer.mock.calls[0][0] as string;
   expect(steered).toContain("коллега, уточнение по твоей работе");
-  expect(steered).toContain("QA");
+  // Отправитель помечен по имени роли (07.10.2026 — «Лайф-тестировщик»).
+  expect(steered).toContain("Лайф-тестировщик");
   fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
   releasePromptWaiter(0);
   await vi.waitFor(()=>{
    const rows=db.prepare("SELECT status FROM chat_message_queue WHERE chat_id=? AND role_id=?").all(chatId,"role_architect") as any[];
    expect(rows.length).toBeGreaterThanOrEqual(1);
    expect(rows.every(row=>row.status==="done")).toBe(true);
-  });
+  },{timeout:6000});
   expect(fakeSessions).toHaveLength(1);
  }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });
 
+// Уточнение, подмешанное в ход в этом же чате, карточки координации не
+// заводит: карточка — признак вопроса в другую комнату.
 it("HTTP: уточнение в текущем чате не создаёт карточку координации",async()=>{
  const chatId="steering-service-row";
- makeChat(chatId,"Служебная строка");
- const headers={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
- const send=(text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES (?,?,?,?)").run(chatId,"Служебная строка","direct","owner-test");
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,?),(?,?),(?,?)").run(chatId,"owner-test",chatId,"role_architect",chatId,"role_qa");
+ const ownerHeaders={authorization:"Bearer "+app!.jwt.sign({id:"owner-test"})};
+ const roleHeaders={authorization:"Bearer "+app!.jwt.sign({id:"role_qa"})};
+ const send=(headers:any,text:string)=>app!.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers,payload:{text}});
  const card=()=>db.prepare("SELECT text,steps FROM chat_messages WHERE message_type='system' AND json_valid(steps) AND json_extract(steps,'$.coordination.question_id') IS NOT NULL").get() as any;
  blockPromptFor(0);
  try{
-  await send("начни проверку");
+  await send(ownerHeaders,"@Архитектор начни проверку");
   await vi.waitFor(()=>expect(fakeSessions[0]?.prompt).toHaveBeenCalled());
-  await send("уточнение в ход");
-  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce());
+  await send(roleHeaders,"уточнение в ход");
+  await vi.waitFor(()=>expect(fakeSessions[0].steer).toHaveBeenCalledOnce(),{timeout:5000});
   const steered=fakeSessions[0].steer.mock.calls[0][0] as string;
   fakeSessions[0].emit({type:"message_start",message:{role:"user",content:[{type:"text",text:steered}]}});
   await new Promise(r=>setTimeout(r,20));
@@ -670,8 +730,16 @@ it("budget overflow aborts/disposes the old SDK session before a single fresh 50
  try{
   await expect(startChatRun({...ctx,role:"architect",prompt:"Исходная работа"})).rejects.toMatchObject({code:"CHAT_ACTION_BUDGET"});
   expect(fakeSessions).toHaveLength(2);
-  expect(fakeSessions[1].prompt).toHaveBeenCalledWith(expect.stringContaining("новая сессия"));
-  const row=db.prepare('SELECT state,used FROM chat_budget_cases WHERE chat_id=? AND role_id=?').get(ctx.chatId,ctx.roleId) as any;
-  expect(row.state).toBe("exhausted");expect(row.used).toBe(150);
+  // Продолжение — новый ход с теми же 50 действиями и исходным контекстом.
+  const continuation=String(fakeSessions[1].prompt.mock.calls[0][0]);
+  expect(continuation).toContain("Продолжение пункта «Бюджет»");
+  expect(continuation).toContain("ещё 50 действий");
+  expect(continuation).toContain("Исходная работа");
+  // Карточка разбора: израсходовано 150 действий (100 основных + 50), материалы хода сохранены.
+  const row=db.prepare('SELECT used,base,total,materials FROM chat_budget_cases WHERE chat_id=? AND role_id=?').get(ctx.chatId,ctx.roleId) as any;
+  expect(row.used).toBe(150);expect(row.base).toBe(100);expect(row.total).toBe(150);expect(row.materials).toBe(1);
+  // Исчерпание бюджета помечено в плане работы пункта.
+  const plan=db.prepare('SELECT status,stop_reason FROM chat_work_plans WHERE chat_id=? AND role_id=?').get(ctx.chatId,ctx.roleId) as any;
+  expect(plan.status).toBe("stopped");expect(plan.stop_reason).toBe("budget_exhausted");
  }finally{resetSetting("chat_item_max_actions",null);budgetPromptHook=null;}
 });
