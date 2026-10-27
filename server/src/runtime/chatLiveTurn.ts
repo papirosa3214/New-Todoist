@@ -134,7 +134,7 @@ const keyOf = (chatId: string, userId: string) => `${chatId}\u0000${userId}`;
 export function liveTurnsOfChat(chatId: string): LiveTurnSnapshot[] {
   return [...liveTurns.values()]
     .filter((t) => t.chatId === chatId)
-    .map((t) => t.snapshot());
+    .map((t) => { t.syncSent(); return t.snapshot(); });
 }
 
 /** Тестовая утилита. */
@@ -750,6 +750,13 @@ export class LiveTurn {
   /** Причина молчания: модель ответила пустым content (null — ответ был). */
   emptyAnswerReason(): string | null {
     return this.emptyReason;
+  }
+
+  /** Перед снимком для клиента — разослать накопленное: снимок и номер
+   *  seq должны совпадать с тем, что ушло дельтами, иначе следующий
+   *  text_append задвоит уже показанный кусок. */
+  syncSent(): void {
+    if (this.timer) this.flush();
   }
 
   /** Замер сорванного хода (владелец 27.10.2026, «Request timed out»):

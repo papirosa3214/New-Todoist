@@ -76,6 +76,18 @@ describe("рассылка хода", () => {
     const [snap] = liveTurnsOfChat("c1");
     expect(snap).toMatchObject({ turn_id: of("chats:live:start")[0].turn_id, message_id: "m-planned", seq: 1 });
   });
+  it("снимок сначала рассылает накопленное — seq снимка совпадает с последней дельтой", () => {
+    const live = turn();
+    live.onEvent(text("А")); vi.advanceTimersByTime(LIVE_BROADCAST_MS);
+    live.onEvent(text("Б"));
+    const [snap] = liveTurnsOfChat("c1");
+    const patches = of("chats:live:patch");
+    expect(snap.seq).toBe(2);
+    expect(patches.map((p) => p.seq)).toEqual([1, 2]);
+    expect((snap.items[0] as any).text).toBe("АБ");
+    vi.advanceTimersByTime(LIVE_BROADCAST_MS);
+    expect(of("chats:live:patch")).toHaveLength(2);
+  });
   it("ход-двойник ничего не рассылает", () => {
     turn(); sent.length = 0;
     const twin = turn();
