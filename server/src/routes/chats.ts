@@ -101,6 +101,7 @@ import {
   validateAnswerPayload,
   type AnswerPayload,
 } from "../lib/chatQuestions.js";
+import { deliverAnswer } from "../lib/questionWait.js";
 import { trimThinkingItems } from "../lib/dataRetention.js";
 import {
   ChecklistItemError,
@@ -1306,7 +1307,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
       })();
       broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(id) });
-      // Роль продолжает с места остановки: поднимаем её ход на ответ.
+      // Ход роли стоит на паузе на этом вопросе — ответ уходит в него, и роль
+      // продолжает с того же вызова инструмента (27.10.2026).
+      if (deliverAnswer(вопрос.id, answer)) return { message: loadChatMessage(id), resumed: true };
+      // Никто не ждёт: поднимаем новый ход роли на ответ.
       try {
         await dispatchRoleReplies({
           chatId,
@@ -1322,7 +1326,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           error instanceof Error ? error.message : error,
         );
       }
-      return { message: loadChatMessage(id) };
+      return { message: loadChatMessage(id), resumed: false };
     },
   );
 
