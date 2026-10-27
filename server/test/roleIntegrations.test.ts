@@ -133,6 +133,29 @@ describe("интеграции в профиле роли", () => {
     ]);
   });
 
+  it("сводка листается постранично: курсор уходит в Composio и возвращается наверх", async () => {
+    saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["todoist"] });
+    const seen: Array<{ search: string; cursor?: string | null; limit?: number }> = [];
+    vi.mocked(inspectComposio).mockImplementation(async (_policy: any, _action: any, search = "", page?: any) => {
+      seen.push({ search, cursor: page?.cursor ?? null, limit: page?.limit });
+      if (page?.cursor === "page-2") {
+        return { items: [{ slug: "notion", name: "Notion", connected: false, noAuth: false }], cursor: null, totalPages: 34 } as any;
+      }
+      return { items: [{ slug: "gmail", name: "Gmail", connected: true, noAuth: false }], cursor: "page-2", totalPages: 34 } as any;
+    });
+    const first = await app.inject({ method: "GET", url: "/api/integrations/composio", headers: auth(ownerToken) });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().catalog.map((item: any) => item.slug)).toEqual(["gmail"]);
+    expect(first.json().catalogCursor).toBe("page-2");
+    expect(first.json().catalogTotalPages).toBe(34);
+
+    const second = await app.inject({ method: "GET", url: "/api/integrations/composio?cursor=page-2", headers: auth(ownerToken) });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().catalog.map((item: any) => item.slug)).toEqual(["notion"]);
+    expect(second.json().catalogCursor).toBeNull();
+    expect(seen.some((call) => call.cursor === "page-2")).toBe(true);
+  });
+
   it("сводка не выдумывает подключение, когда Composio не ответил", async () => {
     saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["todoist"] });
     vi.mocked(inspectComposio).mockRejectedValue(new Error("Composio не отвечает"));

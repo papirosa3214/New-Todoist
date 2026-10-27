@@ -90,7 +90,12 @@ export function registerComposioRoutes(app: FastifyInstance) {
       enabled: !!row.enabled,
       toolkits: row.toolkits == null ? null : (JSON.parse(row.toolkits) as string[]),
     }));
-    const catalog = configured ? await composioCatalog(req.userId, String(req.query?.search ?? "").slice(0, 100)) : { items: [], error: null };
+    // Каталог постраничный: страницу выбирает владелец («показать ещё»),
+    // курсор приходит с прошлой страницы. Без курсора — первая страница.
+    const search = String(req.query?.search ?? "").slice(0, 100);
+    const cursor = String(req.query?.cursor ?? "").slice(0, 200) || null;
+    const limit = Math.min(100, Math.max(1, Number(req.query?.limit) || 50));
+    const catalog = configured ? await composioCatalog(req.userId, search, { cursor, limit }) : { items: [], error: null, cursor: null, totalPages: null };
     // Каталог приходит постранично (первая страница — 50 сервисов), и
     // сервиса роли — например, todoist — в ней может не быть. Поэтому
     // разрешённые ролям сервисы спрашиваем по ключу: иначе экран показывал
@@ -103,6 +108,9 @@ export function registerComposioRoutes(app: FastifyInstance) {
       configured,
       available: configured && !catalog.error,
       catalog: catalog.items,
+      catalogCursor: catalog.cursor,
+      catalogTotalPages: catalog.totalPages,
+      catalogLimit: limit,
       services: resolved.items,
       roles,
       error: configured ? (catalog.error ?? resolved.error) : "Ключ Composio ещё не настроен на сервере",

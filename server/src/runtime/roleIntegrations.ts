@@ -56,10 +56,10 @@ const CACHE_ERROR_TTL_MS = 15_000;
 /** Сколько ждём внешний процесс, прежде чем честно сказать «не ответил». */
 const CATALOG_TIMEOUT_MS = 5_000;
 
-type CacheEntry = { at: number; items: ComposioCatalogItem[]; error: string | null };
+type CacheEntry = { at: number; items: ComposioCatalogItem[]; error: string | null; cursor: string | null; totalPages: number | null };
 
 const cache = new Map<string, CacheEntry>();
-const inflight = new Map<string, Promise<ComposioCatalogItem[]>>();
+const inflight = new Map<string, Promise<{ items: ComposioCatalogItem[]; cursor: string | null; totalPages: number | null }>>();
 
 /** Забыть копию каталога: тестам и смене ключа нужен чистый старт. */
 export function clearComposioCache(): void {
@@ -75,17 +75,25 @@ function messageOf(error: unknown): string {
  * Каталог с таймаутом: внешний процесс не должен висеть в запросе.
  * Ошибку приводим к тексту — наверх идёт честная причина, а не стек.
  */
-async function catalogWithTimeout(policy: ComposioPolicy, search: string): Promise<ComposioCatalogItem[]> {
-  const call = inspectComposio(policy, "catalog", search).then((raw: any) => {
+async function catalogWithTimeout(
+  policy: ComposioPolicy,
+  search: string,
+  page?: { cursor?: string | null; limit?: number },
+): Promise<{ items: ComposioCatalogItem[]; cursor: string | null; totalPages: number | null }> {
+  const call = inspectComposio(policy, "catalog", search, page).then((raw: any) => {
     const items = Array.isArray(raw?.items) ? raw.items : [];
-    return items
-      .map((item: any) => ({
-        slug: String(item?.slug ?? ""),
-        name: item?.name == null ? null : String(item.name),
-        connected: !!item?.connected,
-        noAuth: !!item?.noAuth,
-      }))
-      .filter((item: ComposioCatalogItem) => !!item.slug);
+    return {
+      items: items
+        .map((item: any) => ({
+          slug: String(item?.slug ?? ""),
+          name: item?.name == null ? null : String(item.name),
+          connected: !!item?.connected,
+          noAuth: !!item?.noAuth,
+        }))
+        .filter((item: ComposioCatalogItem) => !!item.slug),
+      cursor: raw?.cursor == null ? null : String(raw.cursor),
+      totalPages: Number.isFinite(raw?.totalPages) ? Number(raw.totalPages) : null,
+    };
   });
   // Если выиграл таймаут, поздний отказ не должен быть «необработанным».
   call.catch(() => {});
@@ -107,33 +115,34 @@ async function catalogWithTimeout(policy: ComposioPolicy, search: string): Promi
 export async function composioCatalog(
   ownerId: string,
   search = "",
-): Promise<{ items: ComposioCatalogItem[]; error: string | null }> {
-  const key = `${ownerId}|${search}`;
+  page?: { cursor?: string | null; limit?: number },
+): Promise<{ items: ComposioCatalogItem[]; error: string | null; cursor: string | null; totalPages: number | null }> {
+  const key = `${ownerId}|${search}|${page?.cursor ?? ""}|${page?.limit ?? ""}`;
   const cached = cache.get(key);
   if (cached) {
     const ttl = cached.error ? CACHE_ERROR_TTL_MS : CACHE_TTL_MS;
-    if (Date.now() - cached.at < ttl) return { items: cached.items, error: cached.error };
+    if (Date.now() - cached.at < ttl) return { items: cached.items, error: cached.error, cursor: cached.cursor, totalPages: cached.totalPages };
   }
   const pending = inflight.get(key);
   if (pending) {
     try {
-      const items = await pending;
-      return { items, error: null };
+      const page1 = await pending;
+      return { items: page1.items, error: null, cursor: page1.cursor, totalPages: page1.totalPages };
     } catch (error) {
-      return { items: [], error: messageOf(error) };
+      return { items: [], error: messageOf(error), cursor: null, totalPages: null };
     }
   }
   const policy: ComposioPolicy = { role: "integrations", ownerId, enabled: true, toolkits: [] };
-  const call = catalogWithTimeout(policy, search);
+  const call = catalogWithTimeout(policy, search, page);
   inflight.set(key, call);
   try {
-    const items = await call;
-    cache.set(key, { at: Date.now(), items, error: null });
-    return { items, error: null };
+    const result = await call;
+    cache.set(key, { at: Date.now(), items: result.items, error: null, cursor: result.cursor, totalPages: result.totalPages });
+    return { items: result.items, error: null, cursor: result.cursor, totalPages: result.totalPages };
   } catch (error) {
     const message = messageOf(error);
-    cache.set(key, { at: Date.now(), items: [], error: message });
-    return { items: [], error: message };
+    cache.set(key, { at: Date.now(), items: [], error: message, cursor: null, totalPages: null });
+    return { items: [], error: message, cursor: null, totalPages: null };
   } finally {
     inflight.delete(key);
   }

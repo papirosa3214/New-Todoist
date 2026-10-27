@@ -43,11 +43,23 @@ export async function connectRoleComposio(role: string, mode: string, context: s
   }
 }
 
-export async function inspectComposio(policy: ComposioPolicy, action: "catalog" | "authorize", search = "") {
+export async function inspectComposio(
+  policy: ComposioPolicy,
+  action: "catalog" | "authorize",
+  search = "",
+  page?: { cursor?: string | null; limit?: number },
+) {
   const command = composioCommand(policy, "work", "settings");
   try {
     const result = await promisify(execFile)(command.command, [...command.args, "--" + action], {
-      env: { ...process.env, ...command.env, TASKFLOW_COMPOSIO_SEARCH: search, TASKFLOW_COMPOSIO_TOOLKIT: search },
+      env: {
+        ...process.env,
+        ...command.env,
+        TASKFLOW_COMPOSIO_SEARCH: search,
+        TASKFLOW_COMPOSIO_TOOLKIT: search,
+        ...(page?.cursor ? { TASKFLOW_COMPOSIO_CURSOR: page.cursor } : {}),
+        ...(page?.limit ? { TASKFLOW_COMPOSIO_LIMIT: String(page.limit) } : {}),
+      },
       timeout: 35_000, maxBuffer: 2 * 1024 * 1024,
     });
     return JSON.parse(result.stdout);

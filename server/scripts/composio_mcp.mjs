@@ -193,8 +193,12 @@ export async function main() {
   if (process.argv.includes("--catalog")) {
     const session = await composio.create(userId, { ...options, toolkits: undefined });
     try {
-      const result = await session.toolkits({ limit: 50, search: process.env.TASKFLOW_COMPOSIO_SEARCH || undefined });
-      process.stdout.write(JSON.stringify({ items: result.items.map(t => ({ slug: t.slug, name: t.name, connected: !!t.connection?.isActive, noAuth: t.isNoAuth })), cursor: result.cursor ?? null }));
+      // Каталог постраничный: страницу задаёт сервер (cursor приходит с
+      // прошлой страницы), иначе видны только первые 50 сервисов.
+      const limit = Math.min(100, Math.max(1, Number(process.env.TASKFLOW_COMPOSIO_LIMIT) || 50));
+      const cursor = process.env.TASKFLOW_COMPOSIO_CURSOR || undefined;
+      const result = await session.toolkits({ limit, cursor, search: process.env.TASKFLOW_COMPOSIO_SEARCH || undefined });
+      process.stdout.write(JSON.stringify({ items: result.items.map(t => ({ slug: t.slug, name: t.name, connected: !!t.connection?.isActive, noAuth: t.isNoAuth })), cursor: result.cursor ?? null, totalPages: result.totalPages ?? null }));
     } finally { await session.delete(); }
     return;
   }
