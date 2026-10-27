@@ -520,3 +520,19 @@ describe("конверт с лишними закрывающими скобка
     expect(parsed.text).toContain("и ещё пояснение");
   });
 });
+
+describe("конверт с неизвестным полем верхнего уровня", () => {
+  // Владелец 27.10.2026: Помощница добавила своё поле report — конверт
+  // отвергался целиком, и в чат уходил сырой JSON.
+  const envelope = { schema_version: 1, ok: true, output: [
+    { type: "heading", level: 2, text: "Composio: каталог" },
+    { type: "text", text: "Полный каталог — 1681 сервис." },
+  ], artifacts: [], plan_artifact: null, error: null, next_hint: null, report: { materials: [] } };
+  it("лишнее поле отбрасывается, ответ разворачивается блоками", () => {
+    const normalized = normalizeRoleReplyV1(JSON.stringify(envelope) + "]}");
+    expect(normalized.displayText).toContain("Composio: каталог");
+    expect(normalized.displayText).not.toContain("schema_version");
+    expect(normalized.envelope.output.map((b: any) => b.type)).toEqual(["heading", "text"]);
+    expect((normalized.envelope as any).report).toBeUndefined();
+  });
+});

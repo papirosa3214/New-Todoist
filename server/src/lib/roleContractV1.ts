@@ -152,8 +152,8 @@ export function validateStructuredRoleContractV1(value: unknown): StructuredRole
   // (`decodeIfPresent(Bool.self, forKey: .needsHuman) ?? false`). Раньше поле было
   // обязательным, и роль, его забывшая, отдавала владельцу сырой JSON вместо
   // блоков (21.10.2026: ответ роли в чате). Значение, если есть, — только boolean.
-  const requiredKeys = ["schema_version", "ok", "output", "artifacts", "plan_artifact", "error", "next_hint"];
-  const allowedKeys = [...requiredKeys, "needs_human"];
+  const requiredKeys = STRUCTURED_REQUIRED_KEYS;
+  const allowedKeys = STRUCTURED_ALLOWED_KEYS;
   for (const key of requiredKeys) if (!(key in value)) errors.push(key + ": обязательное поле отсутствует");
   for (const key of Object.keys(value)) if (!allowedKeys.includes(key)) errors.push(key + ": неизвестное поле");
   if (value.schema_version !== 1) errors.push("schema_version: поддерживается только 1");
@@ -297,6 +297,9 @@ const JSON_FENCE = /```[ \t]*([\w+-]*)[ \t]*\n([\s\S]*?)(?:\n[ \t]*```[ \t]*(?=\
 /** Дешёвая проверка «в тексте вообще есть конверт»: без неё каждый ответ
  *  любого собеседника прогонялся бы через разбор JSON. */
 const ENVELOPE_MARK = /"?ok"?\s*:/;
+
+const STRUCTURED_REQUIRED_KEYS = ["schema_version", "ok", "output", "artifacts", "plan_artifact", "error", "next_hint"];
+const STRUCTURED_ALLOWED_KEYS = [...STRUCTURED_REQUIRED_KEYS, "needs_human"];
 const LEGACY_MARK = /ok\s*:\s*(true|false)/;
 const LEGACY_KEY = /^(artifacts|error|next_hint|needs_human):/;
 const BACKTICK_KEY = /^`((?:ok|output|artifacts|error|next_hint|needs_human):.*)`\s*$/;
@@ -526,10 +529,21 @@ function legacyEnvelope(body: string, output: string): RoleEnvelopeV1 | null {
  * формата при отправке смотрит на сам валидатор и по-прежнему возвращает
  * роли кривой ответ.
  */
-function salvageStructured(candidate: Record<string, unknown>): StructuredRoleEnvelopeV1 | null {
-  if (!Array.isArray(candidate.output)) return null;
-  const blocks = candidate.output.filter((block) => validateStructuredRoleContractV1({ ...candidate, output: [block] }).valid);
-  if (!blocks.length || blocks.length === candidate.output.length) return null;
+function salvageStructured(original: Record<string, unknown>): StructuredRoleEnvelopeV1 | null {
+  let candidate = original;
+  const output = candidate.output;
+  if (!Array.isArray(output)) return null;
+  // Своё поле верхнего уровня (владелец 27.10.2026: Помощница дописала
+  // `report`) не повод выбросить весь конверт: отбрасываем лишнее и
+  // проверяем снова.
+  const known = Object.fromEntries(Object.entries(candidate).filter(([key]) => STRUCTURED_ALLOWED_KEYS.includes(key)));
+  if (Object.keys(known).length !== Object.keys(candidate).length) {
+    const checked = validateStructuredRoleContractV1(known);
+    if (checked.valid && checked.envelope) return checked.envelope;
+    candidate = known;
+  }
+  const blocks = output.filter((block) => validateStructuredRoleContractV1({ ...candidate, output: [block] }).valid);
+  if (!blocks.length || blocks.length === output.length) return null;
   const checked = validateStructuredRoleContractV1({ ...candidate, output: blocks });
   return checked.valid ? checked.envelope : null;
 }
