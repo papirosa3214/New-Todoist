@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { chatWorkspaceDir, listChatWorkspaces, validChatWorkspace } from "../src/lib/chatWorkspace.js";
+import { browseChatWorkspace, chatWorkspaceDir, listChatWorkspaces, validChatWorkspace } from "../src/lib/chatWorkspace.js";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "chat-ws-"));
 const projects = path.join(root, "Проекты");
@@ -31,6 +31,9 @@ beforeAll(() => {
   git(live, "config", "user.email", "t@t");
   git(live, "config", "user.name", "t");
   fs.writeFileSync(path.join(live, "a.txt"), "1\n");
+  fs.mkdirSync(path.join(live, "server"), { recursive: true });
+  fs.writeFileSync(path.join(live, "server", "s.txt"), "s\n");
+  fs.mkdirSync(path.join(projects, "CRM", "app", "src"), { recursive: true });
   git(live, "add", ".");
   git(live, "commit", "-qm", "base");
   process.env.TASKFLOW_PROJECTS_ROOT = projects;
@@ -69,5 +72,26 @@ describe("chat workspace", () => {
     expect(git(copy!.cwd, "rev-parse", "--abbrev-ref", "HEAD")).toBe("roles/chat-c1");
     expect(chatWorkspaceDir("c1", null, live)).toBeNull();
     expect(chatWorkspaceDir("c1", "gone", live)).toBeNull();
+  });
+
+  it("browse: folders inside, parent to go up, hidden and .. refused", () => {
+    expect(browseChatWorkspace("", live)).toMatchObject({ path: "", parent: null });
+    expect(browseChatWorkspace("", live)?.entries.map((e) => e.name)).toEqual(["CRM", "New-Todoist", "notes"]);
+    const crm = browseChatWorkspace("CRM", live);
+    expect(crm).toMatchObject({ path: "CRM", parent: "" });
+    expect(crm?.entries.map((e) => [e.name, e.path])).toEqual([["app", "CRM/app"]]);
+    expect(browseChatWorkspace("CRM/app", live)?.parent).toBe("CRM");
+    expect(browseChatWorkspace("../etc", live)).toBeNull();
+    expect(browseChatWorkspace("CRM/.git", live)).toBeNull();
+    expect(browseChatWorkspace("_archive", live)).toBeNull();
+  });
+
+  it("nested choice: plain folder as is, inside server repo — same subfolder of the copy", () => {
+    expect(validChatWorkspace("CRM/app/src", live)).toBe(true);
+    expect(validChatWorkspace("CRM/nope", live)).toBe(false);
+    expect(chatWorkspaceDir("c2", "CRM/app", live)).toEqual({ cwd: path.join(projects, "CRM", "app"), name: "CRM/app", branch: null });
+    const copy = chatWorkspaceDir("c2", "New-Todoist/server", live);
+    expect(copy?.cwd).toBe(path.join(worktrees, "chat-c2", "server"));
+    expect(copy?.branch).toBe("roles/chat-c2");
   });
 });

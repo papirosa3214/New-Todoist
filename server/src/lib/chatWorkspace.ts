@@ -62,8 +62,72 @@ export function listChatWorkspaces(live: string = liveServerRepo()): ChatWorkspa
     });
 }
 
+export interface ChatFolderEntry {
+  name: string;
+  /** Путь от корня проектов: его и сохраняет выбор. */
+  path: string;
+  git: boolean;
+}
+
+export interface ChatFolderListing {
+  /** "" — корень проектов. */
+  path: string;
+  /** Куда «наверх»; null — уже в корне. */
+  parent: string | null;
+  entries: ChatFolderEntry[];
+}
+
+const SKIPPED = new Set(["node_modules"]);
+
+/** Путь от корня проектов без `..`, скрытых и служебных папок; иначе null. */
+function cleanRelative(rel: string): string[] | null {
+  const parts = rel.split("/").filter(Boolean);
+  if (parts.some((part) => part === ".." || part.startsWith(".") || part.startsWith("_") || SKIPPED.has(part))) return null;
+  return parts;
+}
+
+function isDirectory(dir: string): boolean {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Обзор папок для шторки (владелец 27.10.2026: «как обычный состав папок —
+ * заходить в папку и выходить наверх»). Только внутри корня проектов.
+ */
+export function browseChatWorkspace(rel: string, live: string = liveServerRepo()): ChatFolderListing | null {
+  const parts = cleanRelative(rel);
+  if (!parts) return null;
+  if (parts.length === 0) {
+    return {
+      path: "",
+      parent: null,
+      entries: listChatWorkspaces(live).map((option) => ({ name: option.name, path: option.name, git: option.git })),
+    };
+  }
+  const dir = path.join(projectsRoot(), ...parts);
+  if (!isDirectory(dir)) return null;
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    names = [];
+  }
+  const entries = names
+    .filter((name) => cleanRelative(name)?.length === 1 && isDirectory(path.join(dir, name)))
+    .sort((a, b) => a.localeCompare(b, "ru"))
+    .map((name) => ({ name, path: [...parts, name].join("/"), git: fs.existsSync(path.join(dir, name, ".git")) }));
+  return { path: parts.join("/"), parent: parts.slice(0, -1).join("/"), entries };
+}
+
 export function validChatWorkspace(name: string, live: string = liveServerRepo()): boolean {
-  return listChatWorkspaces(live).some((option) => option.name === name);
+  const parts = cleanRelative(name);
+  if (!parts?.length) return false;
+  if (!listChatWorkspaces(live).some((option) => option.name === parts[0])) return false;
+  return isDirectory(path.join(projectsRoot(), ...parts));
 }
 
 export function chatIdOfCopy(chatId: string): string {
@@ -76,13 +140,16 @@ export function chatWorkspaceDir(
   name: string | null | undefined,
   live: string = liveServerRepo(),
 ): ChatWorkspaceDir | null {
-  if (!name) return null;
-  const option = listChatWorkspaces(live).find((item) => item.name === name);
+  if (!name || !validChatWorkspace(name, live)) return null;
+  const [top, ...sub] = cleanRelative(name)!;
+  const option = listChatWorkspaces(live).find((item) => item.name === top);
   if (!option) return null;
-  const dir = path.join(projectsRoot(), name);
-  if (!option.copy) return { cwd: dir, name, branch: null };
+  if (!option.copy) return { cwd: path.join(projectsRoot(), top, ...sub), name, branch: null };
+  // Внутри репозитория сервера — та же вложенная папка, но в копии.
   const copyId = chatIdOfCopy(chatId);
-  return { cwd: roleWorkspace(copyId, live, live), name, branch: `roles/${copyId}` };
+  const base = roleWorkspace(copyId, live, live);
+  const nested = path.join(base, ...sub);
+  return { cwd: isDirectory(nested) ? nested : base, name, branch: `roles/${copyId}` };
 }
 
 /** Выбор, сохранённый за чатом (колонка `chats.workspace`). */

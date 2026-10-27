@@ -4,12 +4,13 @@ import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { isOwner } from "../access.js";
-import { chatIdOfCopy, chatWorkspaceName, listChatWorkspaces, validChatWorkspace } from "../lib/chatWorkspace.js";
+import { browseChatWorkspace, chatIdOfCopy, chatWorkspaceName, listChatWorkspaces, validChatWorkspace } from "../lib/chatWorkspace.js";
 
 function state(chatId: string) {
   const selected = chatWorkspaceName(chatId);
   const options = listChatWorkspaces();
-  const copy = options.find((option) => option.name === selected)?.copy ?? false;
+  const top = selected?.split("/")[0];
+  const copy = options.find((option) => option.name === top)?.copy ?? false;
   return { selected, branch: copy ? `roles/${chatIdOfCopy(chatId)}` : null, options };
 }
 
@@ -19,6 +20,18 @@ export function registerChatWorkspaceRoutes(app: FastifyInstance): void {
     if (!db.prepare("SELECT id FROM chats WHERE id = ?").get(req.params.id)) return reply.code(404).send({ error: "Not found" });
     return state(req.params.id);
   });
+
+  // Обзор папок для шторки выбора: заходить внутрь и выходить наверх.
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+    "/api/chats/:id/workspace/browse",
+    { preHandler: authOrApiToken },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) return reply.code(403).send({ error: "только владелец" });
+      const listing = browseChatWorkspace(typeof req.query?.path === "string" ? req.query.path : "");
+      if (!listing) return reply.code(404).send({ error: "такой папки нет" });
+      return listing;
+    },
+  );
 
   app.put<{ Params: { id: string }; Body: { name?: string | null } }>(
     "/api/chats/:id/workspace",
