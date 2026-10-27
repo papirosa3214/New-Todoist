@@ -14,6 +14,8 @@ it('saves without applying and detects stale direct-file edits',()=>{
  fs.writeFileSync(path.join(dir,'builder','ROLE.md'),'EXTERNAL');
  expect(readRoleBehavior('builder').version).not.toBe(next.version);
  expect(behaviorInstruction('builder')).toContain('женском');
+ // Характер остаётся везде, но правила SYSTEM и AGENTS.md главнее (владелец 27.10.2026).
+ expect(behaviorInstruction('builder')).toMatch(/^ЛИЧНОСТЬ РОЛИ[^\n]*SYSTEM[^\n]*AGENTS\.md[^\n]*главнее/);
  expect(readRoleBehavior('reviewer').templates.some(t=>t.id===template.id)).toBe(false);
 });
 it('rejects traversal, oversized text, invalid gender',()=>{

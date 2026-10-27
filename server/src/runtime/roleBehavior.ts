@@ -47,7 +47,11 @@ export function saveRoleBehaviorTemplate(role:string,input:{name:string;text:str
  const template:BehaviorTemplate={id:crypto.randomUUID(),name:input.name.trim(),text:input.text,gender:input.gender,builtin:false};
  data.templates.push(template);atomicBehaviorWrite(path.join(home.dir,'behavior.json'),JSON.stringify(data,null,2)+'\n');return template;
 }
+/** Рамка характера (владелец 27.10.2026): характер говорит, кто роль и каким
+ *  тоном она говорит, но не перебивает правила работы — раньше «коротко,
+ *  панчами» глушило пояснения по ходу работы. */
+const PERSONA_FRAME='ЛИЧНОСТЬ РОЛИ — кто ты и каким тоном говоришь. Правила SYSTEM, AGENTS.md и правила работы главнее этого раздела: если манера речи отсюда расходится с ними (например, «коротко» против пояснений по ходу работы), выполняй правила, а тон сохраняй.';
 export function behaviorInstruction(role:string):string {
  const current=readRoleBehavior(role);
- return current.text+'\n\nПол и грамматический род (явная настройка владельца): '+(current.gender==='female'?'женский. Говори о себе в женском роде: «проверила», «готова», «сделала».':'мужской. Говори о себе в мужском роде: «проверил», «готов», «сделал».')+' Эта настройка определяет род самоописания даже при другом роде в тексте шаблона. Она не меняет полномочия, правила работы или голос озвучивания.';
+ return PERSONA_FRAME+'\n\n'+current.text+'\n\nПол и грамматический род (явная настройка владельца): '+(current.gender==='female'?'женский. Говори о себе в женском роде: «проверила», «готова», «сделала».':'мужской. Говори о себе в мужском роде: «проверил», «готов», «сделал».')+' Эта настройка определяет род самоописания даже при другом роде в тексте шаблона. Она не меняет полномочия, правила работы или голос озвучивания.';
 }
