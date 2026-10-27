@@ -5372,6 +5372,12 @@ const migrations: Migration[] = [
       db.prepare("UPDATE roles SET prompt=COALESCE(prompt,'') || ? WHERE key='secretary' AND instr(COALESCE(prompt,''),'## Пояснения владельцу по ходу работы')=0").run("\n\n## Пояснения владельцу по ходу работы\nПока работаешь, примерно раз в 5–7 шагов (вызовов инструментов) пиши владельцу обычным текстом между вызовами одно короткое предложение по-человечески: что сейчас делаешь и зачем. Ровно одно предложение, без списков и технических подробностей.\n");
     },
   },
+  // Рабочая папка чата (владелец 27.10.2026): имя папки из ~/Проекты/*,
+  // NULL — ход идёт в домашней папке роли, как раньше.
+  { id: "182_chat_workspace", description: "chats.workspace: рабочая папка хода роли в чате", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!cols.has("workspace")) db.exec("ALTER TABLE chats ADD COLUMN workspace TEXT");
+  } },
 
 ];
 /**

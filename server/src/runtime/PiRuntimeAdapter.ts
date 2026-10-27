@@ -1,4 +1,5 @@
 import {safelyCaptureBudgetCases,budgetContinuationPrompt} from "./chatBudgetCases.js";
+import { resolveChatWorkspace } from "../lib/chatWorkspace.js";
 import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
 import { ChatPreparationDeadline } from "./chatPreparationDeadline.js";
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
@@ -1438,7 +1439,9 @@ async function startChatRunOnce(
     // стал неизвестен, и чаты легли. Теперь та же сессия Pi живёт в процессе
     // сервера, инструменты трекера — прямые вызовы маршрутов от имени роли.
     const home = ensureRoleHome(role);
-    const cwd = home.workspace;
+    // Папка, выбранная в чате (владелец 27.10.2026); нет выбора — папка роли.
+    const chatWorkspace = resolveChatWorkspace(input.chatId, input.messageId);
+    const cwd = chatWorkspace?.cwd ?? home.workspace;
     const mode: ChatWorkMode = input.mode ?? "work";
     const sessionDirectory = await preparation.wait(prepareChatSessionDirectory(
       role,

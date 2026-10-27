@@ -82,6 +82,7 @@ import { registerProjectLabelRoutes } from "./routes/projects.js";
 import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerMergeMarkerRoutes } from "./routes/merge-marker.js";
 import { registerCodeChangesRoutes } from "./routes/code-changes.js";
+import { registerChatWorkspaceRoutes } from "./routes/chat-workspace.js";
 import { registerOwnerControlRoutes } from "./routes/owner-controls.js";
 import { reloadServerSettings } from "./lib/serverSettings.js";
 import { registerOwnerCommandRoutes } from "./routes/owner-commands.js";
@@ -581,6 +582,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerSubtaskCommentRoutes(app);
   registerMergeMarkerRoutes(app);
   registerCodeChangesRoutes(app);
+  registerChatWorkspaceRoutes(app);
   registerOwnerControlRoutes(app);
   registerAdminServerSettingsRoutes(app);
   registerJevRoutes(app);
