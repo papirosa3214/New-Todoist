@@ -27,6 +27,8 @@ export type RoleIntegrationToolkit = {
   name: string | null;
   /** Логотип сервиса от Composio; null — неизвестен. */
   logo: string | null;
+  /** Описание сервиса по-русски; null — перевода нет. */
+  description: string | null;
   /** Подключён ли сервис у владельца; null — состояние неизвестно. */
   connected: boolean | null;
 };
@@ -48,6 +50,7 @@ export type ComposioCatalogItem = {
   slug: string;
   name: string | null;
   logo: string | null;
+  description: string | null;
   connected: boolean;
   noAuth: boolean;
 };
@@ -91,6 +94,7 @@ async function catalogWithTimeout(
           slug: String(item?.slug ?? ""),
           name: item?.name == null ? null : String(item.name),
           logo: typeof item?.logo === "string" && /^https:\/\//.test(item.logo) ? item.logo : null,
+          description: typeof item?.description === "string" && item.description ? item.description : null,
           connected: !!item?.connected,
           noAuth: !!item?.noAuth,
         }))
@@ -183,7 +187,7 @@ export async function roleIntegrations(role: string, ownerId?: string): Promise<
     const { items, error } = await composioCatalog(policy.ownerId, "");
     return {
       enabled: true,
-      toolkits: items.map((item) => ({ slug: item.slug, name: item.name, logo: item.logo, connected: item.connected })),
+      toolkits: items.map((item) => ({ slug: item.slug, name: item.name, logo: item.logo, description: item.description, connected: item.connected })),
       connected_known: error === null,
       error,
     };
@@ -194,7 +198,7 @@ export async function roleIntegrations(role: string, ownerId?: string): Promise<
   const { items, error } = await resolveToolkits(policy.ownerId, allowed);
   const toolkits = allowed.map((slug) => {
     const found = items.find((item) => item.slug === slug) ?? null;
-    return { slug, name: found?.name ?? null, logo: found?.logo ?? null, connected: found ? found.connected : null };
+    return { slug, name: found?.name ?? null, logo: found?.logo ?? null, description: found?.description ?? null, connected: found ? found.connected : null };
   });
   const connected_known = error === null && toolkits.every((item) => item.connected !== null);
   return { enabled: true, toolkits, connected_known, error };
@@ -229,5 +233,5 @@ export async function resolveToolkits(
  */
 function listAllowed(allowed: string[] | null): RoleIntegrationToolkit[] {
   if (allowed === null) return [];
-  return allowed.map((slug) => ({ slug, name: null, logo: null, connected: null }));
+  return allowed.map((slug) => ({ slug, name: null, logo: null, description: null, connected: null }));
 }

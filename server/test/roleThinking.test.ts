@@ -6,9 +6,10 @@ describe("owner role thinking policy", () => {
   it.each([
     ["architect", "max"], ["code_orchestrator", "max"],
     ["critic_verifier", "low"], ["secretary", "low"],
-    ["researcher", "medium"], ["analyst", "medium"], ["builder", "medium"],
-    ["qa", "medium"], ["designer", "medium"], ["infra_engineer", "medium"],
-    ["new_role", "medium"],
+    // Дефолт ролей — low с 24.10.2026 (648f6eec, scripts/role-thinking.json).
+    ["researcher", "low"], ["analyst", "low"], ["builder", "low"],
+    ["qa", "low"], ["designer", "low"], ["infra_engineer", "low"],
+    ["new_role", "low"],
   ])("%s gets %s on a capable model", (role, level) => {
     expect(resolveThinkingLevel(model, role)).toBe(level);
   });

@@ -49,6 +49,19 @@ export async function flatToolkitTools(composio, options, plan) {
 // нет управляемой авторизации), сессия сама не находит: без явной привязки
 // authConfigs сервис в ней числится неподключённым. Подставляем свои
 // настройки подключения из активных аккаунтов владельца.
+// Описания сервисов по-русски: Composio отдаёт их только на английском,
+// перевод лежит словарём slug → текст рядом с сервером.
+let russianDescriptions;
+export async function russianDescription(slug) {
+  if (russianDescriptions === undefined) {
+    try {
+      const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "data", "composio-toolkits-ru.json");
+      russianDescriptions = JSON.parse(await fs.readFile(file, "utf8"));
+    } catch { russianDescriptions = {}; }
+  }
+  return russianDescriptions[slug] ?? null;
+}
+
 export async function withOwnAuthConfigs(composio, userId, options) {
   const accounts = (await composio.connectedAccounts.list({ userIds: [userId], statuses: ["ACTIVE"], limit: 100 })).items;
   const own = {};
@@ -215,7 +228,7 @@ export async function main() {
       const limit = Math.min(100, Math.max(1, Number(process.env.TASKFLOW_COMPOSIO_LIMIT) || 50));
       const cursor = process.env.TASKFLOW_COMPOSIO_CURSOR || undefined;
       const result = await session.toolkits({ limit, cursor, search: process.env.TASKFLOW_COMPOSIO_SEARCH || undefined });
-      process.stdout.write(JSON.stringify({ items: result.items.map(t => ({ slug: t.slug, name: t.name, logo: t.logo ?? null, connected: !!t.connection?.isActive, noAuth: t.isNoAuth })), cursor: result.cursor ?? null, totalPages: result.totalPages ?? null }));
+      process.stdout.write(JSON.stringify({ items: await Promise.all(result.items.map(async t => ({ slug: t.slug, name: t.name, logo: t.logo ?? null, description: await russianDescription(t.slug), connected: !!t.connection?.isActive, noAuth: t.isNoAuth }))), cursor: result.cursor ?? null, totalPages: result.totalPages ?? null }));
     } finally { await session.delete(); }
     return;
   }

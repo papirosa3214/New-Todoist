@@ -242,7 +242,8 @@ describe("startChatRun (ход чата внутри сервера)", () => {
       expect((fakeSessions[0] as any).setThinkingLevel).toHaveBeenCalledWith("low");
     }finally{Object.assign(entry,prior);delete (entry as any).thinkingLevelMap;}
   });
-  it.each([["architect", "max"], ["qa", "medium"]])("owner thinking policy reaches chat SDK for %s", async (role, expected) => {
+  // Дефолт ролей — low с 24.10.2026 (648f6eec, scripts/role-thinking.json).
+  it.each([["architect", "max"], ["qa", "low"]])("owner thinking policy reaches chat SDK for %s", async (role, expected) => {
     // id в каталоге — без префикса провайдера, как у настоящего Pi.
     const entry = CATALOG.find(m => m.id === liveCatalogEntryOf(role).id && m.provider === liveCatalogEntryOf(role).provider)!;
     const prior = { ...entry };

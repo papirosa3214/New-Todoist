@@ -109,7 +109,7 @@ describe("интеграции в профиле роли", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.configured).toBe(true);
-    expect(body.catalog).toEqual([{ slug: "todoist", name: "Todoist", logo: "https://logos.composio.dev/api/todoist", connected: true, noAuth: false }]);
+    expect(body.catalog).toEqual([{ slug: "todoist", name: "Todoist", logo: "https://logos.composio.dev/api/todoist", description: null, connected: true, noAuth: false }]);
     expect(body.roles).toEqual(
       expect.arrayContaining([{ role, enabled: true, toolkits: ["linear"] }]),
     );
@@ -129,7 +129,7 @@ describe("интеграции в профиле роли", () => {
     const body = res.json();
     expect(body.catalog.map((item: any) => item.slug)).toEqual(["gmail"]);
     expect(body.services).toEqual([
-      { slug: "todoist", name: "Todoist", logo: null, connected: true, noAuth: false },
+      { slug: "todoist", name: "Todoist", logo: null, description: null, connected: true, noAuth: false },
     ]);
   });
 
