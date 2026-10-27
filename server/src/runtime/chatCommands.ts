@@ -5,6 +5,7 @@
 // Выполняется явный вызов — «/skill:имя » или «/mcp:имя » — и он
 // проверяется при отправке сообщения: неизвестное имя отклоняется и не
 // исполняется.
+import { skillCard, toolCard } from "./chatCommandCard.js";
 import { listRoleSkills } from "./instructionResources.js";
 import { taskflowTools } from "./inProcessRun.js";
 import { roleToolAllowed } from "../lib/roleToolScope.js";
@@ -17,6 +18,10 @@ export type ChatCommand = {
   kind: "skill" | "mcp";
   description: string;
   invocation: string;
+  /** Карточка в приложении (владелец 27.10.2026): что делает в двух словах. */
+  summary: string;
+  /** Имя SF Symbol. */
+  icon: string;
 };
 
 export type SlashInvocation = {
@@ -76,22 +81,28 @@ export async function listChatCommands(params: {
     return [] as Awaited<ReturnType<typeof listRoleSkills>>;
   });
   for (const skill of skills) {
+    const card = skillCard(skill.filePath, skill.name, skill.description ?? "");
     commands.push({
       id: skill.name,
-      title: skill.name,
+      title: card.title,
       kind: "skill",
       description: skill.description ?? "",
       invocation: `/skill:${skill.name} `,
+      summary: card.summary,
+      icon: card.icon,
     });
   }
   for (const tool of NATIVE_TOOLS) {
     if (!nativeAllowed(tool.name, params.mode)) continue;
+    const card = toolCard(tool.name, tool.title, tool.description);
     commands.push({
       id: tool.name,
-      title: tool.title,
+      title: card.title,
       kind: "mcp",
       description: tool.description,
       invocation: `/mcp:${tool.name} `,
+      summary: card.summary,
+      icon: card.icon,
     });
   }
   const registry = taskflowTools(
@@ -104,12 +115,16 @@ export async function listChatCommands(params: {
   );
   for (const tool of registry) {
     if (!roleToolAllowedInChat(params.role, tool.name, params.executionMode, params.mode)) continue;
+    const description = (tool.description ?? "").split("\n")[0].slice(0, 300);
+    const card = toolCard(tool.name, tool.name, description);
     commands.push({
       id: tool.name,
-      title: tool.name,
+      title: card.title,
       kind: "mcp",
-      description: (tool.description ?? "").split("\n")[0].slice(0, 300),
+      description,
       invocation: `/mcp:${tool.name} `,
+      summary: card.summary,
+      icon: card.icon,
     });
   }
   return commands;
@@ -157,12 +172,15 @@ export async function resolveSlashCommand(params: {
     if (!skill) {
       return { ok: false, error: `Навык «${params.invocation.name}» у роли ${params.role} не найден` };
     }
+    const card = skillCard(skill.filePath, skill.name, skill.description ?? "");
     const command: ChatCommand = {
       id: skill.name,
-      title: skill.name,
+      title: card.title,
       kind: "skill",
       description: skill.description ?? "",
       invocation: `/skill:${skill.name} `,
+      summary: card.summary,
+      icon: card.icon,
     };
     const text = [
       `ЯВНЫЙ ВЫЗОВ НАВЫКА «${skill.name}». Ниже его полный текст — следуй ему в этом ходу.`,
