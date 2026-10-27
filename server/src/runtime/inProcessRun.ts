@@ -884,7 +884,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   // Исследователя: документ с выводами Помощница пишет сама.
   if (role === "researcher" || role === "secretary") {
     tools.push(
-      T("web_search", "Найти в интернете: сначала Exa, при недоступности — Tavily, затем Brave. Возвращает список результатов со ссылками и выжимками. Текст страницы потом бери через web_get.",
+      T("web_search", "Найти в интернете: сначала Tavily, при недоступности — Brave. Возвращает список результатов со ссылками и выжимками. Текст страницы потом бери через web_get.",
         Type.Object({ query: Type.String(), max_results: Type.Optional(Type.Number()) }),
         (p) => callResearchTool("web_search", p, role)),
       T("web_get", "Скачать страницу и вернуть её основное содержимое чистым markdown — без меню, рекламы и скриптов. Для PDF и сканов — ocr.",
