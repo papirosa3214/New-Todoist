@@ -385,6 +385,8 @@ export class LiveTurn {
   private readonly audience: () => string[];
   private readonly publish?: (turn: LiveTurnSnapshot | null) => void;
   private readonly startedAt = new Date();
+  /** Последнее событие рантайма — сколько молчала модель перед сбоем. */
+  private lastEventAt = Date.now();
   private items: LiveItem[] = [];
   /** Идущее размышление; null — роль сейчас не думает. */
   private thinkingItem: Extract<LiveItem, { kind: "thinking" }> | null = null;
@@ -441,6 +443,7 @@ export class LiveTurn {
   /** Событие рантайма роли. Всё незнакомое молча пропускаем. */
   readonly onEvent = (event: unknown): void => {
     if (this.closed || !event || typeof event !== "object") return;
+    this.lastEventAt = Date.now();
     try { this.files.observe(event); } catch { /* украшение — ход не роняем */ }
     traceCoordination(()=>coordinationActivity(this.triggerMessageId,this.userId,event));
     const e = event as {
@@ -747,6 +750,19 @@ export class LiveTurn {
   /** Причина молчания: модель ответила пустым content (null — ответ был). */
   emptyAnswerReason(): string | null {
     return this.emptyReason;
+  }
+
+  /** Замер сорванного хода (владелец 27.10.2026, «Request timed out»):
+   *  сколько шёл ход, сколько модель молчала, размер последнего запроса
+   *  к модели (null — ни одного ответа) и число обращений. */
+  diagnostics(): { elapsed_ms: number; silent_ms: number; last_context: number | null; calls: number } {
+    const now = Date.now();
+    return {
+      elapsed_ms: now - this.startedAt.getTime(),
+      silent_ms: now - this.lastEventAt,
+      last_context: this.usage ? this.usage.context : null,
+      calls: this.usage ? this.usage.calls : 0,
+    };
   }
 
   /** Текст ответа, который роль успела написать, — для хода, остановленного

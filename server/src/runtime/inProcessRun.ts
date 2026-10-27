@@ -1882,6 +1882,8 @@ try {
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      // Замер сорванного хода (владелец 27.10.2026, «Request timed out»).
+      console.warn(`[run] ход шага сорвался task=${taskId} role=${role}: ${reason.slice(0, 200)}`, JSON.stringify(liveTurn.diagnostics()));
       if (isProviderLimitText(reason)) limitHit = reason;
       else runFailure = error instanceof Error ? error : new Error(reason);
       if (mode !== "review" && !limitHit && !runControl.replacementRequested) try {

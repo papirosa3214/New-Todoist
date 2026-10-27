@@ -3164,6 +3164,7 @@ async function deliverAgentReply(args: {
     console.warn(
       `[chats] startChatRun не удался для chat=${chatId} role=${role}:`,
       error instanceof Error ? error.message : error,
+      JSON.stringify(live.diagnostics()),
     );
     failure = error;
   }
