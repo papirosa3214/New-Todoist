@@ -500,3 +500,23 @@ describe("конверт, вклиненный в текст", () => {
     expect(parsed.structuredEnvelope).toBeNull();
   });
 });
+
+describe("конверт с лишними закрывающими скобками в конце", () => {
+  // Владелец 27.10.2026: Помощница выдала верный конверт и приписала «}]}» —
+  // ответ ушёл в чат сырым JSON. Хвост из одних скобок отбрасываем.
+  const envelope = { schema_version: 1, ok: true, output: [
+    { type: "heading", level: 2, text: "Composio: каталог" },
+    { type: "text", text: "Полный каталог — 1681 сервис." },
+  ] };
+  it("лишние }]} после объекта — разбирается как конверт", () => {
+    const parsed = parseRoleContractV1(JSON.stringify(envelope) + "}]}");
+    expect(parsed.format).toBe("v1");
+    expect(parsed.text).toContain("Composio: каталог");
+    expect(parsed.text).toContain("Полный каталог — 1681 сервис.");
+    expect(parsed.text).not.toContain("schema_version");
+  });
+  it("после объекта осмысленный текст — не отбрасывается", () => {
+    const parsed = parseRoleContractV1(JSON.stringify(envelope) + " и ещё пояснение");
+    expect(parsed.text).toContain("и ещё пояснение");
+  });
+});

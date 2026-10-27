@@ -336,11 +336,41 @@ function extractEmbeddedEnvelope(text: string): { candidate: unknown; prefix: st
 
 /** Кандидат в JSON-конверт: старый строковый output или целевой массив блоков. Один `ok`
  *  без `output` — не конверт (например, пример JSON в обычном ответе). */
+/** Объект JSON с лишними закрывающими скобками в конце (владелец 27.10.2026:
+ *  модель приписала «}]}» к верному конверту — ответ ушёл сырым JSON).
+ *  Отбрасываем хвост, только если он состоит из одних `}`/`]` и пробелов. */
+function parseObjectLenient(trimmed: string): unknown {
+  try {
+    return JSON.parse(trimmed);
+  } catch (error) {
+    let depth = 0, inString = false, escaped = false;
+    for (let i = 0; i < trimmed.length; i++) {
+      const ch = trimmed[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === "\"") inString = false;
+        continue;
+      }
+      if (ch === "\"") inString = true;
+      else if (ch === "{" || ch === "[") depth++;
+      else if (ch === "}" || ch === "]") {
+        depth--;
+        if (depth === 0) {
+          if (!/^[\s\]}]*$/.test(trimmed.slice(i + 1))) break;
+          return JSON.parse(trimmed.slice(0, i + 1));
+        }
+      }
+    }
+    throw error;
+  }
+}
+
 function asV1Candidate(body: string): unknown | null {
   const trimmed = body.trim();
   if (!trimmed.startsWith("{")) return null;
   try {
-    const value = JSON.parse(trimmed);
+    const value = parseObjectLenient(trimmed);
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const obj = value as Record<string, unknown>;
     if (!("ok" in obj) || !("output" in obj)) return null;
