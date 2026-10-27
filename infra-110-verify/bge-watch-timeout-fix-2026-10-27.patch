@@ -1,0 +1,262 @@
+commit ec9fbc8e291425e20f218d1359f106063b071328
+Author: Инженер .110 <infra@taskflow.local>
+Date:   Tue Oct 27 06:20:34 2026 +0300
+
+    BGE-M3: таймаут пробы — «не удалось проверить», а не поломка
+    
+    27.10.2026 в 06:12 сторож поднял тревогу «BGE-M3 требует внимания»:
+    systemctl --user is-active не уложился в 10 с. Причина — общая перегрузка
+    хоста (своп забит, свободной памяти почти нет), из-за чего таймаутили
+    одновременно все сторожи; Ollama при этом отвечала. Теперь таймаут и
+    отсутствие systemd-шины считаются «проба не завершилась», реальный отказ
+    юнита или недоступность Ollama остаются поломкой, а пять неудачных проб
+    подряд поднимают тревогу о перегруженном хосте.
+
+diff --git a/bge-gpu-watch.py b/bge-gpu-watch.py
+index 61a2f64..4759539 100644
+--- a/bge-gpu-watch.py
++++ b/bge-gpu-watch.py
+@@ -1,24 +1,44 @@
+ #!/usr/bin/env python3
+-"""BGE GPU/reload guard. Observes only; alerts via the shared notification channel."""
++"""BGE GPU/reload guard. Observes only; alerts via the shared notification channel.
++
++Правило (память команды, 21.10.2026 и разбор тревоги 27.10.2026): таймаут пробы —
++это «не удалось проверить», а не «сломано». Когда хост перегружен (своп забит,
++свободной памяти почти нет), `systemctl --user is-active` не укладывается в окно,
++и сторож поднимал ложную тревогу «BGE-M3 требует внимания» в 06:12, хотя Ollama
++отвечала. Теперь:
++  * таймаут и отсутствие systemd-шины — «не удалось проверить» (inconclusive),
++  * реальный отказ (юнит не активен, Ollama не принимает соединение) — поломка,
++  * пять неудачных проб подряд — тревога о перегруженном хосте, а не о BGE.
++"""
+ import argparse
+ import datetime as dt
+ import json
+ import os
+ from pathlib import Path
++import socket
+ import subprocess
+ import time
++import urllib.error
+ import urllib.request
+ 
+ STATE = Path.home()/'.local/state/bge-gpu-watch.json'
+ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+ NAMES = {'bge-m3-embed', 'bge-m3-embed-gpu'}
+ 
++SERVICE_TIMEOUT = 30
++HTTP_TIMEOUT = 20
++JOURNAL_TIMEOUT = 30
++INCONCLUSIVE_STREAK_LIMIT = 5
++
+ 
+ def evaluate(models, journal, services):
+     problems = []
++    inconclusive = []
+     for name, active in services.items():
+-        if not active:
++        if active is False:
+             problems.append(f'служба {name} не работает')
++        elif active is None:
++            inconclusive.append(f'служба {name}: не удалось проверить состояние')
+     bge = [m for m in models if m.get('name', '').split(':')[0] in NAMES]
+     for model in bge:
+         size, gpu = model.get('size', 0), model.get('size_vram', 0)
+@@ -27,17 +47,73 @@ def evaluate(models, journal, services):
+     loads = journal.count('offloaded 25/25 layers to GPU')
+     if loads > 6:
+         problems.append(f'частые загрузки BGE-M3: {loads} за 5 минут (порог 6)')
+-    return {'problems': problems, 'loads_5m': loads, 'loaded': bool(bge)}
++    return {'problems': problems, 'inconclusive': inconclusive, 'loads_5m': loads, 'loaded': bool(bge)}
++
++
++def service_state(name):
++    """True — служба работает, False — не работает, None — проверить не удалось."""
++    try:
++        proc = subprocess.run(['systemctl', '--user', 'is-active', '--quiet', name],
++                              timeout=SERVICE_TIMEOUT, capture_output=True, text=True)
++    except subprocess.TimeoutExpired:
++        return None, f'проба systemctl не уложилась в {SERVICE_TIMEOUT} с (хост перегружен)'
++    except OSError as error:
++        return None, f'проба systemctl не выполнилась: {error}'
++    stderr = proc.stderr or ''
++    if 'Failed to connect to bus' in stderr or 'Носитель не найден' in stderr:
++        return None, 'нет доступа к шине systemd пользователя'
++    if proc.returncode == 0:
++        return True, ''
++    return False, ''
++
++
++def ollama_models():
++    """Список загруженных моделей; (None, причина) — если не удалось получить."""
++    try:
++        with OPENER.open('http://127.0.0.1:11434/api/ps', timeout=HTTP_TIMEOUT) as response:
++            return json.load(response)['models'], ''
++    except (socket.timeout, TimeoutError):
++        return None, f'Ollama не ответила за {HTTP_TIMEOUT} с (хост перегружен)'
++    except urllib.error.URLError as error:
++        reason = getattr(error, 'reason', error)
++        if isinstance(reason, (socket.timeout, TimeoutError)):
++            return None, f'Ollama не ответила за {HTTP_TIMEOUT} с (хост перегружен)'
++        return None, f'Ollama недоступна: {reason}'
++    except OSError as error:
++        return None, f'Ollama недоступна: {error}'
+ 
+ 
+ def collect():
++    problems = []
++    inconclusive = []
+     services = {}
+     for name in ('ollama.service', 'ollama-request-watch.service'):
+-        services[name] = subprocess.run(['systemctl', '--user', 'is-active', '--quiet', name], timeout=10).returncode == 0
+-    with OPENER.open('http://127.0.0.1:11434/api/ps', timeout=10) as response:
+-        models = json.load(response)['models']
+-    log = subprocess.run(['journalctl', '--user', '-u', 'ollama.service', '--since', '5 minutes ago', '--no-pager', '-o', 'cat'], capture_output=True, text=True, timeout=15, check=True).stdout
+-    return evaluate(models, log, services)
++        active, note = service_state(name)
++        if active is None:
++            inconclusive.append(f'служба {name}: {note}')
++        else:
++            services[name] = active
++    models, note = ollama_models()
++    if models is None:
++        if 'перегружен' in note:
++            inconclusive.append(note)
++        else:
++            problems.append(note)
++        models = []
++    try:
++        log = subprocess.run(['journalctl', '--user', '-u', 'ollama.service', '--since', '5 minutes ago',
++                              '--no-pager', '-o', 'cat'], capture_output=True, text=True,
++                             timeout=JOURNAL_TIMEOUT, check=True).stdout
++    except subprocess.TimeoutExpired:
++        log = ''
++        inconclusive.append(f'журнал Ollama не прочитан за {JOURNAL_TIMEOUT} с (хост перегружен)')
++    except (subprocess.SubprocessError, OSError) as error:
++        log = ''
++        inconclusive.append(f'журнал Ollama не прочитан: {error}')
++    result = evaluate(models, log, services)
++    result['problems'] = problems + result['problems']
++    result['inconclusive'] = result['inconclusive'] + inconclusive
++    return result
+ 
+ 
+ def summary():
+@@ -48,8 +124,11 @@ def summary():
+         result = state['result']
+         if result['problems']:
+             return 'Эмбеддинги BGE-M3: 🚨 ' + '; '.join(result['problems'])
++        note = ''
++        if result.get('inconclusive'):
++            note = '; последняя проба не завершилась: ' + '; '.join(result['inconclusive'])
+         return ('Эмбеддинги BGE-M3: работает на GPU' if result['loaded'] else
+-                'Эмбеддинги BGE-M3: модель сейчас выгружена; службы доступны') + f"; загрузок за 5 минут: {result['loads_5m']}."
++                'Эмбеддинги BGE-M3: модель сейчас выгружена; службы доступны') + f"; загрузок за 5 минут: {result['loads_5m']}." + note
+     except (OSError, ValueError, KeyError, TypeError) as error:
+         return f'Эмбеддинги BGE-M3: 🚨 не проверить сторожа — {error}'
+ 
+@@ -63,6 +142,8 @@ def notify(result, old, now, send):
+     if due or (previous_bad and not bad):
+         text = ('Эмбеддинги BGE-M3: 🚨 ' + '; '.join(result['problems']) if bad else
+                 'Эмбеддинги BGE-M3: восстановлено штатное состояние; проверка GPU и частых перезагрузок пройдена.')
++        if result.get('inconclusive'):
++            text += ' (часть проб не завершилась: ' + '; '.join(result['inconclusive']) + ')'
+         if send('bge-gpu-watch', 'error' if bad else 'ok',
+                 'BGE-M3 требует внимания' if bad else 'BGE-M3 восстановлена', text, reserve_full=True):
+             return now
+@@ -73,6 +154,13 @@ def notify(result, old, now, send):
+     return old.get('notified_at', 0)
+ 
+ 
++def apply_streak(result, streak):
++    """Серия неудачных проб — это перегруженный хост, а не поломка BGE-M3."""
++    if streak >= INCONCLUSIVE_STREAK_LIMIT:
++        result['problems'].append(f'хост перегружен: проба не завершается {streak} проверок подряд')
++    return streak
++
++
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument('--summary', action='store_true')
+@@ -83,21 +171,26 @@ def main():
+     try:
+         result = collect()
+     except Exception as error:
+-        result = {'problems': [f'не проверить Ollama: {type(error).__name__}: {error}'], 'loaded': False, 'loads_5m': None}
+-    print(json.dumps(result, ensure_ascii=False))
+-    if args.dry_run:
+-        return int(bool(result['problems']))
++        result = {'problems': [f'не проверить Ollama: {type(error).__name__}: {error}'], 'inconclusive': [],
++                  'loaded': False, 'loads_5m': None}
+     try:
+         old = json.loads(STATE.read_text())
+     except (OSError, ValueError):
+         old = {}
++    streak = old.get('inconclusive_streak', 0)
++    streak = streak + 1 if result.get('inconclusive') else 0
++    apply_streak(result, streak)
++    print(json.dumps(result, ensure_ascii=False))
++    if args.dry_run:
++        return int(bool(result['problems']))
+     if old.get('recovery_pending'):
+         old.setdefault('result', {})['problems'] = ['ожидается сообщение о восстановлении']
+     from alert_send import send
+     now = time.time()
+     notified_at = notify(result, old, now, send)
+     state = {'checked_epoch': now, 'checked_at': dt.datetime.now().astimezone().isoformat(), 'result': result,
+-             'notified_at': notified_at, 'recovery_pending': result.pop('recovery_pending', False)}
++             'notified_at': notified_at, 'recovery_pending': result.pop('recovery_pending', False),
++             'inconclusive_streak': streak}
+     STATE.parent.mkdir(parents=True, exist_ok=True)
+     tmp = STATE.with_suffix('.tmp')
+     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2)+'\n')
+diff --git a/test_bge_gpu_watch.py b/test_bge_gpu_watch.py
+index 73662f5..f0142e1 100644
+--- a/test_bge_gpu_watch.py
++++ b/test_bge_gpu_watch.py
+@@ -29,4 +29,44 @@ class GuardTests(unittest.TestCase):
+         result={'problems':[]}
+         guard.notify(result,{'result':{'problems':['cpu']},'notified_at':9000},10000,lambda *a,**k:False)
+         self.assertTrue(result['recovery_pending'])
++
++    def test_timeout_is_not_a_failure(self):
++        """Таймаут пробы — «не удалось проверить», а не поломка (27.10.2026)."""
++        self.assertEqual(guard.evaluate([{'name':'bge-m3-embed:latest','size':1000,'size_vram':1000}],'',
++                                        {'ollama':None})['problems'],[])
++        self.assertTrue(guard.evaluate([{'name':'bge-m3-embed:latest','size':1000,'size_vram':1000}],'',
++                                       {'ollama':None})['inconclusive'])
++    def test_service_state_timeout_is_unknown(self):
++        import subprocess as sp
++        def boom(*a,**k): raise sp.TimeoutExpired(cmd='systemctl',timeout=30)
++        original=guard.subprocess.run; guard.subprocess.run=boom
++        try:
++            state,note=guard.service_state('ollama.service')
++        finally:
++            guard.subprocess.run=original
++        self.assertIsNone(state); self.assertIn('перегружен',note)
++    def test_service_state_without_bus_is_unknown(self):
++        import subprocess as sp
++        class P:
++            returncode=1; stderr='Failed to connect to bus: No such file or directory'
++        original=guard.subprocess.run; guard.subprocess.run=lambda *a,**k: P()
++        try:
++            state,note=guard.service_state('ollama.service')
++        finally:
++            guard.subprocess.run=original
++        self.assertIsNone(state)
++    def test_ollama_connection_refused_is_a_real_problem(self):
++        import urllib.error, socket
++        def boom(*a,**k): raise urllib.error.URLError(socket.gaierror('refused'))
++        original=guard.OPENER.open; guard.OPENER.open=boom
++        try:
++            models,note=guard.ollama_models()
++        finally:
++            guard.OPENER.open=original
++        self.assertIsNone(models); self.assertNotIn('перегружен',note)
++    def test_streak_escalates_to_host_overload(self):
++        result={'problems':[],'inconclusive':['проба не завершилась']}
++        guard.apply_streak(result,guard.INCONCLUSIVE_STREAK_LIMIT)
++        self.assertTrue(any('перегружен' in p for p in result['problems']))
++
+ if __name__=='__main__':unittest.main()
