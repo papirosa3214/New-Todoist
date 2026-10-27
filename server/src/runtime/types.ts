@@ -45,6 +45,8 @@ export interface Model {
   maxTokens?: number;
   /** Умеет ли модель thinking (Model.reasoning). */
   thinking?: boolean;
+  thinkingLevels?: string[];
+  thinkingLevelLabels?: Record<string,string>;
   /** Принимает ли модель изображения (Model.input includes "image"). */
   images?: boolean;
 }

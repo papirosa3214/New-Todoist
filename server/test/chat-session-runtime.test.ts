@@ -112,6 +112,8 @@ function makeFakeSession(options: any): FakeSession {
     listeners.push(listener);
     return () => {};
   };
+  (session as any).thinkingLevel="high";
+  (session as any).setThinkingLevel=vi.fn((level:string)=>{(session as any).thinkingLevel=level;});
   fakeSessions.push(session);
   promptWaiters.push({ resolve: () => {} });
   return session;
@@ -186,6 +188,16 @@ afterEach(async () => {
 });
 
 describe("startChatRun (ход чата внутри сервера)", () => {
+  it("explicit session thinking overrides the role policy in a new SDK session",async()=>{
+    const entry = CATALOG.find(m => m.id === liveCatalogEntryOf("architect").id && m.provider === liveCatalogEntryOf("architect").provider)!;
+    const prior = {...entry};
+    Object.assign(entry,{reasoning:true,thinkingLevelMap:{max:"max"}});
+    try{
+      await startChatRun({chatId:"chat-direct",role:"architect",roleId:"role_architect",prompt:"test",thinkingLevel:"low"} as any);
+      expect(fakeSessions[0].options.thinkingLevel).toBe("low");
+      expect((fakeSessions[0] as any).setThinkingLevel).toHaveBeenCalledWith("low");
+    }finally{Object.assign(entry,prior);delete (entry as any).thinkingLevelMap;}
+  });
   it.each([["architect", "max"], ["qa", "medium"]])("owner thinking policy reaches chat SDK for %s", async (role, expected) => {
     // id в каталоге — без префикса провайдера, как у настоящего Pi.
     const entry = CATALOG.find(m => m.id === liveCatalogEntryOf(role).id && m.provider === liveCatalogEntryOf(role).provider)!;

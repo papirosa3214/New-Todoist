@@ -1,3 +1,4 @@
+import {snapshotChatPreferences,messageThinkingLevel,readChatPreferences} from "../lib/chatSessionPreferences.js";
 import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
 import {visibleChatSql} from "../lib/serviceNoise.js";
 import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
@@ -1089,6 +1090,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
          VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(id, req.userId, storedText, chatId, taskId, mode === "goal" ? "work" : mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot,quickReplies?JSON.stringify(quickReplies):null);
       db.prepare("UPDATE chat_messages SET execution_mode=? WHERE id=?").run(executionMode,id);
+      if(isOwner(req.userId)&&!senderRole)snapshotChatPreferences(id,chatId,chatModelChoice(req.body?.model));
       if(outstanding && ["pending","picked"].includes(outstanding.status)){
         pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
         db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);
@@ -1638,7 +1640,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const saved = db.prepare("SELECT pi_session_id FROM chat_sessions WHERE chat_id = ? AND role_id = ?").get(chatId, roleId) as { pi_session_id: string } | undefined;
       if (!saved) return reply.code(409).send({ error: "Сессии ещё нет — сжимать нечего" });
       try {
-        await startChatRun({ chatId, role, roleId, prompt: "", sessionId: saved.pi_session_id, compactOnly: true });
+        const preferences=readChatPreferences(chatId);
+        await startChatRun({ chatId, role, roleId, prompt: "", sessionId: saved.pi_session_id, compactOnly: true,
+          model:preferences.model??undefined,thinkingLevel:preferences.thinkingLevel??undefined });
         // После сжатия прежнее занятое окно не показатель: нового ответа
         // модели ещё не было (D1 карточки e11eae7a).
         markChatContextCompacted(chatId, roleId);
@@ -3146,6 +3150,7 @@ async function deliverAgentReply(args: {
       roleId: roleUserId,
       prompt,
       model: (db.prepare("SELECT model FROM chat_messages WHERE id = ?").get(trigger.id) as { model: string | null } | undefined)?.model ?? undefined,
+      thinkingLevel: messageThinkingLevel(trigger.id),
       // Свежий ход после прерырования: прежняя сессия не продолжается —
       // стартует новая, с выжимкой в промпте.
       sessionId: staleSession ? undefined : previousSessionId,

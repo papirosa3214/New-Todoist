@@ -1,3 +1,4 @@
+import {supportedThinkingLevels,validateChatThinking,thinkingLevelLabels} from "./thinkingLevels.js";
 import {safelyCaptureBudgetCases,budgetContinuationPrompt} from "./chatBudgetCases.js";
 import { resolveChatWorkspace } from "../lib/chatWorkspace.js";
 import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
@@ -689,6 +690,8 @@ export const piRuntime: RuntimeAdapter = {
         contextWindow: sm.contextWindow,
         maxTokens: sm.maxTokens,
         thinking: sm.reasoning,
+        thinkingLevels: await supportedThinkingLevels(sm),
+        thinkingLevelLabels: thinkingLevelLabels(sm),
         images: Array.isArray(sm.input)
           ? sm.input.includes("image")
           : undefined,
@@ -1199,6 +1202,7 @@ export interface StartChatRunInput {
   prompt: string;
   /** Модель, выбранная в окне ввода на этот ход; не задана — модель роли. */
   model?: string;
+  thinkingLevel?: string;
   /** Сохранённый ранее pi_session_id — продолжит ту же сессию. Если
    *  null/undefined — стартует новую. */
   sessionId?: string | null;
@@ -1550,7 +1554,7 @@ async function startChatRunOnce(
       ({ session } = await preparation.wait(createAgentSession({
         cwd,
         model: piModel,
-        thinkingLevel: resolveThinkingLevel(piModel, role) ?? undefined,
+        thinkingLevel: (await validateChatThinking(piModel,input.thinkingLevel)) ?? resolveThinkingLevel(piModel, role) ?? undefined,
         modelRuntime: runtime,
         resourceLoader,
         // `tools` у SDK — список ИМЁН разрешённых инструментов. Объекты сюда
@@ -1602,7 +1606,7 @@ async function startChatRunOnce(
 
     installSteeringBoundary(session);
     // Role policy also replaces the level restored from an older session.
-    const roleThinking = resolveThinkingLevel(piModel, role);
+    const roleThinking = (await validateChatThinking(piModel,input.thinkingLevel)) ?? resolveThinkingLevel(piModel, role);
     if (roleThinking && session.thinkingLevel !== roleThinking && typeof session.setThinkingLevel === "function") {
       session.setThinkingLevel(roleThinking);
     }

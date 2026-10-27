@@ -16,6 +16,8 @@ export type CatalogModel = {
   name?: string | null;
   contextWindow?: number | null;
   available?: boolean;
+  thinkingLevels?: string[];
+  thinkingLevelLabels?: Record<string,string>;
 };
 
 /** «провайдер/модель» — единственный однозначный вид модели в каталоге. */
@@ -76,15 +78,15 @@ export function resolveCatalogModel(
 /** Каталог роли для клиента: модели не сливаются между провайдерами. */
 export function roleModelOptions(
   catalog: CatalogModel[],
-): Array<{ id: string; title: string; provider: string; modelID: string; contextWindow?: number }> {
+): Array<{ id: string; title: string; provider: string; modelID: string; contextWindow?: number; thinkingLevels?: string[]; thinkingLevelLabels?: Record<string,string> }> {
   const seen = new Set<string>();
-  const out: Array<{ id: string; title: string; provider: string; modelID: string; contextWindow?: number }> = [];
+  const out: Array<{ id: string; title: string; provider: string; modelID: string; contextWindow?: number; thinkingLevels?: string[]; thinkingLevelLabels?: Record<string,string> }> = [];
   for (const model of catalog) {
     if (model.available === false) continue;
     const id = qualifiedModelId(model.provider, model.id);
     if (seen.has(id)) continue;
     seen.add(id);
-    const entry: { id: string; title: string; provider: string; modelID: string; contextWindow?: number } = {
+    const entry: { id: string; title: string; provider: string; modelID: string; contextWindow?: number; thinkingLevels?: string[]; thinkingLevelLabels?: Record<string,string> } = {
       id,
       title: model.name ?? model.id,
       provider: model.provider,
@@ -93,6 +95,8 @@ export function roleModelOptions(
     if (typeof model.contextWindow === "number" && model.contextWindow > 0) {
       entry.contextWindow = model.contextWindow;
     }
+    if (model.thinkingLevels) entry.thinkingLevels = model.thinkingLevels;
+    if (model.thinkingLevelLabels) entry.thinkingLevelLabels = model.thinkingLevelLabels;
     out.push(entry);
   }
   return out;

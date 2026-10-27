@@ -1,3 +1,4 @@
+import {registerChatSessionPreferenceRoutes} from "./routes/chat-session-preferences.js";
 import {startBudgetCaptureWatcher} from "./runtime/chatBudgetCases.js";
 import { serverListenOptions } from "./runtime/systemdSocket.js";
 import {startToolRequestWatcher} from "./runtime/toolRequestStore.js";
@@ -583,6 +584,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerMergeMarkerRoutes(app);
   registerCodeChangesRoutes(app);
   registerChatWorkspaceRoutes(app);
+  registerChatSessionPreferenceRoutes(app);
   registerOwnerControlRoutes(app);
   registerAdminServerSettingsRoutes(app);
   registerJevRoutes(app);

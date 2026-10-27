@@ -5379,6 +5379,18 @@ const migrations: Migration[] = [
     if (!cols.has("workspace")) db.exec("ALTER TABLE chats ADD COLUMN workspace TEXT");
   } },
 
+  {id:"183_chat_session_preferences",description:"Настройки модели и размышлений сессии помощника и снимок сообщения",up:()=>db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_session_preferences(
+      chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+      model TEXT,
+      thinking_level TEXT
+    );
+    CREATE TABLE IF NOT EXISTS chat_message_preferences(
+      message_id TEXT PRIMARY KEY REFERENCES chat_messages(id) ON DELETE CASCADE,
+      thinking_level TEXT
+    );
+  `)},
+
 ];
 /**
  * Опции прогона миграций.
