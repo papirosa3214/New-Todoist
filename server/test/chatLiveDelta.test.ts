@@ -88,6 +88,16 @@ describe("рассылка хода", () => {
     vi.advanceTimersByTime(LIVE_BROADCAST_MS);
     expect(of("chats:live:patch")).toHaveLength(2);
   });
+  it("два куска текста вокруг шага — разные id, второй не затирает первый", () => {
+    const live = turn();
+    live.onEvent(text("До шага")); vi.advanceTimersByTime(LIVE_BROADCAST_MS);
+    live.onEvent({ type: "tool_execution_start", toolCallId: "s1", toolName: "read", args: { path: "a" } });
+    live.onEvent(text("После шага")); vi.advanceTimersByTime(LIVE_BROADCAST_MS);
+    const added = of("chats:live:patch").flatMap((p) => p.ops).filter((o) => o.op === "item_add" && o.item.kind === "text");
+    expect(added.map((o) => o.item.text)).toEqual(["До шага", "После шага"]);
+    expect(added[0].item.id).toBeTruthy();
+    expect(added[1].item.id).not.toBe(added[0].item.id);
+  });
   it("ход-двойник ничего не рассылает", () => {
     turn(); sent.length = 0;
     const twin = turn();

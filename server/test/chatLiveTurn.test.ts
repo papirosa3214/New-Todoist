@@ -102,7 +102,7 @@ describe("живой ход", () => {
     const turn = newTurn();
     turn.onEvent(text("черновик"));
     turn.replaceFinalText("Ответ после проверки.");
-    expect(liveTurnsOfChat("c1")[0].items).toEqual([{ kind: "text", text: "Ответ после проверки." }]);
+    expect(liveTurnsOfChat("c1")[0].items).toEqual([expect.objectContaining({ kind: "text", text: "Ответ после проверки." })]);
     expect(turn.partialText()).toBe("Ответ после проверки.");
   });
 
@@ -221,7 +221,7 @@ describe("размышления роли (28.09.2026)", () => {
     turn.onEvent(think("thinking_start"));
     turn.onEvent(think("thinking_end"));
     turn.onEvent(text("Ответ."));
-    expect(liveTurnsOfChat("c1")[0].items).toEqual([{ kind: "text", text: "Ответ." }]);
+    expect(liveTurnsOfChat("c1")[0].items).toEqual([expect.objectContaining({ kind: "text", text: "Ответ." })]);
     expect(turn.finish()).toBeNull();
   });
 
@@ -324,7 +324,7 @@ describe("конверт ответа роли (01.10.2026)", () => {
   it("в живом снимке конверт тоже снят", () => {
     const turn = newTurn();
     turn.onEvent(text("```\nok: true\noutput: |\n  Готово.\n```"));
-    expect(liveTurnsOfChat("c1")[0].items).toEqual([{ kind: "text", text: "Готово." }]);
+    expect(liveTurnsOfChat("c1")[0].items).toEqual([expect.objectContaining({ kind: "text", text: "Готово." })]);
   });
 });
 

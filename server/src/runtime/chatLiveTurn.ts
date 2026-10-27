@@ -603,7 +603,8 @@ export class LiveTurn {
     for (const it of this.items) {
       if (it.kind === "text") {
         const text = unwrapRoleEnvelope(stripQuickRepliesLine(it.text));
-        if (text.trim()) items.push({ kind: "text", text });
+        // id куска нужен дельтам: без него второй кусок затирал первый.
+        if (text.trim()) items.push({ kind: "text", ...(it.id ? { id: it.id } : {}), text });
       } else if (it.kind === "thinking") {
         // Законченное пустое размышление (модель скрыла текст) — не
         // показываем; идущее пустое — это «Думает…» без текста.

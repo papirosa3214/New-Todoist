@@ -15,7 +15,7 @@ describe("task live stream", () => {
     run.onEvent({ type: "tool_execution_start", toolCallId: "read1", toolName: "read", args: { path: "/tmp/archive.ts" } });
     await new Promise(resolve => setTimeout(resolve, 170));
     expect(publish.mock.calls.at(-1)?.[0].turn.items).toEqual(expect.arrayContaining([
-      { kind: "text", text: "Проверяю архив." },
+      expect.objectContaining({ kind: "text", text: "Проверяю архив." }),
       expect.objectContaining({ kind: "step", tool: "read", status: "running" }),
     ]));
     run.onEvent({ type: "tool_execution_end", toolCallId: "read1", toolName: "read", isError: false });
@@ -27,7 +27,7 @@ describe("task live stream", () => {
     const a = begin("parallel", "s1", "a"); const b = begin("parallel", "s2", "b"); const c = begin("other", "s1", "c");
     a.onEvent(text("Первый")); b.onEvent(text("Второй")); c.onEvent(text("Чужой"));
     a.finish(); b.finish(); c.finish();
-    expect(taskLiveTurns("parallel").map(t => t.turn.items[0])).toEqual([{kind:"text",text:"Первый"},{kind:"text",text:"Второй"}]);
+    expect(taskLiveTurns("parallel").map(t => t.turn.items[0])).toEqual([expect.objectContaining({ kind: "text", text: "Первый" }),expect.objectContaining({ kind: "text", text: "Второй" })]);
   });
   it("ignores late events and completion of a replaced run", () => {
     const old = begin("replacement", "slot", "old");
@@ -37,6 +37,6 @@ describe("task live stream", () => {
     expect(taskLiveTurns("replacement")[0].run_id).toBe("fresh");
     expect(taskLiveTurns("replacement")[0].complete).toBe(false);
     fresh.finish();
-    expect(taskLiveTurns("replacement")[0].turn.items).toEqual([{kind:"text",text:"Новый"}]);
+    expect(taskLiveTurns("replacement")[0].turn.items).toEqual([expect.objectContaining({ kind: "text", text: "Новый" })]);
   });
 });

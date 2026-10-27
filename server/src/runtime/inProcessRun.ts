@@ -1682,6 +1682,10 @@ try {
       const task = db.prepare("SELECT creator_id, assignee_id FROM tasks WHERE id=?").get(taskId) as any;
       if (task) broadcastToUsers([task.creator_id, task.assignee_id], { type: "tasks:live", ...snapshot });
     },
+    publishDelta: event => {
+      const task = db.prepare("SELECT creator_id, assignee_id FROM tasks WHERE id=?").get(taskId) as any;
+      if (task) broadcastToUsers([task.creator_id, task.assignee_id], event);
+    },
   });
 
   // Действия встроенных инструментов — строкой в карточке, как раньше делало
