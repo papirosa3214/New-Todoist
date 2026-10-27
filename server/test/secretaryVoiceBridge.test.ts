@@ -7,6 +7,8 @@ import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { startSecretaryVoiceBridge } from "../src/runtime/secretaryVoiceBridge.js";
 
+vi.mock("../src/runtime/composioRuntime.js",()=>({connectRoleComposio:async()=>({tools:[],close:async()=>{}})}));
+vi.mock("../src/runtime/graftMcp.js",()=>({connectRoleMcp:async()=>({tools:[],close:async()=>{}})}));
 const model = vi.hoisted(()=>({texts:[] as string[]}));
 vi.mock("../src/routes/ai.js",async(importOriginal)=>{
   const actual=await importOriginal<typeof import("../src/routes/ai.js")>();
@@ -24,7 +26,7 @@ function call(body: unknown, path = "/secretary/tasks") {
       let data=""; res.on("data",chunk=>data+=chunk);
       res.on("end",()=>resolve({status:res.statusCode!,body:JSON.parse(data)}));
     });
-    req.on("error",reject); req.end(JSON.stringify(body));
+    req.on("error",reject); req.end(JSON.stringify({...body as any,chat_id:"voice-card-fixture"}));
   });
 }
 describe("закрытый инструмент голосового Помощника владельца", () => {
@@ -33,6 +35,8 @@ describe("закрытый инструмент голосового Помощ�
   beforeAll(async()=>{
     app=await buildApp();
     db.prepare("UPDATE users SET task_intake_mode='manual' WHERE id='u1'").run();
+    db.prepare("INSERT INTO chats(id,kind,created_by,execution_mode) VALUES ('voice-card-fixture','direct','u1','card')").run();
+    for (const member of ["u1","u-secretary"]) db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES ('voice-card-fixture',?)").run(member);
     stop=await startSecretaryVoiceBridge(app,socket);
   });
   afterAll(async()=>{ if(stop)await stop(); if(app)await app.close(); rmSync(directory,{recursive:true,force:true}); });
@@ -79,4 +83,12 @@ describe("закрытый инструмент голосового Помощ�
   it("сохраняет валидацию названия существующего API",async()=>{
     expect((await call({text:"",owner_id:"u1"})).status).toBe(400);
   });
+  it("подключает отдельный инструмент через живой Unix-мост",async()=>{
+    const response=await call({owner_id:"u1",name:"taskflow_tools",arguments:{names:["taskflow_archive"]},session_id:"bridge-native"},"/secretary/tool");
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body.result).activated).toContain("taskflow_archive");
+    expect(response.body.tools.some((t:any)=>t.name==="taskflow_archive")).toBe(true);
+    expect((await call({owner_id:"u1",session_id:"bridge-native"},"/secretary/tools-close")).body.ok).toBe(true);
+  });
+
 });

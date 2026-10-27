@@ -1,72 +1,68 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
-import { asRole, setInProcessApp } from "../src/runtime/inProcessRun.js";
-import * as catalogModule from "../src/runtime/roleToolCatalog.js";
-import { buildRoleToolCatalog } from "../src/runtime/roleToolCatalog.js";
-import { runVoiceTool, voiceToolManifest } from "../src/lib/secretaryVoiceTools.js";
-import { isOwner, isSecretary } from "../src/access.js";
 import db from "../src/db.js";
+import {isOwner,isSecretary} from "../src/access.js";
+import { asRole, setInProcessApp } from "../src/runtime/inProcessRun.js";
+import { buildRoleToolCatalog } from "../src/runtime/roleToolCatalog.js";
+import { voiceToolManifest, runVoiceTool, plainVoiceSchema, decodeVoiceArguments, closeAllVoiceTools } from "../src/lib/secretaryVoiceTools.js";
+vi.mock("../src/runtime/composioRuntime.js",()=>({connectRoleComposio:async()=>({tools:[],close:async()=>{}})}));
+vi.mock("../src/runtime/graftMcp.js",()=>({connectRoleMcp:async()=>({tools:[],close:async()=>{}})}));
+describe("voice native tool parity",()=>{
+ let app:Awaited<ReturnType<typeof buildApp>>;
+ beforeAll(async()=>{app=await buildApp();setInProcessApp(app);});
+ afterAll(async()=>{await closeAllVoiceTools();await app.close();});
+ it("publishes the chat core and loader, without the universal gateway",async()=>{
+  const chat=buildRoleToolCatalog({role:"secretary",mode:"work",runId:"parity",executionMode:"chat"});
+  const manifest=await voiceToolManifest();
+  expect(manifest.map(t=>t.name).sort()).toEqual([...chat.activeNames].sort());
+  expect(manifest.some(t=>t.name==="taskflow")).toBe(false);
+  expect(manifest.find(t=>t.name==="taskflow_task")!.parameters.properties.id.type).toBe("string");
+ });
+ it("loads an operation and returns its callable schema for the next voice turn",async()=>{
+  const result=await runVoiceTool("u1","taskflow_tools",{names:["taskflow_archive"]},{sessionId:"loader-test"} as any);
+  expect(result.ok).toBe(true);
+  expect(JSON.parse(result.result).activated).toContain("taskflow_archive");
+  expect((result as any).tools.some((t:any)=>t.name==="taskflow_archive")).toBe(true);
+ });
+ it("executes native arguments directly and propagates a real missing-task refusal",async()=>{
+  await expect(runVoiceTool("u1","taskflow_task",{id:"voice-missing-task"},{sessionId:"read-test"} as any)).rejects.toThrow();
+ });
+ it("rejects the old universal tool instead of advertising a different protocol",async()=>{
+  await expect(runVoiceTool("u1","taskflow",{action:"discover"})).rejects.toThrow();
+ });
+ it("does not execute calls by non-owners",async()=>{
+  await expect(runVoiceTool("not-owner","taskflow_tools",{})).rejects.toThrow("владелец");
+ });
+ it("rejects invalid native parameters before execution",async()=>{
+  await expect(runVoiceTool("u1","taskflow_task",{id:123})).rejects.toThrow("INVALID_ARGUMENTS");
+ });
 
-describe("Помощник владельца — единые инструменты чата, голоса и задач", () => {
-  let app: FastifyInstance;
-
-  beforeAll(async () => {
-    app = await buildApp();
-    setInProcessApp(app);
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
+ it("retains loaded tools in the next request of the same call",async()=>{
+  const context={sessionId:"persist-test"};
+  await runVoiceTool("u1","taskflow_tools",{names:["taskflow_archive"]},context);
+  expect((await voiceToolManifest("u1",context)).some(t=>t.name==="taskflow_archive")).toBe(true);
+ });
+ it("cannot load card-only operations in chat mode",async()=>{
+  const result=await runVoiceTool("u1","taskflow_tools",{names:["taskflow_create_task"]},{sessionId:"chat-mode"});
+  expect(JSON.parse(result.result).unknown).toContain("taskflow_create_task");
+  await expect(runVoiceTool("u1","taskflow_create_task",{}, {sessionId:"chat-mode"})).rejects.toThrow();
+ });
+ it("keeps structured records and arrays through Gemini transport",()=>{
+  const schema={type:"object",required:["items","headers"],properties:{
+   items:{type:"array",items:{type:"object",properties:{id:{type:"integer"}},required:["id"]}},
+   headers:{type:"object",additionalProperties:{type:"string"}},
+   count:{type:"integer",minimum:1,maximum:20},
+  }};
+  const wire=plainVoiceSchema(schema);
+  expect(wire.required).toEqual(["items","headers"]);
+  expect(wire.properties.items.items.properties.id.type).toBe("integer");
+  expect(wire.properties.headers.type).toBe("string");
+  expect(wire.properties.count).toMatchObject({minimum:1,maximum:20});
+  expect(decodeVoiceArguments(schema,{items:[{id:7}],headers:'{"key":"value"}',count:2})).toEqual({items:[{id:7}],headers:{key:"value"},count:2});
+ });
   it("секретарь распознаётся как помощник владельца, не как обычный агент", () => {
     expect(isSecretary("u-secretary")).toBe(true);
     expect(isOwner("u-secretary")).toBe(true);
-  });
-
-  it("голос публикует ровно тот универсальный taskflow, который собирает каталог чата", async () => {
-    const catalog = buildRoleToolCatalog({ role: "secretary", mode: "work", runId: "secretary-parity" });
-    const universal = catalog.customTools.find((tool) => tool.name === "taskflow");
-    expect(universal).toBeDefined();
-    expect(catalog.operations.some((tool) => tool.name === "taskflow_slot_status")).toBe(true);
-    expect(catalog.operations.some((tool) => tool.name === "taskflow_archive")).toBe(true);
-
-    const manifest = await voiceToolManifest();
-    expect(manifest).toHaveLength(1);
-    expect(manifest[0].name).toBe("taskflow");
-    expect(manifest[0].description).toBe(universal!.description);
-    expect(manifest[0].parameters.properties.action).toEqual({ type: "string", enum: ["discover", "describe", "invoke"] });
-    expect(manifest[0].parameters.properties.request_id).toMatchObject({ type: "string" });
-    expect(manifest[0].parameters.properties.arguments).toMatchObject({ type: "string" });
-  });
-
-  it("голос передаёт вызов в универсальный execute и сохраняет его error envelope и request_id", async () => {
-    const ownerId = "u-secretary";
-    const requestId = "voice-contract-probe-20261019";
-    const response = await runVoiceTool(ownerId, "taskflow", {
-      action: "invoke", operation: "taskflow_task", version: 1,
-      arguments: "{\"id\":\"voice-contract-missing-task\"}", request_id: requestId,
-    });
-    expect(response.ok).toBe(true);
-    const envelope = JSON.parse(response.result);
-    expect(envelope).toMatchObject({
-      ok: false,
-      operation: "taskflow_task",
-      request_id: requestId,
-      error: { code: "OPERATION_FAILED", hint: expect.any(String) },
-    });
-  });
-
-  it("не обрезает большой JSON общего инструмента на границе 12000 символов", async () => {
-    const payload = { ok: true, data: { notes: "x".repeat(15000) } };
-    const spy = vi.spyOn(catalogModule, "buildRoleToolCatalog").mockReturnValue({
-      customTools: [{ name: "taskflow", execute: async () => ({ content: [{ type: "text", text: JSON.stringify(payload) }] }) }],
-    } as any);
-    try {
-      const response = await runVoiceTool("u-secretary", "taskflow", { action: "invoke" });
-      expect(JSON.parse(response.result)).toEqual(payload);
-    } finally { spy.mockRestore(); }
   });
 
   it("слоты и архивные действия доходят до серверных маршрутов; физическое удаление закрыто", async () => {

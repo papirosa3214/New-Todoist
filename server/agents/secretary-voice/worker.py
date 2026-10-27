@@ -8,6 +8,7 @@ import asyncio
 from collections import deque
 import logging
 import os
+import uuid
 import json
 from typing import Awaitable, Callable
 from dataclasses import dataclass
@@ -334,18 +335,21 @@ class VoiceConversationRecorder:
             await asyncio.gather(self._task, return_exceptions=True)
 
 
-async def shared_tools_via_api(socket_path: str, owner_id: str, runner: BackgroundRunner | None = None, chat_id: str | None = None, recorder: VoiceConversationRecorder | None = None) -> list:
+async def shared_tools_via_api(socket_path: str, owner_id: str, runner: BackgroundRunner | None = None, chat_id: str | None = None, recorder: VoiceConversationRecorder | None = None, agent: Agent | None = None, session_id: str | None = None) -> list:
     """Общие инструменты Помощника владельца (те же, что в чате) — как инструменты звонка."""
     connector = aiohttp.UnixConnector(path=socket_path)
-    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
-        async with http.get("http://localhost/secretary/tools") as response:
+    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=60)) as http:
+        async with http.get("http://localhost/secretary/tools", params={"owner_id": owner_id, **({"chat_id": chat_id} if chat_id else {}), **({"session_id": session_id} if session_id else {})}) as response:
             if response.status != 200:
                 raise RuntimeError("Не удалось получить список инструментов")
             specs = (await response.json()).get("tools", [])
+            if not specs or not any(spec.get("name") == "taskflow_tools" for spec in specs):
+                raise RuntimeError("Голосовой каталог неполон: нет отдельных инструментов и taskflow_tools")
 
     def build(spec: dict):
         async def call(raw_arguments: dict[str, object]) -> str:
-            if runner is None:
+            # Загрузчик должен обновить схемы до следующего запроса модели.
+            if runner is None or spec["name"] == "taskflow_tools":
                 return await invoke(raw_arguments)
             return await runner.run(spec["name"], lambda: invoke(raw_arguments))
 
@@ -356,11 +360,15 @@ async def shared_tools_via_api(socket_path: str, owner_id: str, runner: Backgrou
             try:
                 async with aiohttp.ClientSession(connector=inner, timeout=aiohttp.ClientTimeout(total=120)) as http:
                     async with http.post("http://localhost/secretary/tool",
-                                         json={"owner_id": owner_id, "name": spec["name"], "arguments": raw_arguments, **({"chat_id": chat_id} if chat_id else {})}) as resp:
+                                         json={"owner_id": owner_id, "name": spec["name"], "arguments": raw_arguments, "session_id": session_id, "call_id": str(uuid.uuid4()), **({"chat_id": chat_id} if chat_id else {})}) as resp:
                         body = await resp.json()
             except (aiohttp.ClientError, TimeoutError) as exc:
                 return f"Инструмент недоступен: {exc}"
             if body.get("ok"):
+                if "tools" in body:
+                    if agent is None:
+                        return "Не удалось подключить инструменты: голосовой агент не привязан."
+                    await agent.update_tools([build(item) for item in body["tools"]])
                 return body.get("result", "")
             return f"Инструмент отказал: {body.get('error', 'неизвестная ошибка')}"
         return function_tool(call, raw_schema={"name": spec["name"], "description": spec["description"], "parameters": spec["parameters"]})
@@ -391,7 +399,6 @@ class Assistant(Agent):
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions=self.greeting)
 
-    @function_tool
     async def create_task(self, context: RunContext, text: str) -> str:
         """Передать полное поручение общему серверному разбору постановки задач.
 
@@ -408,7 +415,6 @@ class Assistant(Agent):
             return json.dumps(result, ensure_ascii=False)
         return await self.runner.run("постановка задачи", work)
 
-    @function_tool
     async def task_summary(self, context: RunContext, text: str, send_to_chat: bool = False) -> str:
         """Получить фактическую сводку задач любого исполнителя или всех ролей.
 
@@ -425,7 +431,6 @@ class Assistant(Agent):
             return json.dumps(result, ensure_ascii=False)
         return await self.runner.run("сводка задач", work)
 
-    @function_tool
     async def task_details(self, context: RunContext, text: str) -> str:
         """Всё об одной задаче: состояние, шаги плана и кто их делал, вердикт проверки, интеграция, последние комментарии.
 
@@ -441,7 +446,6 @@ class Assistant(Agent):
             return json.dumps(result, ensure_ascii=False)
         return await self.runner.run("карточка задачи", work)
 
-    @function_tool
     async def send_to_owner_chat(self, context: RunContext, text: str) -> str:
         """Написать владельцу в его чат с Помощником владельца: всё, что он просит прислать текстом.
 
@@ -457,7 +461,6 @@ class Assistant(Agent):
             return json.dumps(result, ensure_ascii=False)
         return await self.runner.run("сообщение в чат", work)
 
-    @function_tool
     async def role_load(self, context: RunContext) -> str:
         """Загрузка ролей: чем сейчас занята каждая роль, что в очереди и что заблокировано."""
         async def work() -> str:
@@ -507,13 +510,20 @@ async def entrypoint(ctx: JobContext) -> None:
     runner = BackgroundRunner()
     runner.session = session
     ctx.add_shutdown_callback(runner.close)
-    try:
-        shared = await shared_tools_via_api(cfg.taskflow_socket_path, owner.identity, runner, chat_id, recorder)
-    except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
-        # Звонок важнее полного набора: без общих инструментов остаются базовые.
-        logger.warning("общие инструменты Помощника владельца недоступны: %s", exc)
-        shared = []
-    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=("Продолжи разговор из истории чата. Коротко скажи, что голос подключён; не повторяй прежние ответы." if history else snapshot["greeting"]), tools=shared, runner=runner, chat_ctx=context_from_messages(history), chat_id=chat_id, instructions_suffix=gender_instruction(voice) + "\nГолос и переписка — один разговор. Твои реплики сохраняются в исходном чате. Для файлов используй общий инструмент прикрепления к текущему чату; не говори, что файл отправлен без успешного результата инструмента."), room=ctx.room)
+    agent = Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=("Продолжи разговор из истории чата. Коротко скажи, что голос подключён; не повторяй прежние ответы." if history else snapshot["greeting"]), runner=runner, chat_ctx=context_from_messages(history), chat_id=chat_id, instructions_suffix=gender_instruction(voice) + "\nГолос и переписка — один разговор. Твои реплики сохраняются в исходном чате. Для файлов используй общий инструмент прикрепления к текущему чату; не говори, что файл отправлен без успешного результата инструмента.")
+    async def close_tools():
+        connector = aiohttp.UnixConnector(path=cfg.taskflow_socket_path)
+        try:
+            async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=10)) as http:
+                async with http.post("http://localhost/secretary/tools-close", json={"owner_id": owner.identity, "chat_id": chat_id, "session_id": ctx.room.name}) as response:
+                    await response.read()
+        except (aiohttp.ClientError, TimeoutError):
+            logger.warning("Не удалось закрыть ресурсы голосового каталога")
+    ctx.add_shutdown_callback(close_tools)
+    shared = await shared_tools_via_api(cfg.taskflow_socket_path, owner.identity, runner, chat_id, recorder, agent=agent, session_id=ctx.room.name)
+    await agent.update_tools(shared)
+    logger.info("Голосовой каталог: %s", ", ".join(tool.id for tool in shared))
+    await session.start(agent=agent, room=ctx.room)
 
     # Тап по анимации на телефоне — перебить Помощника владельца на полуслове.
     @ctx.room.local_participant.register_rpc_method("interrupt")

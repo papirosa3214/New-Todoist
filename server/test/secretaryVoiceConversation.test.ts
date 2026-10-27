@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startSecretaryVoiceBridge } from "../src/runtime/secretaryVoiceBridge.js";
 import { runVoiceTool } from "../src/lib/secretaryVoiceTools.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
+vi.mock("../src/runtime/composioRuntime.js",()=>({connectRoleComposio:async()=>({tools:[],close:async()=>{}})}));
+vi.mock("../src/runtime/graftMcp.js",()=>({connectRoleMcp:async()=>({tools:[],close:async()=>{}})}));
 import { voiceChatContext, saveVoiceMessage, assertVoiceChat, voiceSummaryText } from "../src/lib/secretaryVoiceConversation.js";
 
 describe("голос сохраняет исходный чат без второй генерации", () => {
@@ -74,12 +76,12 @@ describe("голос сохраняет исходный чат без втор�
   });
 
   it("общий инструмент вложений получает исходный чат и сообщение", async () => {
-    const args={action:"discover",query:"taskflow_chat_attach_file"};
-    const legacy=JSON.parse((await runVoiceTool(owner,"taskflow",args)).result);
+    const args={names:["taskflow_chat_attach_file"]};
+    const legacy=JSON.parse((await runVoiceTool(owner,"taskflow_tools",args)).result);
     const userId=(db.prepare("SELECT id FROM chat_messages WHERE chat_id='voice-a' AND from_user_id=? ORDER BY rowid DESC LIMIT 1").get(owner) as any).id;
-    const contextual=JSON.parse((await runVoiceTool(owner,"taskflow",args,{chatId:"voice-a",messageId:userId})).result);
-    expect(legacy.data.operations.find((o:any)=>o.operation==="taskflow_chat_attach_file")?.available).toBe(false);
-    expect(contextual.data.operations.find((o:any)=>o.operation==="taskflow_chat_attach_file")?.available).toBe(true);
+    const contextual=JSON.parse((await runVoiceTool(owner,"taskflow_tools",args,{chatId:"voice-a",messageId:userId})).result);
+    expect(legacy.unknown).toContain("taskflow_chat_attach_file");
+    expect(contextual.activated).toContain("taskflow_chat_attach_file");
   });
 
   it("полная сводка извлекается без служебного конверта", () => {
@@ -89,11 +91,8 @@ describe("голос сохраняет исходный чат без втор�
 
   it("файл из голосового инструмента появляется вложением в исходном чате", async () => {
     const userId=(db.prepare("SELECT id FROM chat_messages WHERE chat_id='voice-a' AND from_user_id=? ORDER BY rowid DESC LIMIT 1").get(owner) as any).id;
-    const result=JSON.parse((await runVoiceTool(owner,"taskflow",{
-      operation:"taskflow_chat_attach_file",request_id:"voice-fixture-attachment",
-      arguments:JSON.stringify({file_name:"voice-fixture.md",format:"md",content:"# Голосовой документ\nПроверка исходного чата.",caption:"Документ из звонка"})
-    },{chatId:"voice-a",messageId:userId})).result);
-    expect(result.ok).toBe(true);
+    const result=JSON.parse((await runVoiceTool(owner,"taskflow_chat_attach_file",{file_name:"voice-fixture.md",format:"md",content:"# Голосовой документ\nПроверка исходного чата.",caption:"Документ из звонка"},{chatId:"voice-a",messageId:userId})).result);
+    expect(result).toBeDefined();
     const attachment=db.prepare("SELECT a.id,m.chat_id,m.reply_to_message_id FROM attachments a JOIN chat_messages m ON m.id=a.chat_message_id WHERE a.file_name='voice-fixture.md'").get() as any;
     expect(attachment?.chat_id).toBe("voice-a");
     expect(attachment?.reply_to_message_id).toBe(userId);

@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import db from "../db.js";
 import { requestTaskSummary } from "../lib/secretaryTaskSummary.js";
 import { submitOwnerTaskText } from "../lib/ownerDraft.js";
-import { VOICE_TOOLS_GUIDE, lookupTaskDetails, roleLoadNow, voiceToolManifest, runVoiceTool } from "../lib/secretaryVoiceTools.js";
+import { VOICE_TOOLS_GUIDE, lookupTaskDetails, roleLoadNow, voiceToolManifest, runVoiceTool, closeVoiceTools, closeAllVoiceTools } from "../lib/secretaryVoiceTools.js";
 import { sendSummaryToSecretaryChat } from "../lib/secretaryTaskSummary.js";
 
 export const secretaryVoiceSocket = () => join(
@@ -39,11 +39,17 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       if (chatId) {try {assertVoiceChat(ownerId || "",chatId);} catch {send(403,{error:"нет доступа к исходному чату"});return;}}
       send(200,{instructions:composeLayer("secretary","secretary.voice")!.effective+"\n\n"+roleInstructionText("secretary")+"\n\n"+VOICE_TOOLS_GUIDE+"\n\n"+chatExecutionInstruction(chatExecutionMode(chatId ?? undefined)),greeting:composeLayer("secretary","secretary.greeting")!.effective,manifest:instructionManifest("secretary","voice")}); return;
     }
-    if (req.method === "GET" && req.url === "/secretary/tools") {
-      try { send(200,{tools:await voiceToolManifest()}); } catch (error) { app.log.error({err:error},"не собран список инструментов голосового Помощника владельца"); send(500,{error:"сбой списка инструментов"}); }
+    if (req.method === "GET" && new URL(req.url || "/", "http://localhost").pathname === "/secretary/tools") {
+      try {
+        const query = new URL(req.url!, "http://localhost").searchParams;
+        const ownerId = query.get("owner_id") || "u-secretary";
+        const chatId = query.get("chat_id") || undefined;
+        if (chatId) assertVoiceChat(ownerId, chatId);
+        send(200,{tools:await voiceToolManifest(ownerId,{chatId,sessionId:query.get("session_id") || undefined})});
+      } catch (error) { app.log.error({err:error},"не собран список инструментов голосового Помощника владельца"); send(500,{error:"сбой списка инструментов"}); }
       return;
     }
-    if (req.method !== "POST" || !["/secretary/tasks", "/secretary/summary", "/secretary/task", "/secretary/roles", "/secretary/tool", "/secretary/owner-chat", "/secretary/conversation", "/secretary/transcript"].includes(req.url || "")) {
+    if (req.method !== "POST" || !["/secretary/tasks", "/secretary/summary", "/secretary/task", "/secretary/roles", "/secretary/tool", "/secretary/owner-chat", "/secretary/conversation", "/secretary/transcript", "/secretary/tools-close"].includes(req.url || "")) {
       send(404, { error: "неизвестный инструмент" }); return;
     }
     try {
@@ -70,13 +76,17 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
         }
         send(200,{message_id:saveVoiceMessage(owner.id,chatId!,body.event_id,body.role,body.text)}); return;
       }
+      if (req.url === "/secretary/tools-close") {
+        await closeVoiceTools(owner.id,{chatId,sessionId:body.session_id});
+        send(200,{ok:true}); return;
+      }
       if (req.url === "/secretary/roles") { send(200,roleLoadNow(owner.id)); return; }
       if (req.url === "/secretary/tool") {
         if (typeof body.name !== "string") { send(400,{error:"нужно имя инструмента"}); return; }
         const messageId = chatId ? (db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id=? ORDER BY rowid DESC LIMIT 1").get(chatId,owner.id) as {id:string}|undefined)?.id : undefined;
-        const result = await runVoiceTool(owner.id,body.name,body.arguments,{chatId,messageId});
-        if (chatId && body.arguments?.operation==="taskflow_task_summary" && (!body.arguments.action || body.arguments.action==="invoke")) {
-          const text = voiceSummaryText(result.result);
+        const result = await runVoiceTool(owner.id,body.name,body.arguments,{chatId,messageId,sessionId:body.session_id,callId:body.call_id});
+        if (chatId && body.name==="taskflow_task_summary") {
+          const text = voiceSummaryText(JSON.stringify({ok:true,data:{content:[{type:"text",text:result.result}]}}));
           if (text) saveVoiceMessage(owner.id,chatId,"summary:"+(body.arguments.request_id || randomUUID()),"assistant",text);
         }
         send(200,result); return;
@@ -108,7 +118,7 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
     } catch (error) {
       if (error instanceof NonTaskInputError) { send(422,{error:error.message,intent:error.intent,task:null}); return; }
       app.log.error({err:error}, "ошибка локального инструмента голосового Помощника владельца");
-      if (!res.headersSent) send(500, {error:"сбой инструмента Помощника владельца"});
+      if (!res.headersSent) send(500, {error: error instanceof Error ? error.message : "сбой инструмента Помощника владельца"});
     }
   });
   await new Promise<void>((resolve, reject) => {
@@ -116,6 +126,7 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
     server.listen(socketPath, () => { chmodSync(socketPath, 0o600); resolve(); });
   });
   return async () => {
+    await closeAllVoiceTools();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     try { unlinkSync(socketPath); } catch (error:any) { if (error.code !== "ENOENT") throw error; }
   };
