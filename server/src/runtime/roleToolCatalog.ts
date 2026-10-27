@@ -2,10 +2,12 @@ import {chatExecutionMode,type ChatExecutionMode} from "./chatExecutionMode.js";
 import {roleHostAccessTools} from "./roleHostAccess.js";
 import {createHostRoleTools} from "./hostRoleTools.js";
 import {isServerRefusal} from "./serverRefusal.js";
+import {Check,Errors} from "typebox/value";
+import {createHash} from "node:crypto";
 import {taskflowTools} from "./inProcessRun.js";
 import {roleToolAllowed} from "../lib/roleToolScope.js";
 import {roleUserId} from "../roleRouting.js";
-import {createUniversalTaskflow,operationRestriction,UNIVERSAL_INSTRUCTION,type Tool,type Context} from "./universalTaskflow.js";
+import {createUniversalTaskflow,isReadOperation,operationRestriction,UNIVERSAL_INSTRUCTION,type Tool,type Context} from "./universalTaskflow.js";
 import {toolRequestStore} from "./toolRequestStore.js";
 import {recordToolAudit} from "./toolAuditStore.js";
 import {MISTAKE_LIMIT,stopRoleOnErrorLoop} from "./errorLoopStop.js";
@@ -61,16 +63,54 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const sdkMistakes=new Map<string,number>();
  // Ключ памяти подключённых по требованию операций: роль + чат/задача.
  const scope=onDemandScopeKey(input);
- // Native schema and name are visible; execution still goes through the existing
- // authorization, argument validation, idempotency and audit path.
+ // Нативный инструмент исполняется напрямую (владелец 27.10.2026): Pi
+ // рассчитан на обычные инструменты, а прогон через общий шлюз (конверт,
+ // request_id, тренер ошибок) совпал по времени с ростом сбоев шагов.
+ // Права проверяются и здесь, каждый вызов пишется в журнал аудита.
+ const requestScope=JSON.stringify({taskId:context.taskId??null,subtaskId:context.subtaskId??null,chatId:context.chatId??null});
  const aliases=operations.filter(t=>!operationRestriction(t.name,context)).map(tool=>({...tool,execute:async(id:string,args:any,signal?:AbortSignal,onUpdate?:any)=>{
   handledCalls.add(id);
-  const output=await universal.execute(id,{action:"invoke",operation:tool.name,version:1,arguments:args,request_id:input.runId+":"+id},signal,onUpdate);
-  const envelope=JSON.parse(output.content[0].text);
-  if(!envelope.ok)throw new Error(JSON.stringify({ok:false,operation:tool.name,request_id:envelope.request_id,error:envelope.error}));
-  sdkMistakes.delete(tool.name);
-  if(!envelope.data?.content)throw new Error("Запрос уже выполняется; проверь requests.status");
-  return {content:envelope.data.content,details:{operation:tool.name}};
+  const audit=(outcome:"ok"|"error",errorCode?:string,errorMessage?:string)=>recordToolAudit({...context,action:"invoke",tool:tool.name,operation:tool.name,outcome,errorCode,errorMessage});
+  const restriction=operationRestriction(tool.name,context);
+  if(restriction){audit("error",restriction.code,restriction.message);throw new Error(restriction.message);}
+  // request_id — служебное поле прежнего шлюза, в схему операции не входит.
+  const {request_id:_requestId,...own}=(args??{}) as Record<string,unknown>;
+  // Страховка на случай вызова в обход проверки SDK: неверные аргументы не доходят до записи.
+  if(!Check(tool.parameters,own)){
+   const issues=[...Errors(tool.parameters,own)].slice(0,3).map((e:any)=>`${e.instancePath||e.path||"/"}: ${e.message}`).join("; ");
+   audit("error","INVALID_ARGUMENTS",issues);
+   throw new Error(`INVALID_ARGUMENTS: ${issues}. Операция не выполнялась. hint: исправь эти поля по схеме инструмента и повтори вызов.`);
+  }
+  // Повтор записи с тем же request_id отдаёт прежний результат, а не делает
+  // действие второй раз (дубли задач, повторный запуск рутины).
+  // Ключ — явный request_id или номер хода и вызова, как было в шлюзе.
+  const requestId=typeof _requestId==="string"&&_requestId.trim()?_requestId:input.runId+":"+id;
+  const write=!isReadOperation(tool.name);
+  const hash=write?createHash("sha256").update(JSON.stringify([tool.name,own])).digest("hex"):"";
+  if(write){
+   const prior=toolRequestStore.get(context.actor,requestId);
+   if(prior){
+    if(prior.scope!==requestScope||prior.hash!==hash)throw new Error("Этот request_id уже использован для другого действия — для нового действия нужен новый request_id.");
+    if(prior.result)return prior.result;
+    throw new Error("Запрос с этим request_id уже выполняется или его исход неизвестен — не повторяй, проверь результат.");
+   }
+   toolRequestStore.begin({actor:context.actor,id:requestId,scope:requestScope,hash,operation:tool.name,state:"running"});
+  }
+  try{
+   const result=await tool.execute(id,own,signal,onUpdate);
+   if(result?.isError)throw new Error((result.content??[]).map((c:any)=>c?.text??"").join("\n")||"Операция вернула ошибку");
+   audit("ok");
+   sdkMistakes.delete(tool.name);
+   const out={content:result?.content??[],details:{operation:tool.name}};
+   if(write)toolRequestStore.finish(context.actor,requestId!,"succeeded",out);
+   return out;
+  }catch(error){
+   if(write)try{toolRequestStore.finish(context.actor,requestId!,"unknown_outcome",null);}catch{}
+   const status=(error as {status?:number}).status;
+   const rejected=(error as Error)?.name==="ToolError"&&(status===undefined||status<500);
+   audit("error",rejected?"REJECTED":"OPERATION_FAILED",String((error as Error)?.message??error).slice(0,500));
+   throw error;
+  }
  }}));
  const nativeByName=new Map(aliases.map(tool=>[tool.name,tool]));
  const loader=createToolLoader({operations:aliases});
