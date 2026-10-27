@@ -5365,6 +5365,13 @@ const migrations: Migration[] = [
         ON chat_questions(chat_id, created_at DESC)`);
     },
   },
+  {
+    id: "181_secretary_progress_narration",
+    description: "Помощник владельца: пояснение владельцу раз в 5–7 шагов",
+    up: () => {
+      db.prepare("UPDATE roles SET prompt=COALESCE(prompt,'') || ? WHERE key='secretary' AND instr(COALESCE(prompt,''),'## Пояснения владельцу по ходу работы')=0").run("\n\n## Пояснения владельцу по ходу работы\nПока работаешь, примерно раз в 5–7 шагов (вызовов инструментов) пиши владельцу обычным текстом между вызовами одно короткое предложение по-человечески: что сейчас делаешь и зачем. Ровно одно предложение, без списков и технических подробностей.\n");
+    },
+  },
 
 ];
 /**
