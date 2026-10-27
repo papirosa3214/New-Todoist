@@ -22,6 +22,7 @@ import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 import { sourcedChatBlocks, type ChatBlock } from "../lib/chatBlocks.js";
 import { broadcastToUsers } from "../ws.js";
 import { unwrapRoleEnvelopeText } from "../lib/roleContractV1.js";
+import { TurnFileTracker, type TurnCodeChanges } from "../lib/turnFileChanges.js";
 import { emptyAssistantAnswer } from "./providerFailover.js";
 
 export const LIVE_BROADCAST_MS = 150;
@@ -112,6 +113,8 @@ export interface SavedSteps {
   duration_ms: number;
   items: LiveItem[];
   usage?: TurnUsage;
+  /** Файлы, которые роль поменяла за ход (владелец 27.10.2026). */
+  code_changes?: TurnCodeChanges;
 }
 
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
@@ -384,6 +387,8 @@ export class LiveTurn {
   /** Модель ответила пустотой (21.10.2026): ни текста, ни вызова
    *  инструмента. Ход молчал — в чате это видно как сбой. */
   private emptyReason: string | null = null;
+  /** Исходный вид файлов до правок роли — для «Изменений кода» хода. */
+  private readonly files = new TurnFileTracker();
 
   constructor(args: {
     chatId: string;
@@ -407,6 +412,7 @@ export class LiveTurn {
   /** Событие рантайма роли. Всё незнакомое молча пропускаем. */
   readonly onEvent = (event: unknown): void => {
     if (this.closed || !event || typeof event !== "object") return;
+    try { this.files.observe(event); } catch { /* украшение — ход не роняем */ }
     traceCoordination(()=>coordinationActivity(this.triggerMessageId,this.userId,event));
     const e = event as {
       type?: string;
@@ -658,10 +664,13 @@ export class LiveTurn {
     }
     const usage = this.usage && this.usage.input + this.usage.output > 0 ? this.usage : null;
     if (!usage && !items.some((it) => it.kind !== "text")) return null;
+    let codeChanges: TurnCodeChanges | null = null;
+    try { codeChanges = this.files.result(); } catch { codeChanges = null; }
     return {
       duration_ms: Date.now() - this.startedAt.getTime(),
       items,
       ...(usage ? { usage } : {}),
+      ...(codeChanges ? { code_changes: codeChanges } : {}),
     };
   }
 

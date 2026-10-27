@@ -1653,6 +1653,9 @@ async function startChatRunOnce(
     // текст, и роль в чате просто молчала.
     const turnState: { last: TurnResult | null } = { last: null };
 
+    // Рабочая папка роли — живому ходу: относительные пути правок файлов
+    // считаются от неё («Изменения кода» под ответом, 27.10.2026).
+    try { input.onEvent?.({ type: "taskflow_workspace", cwd }); } catch { /* украшение */ }
     const unsubscribe = session.subscribe((event: any) => {
       if(event?.type!=="message_update")budgetEvents.push(event);
       steering?.observe(event);
@@ -1908,6 +1911,9 @@ async function runExternalChat(
   const steering=input.deliveryOutcome
     ? registerChatSteering({chatId:input.chatId,roleId:input.roleId,executionMode:chatExecutionMode(input.chatId,input.messageId),workMode:mode,steer:text=>session.steer(text),outcome:input.deliveryOutcome})
     : null;
+  // Рабочая папка роли — живому ходу: относительные пути правок файлов
+  // считаются от неё («Изменения кода» под ответом, 27.10.2026).
+  try { input.onEvent?.({ type: "taskflow_workspace", cwd }); } catch { /* украшение */ }
   const unsubscribe = session.subscribe((event: any) => {
     steering?.observe(event);
     if (event?.type === "tool_execution_start") input.onStep?.(event.toolName);
