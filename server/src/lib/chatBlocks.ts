@@ -12,14 +12,16 @@
 //   • pending / structured_json_streaming — такой блок ещё дописывается.
 import { markdownToTiptap, parseInline, type Node } from "./markdownToTiptap.js";
 
+import { componentOfWidget, componentsOfStructured, type AgentComponent } from "./agentComponents.js";
+
 export type TableAlignment = "leading" | "center" | "trailing";
 export type PendingKind = "widget" | "structured_json" | "html";
 
 export type ChatBlock =
   | { type: "doc"; doc: Node; chars: number }
   | { type: "table"; header: Node[][]; align: TableAlignment[]; rows: Node[][][]; chars: number }
-  | { type: "widget"; json: string }
-  | { type: "structured_json"; json: string }
+  | { type: "widget"; json: string; component?: AgentComponent }
+  | { type: "structured_json"; json: string; components?: AgentComponent[] }
   | { type: "structured_json_streaming"; json: string }
   | { type: "html"; html: string }
   | { type: "pending"; kind: PendingKind };
@@ -83,6 +85,10 @@ function docOf(markdown: string): ChatBlock {
 
 /** Блок с исходным куском текста — для живого хода: клиент проявляет
  *  исходный текст по словам и рисует блок, обрезанный по открытой части. */
+function parsedJSON(json: string): unknown {
+  try { return JSON.parse(json); } catch { return null; }
+}
+
 export type SourcedChatBlock = ChatBlock & { source: string };
 
 /** Разложить текст ответа на блоки. streaming — ответ ещё печатается. */
@@ -125,8 +131,15 @@ export function sourcedChatBlocks(text: string, streaming = false): SourcedChatB
         if (!closed && streaming) {
           blocks.push(special === "structured_json" ? { type: "structured_json_streaming", json: body, source } : { type: "pending", kind: special, source });
         } else if (special === "html") blocks.push({ type: "html", html: body, source });
-        else if (special === "widget") blocks.push({ type: "widget", json: jsonWithTextBlocks(body), source });
-        else blocks.push({ type: "structured_json", json: jsonWithTextBlocks(body), source });
+        else if (special === "widget") {
+          const json = jsonWithTextBlocks(body);
+          const component = componentOfWidget(parsedJSON(json));
+          blocks.push({ type: "widget", json, ...(component ? { component } : {}), source });
+        } else {
+          const json = jsonWithTextBlocks(body);
+          const components = componentsOfStructured(parsedJSON(json));
+          blocks.push({ type: "structured_json", json, ...(components ? { components } : {}), source });
+        }
         i = closed ? j + 1 : lines.length;
         continue;
       }
