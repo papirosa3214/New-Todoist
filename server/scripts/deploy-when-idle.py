@@ -24,7 +24,7 @@
 Состояние: ~/.local/state/taskflow-deploy/ (deployed — выложенный коммит).
 Реестр: docs/watchers.md, раздел «Отложенная выкладка сервера».
 """
-import os, sqlite3, subprocess, time, urllib.request, uuid
+import os, re, sqlite3, subprocess, time, urllib.request, uuid
 from datetime import datetime
 
 REPO = os.path.expanduser("~/Проекты/New-Todoist")
@@ -166,6 +166,54 @@ def healthy(wait=90):
     return False
 
 
+def prune_backups(keep=10):
+    """Убрать старые копии БД, оставив последние `keep` выкладок.
+
+    Склад копий рос без удержания: 179 файлов pre-deploy-*.db на 22 ГБ
+    (28.10.2026) — по 10–26 копий на выкладку, потому что выкладок в дне
+    несколько. Диск .110 заполнялся на ~2 ГБ в сутки.
+
+    Что удаляем: ТОЛЬКО `pre-deploy-*.db` — их снимает этот же скрипт перед
+    каждой выкладкой, и они взаимозаменяемы (свежая копия той же базы).
+    Ручные копии (`rescue-*`, `mak112-*`, `durable-review-*` и прочие) не
+    трогаем: они сделаны под конкретный разбор и могут быть единственными.
+    Ночной слепок на NAS (systemd taskflow-backup.timer) — отдельная
+    история, там копии по датам и они на месте.
+
+    Ошибка удаления — только в журнал: уборка не должна ломать выкладку.
+    """
+    backups = os.path.join(SERVER, "backups")
+    if not os.path.isdir(backups):
+        return
+    try:
+        # Строгий шаблон: `pre-deploy-ГГГГММДД-ЧЧММ.db`. Ручные копии,
+        # названные похоже (например pre-deploy-manual-20261026-1952.db),
+        # под шаблон не подходят и остаются нетронутыми.
+        pattern = re.compile(r"^pre-deploy-\d{8}-\d{4}\.db$")
+        names = [n for n in os.listdir(backups) if pattern.match(n)]
+        if len(names) <= keep:
+            return
+        # Сортировка по имени: в имени метка времени (YYYYMMDD-HHMM), и
+        # лексикографический порядок совпадает с хронологическим.
+        names.sort()
+        removed = 0
+        freed = 0
+        for name in names[:-keep]:
+            path = os.path.join(backups, name)
+            try:
+                size = os.path.getsize(path)
+                os.unlink(path)
+                removed += 1
+                freed += size
+            except OSError:
+                continue
+        if removed:
+            log(f"бэкапы убраны: {removed} шт., {freed / 1024 / 1024:.0f} МБ "
+                f"(оставлено {keep})")
+    except Exception as e:
+        log(f"уборка бэкапов не прошла: {e}")
+
+
 def main():
     os.makedirs(STATE, exist_ok=True)
     state("last_run", datetime.now().isoformat(timespec="seconds"))
@@ -264,6 +312,9 @@ def main():
         state("deployed", head)
         state("pending_since", "")
         log(f"выложено {head[:8]}")
+        # Уборка склада копий — только после успешной выкладки: до неё
+        # свежая копия нужна для отката.
+        prune_backups()
         notify(f"TaskFlow: выложено {head[:8]} ({len(subject)} серверн. коммит(ов)), сервер отвечает.\n" + "\n".join("• " + s for s in subject[:6]))
     else:
         state("failed", head)
