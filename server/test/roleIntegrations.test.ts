@@ -103,13 +103,13 @@ describe("интеграции в профиле роли", () => {
 
   it("сводка по Composio у владельца: каталог, роли и их политики", async () => {
     vi.mocked(inspectComposio).mockResolvedValue({
-      items: [{ slug: "todoist", name: "Todoist", connected: true, noAuth: false }],
+      items: [{ slug: "todoist", name: "Todoist", logo: "https://logos.composio.dev/api/todoist", connected: true, noAuth: false }],
     } as any);
     const res = await app.inject({ method: "GET", url: "/api/integrations/composio", headers: auth(ownerToken) });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.configured).toBe(true);
-    expect(body.catalog).toEqual([{ slug: "todoist", name: "Todoist", connected: true, noAuth: false }]);
+    expect(body.catalog).toEqual([{ slug: "todoist", name: "Todoist", logo: "https://logos.composio.dev/api/todoist", connected: true, noAuth: false }]);
     expect(body.roles).toEqual(
       expect.arrayContaining([{ role, enabled: true, toolkits: ["linear"] }]),
     );
@@ -129,7 +129,7 @@ describe("интеграции в профиле роли", () => {
     const body = res.json();
     expect(body.catalog.map((item: any) => item.slug)).toEqual(["gmail"]);
     expect(body.services).toEqual([
-      { slug: "todoist", name: "Todoist", connected: true, noAuth: false },
+      { slug: "todoist", name: "Todoist", logo: null, connected: true, noAuth: false },
     ]);
   });
 

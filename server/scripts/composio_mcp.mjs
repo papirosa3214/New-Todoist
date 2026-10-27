@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +43,22 @@ export async function flatToolkitTools(composio, options, plan) {
     } catch { /* остаются мета-инструменты Composio */ }
   }
   return out;
+}
+
+// Аккаунт, подключённый по своему ключу (Exa и подобные — у Composio для них
+// нет управляемой авторизации), сессия сама не находит: без явной привязки
+// authConfigs сервис в ней числится неподключённым. Подставляем свои
+// настройки подключения из активных аккаунтов владельца.
+export async function withOwnAuthConfigs(composio, userId, options) {
+  const accounts = (await composio.connectedAccounts.list({ userIds: [userId], statuses: ["ACTIVE"], limit: 100 })).items;
+  const own = {};
+  for (const account of accounts) {
+    const slug = account.toolkit?.slug;
+    const config = account.authConfig;
+    if (slug && config?.id && !config.isComposioManaged && !own[slug]) own[slug] = config.id;
+  }
+  if (!Object.keys(own).length) return options;
+  return { ...options, authConfigs: { ...own, ...(options.authConfigs ?? {}) } };
 }
 
 export async function openComposioSession(composio, options, userId, cacheFile) {
@@ -185,10 +202,10 @@ export async function manageAccounts(composio, userId, toolkit, action, input) {
 }
 
 export async function main() {
-  const options = JSON.parse(process.env.TASKFLOW_COMPOSIO_OPTIONS ?? "{}");
   const userId = process.env.TASKFLOW_COMPOSIO_USER_ID;
   if (!userId || !process.env.COMPOSIO_API_KEY) throw new Error("credential_missing");
   const composio = new Composio({ apiKey: process.env.COMPOSIO_API_KEY, logLevel: "silent", allowTracking: false });
+  const options = await withOwnAuthConfigs(composio, userId, JSON.parse(process.env.TASKFLOW_COMPOSIO_OPTIONS ?? "{}"));
   phase = "session";
   if (process.argv.includes("--catalog")) {
     const session = await composio.create(userId, { ...options, toolkits: undefined });
@@ -198,7 +215,7 @@ export async function main() {
       const limit = Math.min(100, Math.max(1, Number(process.env.TASKFLOW_COMPOSIO_LIMIT) || 50));
       const cursor = process.env.TASKFLOW_COMPOSIO_CURSOR || undefined;
       const result = await session.toolkits({ limit, cursor, search: process.env.TASKFLOW_COMPOSIO_SEARCH || undefined });
-      process.stdout.write(JSON.stringify({ items: result.items.map(t => ({ slug: t.slug, name: t.name, connected: !!t.connection?.isActive, noAuth: t.isNoAuth })), cursor: result.cursor ?? null, totalPages: result.totalPages ?? null }));
+      process.stdout.write(JSON.stringify({ items: result.items.map(t => ({ slug: t.slug, name: t.name, logo: t.logo ?? null, connected: !!t.connection?.isActive, noAuth: t.isNoAuth })), cursor: result.cursor ?? null, totalPages: result.totalPages ?? null }));
     } finally { await session.delete(); }
     return;
   }
@@ -226,7 +243,10 @@ export async function main() {
   }
   const hash = process.env.TASKFLOW_COMPOSIO_CACHE_KEY;
   if (!/^[a-f0-9]{64}$/.test(hash ?? "")) throw new Error("invalid_context");
-  const cacheFile = path.join(process.env.TASKFLOW_COMPOSIO_STATE_DIR ?? path.join(os.homedir(), ".local", "state", "taskflow", "composio"), hash + ".json");
+  // Свои настройки подключения входят в ключ кэша: появился новый аккаунт по
+  // ключу — нужна новая сессия, старая о нём не знает.
+  const own = options.authConfigs ? "-" + createHash("sha256").update(JSON.stringify(options.authConfigs)).digest("hex").slice(0, 12) : "";
+  const cacheFile = path.join(process.env.TASKFLOW_COMPOSIO_STATE_DIR ?? path.join(os.homedir(), ".local", "state", "taskflow", "composio"), hash + own + ".json");
   const session = await openComposioSession(composio, options, userId, cacheFile);
   phase = "mcp_connection";
   const endpoint = new URL(session.mcp.url);
