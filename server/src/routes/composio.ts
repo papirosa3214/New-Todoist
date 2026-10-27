@@ -18,11 +18,28 @@ export function registerComposioRoutes(app: FastifyInstance) {
   app.get("/api/roles/:role/composio", { preHandler: authorize }, async (req: any) => {
     const policy = roleComposioPolicy(req.params.role, req.userId);
     const configured = composioCredentialConfigured();
+    // Каталог постраничный: iOS-клиент листает его курсором (первая
+    // страница — 50 сервисов, всего их больше тысячи).
+    const search = String(req.query.search ?? "").slice(0, 100);
+    const cursor = String(req.query.cursor ?? "").slice(0, 200) || null;
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
     try {
-      const catalog = configured ? await inspectComposio(policy, "catalog", String(req.query.search ?? "").slice(0, 100)) : { items: [] };
-      return { enabled: policy.enabled, toolkits: policy.toolkits, configured, available: configured, catalog: catalog.items, error: configured ? null : "Ключ Composio ещё не настроен на сервере" };
+      const catalog = configured
+        ? await inspectComposio(policy, "catalog", search, { cursor, limit })
+        : { items: [], cursor: null, totalPages: null };
+      return {
+        enabled: policy.enabled,
+        toolkits: policy.toolkits,
+        configured,
+        available: configured,
+        catalog: Array.isArray(catalog.items) ? catalog.items : [],
+        catalogCursor: catalog.cursor ?? null,
+        catalogTotalPages: catalog.totalPages ?? null,
+        catalogLimit: limit,
+        error: configured ? null : "Ключ Composio ещё не настроен на сервере",
+      };
     } catch (error) {
-      return { enabled: policy.enabled, toolkits: policy.toolkits, configured, available: false, catalog: [], error: (error as Error).message };
+      return { enabled: policy.enabled, toolkits: policy.toolkits, configured, available: false, catalog: [], catalogCursor: null, catalogTotalPages: null, catalogLimit: limit, error: (error as Error).message };
     }
   });
   app.patch("/api/roles/:role/composio", { preHandler: authorize }, async (req: any, reply) => {
