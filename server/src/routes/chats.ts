@@ -7,7 +7,7 @@ import {preparedReportMaterials} from "../runtime/chatPreparedMaterials.js";
 import { prepareChatValue } from "../runtime/chatPreparationDeadline.js";
 import {chatExecutionMode,parseChatExecutionMode,isCardHandoffCommand,type ChatExecutionMode} from "../runtime/chatExecutionMode.js";
 import {offerChatSteering} from "../runtime/chatSteering.js";
-import { autoTitleChat, ensurePersonalRoom, isDirectRoom, roomsSnapshot } from "../lib/chatRooms.js";
+import { autoTitleChat, ensurePersonalRoom, isDirectRoom, roomTurn, roomsSnapshot } from "../lib/chatRooms.js";
 import {
   ChatItemSubmitError,
   ChatPlanWriteRejection,
@@ -85,7 +85,7 @@ import {
   ensureCommonChat,
 } from "../lib/chatCommon.js";
 import {
-  chatRunFailureText,
+  chatRunFailureText, chatRunStopReason,
   liveTurnsOfChat,
   liveTurnForClient,
   startLiveTurn,
@@ -537,6 +537,8 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
             ? { ...last, text: typeof last.text === "string" ? previewText(last.text) : last.text }
             : null,
           unread_count: unread,
+          // Ход роли в этой комнате: идёт / чем кончился (владелец 27.10.2026).
+          turn: roomTurn(c.id, req.userId),
           // Название задачи для пометки в строке списка: по ней видно, какой
           // чат за какой задачей (владелец 21.09.2026, LOCK-195).
           task_title: c.task_id
@@ -3294,13 +3296,7 @@ async function deliverAgentReply(args: {
     replyId = plannedReplyId;
     // Прерванный ответ помечается явно: stop_reason — почему ответ прерван,
     // partial — что ответ сохранён частично (карточка 252c400e, §2.1).
-    const stopReason = cancelled
-      ? "owner_interrupt"
-      : failure
-        ? (failure as { code?: string } | null)?.code === "CHAT_RUN_CANCELLED"
-          ? "owner_interrupt"
-          : "error"
-        : null;
+    const stopReason = chatRunStopReason(Boolean(cancelled), failure);
     db.prepare(
       `INSERT INTO chat_messages (id, from_user_id, text, role_envelope_json, channel, chat_id, quick_replies, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id,stop_reason,partial)
        VALUES (?, ?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

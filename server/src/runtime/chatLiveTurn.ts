@@ -840,6 +840,25 @@ export function startLiveTurn(args: {
   return turn;
 }
 
+/** Кончился лимит у модели-провайдера: квота, баланс, частота запросов. */
+const PROVIDER_LIMIT = /rate.?limit|quota|\b429\b|insufficient.?(balance|credit|quota)|usage.?limit|лимит/i;
+
+/**
+ * Почему ответ роли прерван — пишется в chat_messages.stop_reason.
+ * «limit» отдельно от «error» (владелец 27.10.2026): в списке комнат
+ * кончившийся лимит — красная точка, отвалившийся ход — жёлтая.
+ */
+export function chatRunStopReason(cancelled: boolean, failure: unknown): string | null {
+  if (cancelled) return "owner_interrupt";
+  if (!failure) return null;
+  const code = (failure as { code?: string } | null)?.code;
+  if (code === "CHAT_RUN_CANCELLED") return "owner_interrupt";
+  if (code === "CHAT_ACTION_BUDGET" || code === "CHAT_RUN_CEILING") return "limit";
+  const message = failure instanceof Error ? failure.message : String((failure as { message?: unknown })?.message ?? "");
+  if (PROVIDER_LIMIT.test(message)) return "limit";
+  return "error";
+}
+
 /** Человеческий текст о сорванном ходе — ложится в чат вместо тишины. */
 export function chatRunFailureText(error: unknown): string {
   const code = (error as { code?: string } | null)?.code;
