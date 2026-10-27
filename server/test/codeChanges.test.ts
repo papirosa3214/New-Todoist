@@ -112,6 +112,29 @@ describe("taskCodeChanges", () => {
     expect(result.files.map((f) => f.path).sort()).toEqual(["a.txt", "gone.txt", "new.txt"]);
   });
 
+  it("рабочая копия роли: незакоммиченные правки и новые файлы тоже в счёте", () => {
+    // Роль правила, но не закоммитила (владелец 27.10.2026): ветка без своих
+    // коммитов, правки только в рабочей копии.
+    const wt = path.join(root, "wt-t2");
+    git("worktree", "add", "-q", "-b", "roles/t2", wt, "main");
+    fs.writeFileSync(path.join(wt, "a.txt"), fs.readFileSync(path.join(wt, "a.txt"), "utf8") + "ещё\n");
+    fs.writeFileSync(path.join(wt, "fresh.txt"), "f1\nf2\n");
+    const result = taskCodeChanges("t2", { repo: live, worktree: wt });
+    expect(result.state).toBe("branch");
+    expect(result.uncommitted).toBe(true);
+    expect(result.files.map((f) => [f.path, f.status, f.additions, f.deletions]).sort()).toEqual([
+      ["a.txt", "modified", 1, 0],
+      ["fresh.txt", "added", 2, 0],
+    ]);
+    expect(result.totals).toEqual({ files: 2, additions: 3, deletions: 0 });
+  });
+
+  it("рабочая копия без правок — как раньше, только коммиты ветки", () => {
+    const wt = path.join(root, "wt-t3");
+    git("worktree", "add", "-q", "-b", "roles/t3", wt, "main");
+    expect(taskCodeChanges("t3", { repo: live, worktree: wt })).toMatchObject({ state: "none", files: [] });
+  });
+
   it("no branch: empty answer, no throw", () => {
     expect(taskCodeChanges("nope", { repo: live })).toMatchObject({ state: "none", files: [] });
   });

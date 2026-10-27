@@ -4,7 +4,8 @@
 // Владелец 27.10.2026: «точно буду знать, что трогали, что не трогали».
 // Только чтение: ничего не сливает и не правит. Разбор diff — здесь, на
 // сервере, чтобы приложение только показывало готовые строки.
-import { gitOrNull, liveRepo, refExists, roleBranch } from "./paths.js";
+import { spawnSync } from "node:child_process";
+import { gitOrNull, liveRepo, refExists, roleBranch, worktreeExists, worktreePath } from "./paths.js";
 
 export type CodeLineKind = "context" | "added" | "deleted";
 
@@ -43,6 +44,8 @@ export interface CodeChanges {
   state: "branch" | "merged" | "none";
   base: string | null;
   head: string | null;
+  /** В счёт вошли незакоммиченные правки рабочей копии роли (27.10.2026). */
+  uncommitted?: boolean;
   totals: { files: number; additions: number; deletions: number };
   files: CodeFile[];
 }
@@ -128,6 +131,24 @@ function diff(repo: string, base: string, head: string): CodeFile[] {
   return text ? parseUnifiedDiff(text) : [];
 }
 
+/** Новых файлов в счёт не больше этого: отчёт, а не выгрузка копии. */
+const UNTRACKED_MAX = 200;
+
+/** Рабочая копия роли против `base`: закоммиченное и нет, плюс новые файлы. */
+function workingDiff(worktree: string, base: string): CodeFile[] {
+  const tracked = gitOrNull(worktree, ["diff", "--no-color", "--find-renames", "-U3", base], 60_000);
+  const files = tracked ? parseUnifiedDiff(tracked) : [];
+  const untracked = (gitOrNull(worktree, ["ls-files", "--others", "--exclude-standard", "-z"]) ?? "")
+    .split("\0").filter(Boolean).slice(0, UNTRACKED_MAX);
+  for (const file of untracked) {
+    // --no-index отвечает кодом 1, когда разница есть, — это не ошибка.
+    const out = spawnSync("git", ["diff", "--no-index", "--no-color", "-U3", "--", "/dev/null", file],
+      { cwd: worktree, encoding: "utf8", timeout: 30_000, maxBuffer: 32 * 1024 * 1024 });
+    if (out.stdout) files.push(...parseUnifiedDiff(out.stdout));
+  }
+  return files;
+}
+
 /**
  * Диапазон: невлитая ветка — от точки ответвления до вершины ветки (что
  * сделала роль, без того, что ушло в main после); влитая — `before..after`,
@@ -135,7 +156,7 @@ function diff(repo: string, base: string, head: string): CodeFile[] {
  */
 export function taskCodeChanges(
   taskId: string,
-  opts: { repo?: string; merged?: { before: string; after: string } | null } = {},
+  opts: { repo?: string; merged?: { before: string; after: string } | null; worktree?: string | null } = {},
 ): CodeChanges {
   const repo = opts.repo ?? liveRepo();
   const branch = roleBranch(taskId);
@@ -157,6 +178,18 @@ export function taskCodeChanges(
     base = head ? gitOrNull(repo, ["merge-base", "refs/heads/main", head]) : null;
     if (head && base && base !== head) state = "branch";
   }
+  // Незакоммиченные правки в рабочей копии роли (владелец 27.10.2026):
+  // роль могла править и не успеть закоммитить — их тоже видно.
+  const worktree = opts.worktree !== undefined ? opts.worktree
+    : worktreeExists(taskId) ? worktreePath(taskId) : null;
+  let uncommitted = false;
+  if (worktree && head && refExists(repo, "refs/heads/main")) {
+    const dirty = gitOrNull(worktree, ["status", "--porcelain"]);
+    if (dirty && dirty.trim()) {
+      base = base ?? gitOrNull(repo, ["merge-base", "refs/heads/main", head]);
+      if (base) { uncommitted = true; state = "branch"; }
+    }
+  }
   if (state === "none" && opts.merged?.before && opts.merged.after) {
     base = opts.merged.before;
     head = opts.merged.after;
@@ -164,13 +197,14 @@ export function taskCodeChanges(
   }
   if (state === "none" || !base || !head) return empty;
 
-  const files = diff(repo, base, head);
+  const files = uncommitted && worktree ? workingDiff(worktree, base) : diff(repo, base, head);
   return {
     task_id: taskId,
     branch,
     state,
     base,
     head,
+    ...(uncommitted ? { uncommitted: true } : {}),
     totals: {
       files: files.length,
       additions: files.reduce((sum, f) => sum + f.additions, 0),
