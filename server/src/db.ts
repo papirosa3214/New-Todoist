@@ -31,6 +31,14 @@ export const DB_PATH = process.env.DB_PATH
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
+// Предел размера WAL: без него файл не усекается никогда и растёт вместе
+// с базой — VACUUM в выкладке (server/scripts/deploy-when-idle.py)
+// переписывает всю базу в WAL, и journal_size_limit = -1 (дефолт SQLite
+// «без предела») позволял ему раздуваться до размера базы (28.10.2026:
+// база 174 МБ, WAL 175 МБ — из них живых страниц единицы).
+// 64 МБ — с запасом над рабочим окном, но без роста вслед за базой.
+// Применяется при старте процесса; боевую базу не переписывает.
+db.pragma("journal_size_limit = 67108864");
 
 /**
  * Базовая миграция схемы: `CREATE TABLE IF NOT EXISTS` для таблиц и

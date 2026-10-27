@@ -245,6 +245,20 @@ def main():
     else:
         size_mb = os.path.getsize(DB) / 1024 / 1024 if os.path.exists(DB) else 0
         log(f"VACUUM выполнен, размер БД: {size_mb:.0f} МБ")
+    # Усечение WAL сразу после VACUUM. VACUUM переписывает всю базу в
+    # WAL, и без TRUNCATE этот файл остаётся размером с базу (28.10.2026:
+    # после выкладки WAL раздувался до 175 МБ при 174 МБ базы, из них
+    # живых страниц — единицы). TRUNCATE переносит кадры в базу и обрезает
+    # файл до нуля. Тот же приём, что и в db.ts (journal_size_limit), —
+    # только здесь усечение происходит в момент появления раздутия.
+    # Ошибка — только в журнал: обслуживание не отменяет выкладку.
+    truncate = sh("sqlite3", DB, "pragma wal_checkpoint(TRUNCATE);", cwd=SERVER, timeout=300)
+    if truncate.returncode != 0:
+        log(f"WAL не усечён: {(truncate.stderr or truncate.stdout).strip()[:200]}")
+    else:
+        wal = os.path.join(SERVER, "taskflow.db-wal")
+        wal_mb = os.path.getsize(wal) / 1024 / 1024 if os.path.exists(wal) else 0
+        log(f"WAL усечён, размер: {wal_mb:.1f} МБ")
     sh("systemctl", "--user", "restart", "taskflow-server", timeout=120)
     if healthy():
         state("deployed", head)

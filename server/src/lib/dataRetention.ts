@@ -37,6 +37,7 @@
 // Остальное в chat_messages (текст сообщений, координация, конверты)
 // не трогаем — это история переписки.
 import db from "../db.js";
+import { existsSync, statSync } from "node:fs";
 
 /** Журнал идемпотентности: сколько дней хранить. */
 export const TOOL_REQUEST_RETENTION_DAYS = 7;
@@ -172,6 +173,36 @@ export function runRetention(): { toolRequests: number; thinkingTrimmed: number 
 }
 
 /**
+ * Усечение WAL-файла. SQLite не обрезает WAL сам: кадры перезаписываются
+ * с начала, но файл остаётся размером, каким вырос (28.10.2026 — WAL
+ * 175 МБ при базе 174 МБ, из них живых страниц единицы). Основная причина
+ * у нас — VACUUM в выкладке, он переписывает всю базу в WAL.
+ *
+ * TRUNCATE переносит кадры в базу и обрезает файл до нуля. Здесь — подстраховка
+ * для раздутия от других операций (у выкладки своя, сразу после VACUUM).
+ *
+ * Возвращает размер WAL в байтах до усечения (0 — файла не было).
+ */
+export function truncateWal(): number {
+  const wal = `${db.name}-wal`;
+  let before = 0;
+  try {
+    before = existsSync(wal) ? statSync(wal).size : 0;
+  } catch {
+    before = 0;
+  }
+  // checkpoint(TRUNCATE) не трогает данные: он лишь переносит кадры из
+  // WAL в базу и обрезает файл. busy-счётчик игнорируем: если база занята
+  // записью, усечение не удастся — повторим в следующий проход.
+  try {
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } catch (error) {
+    console.warn("[retention] WAL не усечён:", error);
+  }
+  return before;
+}
+
+/**
  * Таймер уборки. Возвращает функцию остановки.
  *
  * Обслуживание не должно ронять сервер: любая ошибка — в журнал, дальше
@@ -188,6 +219,17 @@ export function startRetention(): () => void {
       }
     } catch (error) {
       console.warn("[retention] уборка не прошла:", error);
+    }
+    // WAL усечаем отдельным шагом: он не должен отменять уборку записей
+    // и наоборот. Усечение — только если файл действительно раздулся
+    // (больше 32 МБ): при нормальном размере трогать его незачем.
+    try {
+      const was = truncateWal();
+      if (was > 32 * 1024 * 1024) {
+        console.log(`[retention] WAL усечён: ${(was / 1024 / 1024).toFixed(0)} МБ → 0`);
+      }
+    } catch (error) {
+      console.warn("[retention] WAL не усечён:", error);
     }
   }, RETENTION_INTERVAL_MS);
   // Таймер не должен держать процесс живым при остановке.
