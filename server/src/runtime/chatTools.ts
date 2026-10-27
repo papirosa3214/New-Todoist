@@ -22,11 +22,13 @@ import { loadChatMessage } from "../lib/chatMessages.js";
 import {
   createQuestionRow,
   QuestionValidationError,
+  renderAnswerText,
   renderQuestionText,
   validateQuestionPayload,
   type QuestionPayload,
 } from "../lib/chatQuestions.js";
 import { broadcastToUsers } from "../ws.js";
+import { liveInterruptEvent, liveResumeEvent, waitForAnswer } from "../lib/questionWait.js";
 import { saveUploadedFile, UploadRejected } from "../routes/attachments.js";
 import { roleUserId } from "../roleRouting.js";
 
@@ -44,7 +46,7 @@ function asTasks(payload: any): any[] {
 /** Набор инструментов чата для роли. Описания — из реестра инструкций
  *  (`tool.runtime.<имя>`), владелец правит их на экране «Команда». */
 export function chatTools(role: string, ownerContext?: {chatId:string;messageId:string}) {
-  const T = (name: string, description: string, parameters: any, run: (p: any) => Promise<unknown>) => {
+  const T = (name: string, description: string, parameters: any, run: (p: any, signal?: AbortSignal) => Promise<unknown>) => {
     const key = "tool.runtime." + name;
     registerInstructionBlock({
       key, title: name, group: "Возможности", scope: "command",
@@ -56,9 +58,9 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
       label: name,
       description: composeLayer(role, key)?.effective ?? description,
       parameters,
-      execute: async (_id: string, params: any) => {
+      execute: async (_id: string, params: any, signal?: AbortSignal) => {
         try {
-          return asText(await run(params ?? {}));
+          return asText(await run(params ?? {}, signal));
         } catch (e) {
           throw new Error(e instanceof ToolError ? e.message : `сбой инструмента ${name}: ${String(e)}`);
         }
@@ -361,11 +363,13 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
     ...(ownerContext ? [T("taskflow_slot_restart",
       "По прямой просьбе владельца заменить зависшего исполнителя свежим агентом ТОЙ ЖЕ роли в существующем слоте и запустить. Не добавляет узлы и не меняет связи. Перед вызовом прочитай карточку; укажи точный subtask_id и неизменную роль. Если слотов несколько — уточни у владельца. Не вызывай для обычного сообщения, консультации или простого назначения. Сохраняет историю и передаёт снимок работы в новую сессию.",
       Type.Object({subtask_id:Type.String(),role:Type.String(),reason:Type.String()}),p=>restartSlotFromOwnerChat(ownerContext.chatId,ownerContext.messageId,p))] : []),
-    // Уточнение у владельца (26.10.2026). Ход НЕ ждёт ответа: вопрос
-    // записывается в БД и показывается в чате, ход завершается, а ответ
-    // владельца поднимает новый ход роли (POST /api/chats/:id/questions/:qid/answer).
+    // Уточнение у владельца (26.10.2026). С 27.10.2026 ход ждёт ответа
+    // (пауза, как interrupt в AG-UI): вопрос записывается в БД и показывается
+    // в чате, в поток хода уходит chats:live:interrupt, ответ владельца
+    // возвращается результатом этого же вызова. Ход оборван или пауза вышла
+    // по таймауту — ответ поднимет новый ход роли, как раньше.
     ...(ownerContext ? [T("taskflow_ask_user_question",
-      "Задать владельцу уточняющий вопрос с вариантами ответа. Вопросов — от одного до четырёх, у каждого от двух до четырёх вариантов с коротким пояснением (description). header — короткая метка до 16 символов, label варианта — до 60. Свои варианты не называй «Other», «Type something.», «Next» — свой ответ владелец вводит сам. multiSelect — можно ли выбрать несколько вариантов. Инструмент записывает вопрос и показывает его владельцу в чате, а ход завершает: не жди ответа в этом ходу, не повторяй вопрос и не продолжай работу без ответа. Ответ придёт отдельным сообщением владельца, сервер поднимет новый ход роли.",
+      "Задать владельцу уточняющий вопрос с вариантами ответа. Вопросов — от одного до четырёх, у каждого от двух до четырёх вариантов с коротким пояснением (description). header — короткая метка до 16 символов, label варианта — до 60. Свои варианты не называй «Other», «Type something.», «Next» — свой ответ владелец вводит сам. multiSelect — можно ли выбрать несколько вариантов. Инструмент показывает вопрос владельцу и ждёт его ответа: результат вызова — выбранные варианты, после него продолжай работу с того же места. Вопрос не повторяй. Если в результате статус «open» — владелец не ответил вовремя: заверши ход, ответ придёт отдельным сообщением и сервер поднимет новый ход роли.",
       Type.Object({
         questions: Type.Array(Type.Object({
           question: Type.String({ description: "текст вопроса" }),
@@ -377,7 +381,7 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           multiSelect: Type.Optional(Type.Boolean()),
         }), { minItems: 1, maxItems: 4 }),
         note: S("пояснение для владельца, необязательно"),
-      }), async (p) => {
+      }), async (p, signal) => {
         let payload: QuestionPayload;
         try {
           payload = validateQuestionPayload(p);
@@ -397,6 +401,19 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         const участники = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(ownerContext.chatId) as Array<{ member_id: string }>)
           .map((row) => row.member_id);
         broadcastToUsers(участники, { type: "chat:new", message: loadChatMessage(messageId) });
+        const ждём = waitForAnswer(вопрос.id, { signal });
+        broadcastToUsers(участники, liveInterruptEvent({ chatId: ownerContext.chatId, userId: roleId, questionId: вопрос.id, messageId, payload }));
+        const ответ = await ждём;
+        broadcastToUsers(участники, liveResumeEvent({ chatId: ownerContext.chatId, userId: roleId, questionId: вопрос.id, outcome: ответ ? "answered" : "expired" }));
+        if (ответ) {
+          return {
+            вопрос: вопрос.id,
+            статус: "answered",
+            ответ,
+            текст: renderAnswerText(payload, ответ),
+            итог: "Владелец ответил. Продолжай работу с этим ответом.",
+          };
+        }
         return {
           вопрос: вопрос.id,
           статус: "open",

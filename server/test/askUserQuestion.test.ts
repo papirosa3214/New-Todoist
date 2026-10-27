@@ -13,6 +13,7 @@ import { taskflowTools } from "../src/runtime/inProcessRun.js";
 import { buildRoleToolCatalog } from "../src/runtime/roleToolCatalog.js";
 import { roleToolAllowed } from "../src/lib/roleToolScope.js";
 import { QuestionValidationError, validateQuestionPayload } from "../src/lib/chatQuestions.js";
+import { deliverAnswer, isWaiting, liveInterruptEvent, waitForAnswer } from "../src/lib/questionWait.js";
 
 const ВОПРОС = {
   question: "Какой вариант верный?",
@@ -130,6 +131,33 @@ describe("валидация вопроса роли", () => {
   });
 });
 
+describe("пауза хода на вопрос: реестр ожидания", () => {
+  const ОТВЕТ = { answers: [{ questionIndex: 0, selected: ["Оба"] }] };
+  it("ответ отдаётся ждущему ходу один раз", async () => {
+    const ждём = waitForAnswer("q-1", { timeoutMs: 1000 });
+    expect(isWaiting("q-1")).toBe(true);
+    expect(deliverAnswer("q-1", ОТВЕТ)).toBe(true);
+    expect(await ждём).toEqual(ОТВЕТ);
+    expect(deliverAnswer("q-1", ОТВЕТ)).toBe(false);
+  });
+  it("таймаут и обрыв хода снимают ожидание", async () => {
+    expect(await waitForAnswer("q-2", { timeoutMs: 5 })).toBeNull();
+    expect(isWaiting("q-2")).toBe(false);
+    const стоп = new AbortController();
+    const ждём = waitForAnswer("q-3", { timeoutMs: 1000, signal: стоп.signal });
+    стоп.abort();
+    expect(await ждём).toBeNull();
+    expect(deliverAnswer("q-3", ОТВЕТ)).toBe(false);
+  });
+  it("событие паузы несёт вопрос и варианты", () => {
+    const событие = liveInterruptEvent({ chatId: "c", userId: "u-secretary", questionId: "q", messageId: "m", payload: { questions: [ВОПРОС] } });
+    expect(событие).toEqual({
+      type: "chats:live:interrupt", chat_id: "c", user_id: "u-secretary",
+      question_id: "q", message_id: "m", questions: [ВОПРОС],
+    });
+  });
+});
+
 describe("инструмент уточнения: права", () => {
   it("доступен только Помощнику владельца", () => {
     expect(roleToolAllowed("secretary", "taskflow_ask_user_question")).toBe(true);
@@ -165,8 +193,12 @@ describe("уточнение у владельца из чата: сквозно
   }
 
   /** Инструмент отдаёт JSON в текстовом блоке (как все инструменты ролей). */
+  //  Ход оборван сразу (signal aborted) — пауза не держит тест: инструмент
+  //  ведёт себя как до паузы, ответ поднимет новый ход.
   async function вызвать(инструмент_: any, args: unknown): Promise<any> {
-    const результат = await инструмент_.execute("call", args);
+    const стоп = new AbortController();
+    стоп.abort();
+    const результат = await инструмент_.execute("call", args, стоп.signal);
     return JSON.parse(результат.content[0].text);
   }
 
@@ -269,6 +301,44 @@ describe("уточнение у владельца из чата: сквозно
       payload: { answers: [{ questionIndex: 0, selected: [] }] },
     });
     expect(пустой.statusCode).toBe(400);
+  });
+
+  it("пауза: ход ждёт ответа владельца и продолжает с того же вызова", async () => {
+    const ход = инструмент().execute("call-wait", { questions: [ВОПРОС] });
+    // Вопрос записан и открыт, ход стоит на паузе.
+    let строка: any;
+    for (let i = 0; i < 50 && !строка; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      строка = db.prepare("SELECT * FROM chat_questions WHERE chat_id=? AND status='open' ORDER BY rowid DESC").all(chatId).find((r: any) => isWaiting(r.id));
+    }
+    expect(строка, "вопрос должен ждать ответа").toBeTruthy();
+
+    const ответВладельца = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/questions/${строка.id}/answer`,
+      headers: auth(),
+      payload: { answers: [{ questionIndex: 0, selected: ["Оба"] }] },
+    });
+    expect(ответВладельца.statusCode).toBe(200);
+    // Ответ ушёл в ждущий ход, новый ход не поднимали.
+    expect(ответВладельца.json().resumed).toBe(true);
+
+    const результат = JSON.parse((await ход).content[0].text);
+    expect(результат.статус).toBe("answered");
+    expect(результат.ответ.answers[0].selected).toEqual(["Оба"]);
+    expect(isWaiting(строка.id)).toBe(false);
+  });
+
+  it("без ждущего хода ответ поднимает новый ход, как раньше", async () => {
+    const ответ = await вызвать(инструмент(), { questions: [ВОПРОС] });
+    const ответВладельца = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/questions/${ответ.вопрос}/answer`,
+      headers: auth(),
+      payload: { answers: [{ questionIndex: 0, selected: ["Оба"] }] },
+    });
+    expect(ответВладельца.statusCode).toBe(200);
+    expect(ответВладельца.json().resumed).toBe(false);
   });
 
   it("инструмент отдаёт код ошибки валидации модели", async () => {
