@@ -16,6 +16,8 @@ type Action = "answer" | "approve" | "restart" | "cancel" | "open";
 interface AttentionItem {
   kind: "task" | "step" | "chat" | "attempt" | "silent" | "routine";
   id: string;
+  /** Карточка, к которой относится событие — по ней экран открывает задачу. */
+  task_id?: string;
   title: string;
   context: string | null;
   role: string | null;
@@ -89,6 +91,7 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
       ...tasks.map((t) => ({
         kind: "task" as const,
         id: t.id,
+        task_id: t.id,
         title: t.title,
         context: t.project_name,
         role: null,
@@ -98,6 +101,7 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
       ...steps.map((s) => ({
         kind: "step" as const,
         id: s.id,
+        task_id: s.task_id,
         title: s.title,
         context: s.task_title,
         role: null,
@@ -121,8 +125,8 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
         `SELECT a.id, a.task_id, a.outcome, a.reason, a.ended_at, u.name AS executor
            FROM attempts a LEFT JOIN users u ON u.id = a.executor_id
           WHERE a.ended_at IS NOT NULL
-            AND a.outcome IN ('error','error_loop','failed','timeout','cancelled')
-            AND a.ended_at >= datetime('now','-1 day')
+            AND a.outcome IN ('error','error_loop','failed','timeout')
+            AND a.ended_at >= datetime('now','-6 hours')
           ORDER BY a.ended_at DESC
           LIMIT 30`,
       )
@@ -130,19 +134,20 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
 
     const silent = (db
       .prepare(
-        `SELECT s.id, s.title, s.agent_heartbeat_at, t.title AS task_title
+        `SELECT s.id, s.task_id, s.title, s.agent_heartbeat_at, t.title AS task_title
            FROM subtasks s JOIN tasks t ON t.id = s.task_id
           WHERE s.done = 0 AND s.agent_state = 'in_progress'
             AND s.agent_heartbeat_at IS NOT NULL
             AND s.agent_heartbeat_at <= datetime('now','-10 minutes')
           LIMIT 30`,
       )
-      .all() as { id: string; title: string; agent_heartbeat_at: string; task_title: string }[]) ?? [];
+      .all() as { id: string; task_id: string; title: string; agent_heartbeat_at: string; task_title: string }[]) ?? [];
 
     const failuresOut = [
       ...failures.map((f) => ({
         kind: "attempt" as const,
         id: f.id,
+        task_id: f.task_id,
         title: `${f.outcome}${f.reason ? ": " + f.reason.slice(0, 120) : ""}`,
         context: f.task_id,
         role: f.executor,
@@ -152,6 +157,7 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
       ...silent.map((s) => ({
         kind: "silent" as const,
         id: s.id,
+        task_id: s.task_id,
         title: `шаг молчит: ${s.title}`,
         context: s.task_title,
         role: null,
