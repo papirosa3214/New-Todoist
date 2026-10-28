@@ -1565,7 +1565,10 @@ try {
   // колонка появится только после миграции 081; до неё молча.
 }
 
-  const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId);
+  // Composio (Exa, GitHub) тоже не обязателен: 28.10.2026 он не поднялся, и шаги
+  // разработчика падали на старте, хотя задаче он не нужен. Не поднялся — роль
+  // работает без его инструментов.
+  const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId).catch(error => { console.warn(`[composio] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
   if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
   const infra = await connectRoleMcp(role, cwd).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
