@@ -5395,7 +5395,7 @@ const migrations: Migration[] = [
     if (!cols.has("pr_number")) db.exec("ALTER TABLE worktree_merge_queue ADD COLUMN pr_number INTEGER");
     if (!cols.has("pr_url")) db.exec("ALTER TABLE worktree_merge_queue ADD COLUMN pr_url TEXT");
     const settings = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='server_settings'").get();
-    if (settings) db.prepare("UPDATE server_settings SET value = ?, updated_at = datetime('now'), updated_by = 'migration-184' WHERE key = 'auto_merge_mode' AND value = ?").run(JSON.stringify("pr"), JSON.stringify("on"));
+    if (settings) db.prepare("UPDATE server_settings SET value = ?, updated_at = datetime('now'), updated_by = NULL WHERE key = 'auto_merge_mode' AND value = ?").run(JSON.stringify("pr"), JSON.stringify("on"));
   } },
 
 ];
