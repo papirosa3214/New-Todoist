@@ -88,6 +88,7 @@ import { registerOwnerControlRoutes } from "./routes/owner-controls.js";
 import { reloadServerSettings } from "./lib/serverSettings.js";
 import { registerOwnerCommandRoutes } from "./routes/owner-commands.js";
 import { registerAdminServerSettingsRoutes } from "./routes/admin-server-settings.js";
+import { registerSecretsRoutes } from "./routes/secrets.js";
 import { registerJevRoutes } from "./routes/jev.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerEscalationRoutes } from "./routes/escalation.js";
@@ -587,6 +588,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerChatSessionPreferenceRoutes(app);
   registerOwnerControlRoutes(app);
   registerAdminServerSettingsRoutes(app);
+  registerSecretsRoutes(app);
   registerJevRoutes(app);
   registerServerEventsRoutes(app);
   registerOwnerCommandRoutes(app);
