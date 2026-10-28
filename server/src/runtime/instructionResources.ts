@@ -242,7 +242,7 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  // про свои навыки. Возвращены оба, файлом и текстом соответственно.
  for(const file of discovered.agentsFiles)append.push('# '+file.path+'\n'+composeLayer(role,keyFor(file.path))!.effective);
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
- append.push(composeLayer(role,'rules')!.effective);
+ // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).
  append.push(roleHomeInstruction(role));
  append.push(behaviorInstruction(role));
  append.push(renderPromptAddendum('chat',role,ensureRoleHome(role)));
