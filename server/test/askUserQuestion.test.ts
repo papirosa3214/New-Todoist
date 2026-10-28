@@ -159,28 +159,27 @@ describe("пауза хода на вопрос: реестр ожидания",
 });
 
 describe("инструмент уточнения: права", () => {
-  it("доступен только Помощнику владельца", () => {
-    expect(roleToolAllowed("secretary", "taskflow_ask_user_question")).toBe(true);
-    for (const role of ["builder", "architect", "qa", "analyst", "designer", "researcher", "critic_verifier", "infra_engineer"]) {
-      expect(roleToolAllowed(role, "taskflow_ask_user_question"), role).toBe(false);
+  it("доступен всем ролям (владелец 28.10.2026)", () => {
+    for (const role of ["secretary", "builder", "architect", "qa", "analyst", "designer", "researcher", "critic_verifier", "infra_engineer"]) {
+      expect(roleToolAllowed(role, "taskflow_ask_user_question"), role).toBe(true);
     }
   });
 
-  it("роль без права инструмент не видит — ни в наборе чата, ни в каталоге сессии", () => {
+  it("любая роль видит инструмент в чате — и в наборе, и в ядре сессии", () => {
     const ctx = { chatId: "chat-secretary", messageId: "m1" };
     const имена = (role: string) =>
       taskflowTools(role, null, undefined, undefined, false, ctx).map((tool) => tool.name);
     expect(имена("secretary")).toContain("taskflow_ask_user_question");
-    expect(имена("builder")).not.toContain("taskflow_ask_user_question");
-    expect(имена("architect")).not.toContain("taskflow_ask_user_question");
+    expect(имена("builder")).toContain("taskflow_ask_user_question");
+    expect(имена("architect")).toContain("taskflow_ask_user_question");
 
     const каталог = (role: string) =>
       buildRoleToolCatalog({ role, model: null, mode: "chat", runId: "test", chatId: ctx.chatId, messageId: ctx.messageId });
     expect(каталог("secretary").registeredNames).toContain("taskflow_ask_user_question");
     // Ядро сессии: модель видит инструмент без подключения по требованию.
     expect(каталог("secretary").activeNames).toContain("taskflow_ask_user_question");
-    expect(каталог("builder").registeredNames).not.toContain("taskflow_ask_user_question");
-    expect(каталог("builder").activeNames).not.toContain("taskflow_ask_user_question");
+    expect(каталог("builder").registeredNames).toContain("taskflow_ask_user_question");
+    expect(каталог("builder").activeNames).toContain("taskflow_ask_user_question");
   });
 });
 
