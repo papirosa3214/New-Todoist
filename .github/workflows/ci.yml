@@ -77,6 +77,11 @@ jobs:
       - name: Собрать сервер
         working-directory: server
         run: npx tsc -p tsconfig.json
+      - name: Python-зависимости тестов
+        # scripts/md_sanitize.py (отчёты в markdown) импортирует markdown —
+        # на .110 он стоит (3.5.2), на раннере его не было, и
+        # securityAuditFixes падал на ModuleNotFoundError, а не на логике.
+        run: python3 -m pip install --quiet "markdown==3.5.2"
       - name: Прогнать тесты
         working-directory: server
         # Потолок потоков — по правилу проекта (AGENTS.md). Полный набор

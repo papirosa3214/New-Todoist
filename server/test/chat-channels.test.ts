@@ -7,8 +7,18 @@
 // (владелец, оркестратор, исполнитель), а там — обычные зарегистрированные
 // участники, и смешивать их в одной базе значило бы менять условия соседним
 // тестам на ходу. setupFiles даёт каждому файлу свою временную базу.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
+
+// Надиктовка владельца в окно постановки запускает в фоне черновик
+// Секретаря, и тот отвечает владельцу в тот же канал («нет поручения»).
+// Ответ приходит когда придётся — на раннере CI посреди следующего теста —
+// и счётчик непрочитанного считал его лишним (28.10.2026). Здесь проверяются
+// каналы, а не Секретарь: черновик глушим, остальной модуль настоящий.
+vi.mock("../src/lib/ownerDraft.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/lib/ownerDraft.js")>()),
+  startDraftFromChat: () => {},
+}));
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { demoteSeededOwner } from "./helpers/seedOwner.js";
