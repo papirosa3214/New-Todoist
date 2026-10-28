@@ -62,7 +62,6 @@ describe("roleContextResolver — каталог", () => {
     for (const expected of [
       "role.prompt",
       "rules",
-      "local_policy",
       "role_skills",
       "mcp_tools",
       "model_policy",
@@ -76,10 +75,9 @@ describe("roleContextResolver — каталог", () => {
     }
   });
 
-  it("readOnly-флаги соответствуют дизайну: prompt/rules/local_policy редактируются, остальные read_only", () => {
+  it("readOnly-флаги соответствуют дизайну: prompt/rules редактируются, остальные read_only", () => {
     expect(getLayerSpec("role.prompt")?.readOnly).toBe(false);
     expect(getLayerSpec("rules")?.readOnly).toBe(false);
-    expect(getLayerSpec("local_policy")?.readOnly).toBe(false);
     expect(getLayerSpec("intake.summary")?.readOnly).toBe(true);
     expect(getLayerSpec("role_skills")?.readOnly).toBe(true);
     expect(getLayerSpec("mcp_tools")?.readOnly).toBe(true);
@@ -118,9 +116,9 @@ describe("roleContextResolver — original без override", () => {
   it("readOriginalOnly возвращает тот же original, что и composeLayer(source=original).effective", () => {
     const role = freshRoleKey("ghost");
     seedRole(role, "Призрак");
-    const original = composeLayer(role, "local_policy");
+    const original = composeLayer(role, "rules");
     expect(original!.source).toBe("original");
-    const only = readOriginalOnly(role, "local_policy");
+    const only = readOriginalOnly(role, "rules");
     expect(only).toBe(original!.effective);
   });
 
