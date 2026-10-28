@@ -216,4 +216,12 @@ describe("provider failure coverage",()=>{
    expect(JSON.stringify(logs)).not.toContain("SECRET");
   }finally {server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
  });
+
+ it("keeps late transport errors attached to their original turn",async()=>{
+  registerProviderSession("session-1",{role:"analyst",run_id:"old-turn"});
+  const h=harness(vi.fn().mockRejectedValue(new Error("late failure")));
+  registerProviderSession("session-1",{role:"analyst",run_id:"new-turn"});
+  await expect(h.options.fetch("https://example.org")).rejects.toThrow("late failure");
+  expect(h.logs.find(e=>e.event==="transport_error")).toMatchObject({run_id:"old-turn"});
+ });
 });

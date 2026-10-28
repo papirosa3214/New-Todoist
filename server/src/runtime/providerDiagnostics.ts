@@ -43,11 +43,12 @@ export function registerProviderSession(sessionId: string, context: Record<strin
 export function observeProviderRetries(session: any, sessionId: string): void {
   if (!session?.subscribe || observedSessions.has(session)) return;
   observedSessions.add(session);
+  const sessionContext={...sessions.get(sessionId)};
   session.subscribe((e:any) => {
     if (!["auto_retry_start","auto_retry_end","summarization_retry_scheduled","summarization_retry_attempt_start","summarization_retry_finished"].includes(e.type)) return;
     try {
       console.error("[provider-diagnostics]", JSON.stringify({
-        schema_version:1, timestamp:new Date().toISOString(), event:e.type, session_id:sessionId, ...sessions.get(sessionId),
+        schema_version:1, timestamp:new Date().toISOString(), event:e.type, session_id:sessionId, ...sessionContext,
         attempt:e.attempt, max_attempts:e.maxAttempts, delay_ms:e.delayMs, success:e.success,
         error:sanitize(e.errorMessage ?? e.finalError,new Set()),
         provider:session.model?.provider, model:session.model?.id,
@@ -88,7 +89,8 @@ export function installProviderDiagnostics(runtime: Runtime, dependencies: Optio
         transport: options.transport ?? "provider_default", websocket_connect_timeout_ms: options.websocketConnectTimeoutMs ?? null,
         tool_count: Array.isArray(context?.tools) ? context.tools.length : 0,
       };
-      const log = (event: string, data: Entry = {}) => emit({...base, origin:"runtime", ...sessions.get(options.sessionId), event, elapsed_ms: Date.now()-started, ...data});
+      const sessionContext={...sessions.get(options.sessionId)};
+      const log = (event: string, data: Entry = {}) => emit({...base, origin:"runtime", ...sessionContext, event, elapsed_ms: Date.now()-started, ...data});
       const fetchImpl = options.fetch ?? dependencies.fetch;
       const instrumentedFetch = async (input: any, init?: any): Promise<Response> => {
         const n = ++attempt;
