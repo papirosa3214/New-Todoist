@@ -1,3 +1,5 @@
+import { prepareOwnerManualRun } from "../runtime/ownerManualRun.js";
+import { startPlanSubtaskRun } from "../runtime/planSubtaskAdmission.js";
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead, isOwner } from "../access.js";
@@ -32,7 +34,18 @@ export async function registerManualRunRoutes(app: FastifyInstance): Promise<voi
       const mode = req.body?.mode === "reviewer" ? "reviewer" : "executor";
       if (mode === "executor") {
         const state = taskExecutionState(task.id);
-        if (!state.can_launch) return reply.code(409).send({error:"Запуск уже принят или выбрана другая схема работы", execution:state});
+        const step=db.prepare("SELECT s.id FROM subtasks s JOIN task_collaboration_plans p ON p.id=s.collaboration_plan_id WHERE s.task_id=? ORDER BY (s.done=0) DESC,p.revision DESC,s.position LIMIT 1").get(task.id) as {id:string}|undefined;
+        if(step) {
+          const started=await startPlanSubtaskRun(step.id,req.userId,{manualStart:true});
+          if(!started.ok)return reply.code(409).send({error:started.error});
+          return {ok:true,mode,run_id:started.runId,execution:taskExecutionState(task.id)};
+        }
+        await prepareOwnerManualRun(task.id,req.userId);
+        const assigned=task.assignee_id?.replace(/^role_/, "");
+        if(assigned && ROLE_NAMES.includes(assigned)) {
+          const run=await runRoleInProcess({taskId:task.id,role:assigned,mode:"work",ownerStartActorId:req.userId});
+          return {ok:true,mode,run_id:run.runId,execution:taskExecutionState(task.id)};
+        }
         // MAK-68: 9 входов сведены к одной функции. Кнопка «Запустить
         // исполнителя» идёт через `tryStartSingleExecutorPlan` — она
         // сама подберёт роль (если владелец не выбрал её явно через
@@ -54,7 +67,14 @@ export async function registerManualRunRoutes(app: FastifyInstance): Promise<voi
       // Проверка Критиком — тоже внутри сервера (этап C2).
       if (mode === "reviewer" && ROLE_NAMES.includes("critic_verifier")) {
         try {
-          await runRoleInProcess({ taskId: task.id, role: "critic_verifier", prompt: reviewPromptFor(task.id) });
+          const step=db.prepare("SELECT s.id FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key JOIN task_collaboration_plans p ON p.id=s.collaboration_plan_id WHERE s.task_id=? AND n.role_key='critic_verifier' ORDER BY p.revision DESC,(s.done=0) DESC,s.position DESC LIMIT 1").get(task.id) as {id:string}|undefined;
+          if(step) {
+            const started=await startPlanSubtaskRun(step.id,req.userId,{manualStart:true});
+            if(!started.ok)return reply.code(409).send({error:started.error});
+            return {ok:true,mode,run_id:started.runId};
+          }
+          await prepareOwnerManualRun(task.id,req.userId);
+          await runRoleInProcess({ taskId: task.id, role: "critic_verifier", ownerStartActorId:req.userId, prompt: reviewPromptFor(task.id) });
         } catch (err) {
           return reply.code(409).send({ error: err instanceof Error ? err.message : String(err) });
         }

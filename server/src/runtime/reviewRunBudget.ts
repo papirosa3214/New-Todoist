@@ -1,3 +1,4 @@
+import { isOwner } from "../access.js";
 import { createHash } from "node:crypto";
 import { tiptapToPlainText } from "../lib/tiptapPlaintext.js";
 import db from "../db.js";
@@ -87,13 +88,14 @@ export function blockReviewRun(taskId: string, reason: string): void {
   }
 }
 
-export function reserveReviewRun(taskId: string): ReviewRunTicket {
+export function reserveReviewRun(taskId: string, ownerStartActorId?:string): ReviewRunTicket {
+  const manual=Boolean(ownerStartActorId && isOwner(ownerStartActorId));
   return db.transaction(() => {
     const task=db.prepare("SELECT agent_state FROM tasks WHERE id=?").get(taskId) as {agent_state:string}|undefined;
-    if(task?.agent_state==='blocked')throw new Error("Проверка заблокирована; нужно решение владельца");
+    if(!manual && task?.agent_state==='blocked')throw new Error("Проверка заблокирована; нужно решение владельца");
     const {cycle,versionId,count}=budgetState(taskId);
     const beforeOutputs=reviewOutputs(taskId);
-    const denied=reviewRepeatBlockReason(taskId) ?? undefined;
+    const denied=manual ? undefined : reviewRepeatBlockReason(taskId) ?? undefined;
     const ticket={taskId,cycle,versionId,number:count+1,beforeOutputs,denied};
     // Block outside the transaction: throwing here would undo the block.
     if(!denied)logEvent({taskId,actorId:null,kind:"review_run_started",field:cycle,toValue:JSON.stringify({number:ticket.number,outputs:beforeOutputs})});

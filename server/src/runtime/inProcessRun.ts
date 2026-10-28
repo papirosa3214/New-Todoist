@@ -1394,11 +1394,18 @@ async function prepareInProcessRun(input: Parameters<typeof runRoleInProcessUnse
   try { assertRunTaskAvailable(input.taskId); return await runRoleInProcessUnserialized(input); }
   finally { preparingRuns.delete(key); }
 }
+export async function interruptOwnerRun(taskId:string,subtaskId?:string):Promise<void> {
+  for(const run of [...activeRuns.values()].filter(r=>r.taskId===taskId && (!subtaskId || r.subtaskId===subtaskId))) {
+    run.replacementRequested=true;
+    await run.abort();
+    await run.completion?.catch(()=>{});
+  }
+}
 export async function runRoleInProcess(input:Parameters<typeof runRoleInProcessUnserialized>[0]):Promise<{runId:string;completion:Promise<void>}> {
   const review=input.role==="critic_verifier" && (input.mode ?? "review")==="review";
   if(!review)return runRoleInProcessSerialized(input);
   if(preparingRuns.has(preparationKey(input)) || activeInProcessRun(input.taskId,input.subtaskId))throw new Error("по этому окну агент уже работает");
-  const ticket=reserveReviewRun(input.taskId);
+  const ticket=reserveReviewRun(input.taskId, input.ownerStartActorId);
   assertReviewRunAllowed(ticket);
   let result: Awaited<ReturnType<typeof runRoleInProcessUnserialized>>;
   try {result=await runRoleInProcessSerialized(input);}
@@ -1423,6 +1430,7 @@ async function runRoleInProcessUnserialized(input: {
   taskId: string;
   role: string;
   prompt?: string;
+  ownerStartActorId?: string;
   cwd?: string;
   model?: string;
   /** work — работа по задаче (с повторами), reply — только ответ владельцу,
@@ -2028,7 +2036,7 @@ try {
           const started = await startPlanSubtaskRun(input.subtaskId, roleUserId(role));
           if (!started.ok) console.warn("[failover] шаг не перезапущен:", started.error);
         } else {
-          await runRoleInProcess({ ...input, model: next, failoverDepth: depth + 1 });
+          await runRoleInProcess({ ...input, ownerStartActorId: undefined, model: next, failoverDepth: depth + 1 });
         }
       } catch (error) {
         console.warn("[failover] перезапуск на запасной модели не удался:", error);
@@ -2166,7 +2174,7 @@ async function kickRoleTaskStrictImpl(
     };
   }
   const { unitState } = await import("../routes/agent-service.js");
-  const explicitOwnerStart = options?.manualStart === true && reason === "assigned" && Boolean(actorId && isOwner(actorId));
+  const explicitOwnerStart = options?.manualStart === true && (reason === "assigned" || reason === "review") && Boolean(actorId && isOwner(actorId));
   if (!(await unitState()).active && !explicitOwnerStart) {
     return {
       outcome: "deferred",
@@ -2201,6 +2209,7 @@ async function kickRoleTaskStrictImpl(
         role: "critic_verifier",
         prompt: `${reviewPromptFor(taskId)}\n\n${planReviewRouteContext(taskId)}\n\n${oneShotReviewInstruction(taskId) ? "Разовая проверка: не передавай rework_steps; замечания завершают проверку." : "Для доработки плана передай rework_steps: slot_key первого дефектного рабочего этапа. Несколько slot_key разрешены только для независимых параллельных веток. Сервер повторит затронутую цепочку и итоговую проверку."}`,
         mode: "review",
+        ownerStartActorId: explicitOwnerStart ? actorId ?? undefined : undefined,
       }).catch(error => { markPlanFinalReviewerWaiting(taskId); throw error; });
       logEvent({ taskId, actorId: null, kind: "reviewer_sent", toValue: roleTitle("critic_verifier") });
       return { outcome: "started", ...run };

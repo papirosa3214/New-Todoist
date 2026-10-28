@@ -1,3 +1,5 @@
+import { isOwner } from "../access.js";
+import { prepareOwnerManualRun } from "./ownerManualRun.js";
 import {isRoutineServiceComment} from "../lib/serviceNoise.js";
 import { wakeAndDeliver } from "./orchestratorWake.js";
 import {
@@ -379,9 +381,14 @@ export function assigneeToBlockedSlot(
 export async function startPlanSubtaskRun(
   subtaskId: string,
   actorId: string,
-  options: { freshSession?: boolean } = {},
+  options: { freshSession?: boolean; manualStart?: boolean } = {},
 ): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
-  const current = subtask(subtaskId);
+  let current = subtask(subtaskId);
+  const manual = options.manualStart === true && isOwner(actorId);
+  if (current && manual) {
+    await prepareOwnerManualRun(current.task_id,actorId,subtaskId);
+    current = subtask(subtaskId);
+  }
   if (!current || !current.collaboration_plan_id || !current.plan_node_key)
     return { ok: false, error: "подзадача не узел плана" };
   if (current.done || current.agent_state)
@@ -405,7 +412,7 @@ export async function startPlanSubtaskRun(
     .get(current.collaboration_plan_id) as { status: string } | undefined;
   if (approved?.status !== "approved")
     return { ok: false, error: "План ещё не утверждён" };
-  if (!canPlanSubtaskBecomeReady(current))
+  if (!manual && !canPlanSubtaskBecomeReady(current))
     return {
       ok: false,
       error:
@@ -431,7 +438,7 @@ export async function startPlanSubtaskRun(
       current.plan_node_key,
     );
     followSlotAssignee(current.task_id, node.role_key, actorId);
-    return queuePlanFinalReview(current.id, actorId);
+    return queuePlanFinalReview(current.id, actorId, { manualStart: manual });
   }
 
   const attemptId = crypto.randomUUID();
@@ -447,7 +454,7 @@ export async function startPlanSubtaskRun(
       !latest ||
       latest.done ||
       latest.agent_state ||
-      !canPlanSubtaskBecomeReady(latest)
+      (!manual && !canPlanSubtaskBecomeReady(latest))
     )
       return false;
     if (
@@ -523,6 +530,7 @@ export async function startPlanSubtaskRun(
             )
           : undefined,
       freshSession: options.freshSession,
+      ownerStartActorId: manual ? actorId : undefined,
       model: current.model || undefined,
     }));
     logEvent({
