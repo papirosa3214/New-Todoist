@@ -12,6 +12,7 @@ import {resolveMachine,isMachineOnline,runOperation} from "../host/gateway.js";
 import {HOSTS_CONFIG} from "./roleWorkspace.js";
 import {hostOperations,withHostToolExecution} from "./hostOperations.js";
 import {местаОшибок, type Tool} from "./universalTaskflow.js";
+import {asText,captureBash,captureFile,q,withFileChanges,type CaptureIO} from "../lib/toolFileCapture.js";
 type Context={role:string;taskId?:string};
 const native=()=>[...new Map([...createCodingTools("/"),...createReadOnlyTools("/")].map(t=>[t.name,t])).values()];
 const bindings=()=>JSON.parse(fs.readFileSync(HOSTS_CONFIG,"utf8")).projects as Record<string,Record<string,string>>;
@@ -65,7 +66,33 @@ export async function executeRoleHostTool(c:Context,p:any,signal?:AbortSignal,on
  const o=hostOperations(machine.id,cwd);
  const options={bash:{operations:o.bash},read:{operations:o.read},write:{operations:o.write},edit:{operations:o.edit},grep:{operations:o.grep},find:{operations:o.find},ls:{operations:o.ls}};
  const tool=withHostToolExecution(machine.id,cwd,[...createCodingTools(cwd,options),...createReadOnlyTools(cwd,options)]).find(t=>t.name===p.tool)!;
- return tool.execute(crypto.randomUUID(),args,signal,onUpdate);
+ const run=()=>tool.execute(crypto.randomUUID(),args,signal,onUpdate);
+ // Диф под ответом в чате (LOCK-ASSISTANT-TOOL-DIFFS-20261028): снимки
+ // файлов до и после правки — на той же машине. Сбой снимка правку не роняет.
+ const io=hostCaptureIO(machine.id,signal);
+ if(["write","edit"].includes(p.tool)&&typeof args.path==="string"){
+  const {result,files}=await captureFile(io,args.path,run);
+  return withFileChanges(result,machine.name,files);
+ }
+ if(p.tool==="bash"){
+  const {result,files}=await captureBash(io,cwd,run);
+  return withFileChanges(result,machine.name,files);
+ }
+ return run();
+}
+function hostCaptureIO(machineId:string,signal?:AbortSignal):CaptureIO{
+ return {
+  read:async file=>{
+   const r=await runOperation(machineId,"read",{path:file,encoding:"base64"},{signal}) as any;
+   if(!r.ok)return null;
+   const d=(r.data??{}) as {content?:string;encoding?:string};
+   return asText(Buffer.from(d.content??"",d.encoding==="base64"?"base64":"utf8"));
+  },
+  sh:async(command,dir)=>{
+   const r=await runOperation(machineId,"bash",{command:"cd "+q(dir)+" && "+command,cwd:dir,timeoutMs:20_000},{signal,timeoutMs:50_000}) as any;
+   return {ok:!!r.ok&&(r.exitCode??0)===0,stdout:typeof r.stdout==="string"?r.stdout:""};
+  },
+ };
 }
 export function roleHostAccessTools(context:Context):Tool[]{
  const target={machine:Type.Optional(Type.String({description:"Имя или id из taskflow_hosts; при одной машине можно не указывать"})),project_id:Type.Optional(Type.String()),task_id:Type.Optional(Type.String())};

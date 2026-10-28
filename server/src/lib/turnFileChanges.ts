@@ -4,12 +4,19 @@
 // поменяла в файлах, тем же видом, что «Изменения кода» в карточке.
 // У хода чата нет своей ветки, поэтому исходный вид файла запоминается
 // прямо перед первой правкой (`edit`/`write`), а в конце хода сравнивается
-// с тем, что стало. Правки через bash сюда не попадают.
+// с тем, что стало.
+//
+// 28.10.2026 (LOCK-ASSISTANT-TOOL-DIFFS-20261028): правки на других машинах
+// и через bash приходят готовыми снимками «до/после» — событием
+// `taskflow_file_changes` или в `details` результата инструмента (их снимает
+// toolFileCapture.ts там, где идёт операция). Здесь они склеиваются: первый
+// «до» и последний «после» по каждому файлу каждой машины.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseUnifiedDiff, type CodeFile } from "./worktree/codeChanges.js";
+import type { FileChangesEvent } from "./toolFileCapture.js";
 
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const MAX_FILE_BYTES = 1_000_000;
@@ -62,6 +69,8 @@ export class TurnFileTracker {
   private readonly home: string;
   /** Абсолютный путь → вид файла до первой правки (null — файла не было). */
   private readonly originals = new Map<string, string | null>();
+  /** «машина:путь» → первый «до» и последний «после» из готовых снимков. */
+  private readonly captured = new Map<string, { before: string | null; after: string | null }>();
 
   constructor(opts: { home?: string } = {}) {
     this.home = opts.home ?? os.homedir();
@@ -70,7 +79,13 @@ export class TurnFileTracker {
   /** Событие рантайма роли; всё, кроме правок файлов, пропускается. */
   observe(event: unknown): void {
     if (!event || typeof event !== "object") return;
-    const e = event as { type?: string; cwd?: unknown; toolName?: string; args?: unknown };
+    const e = event as { type?: string; cwd?: unknown; toolName?: string; args?: unknown; result?: any };
+    if (e.type === "taskflow_file_changes") return this.absorb(event as FileChangesEvent);
+    if (e.type === "tool_execution_end") {
+      const attached = e.result?.details?.taskflow_file_changes;
+      if (attached?.type === "taskflow_file_changes") this.absorb(attached);
+      return;
+    }
     if (e.type === "taskflow_workspace" && typeof e.cwd === "string") {
       this.cwd = e.cwd;
       return;
@@ -81,6 +96,17 @@ export class TurnFileTracker {
     const resolved = this.resolve(raw.trim());
     if (!resolved || this.originals.has(resolved) || this.originals.size >= MAX_FILES) return;
     this.originals.set(resolved, fs.existsSync(resolved) ? readText(resolved) : null);
+  }
+
+  private absorb(event: FileChangesEvent): void {
+    if (typeof event.machine !== "string" || !Array.isArray(event.files)) return;
+    for (const f of event.files) {
+      if (!f || typeof f.path !== "string") continue;
+      const key = event.machine + ":" + f.path;
+      const prev = this.captured.get(key);
+      if (!prev && this.captured.size >= MAX_FILES) continue;
+      this.captured.set(key, { before: prev ? prev.before : f.before ?? null, after: f.after ?? null });
+    }
   }
 
   private resolve(raw: string): string | null {
@@ -103,6 +129,11 @@ export class TurnFileTracker {
       const after = fs.existsSync(file) ? readText(file) : null;
       if (before === after) continue;
       const changed = diffTexts(before, after, this.label(file));
+      if (changed) files.push(changed);
+    }
+    for (const [key, { before, after }] of this.captured) {
+      if (before === after) continue;
+      const changed = diffTexts(before, after, key);
       if (changed) files.push(changed);
     }
     if (!files.length) return null;

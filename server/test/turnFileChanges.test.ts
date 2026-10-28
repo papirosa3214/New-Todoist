@@ -55,3 +55,19 @@ describe("TurnFileTracker", () => {
     expect(tracker.result()?.files[0].path).toBe("~/outside/b.txt");
   });
 });
+
+it("merges remote captures across edits and distinguishes machines", () => {
+  const tracker = new TurnFileTracker();
+  const event = (machine: string, before: string | null, after: string | null) => ({
+    type: "taskflow_file_changes", machine, files: [{ path: "/repo/a.txt", before, after }],
+  });
+  tracker.observe(event("macbook", "one\n", "two\n"));
+  tracker.observe(event("macbook", "two\n", "three\n"));
+  tracker.observe(event("server", null, "new\n"));
+  const result = tracker.result();
+  expect(result?.totals).toEqual({ files: 2, additions: 2, deletions: 1 });
+  expect(result?.files[0].path).toBe("macbook:/repo/a.txt");
+  expect(result?.files[0].hunks[0].lines.filter(l => l.kind === "deleted").map(l => l.text)).toEqual(["one"]);
+  tracker.observe(event("macbook", "three\n", "one\n"));
+  expect(tracker.result()?.totals.files).toBe(1);
+});

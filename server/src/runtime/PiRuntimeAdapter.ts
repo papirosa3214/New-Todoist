@@ -1,4 +1,6 @@
 import {installProviderDiagnostics, registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
+import { captureBash, withFileChanges } from "../lib/toolFileCapture.js";
+import { localCaptureIO } from "../lib/localCaptureIO.js";
 import {supportedThinkingLevels,validateChatThinking,thinkingLevelLabels} from "./thinkingLevels.js";
 import {safelyCaptureBudgetCases,budgetContinuationPrompt} from "./chatBudgetCases.js";
 import { resolveChatWorkspace } from "../lib/chatWorkspace.js";
@@ -1520,6 +1522,18 @@ async function startChatRunOnce(
         description:
           composeLayer(role, "tool.builtin." + t.name)?.effective ??
           t.description,
+        // Диф под ответом в чате: что bash поменял в git-репозитории папки
+        // роли (LOCK-ASSISTANT-TOOL-DIFFS-20261028).
+        ...(t.name === "bash"
+          ? {
+              execute: async (id: string, args: any, signal?: AbortSignal, onUpdate?: any) => {
+                const { result, files } = await captureBash(localCaptureIO(), cwd, () =>
+                  t.execute(id, args, signal, onUpdate),
+                );
+                return withFileChanges(result, ".110", files);
+              },
+            }
+          : {}),
       }));
     const infra = await preparation.wait(connectRoleMcp(role, cwd).catch(() => ({
       tools: [] as any[],
