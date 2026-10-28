@@ -34,6 +34,21 @@ import {
 export const ROLE_USER = process.env.TASKFLOW_ROLE_USER || "tfrole";
 const ROLE_HOME = `/home/${ROLE_USER}`;
 
+/**
+ * Прокси для bash роли (владелец 28.10.2026): sudo сбрасывает окружение, и
+ * роль ходила в сеть без прокси — Anthropic отвечал 403, Telegram молчал.
+ * Вход 127.0.0.1:10818 шлюза xray-claude сам решает: закрытое из РФ (AI,
+ * Telegram, соцсети, YouTube) — через Happ, остальное напрямую, без потери
+ * скорости. Пустой TASKFLOW_ROLE_PROXY выключает.
+ */
+export function roleProxyExports(env: NodeJS.ProcessEnv = process.env): string {
+  const proxy = (env.TASKFLOW_ROLE_PROXY ?? "http://127.0.0.1:10818").replaceAll("'", "");
+  if (!proxy) return "";
+  const local = "localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,.local";
+  return ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"].map(k => `${k}='${proxy}'`)
+    .concat([`no_proxy='${local}'`, `NO_PROXY='${local}'`, "NODE_USE_ENV_PROXY=1"]).join(" ");
+}
+
 export function roleIsolationEnabled(): boolean {
   return process.env.TASKFLOW_ROLE_ISOLATION !== "off";
 }
@@ -89,7 +104,7 @@ export function isolatedBashOperations(cwd: string, lease?: RoleProcessLease): B
       const processLease = lease ?? new RoleProcessLease(ROLE_USER);
       processLease.ensure();
       const commandId = crypto.randomUUID();
-      const inner = `export HOME=${q(ROLE_HOME)} PATH=${q(pathVar)} TF_PROCESS_LEASE=${q(processLease.id)} TF_PROCESS_COMMAND=${q(commandId)}; umask 002; cd ${q(dir)} && exec /bin/bash -c ${q(command)}`;
+      const inner = `export HOME=${q(ROLE_HOME)} PATH=${q(pathVar)} ${roleProxyExports()} TF_PROCESS_LEASE=${q(processLease.id)} TF_PROCESS_COMMAND=${q(commandId)}; umask 002; cd ${q(dir)} && exec /bin/bash -c ${q(command)}`;
       const wrapped = `sudo -n -u ${ROLE_USER} /bin/bash -c ${q(inner)}`;
       let cleanup: Promise<void> | undefined;
       const stop = () => {
