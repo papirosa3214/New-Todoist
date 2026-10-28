@@ -28,6 +28,7 @@ import {
   coordinationAnswered,
   ensureSubagentCoordinationCard,
 } from "./chatCoordination.js";
+import { openSubagentRoom, type SubagentRoom } from "./subagentRoom.js";
 import type { Context, Tool } from "./universalTaskflow.js";
 
 export const ROLE_SUBAGENT_CALL_TOOL = "taskflow_call_role";
@@ -245,6 +246,22 @@ export function createRoleSubagentCallTool(
 
       const requesterId = context.actor || roleUserId(context.role);
       const recipientId = roleUserId(role);
+      // Своя комната-ветка: там видно, как роль работает (владелец 28.10.2026).
+      // Не завелась — роль работает, как раньше, в исходном чате.
+      let room: SubagentRoom | undefined;
+      try {
+        room = openSubagentRoom({
+          originChatId: chatId,
+          originMessageId: originMessageId(context.messageId),
+          requesterId,
+          recipientId,
+          question,
+        });
+      } catch (error) {
+        console.warn("[subagent-call] комната субагента не заведена:", errorText(error));
+      }
+      const runChatId = room?.chatId ?? chatId;
+
       let questionId: string | undefined;
       try {
         questionId = ensureSubagentCoordinationCard({
@@ -253,23 +270,29 @@ export function createRoleSubagentCallTool(
           recipientId,
           question,
           originMessageId: originMessageId(context.messageId),
+          roomChatId: room?.chatId,
         });
       } catch (error) {
         console.warn("[subagent-call] карточка обращения не создана:", errorText(error));
       }
 
       // Сессия роли в этом чате — не трогаем: ход субагента одноразовый.
-      const priorSession = readSession(chatId, recipientId);
+      const priorSession = readSession(runChatId, recipientId);
       let text = "";
       try {
         text = await runAsSubagent({ requesterRole: context.role, recipientRole: role }, () =>
           runner({
             role,
             roleId: recipientId,
-            chatId,
+            chatId: runChatId,
             prompt: subagentPrompt(context.role, role, question),
             timeoutMs: SUBAGENT_TIMEOUT_MS,
             onEvent: (event: unknown) => {
+              try {
+                room?.onEvent(event);
+              } catch {
+                /* живая лента — украшение */
+              }
               try {
                 coordinationActivity(questionId, recipientId, event);
               } catch {
@@ -280,6 +303,11 @@ export function createRoleSubagentCallTool(
         );
       } catch (error) {
         const message = errorText(error);
+        try {
+          room?.finish(`Ход роли не состоялся: ${message}`, true);
+        } catch {
+          /* комната — украшение */
+        }
         if (questionId) {
           try {
             coordinationAnswered(questionId, recipientId, `Ход роли не состоялся: ${message}`, true);
@@ -289,10 +317,15 @@ export function createRoleSubagentCallTool(
         }
         throw new Error(`ХОД РОЛИ «${role}» НЕ СОСТОЯЛСЯ: ${message}`);
       } finally {
-        restoreSession(chatId, recipientId, priorSession);
+        restoreSession(runChatId, recipientId, priorSession);
       }
 
       const answer = truncateAnswer(text) || "(Роль не ответила)";
+      try {
+        room?.finish(answer, false);
+      } catch (error) {
+        console.warn("[subagent-call] ответ в комнату не лёг:", errorText(error));
+      }
       if (questionId) {
         try {
           coordinationAnswered(questionId, recipientId, answer, false);
@@ -302,7 +335,7 @@ export function createRoleSubagentCallTool(
       }
       return {
         content: [{ type: "text", text: answer }],
-        details: { operation: ROLE_SUBAGENT_CALL_TOOL, role, question_id: questionId },
+        details: { operation: ROLE_SUBAGENT_CALL_TOOL, role, question_id: questionId, room_chat_id: room?.chatId },
       };
     },
   };

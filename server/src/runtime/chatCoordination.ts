@@ -49,13 +49,15 @@ export function ensureCoordinationCard(questionId:string,recipientId:string){
  */
 export function ensureSubagentCoordinationCard(input: {
  chatId:string;requesterId:string;recipientId:string;question:string;originMessageId?:string;
+ /** Комната, где роль работает (владелец 28.10.2026); нет — исходный чат. */
+ roomChatId?:string;
 }): string | undefined {
  if(!input.chatId || !input.question.trim() || !input.requesterId || !input.recipientId)return undefined;
  const questionId="subagent:"+crypto.randomUUID(),now=new Date().toISOString();
  const c:Coordination={
   question_id:questionId,recipient_id:input.recipientId,
   requester_name:title(input.requesterId),recipient_name:title(input.recipientId),
-  question:input.question,child_chat_id:input.chatId,origin_message_id:input.originMessageId??"",
+  question:input.question,child_chat_id:input.roomChatId??input.chatId,origin_message_id:input.originMessageId??"",
   status:"queued",activity:"Вопрос принят и передан роли",
   created_at:now,last_activity_at:now,terminal:false,
  };
