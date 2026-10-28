@@ -25,6 +25,7 @@ from livekit.agents import (
     cli,
     function_tool,
     llm,
+    room_io,
 )
 from livekit.plugins.google.realtime import RealtimeModel
 
@@ -523,7 +524,8 @@ async def entrypoint(ctx: JobContext) -> None:
     shared = await shared_tools_via_api(cfg.taskflow_socket_path, owner.identity, runner, chat_id, recorder, agent=agent, session_id=ctx.room.name)
     await agent.update_tools(shared)
     logger.info("Голосовой каталог: %s", ", ".join(tool.id for tool in shared))
-    await session.start(agent=agent, room=ctx.room)
+    await session.start(agent=agent, room=ctx.room,
+                        room_options=room_io.RoomOptions(video_input=True, participant_identity=owner.identity))
 
     # Тап по анимации на телефоне — перебить Помощника владельца на полуслове.
     @ctx.room.local_participant.register_rpc_method("interrupt")
