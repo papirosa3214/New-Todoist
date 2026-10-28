@@ -1,3 +1,4 @@
+import {installProviderDiagnostics, registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import {supportedThinkingLevels,validateChatThinking,thinkingLevelLabels} from "./thinkingLevels.js";
 import {safelyCaptureBudgetCases,budgetContinuationPrompt} from "./chatBudgetCases.js";
 import { resolveChatWorkspace } from "../lib/chatWorkspace.js";
@@ -135,6 +136,7 @@ export async function getModelRuntime(): Promise<ModelRuntime> {
   if (!modelRuntime) {
     try {
       modelRuntime = await ModelRuntime.create();
+      installProviderDiagnostics(modelRuntime);
     } catch (error) {
       throw new RuntimeUnavailableError(
         `ModelRuntime.create() failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1546,6 +1548,7 @@ async function startChatRunOnce(
       [...composio.tools, ...infra.tools, ...secretary],
     );
 
+    registerProviderSession(sessionManager.getSessionId(), {role, chat_id:input.chatId, message_id:input.messageId, run_id:runId, origin:"chat"});
     let session: any;
     let budgetFailure: Error | null = null;
     const budgetEvents: unknown[] = [];
@@ -1584,6 +1587,7 @@ async function startChatRunOnce(
     }
     preparation.transfer();
 
+    observeProviderRetries(session, sessionManager.getSessionId());
     installNativeToolSchemas(session, toolCatalog);
     // Активно только ядро операций: остальное подключает taskflow_tools по
     // требованию (setActiveToolsByName). Реестр сессии полный — подключать можно

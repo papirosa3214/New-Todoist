@@ -1,3 +1,4 @@
+import {registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import {reportReviewBlockForTask} from "../lib/jevAssist.js";
 import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
 import { reviewThoughts, thoughtNudge, REVIEW_EVERY, NUDGE_COOLDOWN } from "../lib/thoughtReviewJev.js";
@@ -1586,6 +1587,7 @@ try {
   // На удалённой машине встроенные инструменты CLI исполнялись бы на .110, а не там:
   // запуск внешнего агента через хост — отдельный этап (операция agent_spawn в host/).
   if (external && host) throw new Error("внешний агент пока запускается только на .110, не через хост");
+  registerProviderSession(manager.getSessionId(), {role, task_id:taskId, subtask_id:input.subtaskId, run_id:runId, origin:"card"});
   const { session } = await (external
     ? (() => {
         const command = agentBinary(external);
@@ -1618,6 +1620,7 @@ try {
     settingsManager: SettingsManager.inMemory({ compaction: { ...COMPACTION_SETTINGS }, retry: { enabled: true, maxRetries: 2 } }),
   } as any)).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await infra.close(); throw error; });
 
+  observeProviderRetries(session, manager.getSessionId());
   installNativeToolSchemas(session, toolCatalog);
   // Активно только ядро операций: остальное подключает taskflow_tools по
   // требованию (setActiveToolsByName). Реестр сессии полный — подключать можно
