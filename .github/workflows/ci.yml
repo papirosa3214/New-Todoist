@@ -24,7 +24,11 @@
 # встроенный auto-merge GitHub. Слияние токеном GITHUB_TOKEN не запускает
 # CI на main повторно — тесты уже прошли в PR.
 #
-# PR только с документацией (*.md, docs/) тесты не гоняет.
+# PR без кода тесты не гоняет: *.md, документация, данные-тексты (переводы
+# Composio), отчёты QA, макеты, аватары, бэкапы. Список папок проверен
+# 28.10.2026: ни server/src, ни server/test их файлы не читают. Код сервера,
+# scripts/, host/, roles/, server/agents|assets|shared|systemd и корневые
+# package*.json/tsconfig — по-прежнему с тестами.
 # Тесты разбиты на 4 параллельных куска (--shard), гейт — на каждом.
 name: CI — сервер TaskFlow
 
@@ -49,12 +53,12 @@ jobs:
         with:
           fetch-depth: 0
       - id: diff
-        name: Есть ли правки кроме документации
+        name: Есть ли правки в коде
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           files=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "$files"
-          if echo "$files" | grep -qvE '(\.md$|^docs/)'; then echo "code=true" >> "$GITHUB_OUTPUT"; else echo "code=false" >> "$GITHUB_OUTPUT"; fi
+          if echo "$files" | grep -qvE '(\.md$|\.patch$|^qa-[^/]*\.json$|^(docs|server/docs|server/data|server/backups|workspace|qa|qa-srok|qa-report|tests|public|handoff|mockup-reference|avatar-sets|infra-110-verify|\.artifacts|\.superdesign|\.superpowers|\.ui-craft)/)'; then echo "code=true" >> "$GITHUB_OUTPUT"; else echo "code=false" >> "$GITHUB_OUTPUT"; fi
 
   typecheck:
     name: Типы (tsc --noEmit)
