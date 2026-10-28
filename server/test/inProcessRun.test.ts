@@ -464,7 +464,7 @@ describe("агент роли внутри сервера", () => {
     expect(claimed.actor_id).toBe("role_builder");
   });
 
-  it("системный prompt объясняет роли, что она уже работает локально на .110", async () => {
+  it("памятки среды .110 (local_policy) в системном prompt нет — слой убран владельцем 28.10.2026", async () => {
     const { taskId } = builderTask("Локальная файловая операция");
     script.systemPrompts.length = 0;
     script.steps = async () => {};
@@ -472,9 +472,7 @@ describe("агент роли внутри сервера", () => {
     await runRoleInProcess({ taskId, role: "builder" });
     await _settleInProcessRunsForTests();
 
-    expect(script.systemPrompts.at(-1)).toContain("ты уже работаешь на сервере .110");
-    expect(script.systemPrompts.at(-1)).toContain("не подключайся к .110 по SSH");
-    expect(script.systemPrompts.at(-1)).toContain("/home/maksim/Проекты/Хранилище");
+    expect(script.systemPrompts.at(-1)).not.toContain("не подключайся к .110 по SSH");
   });
 
   // С 24.10.2026 (70ec3a7b) сводка «Материал для работы собран…» — служебный шум:
