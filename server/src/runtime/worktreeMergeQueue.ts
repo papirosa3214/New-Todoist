@@ -16,8 +16,9 @@
 // Последовательность: одна очередь, одна блокировка на файл, за проход
 // планировщика — одна карточка (тесты занимают минуты, блокировать все
 // ветки планировщика нельзя).
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
@@ -44,6 +45,7 @@ export type MergeTrigger = "integration_step" | "orchestrator_step" | "sweep";
 export type MergeState =
   | "queued"
   | "running"
+  | "pr_open"
   | "merged"
   | "conflict"
   | "test_failed"
@@ -65,13 +67,77 @@ export interface MergeRow {
   created_at: string;
   updated_at: string;
   finished_at: string | null;
+  /** Номер и ссылка PR на GitHub (режим `pr`). */
+  pr_number?: number | null;
+  pr_url?: string | null;
 }
 
 const LOCK_FILE = "merge.lock";
 const LOCK_STALE_MS = 30 * 60_000;
 
+// ───────────────────────── GitHub (режим pr) ─────────────────────────
+//
+// Владелец 28.10.2026: ветки ролей идут той же дорогой, что и правки
+// Claude, — ветка → GitHub → PR → тесты CI → зелёный без конфликтов
+// вливается сам (job `automerge` в .github/workflows/ci.yml). Сервер
+// больше не сливает и не гоняет тесты на .110: он отправляет ветку,
+// открывает PR и следит за его исходом.
+
+const GITHUB_REMOTE = "github";
+const NET_TIMEOUT_MS = 120_000;
+
+export interface PullRequestStatus {
+  state: "OPEN" | "MERGED" | "CLOSED";
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  merge_commit: string | null;
+  /** Хотя бы одна проверка CI красная. */
+  checks_failed: boolean;
+}
+
+/** Репозиторий на GitHub (`owner/name`) из адреса remote `github`. */
+function githubRepo(live: string): string {
+  const url = git(live, ["remote", "get-url", GITHUB_REMOTE]);
+  const match = /github\.com[:/](.+?)(?:\.git)?$/.exec(url.trim());
+  if (!match) throw new Error(`remote ${GITHUB_REMOTE} — не GitHub: ${url}`);
+  return match[1];
+}
+
+/** `gh` с ключом из хранилища; значение ключа в вывод не попадает. */
+function gh(args: string[]): string {
+  const vault = process.env.TASKFLOW_VAULT_RUN ?? path.join(os.homedir(), ".claude", "vault-run.py");
+  return execFileSync("python3", [vault, "--secret", "GH_TOKEN=GITHUB_TOKEN", "--", "gh", ...args], {
+    encoding: "utf8",
+    timeout: NET_TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
 /** Крюк для тестов: реальный запуск `npm test` занимает минуты. */
 export const hooks = {
+  /** Отправить ветку роли на GitHub (перезаписью своей же ветки). */
+  pushBranch: (live: string, branch: string): void => {
+    git(live, ["push", "--force", GITHUB_REMOTE, `refs/heads/${branch}:refs/heads/${branch}`], NET_TIMEOUT_MS);
+  },
+  /** Открытый PR ветки или новый. */
+  ensurePullRequest: (live: string, branch: string, title: string, body: string): { number: number; url: string } => {
+    const repo = githubRepo(live);
+    const open = JSON.parse(gh(["pr", "list", "-R", repo, "--head", branch, "--state", "open", "--json", "number,url"]) || "[]");
+    if (open.length) return { number: open[0].number, url: open[0].url };
+    gh(["pr", "create", "-R", repo, "--base", "main", "--head", branch, "--title", title, "--body", body]);
+    const made = JSON.parse(gh(["pr", "view", branch, "-R", repo, "--json", "number,url"]));
+    return { number: made.number, url: made.url };
+  },
+  /** Состояние PR: влит, закрыт, конфликт, красные проверки. */
+  pullRequestStatus: (live: string, number: number): PullRequestStatus => {
+    const raw = JSON.parse(gh(["pr", "view", String(number), "-R", githubRepo(live), "--json", "state,mergeable,mergeCommit,statusCheckRollup"]));
+    const checks = Array.isArray(raw.statusCheckRollup) ? raw.statusCheckRollup : [];
+    return {
+      state: raw.state,
+      mergeable: raw.mergeable,
+      merge_commit: raw.mergeCommit?.oid ?? null,
+      checks_failed: checks.some((c: { conclusion?: string }) => c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT"),
+    };
+  },
   /** Отправка main во все git-хосты после слияния; тесты подменяют. */
   pushHosts: (live: string): PushStatus => pushMainToHosts(live),
   runTests: async (cwd: string, timeoutMs: number): Promise<{ ok: boolean; output: string }> => {
@@ -176,7 +242,7 @@ function releaseLock(file: string | null): void {
 
 // ───────────────────────── очередь в БД ─────────────────────────
 
-export function mergeMode(): "off" | "dry" | "on" {
+export function mergeMode(): "off" | "dry" | "on" | "pr" {
   return getSetting("auto_merge_mode");
 }
 
@@ -312,7 +378,9 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   const live = liveRepo();
   const branch = roleBranch(taskId);
 
-  const dirtyMain = dirtyFiles(live);
+  // Режим pr: живой main не трогаем вовсе — его незакоммиченное слиянию
+  // через GitHub не мешает. Проверки ветки и копии роли — те же.
+  const dirtyMain = mergeMode() === "pr" ? [] : dirtyFiles(live);
   if (dirtyMain.length > 0) {
     outcome.state = "blocked_dirty_main";
     outcome.error = `в main есть незакоммиченное (${dirtyMain.length}): ${dirtyMain.slice(0, 3).join(", ")}`;
@@ -343,6 +411,7 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
 
   const mainShaBefore = git(live, ["rev-parse", "main"]);
   outcome.main_sha_before = mainShaBefore;
+  if (mergeMode() === "pr") return openPullRequest(taskId, row, branch, live, mainShaBefore, outcome);
   writeState(taskId, { state: "running", main_sha_before: mainShaBefore, error: null });
   // Счётчик попыток: по нему видно, что слияние упирается в одно и то же
   // (создание копии) и пора звать человека.
@@ -499,6 +568,98 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
     journal({ task_id: taskId, state: "push", error: String(error) });
   }
   return outcome;
+}
+
+/** Режим pr: ветка роли → GitHub → PR. Тесты и слияние — CI на GitHub. */
+function openPullRequest(
+  taskId: string,
+  row: MergeRow,
+  branch: string,
+  live: string,
+  mainShaBefore: string,
+  outcome: MergeOutcome,
+): MergeOutcome {
+  writeState(taskId, { state: "running", main_sha_before: mainShaBefore, error: null });
+  let taskTitle: string | null = null;
+  try {
+    taskTitle = (db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title: string } | undefined)?.title ?? null;
+  } catch {
+    /* без названия — PR назовётся по карточке */
+  }
+  const title = `${taskTitle ?? "Работа роли"} (карточка ${taskId.slice(0, 8)})`;
+  const body = [
+    `Ветка роли \`${branch}\`, карточка TaskFlow \`${taskId}\`.`,
+    "",
+    "Открыта очередью слияния ролей. Зелёные проверки без конфликтов — PR вливается сам;",
+    "конфликт или красные тесты — роль обновляет ветку от main и сдаёт шаг заново.",
+  ].join("\n");
+  try {
+    hooks.pushBranch(live, branch);
+    const pr = hooks.ensurePullRequest(live, branch, title, body);
+    db.prepare("UPDATE worktree_merge_queue SET pr_number = ?, pr_url = ?, attempts = 0 WHERE task_id = ?").run(pr.number, pr.url, taskId);
+    outcome.state = "pr_open";
+    outcome.error = null;
+    outcome.pr_number = pr.number;
+    outcome.pr_url = pr.url;
+    writeState(taskId, { state: "pr_open", error: null });
+    journal({ task_id: taskId, state: "pr_open", pr: pr.url, main_sha_before: mainShaBefore });
+    safeLogEvent(taskId, "merge_pr_opened", branch, pr.url);
+  } catch (error) {
+    const attempts = Number(row.attempts ?? 0) + 1;
+    db.prepare("UPDATE worktree_merge_queue SET attempts = ? WHERE task_id = ?").run(attempts, taskId);
+    const message = error instanceof Error ? error.message : String(error);
+    // Сеть или GitHub недоступны — следующий проход повторит; упорный
+    // отказ отдаём ответственному за интеграцию.
+    outcome.state = attempts >= 4 ? "conflict" : "queued";
+    outcome.error = `PR не открыт: ${tail(message, 600)}`;
+    writeState(taskId, { state: outcome.state, error: outcome.error });
+    journal({ task_id: taskId, state: outcome.state, reason: "pr_failed", error: outcome.error });
+  }
+  return outcome;
+}
+
+/**
+ * Режим pr: сверить открытые PR с GitHub. Влит — карточке «влито» и
+ * уборка копии; конфликт, красные тесты или закрытый PR — роли на разбор
+ * (повторная сдача шага интеграции снова отправит ветку и обновит PR).
+ */
+export function syncPullRequests(limit = 20): number {
+  if (mergeMode() !== "pr") return 0;
+  const live = liveRepo();
+  const rows = db
+    .prepare("SELECT task_id, pr_number FROM worktree_merge_queue WHERE state = 'pr_open' AND pr_number IS NOT NULL ORDER BY updated_at LIMIT ?")
+    .all(limit) as Array<{ task_id: string; pr_number: number }>;
+  let changed = 0;
+  for (const row of rows) {
+    let status: PullRequestStatus;
+    try {
+      status = hooks.pullRequestStatus(live, row.pr_number);
+    } catch {
+      continue; // GitHub недоступен — следующий проход
+    }
+    const pr = `PR #${row.pr_number}`;
+    if (status.state === "MERGED") {
+      db.prepare(
+        "UPDATE tasks SET merged_at = datetime('now'), merged_into_commit = ?, merged_into_branch = 'main' WHERE id = ?",
+      ).run(status.merge_commit, row.task_id);
+      writeState(row.task_id, { state: "merged", result_sha: status.merge_commit, error: null });
+      journal({ task_id: row.task_id, state: "merged", pr: row.pr_number, result_sha: status.merge_commit });
+      safeLogEvent(row.task_id, "auto_merged", pr, status.merge_commit);
+      changed += 1;
+    } else if (status.state === "CLOSED") {
+      writeState(row.task_id, { state: "conflict", error: `${pr} закрыт без слияния` });
+      changed += 1;
+    } else if (status.mergeable === "CONFLICTING") {
+      writeState(row.task_id, { state: "conflict", error: `конфликт с main в ${pr}: обнови ветку от main, разреши конфликт и сдай шаг заново` });
+      safeLogEvent(row.task_id, "merge_conflict", pr, "конфликт с main");
+      changed += 1;
+    } else if (status.checks_failed) {
+      writeState(row.task_id, { state: "test_failed", error: `проверки CI в ${pr} красные: почини и сдай шаг заново` });
+      safeLogEvent(row.task_id, "merge_test_failed", pr, null);
+      changed += 1;
+    }
+  }
+  return changed;
 }
 
 function tail(output: string, limit = 4000): string {
@@ -707,7 +868,7 @@ export async function worktreeMaintenancePass(): Promise<number> {
   // Зависшие в `running` строки (сервер упал посреди слияния) — тоже
   // в очередь: иначе карточка висит до прихода человека.
   const recovered = recoverStaleRunning().length;
-  const merged = (await drainMergeQueue(1)).filter((row) => row.state === "merged").length;
+  const merged = (await drainMergeQueue(1)).filter((row) => row.state === "merged").length + syncPullRequests();
   const cleaned = await sweepMergedWorkspaces();
   const leftovers = sweepTestLeftovers() + sweepMergeScratch();
   return unblocked + recovered + merged + cleaned + leftovers;

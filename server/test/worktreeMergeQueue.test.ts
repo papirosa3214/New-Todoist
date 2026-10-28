@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import db from "../src/db.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, recoverStaleRunning, requeueMerge, retryClearedObstructions, sweepMergeScratch, worktreeMaintenancePass } from "../src/runtime/worktreeMergeQueue.js";
+import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, recoverStaleRunning, requeueMerge, retryClearedObstructions, sweepMergeScratch, syncPullRequests, worktreeMaintenancePass } from "../src/runtime/worktreeMergeQueue.js";
 import { reloadServerSettings, setSetting } from "../src/lib/serverSettings.js";
 import { saveBaseline } from "../src/lib/worktree/testGate.js";
 
@@ -483,5 +483,119 @@ describe("integration stamp is the only admission",()=>{
     expect(enqueueMerge("t-legacy","integration_step")).toBe(true);
     expect((await processMerge("t-legacy")).state).toBe("merged");
     expect(calls).toBe(1);
+  });
+});
+
+// Режим pr (владелец 28.10.2026): ветка роли уходит на GitHub, открывается
+// PR, тесты и слияние — CI на GitHub. Сервер main не двигает и тестов не
+// гоняет, только следит за исходом PR.
+describe("режим pr: слияние через PR на GitHub", () => {
+  const real = { pushBranch: hooks.pushBranch, ensurePullRequest: hooks.ensurePullRequest, pullRequestStatus: hooks.pullRequestStatus };
+  let pushed: string[] = [];
+  let status: ReturnType<typeof hooks.pullRequestStatus>;
+
+  beforeAll(() => {
+    for (const column of ["pr_number INTEGER", "pr_url TEXT"]) {
+      try { db.exec(`ALTER TABLE worktree_merge_queue ADD COLUMN ${column}`); } catch { /* уже есть */ }
+    }
+  });
+  afterAll(() => {
+    Object.assign(hooks, real);
+    setSetting("auto_merge_mode", "on", null, "возврат боевого режима");
+  });
+  afterEach(() => {
+    pushed = [];
+  });
+
+  function prMode(): void {
+    setSetting("auto_merge_mode", "pr", null, "тест режима pr");
+    hooks.pushBranch = (_live, branch) => { pushed.push(branch); };
+    hooks.ensurePullRequest = () => ({ number: 42, url: "https://github.com/o/r/pull/42" });
+    status = { state: "OPEN", mergeable: "MERGEABLE", merge_commit: null, checks_failed: false };
+    hooks.pullRequestStatus = () => status;
+  }
+
+  it("сдача шага: ветка отправлена, PR открыт, main и тесты не тронуты", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-pr");
+    seedTask("t-pr");
+    prMode();
+    let tests = 0;
+    hooks.runTests = async () => { tests++; return { ok: true, output: "ok" }; };
+    const mainBefore = git(repo.live, "rev-parse", "main");
+    enqueueMerge("t-pr", "integration_step");
+    const outcome = await processMerge("t-pr");
+    expect(outcome.state).toBe("pr_open");
+    expect(pushed).toEqual(["roles/t-pr"]);
+    expect(tests).toBe(0);
+    expect(git(repo.live, "rev-parse", "main")).toBe(mainBefore);
+    expect(mergeQueueRow("t-pr")).toMatchObject({ state: "pr_open", pr_number: 42, pr_url: "https://github.com/o/r/pull/42" });
+  });
+
+  it("грязный живой main не мешает: PR всё равно открывается", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-pr-dirty");
+    seedTask("t-pr-dirty");
+    prMode();
+    fs.writeFileSync(path.join(repo.live, "черновик.txt"), "чужая правка\n");
+    enqueueMerge("t-pr-dirty", "integration_step");
+    expect((await processMerge("t-pr-dirty")).state).toBe("pr_open");
+  });
+
+  it("PR влит на GitHub: карточка получает «влито» и коммит слияния", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-pr-merged");
+    seedTask("t-pr-merged");
+    prMode();
+    enqueueMerge("t-pr-merged", "integration_step");
+    await processMerge("t-pr-merged");
+    expect(syncPullRequests()).toBe(0); // ещё идёт проверка
+    status = { state: "MERGED", mergeable: "UNKNOWN", merge_commit: "abc123", checks_failed: false };
+    expect(syncPullRequests()).toBe(1);
+    expect(mergeQueueRow("t-pr-merged")).toMatchObject({ state: "merged", result_sha: "abc123" });
+    const task = db.prepare("SELECT merged_at, merged_into_commit FROM tasks WHERE id = ?").get("t-pr-merged") as
+      { merged_at: string | null; merged_into_commit: string | null };
+    expect(task.merged_at).toBeTruthy();
+    expect(task.merged_into_commit).toBe("abc123");
+  });
+
+  it("конфликт в PR: роли на разбор, повторная сдача снова отправляет ветку", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-pr-conflict");
+    seedTask("t-pr-conflict");
+    prMode();
+    enqueueMerge("t-pr-conflict", "integration_step");
+    await processMerge("t-pr-conflict");
+    status = { state: "OPEN", mergeable: "CONFLICTING", merge_commit: null, checks_failed: false };
+    syncPullRequests();
+    expect(mergeQueueRow("t-pr-conflict")?.state).toBe("conflict");
+    expect(mergeQueueRow("t-pr-conflict")?.error).toContain("PR #42");
+    expect(requeueMerge("t-pr-conflict")).toBe(true);
+    expect((await processMerge("t-pr-conflict")).state).toBe("pr_open");
+    expect(pushed).toEqual(["roles/t-pr-conflict", "roles/t-pr-conflict"]);
+  });
+
+  it("красные проверки CI: test_failed с номером PR", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-pr-red");
+    seedTask("t-pr-red");
+    prMode();
+    enqueueMerge("t-pr-red", "integration_step");
+    await processMerge("t-pr-red");
+    status = { state: "OPEN", mergeable: "MERGEABLE", merge_commit: null, checks_failed: true };
+    syncPullRequests();
+    expect(mergeQueueRow("t-pr-red")).toMatchObject({ state: "test_failed" });
+  });
+
+  it("GitHub недоступен: строка остаётся в очереди для повтора", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-pr-net");
+    seedTask("t-pr-net");
+    prMode();
+    hooks.pushBranch = () => { throw new Error("сеть"); };
+    enqueueMerge("t-pr-net", "integration_step");
+    const outcome = await processMerge("t-pr-net");
+    expect(outcome.state).toBe("queued");
+    expect(outcome.error).toContain("PR не открыт");
   });
 });

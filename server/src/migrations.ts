@@ -5390,6 +5390,13 @@ const migrations: Migration[] = [
       thinking_level TEXT
     );
   `)},
+  { id: "184_merge_queue_pull_requests", description: "Очередь слияния ролей через PR на GitHub: номер и ссылка PR; живой режим on → pr (владелец 28.10.2026)", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(worktree_merge_queue)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!cols.has("pr_number")) db.exec("ALTER TABLE worktree_merge_queue ADD COLUMN pr_number INTEGER");
+    if (!cols.has("pr_url")) db.exec("ALTER TABLE worktree_merge_queue ADD COLUMN pr_url TEXT");
+    const settings = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='server_settings'").get();
+    if (settings) db.prepare("UPDATE server_settings SET value = ?, updated_at = datetime('now'), updated_by = 'migration-184' WHERE key = 'auto_merge_mode' AND value = ?").run(JSON.stringify("pr"), JSON.stringify("on"));
+  } },
 
 ];
 /**
