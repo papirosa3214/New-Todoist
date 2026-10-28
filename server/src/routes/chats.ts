@@ -2,6 +2,7 @@ import {snapshotChatPreferences,messageThinkingLevel,readChatPreferences} from "
 import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
 import {visibleChatSql} from "../lib/serviceNoise.js";
 import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
+import { extractQuickReplies, pullQuickReplies } from "../lib/quickReplies.js";
 import {compactChatReportMaterials} from "../lib/chatReportMaterials.js";
 import {preparedReportMaterials} from "../runtime/chatPreparedMaterials.js";
 import { prepareChatValue } from "../runtime/chatPreparationDeadline.js";
@@ -180,27 +181,6 @@ function previewText(text: string): string {
       return type === "weather" ? "🌤 Погода" : "▦ Виджет";
     })
     .trim();
-}
-
-/** Быстрые ответы (владелец 25.09.2026): модель заканчивает ответ строкой
- *  `БЫСТРО: вариант1 | вариант2 | вариант3` — разбираем и убираем из
- *  текста, который ложится в ленту. Раньше жило только у Помощника владельца,
- *  теперь это общий формат ответа любой роли. */
-function extractQuickReplies(text: string): { clean: string; replies: string[] | null } {
-  const lines = text.split("\n");
-  let lastIdx = lines.length - 1;
-  while (lastIdx >= 0 && lines[lastIdx].trim() === "") lastIdx--;
-  if (lastIdx < 0) return { clean: text, replies: null };
-  const match = lines[lastIdx].trim().match(/^БЫСТРО:\s*(.+)$/i);
-  if (!match) return { clean: text, replies: null };
-  const replies = match[1]
-    .split("|")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 4);
-  if (!replies.length) return { clean: text, replies: null };
-  const clean = lines.slice(0, lastIdx).join("\n").trimEnd();
-  return { clean, replies };
 }
 
 /** Сколько пунктов должно быть в чек-листе роли, чтобы владелец его видел. */
@@ -3226,15 +3206,16 @@ async function deliverAgentReply(args: {
           validationErrors: normalized.validationErrors,
         });
       }
-      const replies: string[] = [];
-      normalized.envelope.output = normalized.envelope.output.map((block) => {
-        if (block.type !== "text" || typeof block.text !== "string") return block;
-        const widgetsNormalized = normalizeWidgetBlocks(block.text);
-        const extracted = extractQuickReplies(widgetsNormalized);
-        if (extracted.replies) replies.push(...extracted.replies);
-        return { ...block, text: extracted.clean };
-      });
-      quickReplies = replies.length ? replies.slice(0, 4) : null;
+      // Разбор идёт и по отчёту: строка `БЫСТРО:` бывает внутри `report.sections`,
+      // а не только в обычном блоке `text` (владелец 28.10.2026 — у отчёта
+      // кнопки показывались простым текстом).
+      const withReplies = pullQuickReplies(
+        normalized.envelope.output.map((block) => (
+          typeof block.text === "string" ? { ...block, text: normalizeWidgetBlocks(block.text) } : block
+        )),
+      );
+      normalized.envelope.output = withReplies.output;
+      quickReplies = withReplies.replies;
       storedRoleEnvelope = JSON.stringify(normalized.envelope);
       replyText = structuredOutputText(normalized.envelope.output).trim();
     }
