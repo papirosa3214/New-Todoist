@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 // Агент роли внутри сервера (владелец 23.09.2026: «как у Гермеса, без
 // ключей»). Модель подменена: «агент» по заданию вызывает инструменты
 // трекера — проверяем, что всё записывается от имени роли и без ключей.
@@ -85,6 +86,78 @@ describe("агент роли внутри сервера", () => {
   let app: FastifyInstance;
   let ownerId: string;
   let ownerToken: string;
+
+  it.each([null, 'blocked', 'in_progress', 'review'])("owner manual reviewer bypasses stale state %s and exhausted automatic budget", async state => {
+    const id = 'owner-review-' + crypto.randomUUID();
+    db.prepare("INSERT INTO tasks(id,title,creator_id,status,agent_state,assignee_id) VALUES(?,'Owner retry',?,'active',?,'role_critic_verifier')").run(id, ownerId, state);
+    const {reserveReviewRun} = await import('../src/runtime/reviewRunBudget.js');
+    db.prepare("UPDATE tasks SET agent_state='review' WHERE id=?").run(id);
+    reserveReviewRun(id);
+    db.prepare("UPDATE tasks SET agent_state=? WHERE id=?").run(state,id);
+    script.systemOn = false;
+    let calls = 0;
+    script.steps = async () => { calls++; };
+    const res = await app.inject({method:'POST',url:'/api/tasks/'+id+'/run',headers:{authorization:'Bearer '+ownerToken},payload:{mode:'reviewer'}});
+    expect(res.statusCode,res.body).toBe(200);
+    await _settleInProcessRunsForTests();
+    expect(calls).toBe(1);
+    const {reviewRepeatBlockReason} = await import('../src/runtime/reviewRunBudget.js');
+    expect(reviewRepeatBlockReason(id)).toBeTruthy();
+  });
+  it.each(['blocked','in_progress','review'])("owner manual executor recovers %s without enabling automation", async state => {
+    const id = 'owner-work-' + crypto.randomUUID();
+    db.prepare("INSERT INTO tasks(id,title,creator_id,status,agent_state,assignee_id) VALUES(?,'Owner retry',?,'active',?,'role_builder')").run(id,ownerId,state);
+    script.systemOn=false;
+    let calls=0;
+    script.steps=async()=>{ calls++; };
+    const res=await app.inject({method:'POST',url:'/api/tasks/'+id+'/run',headers:{authorization:'Bearer '+ownerToken},payload:{mode:'executor'}});
+    expect(res.statusCode,res.body).toBe(200);
+    await _settleInProcessRunsForTests();
+    expect(calls).toBe(1);
+  });
+
+  it.each(['builder','critic_verifier'])("owner manual plan step recovers %s from blocked, closed plan and unmet predecessors", async role => {
+    const {taskId,stepId}=builderTask('Owner plan recovery');
+    const planId=taskId+'-plan';
+    db.prepare("INSERT INTO task_collaboration_plans(id,task_id,revision,status,profile,rationale,created_by) VALUES(?,?,99,'draft','manual','test',?)").run(planId,taskId,ownerId);
+    db.prepare("INSERT INTO task_collaboration_plan_nodes(id,plan_id,slot_key,role_key,required,expected_result) VALUES(?,?,'work',?,1,'Result')").run(planId+'-node',planId,role);
+    db.prepare("UPDATE subtasks SET collaboration_plan_id=?,plan_node_key='work',agent_id=?,agent_state='blocked',done=1 WHERE id=?").run(planId,'role_'+role,stepId);
+    db.prepare("INSERT INTO task_collaboration_plan_edges(id,plan_id,from_slot_key,to_slot_key,start_condition) VALUES(?,?,'missing','work','submitted')").run(planId+'-edge',planId);
+    db.prepare("UPDATE tasks SET agent_state='review' WHERE id=?").run(taskId);
+    const {reserveReviewRun,reviewRepeatBlockReason}=await import('../src/runtime/reviewRunBudget.js');
+    reserveReviewRun(taskId);
+    db.prepare("UPDATE tasks SET agent_state='blocked' WHERE id=?").run(taskId);
+    const {startPlanSubtaskRun}=await import('../src/runtime/planSubtaskAdmission.js');
+    expect((await startPlanSubtaskRun(stepId,'role_'+role,{manualStart:true})).ok).toBe(false);
+    expect(db.prepare('SELECT done,agent_state FROM subtasks WHERE id=?').get(stepId)).toEqual({done:1,agent_state:'blocked'});
+    script.systemOn=false;
+    let calls=0;
+    script.steps=async()=>{calls++; if(role==="builder")db.prepare("UPDATE subtasks SET done=1 WHERE id=?").run(stepId);};
+    const res=await app.inject({method:'POST',url:'/api/subtasks/'+stepId+'/run',headers:{authorization:'Bearer '+ownerToken}});
+    expect(res.statusCode,res.body).toBe(200);
+    if(role==='critic_verifier') {
+      const job=db.prepare("SELECT manual_start,max_attempts FROM role_run_jobs WHERE task_id=? AND status='queued' ORDER BY rowid DESC LIMIT 1").get(taskId) as any;
+      expect(job).toMatchObject({manual_start:1,max_attempts:1});
+      const {processOneRoleRunJob}=await import('../src/runtime/roleRunWorker.js');
+      await processOneRoleRunJob({workerId:'owner-manual-test'});
+    }
+    await _settleInProcessRunsForTests();
+    expect(calls).toBe(1);
+    expect(db.prepare('SELECT done FROM subtasks WHERE id=?').get(stepId)).toEqual({done:role==='builder'?1:0});
+    if(role==='critic_verifier')expect(reviewRepeatBlockReason(taskId)).toBeTruthy();
+  });
+  it("role cannot use owner manual task entrypoint",async()=>{
+    const {taskId}=builderTask('Role is not owner');
+    const res=await app.inject({method:'POST',url:'/api/tasks/'+taskId+'/run',headers:{authorization:'Bearer '+app.jwt.sign({id:'role_builder'})},payload:{mode:'executor',manualStart:true}});
+    expect(res.statusCode).toBe(403);
+  });
+
+  it.each(['blocked','in_progress','review'])("owner manual launch remains available in %s",async state=>{
+    const {taskId}=builderTask('Owner available');
+    db.prepare('UPDATE tasks SET agent_state=? WHERE id=?').run(state,taskId);
+    const {taskExecutionState}=await import('../src/runtime/taskExecutionState.js');
+    expect(taskExecutionState(taskId).can_launch).toBe(true);
+  });
 
   beforeAll(async () => {
     app = await buildApp();

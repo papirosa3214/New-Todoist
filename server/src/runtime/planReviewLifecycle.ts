@@ -1,3 +1,4 @@
+import { isOwner } from "../access.js";
 import { reviewRepeatBlockReason, blockReviewRun } from "./reviewRunBudget.js";
 import {
   branchMembership,
@@ -240,11 +241,12 @@ export function isPlanFinalReviewStep(subtaskId: string): boolean {
       .get(subtaskId, `${FINAL_REVIEW_MARKER}%`),
   );
 }
-export function queuePlanFinalReview(subtaskId: string, actorId: string) {
+export function queuePlanFinalReview(subtaskId: string, actorId: string, options:{manualStart?:boolean}={}) {
+  const manual=options.manualStart===true && isOwner(actorId);
   const step = db
     .prepare("SELECT * FROM subtasks WHERE id=?")
     .get(subtaskId) as ReviewStep;
-  const repeatBlock=reviewRepeatBlockReason(step.task_id);
+  const repeatBlock=manual ? null : reviewRepeatBlockReason(step.task_id);
   if(repeatBlock) {
     const error=repeatBlock;
     blockReviewRun(step.task_id,error);
@@ -303,6 +305,8 @@ export function queuePlanFinalReview(subtaskId: string, actorId: string) {
     const job = enqueueRoleRunJob({
       taskId: step.task_id,
       reason: "review",
+      manualStart: manual,
+      maxAttempts: manual ? 1 : undefined,
       actorId,
       dedupeKey,
     });

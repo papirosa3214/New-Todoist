@@ -27,7 +27,7 @@ export function taskExecutionState(taskId: string) {
   const canRetry = status === 'failed';
   return {status, busy, scheme: team ? 'team' : null,
     branch_root_task_id:isChild ? rootId : null,
-    can_launch: !isBranchRoot && !isChild && !busy && !team && !task?.agent_state && task?.status === 'active',
+    can_launch: Boolean(task), // The run endpoint authenticates the owner and recovers state.
     can_change_executor: !isBranchRoot && !isChild && !busy && !team,
     can_use_plan: !isChild && (!busy || hasOnlyBranchCoordination(taskId)),
     error: canRetry ? job?.last_error ?? 'Запуск завершён без начала работы. Проверьте назначение исполнителя.' : null};

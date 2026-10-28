@@ -185,7 +185,7 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     if (current.agent_id !== req.userId && !isOwner(req.userId) && !isOrchestrator(req.userId)) {
       return reply.code(403).send({ error: "это не ваш узел плана" });
     }
-    const started = await startPlanSubtaskRun(current.id, req.userId);
+    const started = await startPlanSubtaskRun(current.id, req.userId, {manualStart:isOwner(req.userId)});
     if (!started.ok) return reply.code(409).send({ error: started.error });
     return { ok: true, run_id: started.runId, subtask: db.prepare("SELECT * FROM subtasks WHERE id = ?").get(current.id) };
   });

@@ -45,13 +45,13 @@ describe('single executor launch',()=>{
   const first=await app.inject({method:'POST',url:`/api/tasks/${id}/run`,headers:{authorization:auth},payload:{mode:'executor'}});
   expect(first.statusCode).toBe(200);
   // Схема одна — план; различия single/team больше нет, но признак
-  // активного плана остаётся и запирает запуск и смену исполнителя.
+  // активного плана запирает смену исполнителя. Явный запуск владельца разрешён.
   // can_use_plan не запирается планом: поверх утверждённого плана можно
   // завести новую revision (POST /collaboration-plans).
-  expect(taskExecutionState(id)).toMatchObject({scheme:'team',can_launch:false,can_change_executor:false});
-  // Повторный запуск — отказ, план ровно один.
+  expect(taskExecutionState(id)).toMatchObject({scheme:'team',can_launch:true,can_change_executor:false});
+  // Ручной повтор запускает тот же шаг; план ровно один.
   const second=await app.inject({method:'POST',url:`/api/tasks/${id}/run`,headers:{authorization:auth},payload:{mode:'executor'}});
-  expect(second.statusCode).toBeGreaterThanOrEqual(400);
+  expect(second.statusCode,second.body).toBe(200);
   const plans=db.prepare('SELECT profile,status FROM task_collaboration_plans WHERE task_id=?').all(id);
   expect(plans).toEqual([{profile:'single_executor',status:'approved'}]);
   const patch=await app.inject({method:'PATCH',url:`/api/tasks/${id}`,headers:{authorization:auth},payload:{assignee_id:owner}});
