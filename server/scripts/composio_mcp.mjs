@@ -64,10 +64,14 @@ export async function russianDescription(slug) {
 
 export async function withOwnAuthConfigs(composio, userId, options) {
   const accounts = (await composio.connectedAccounts.list({ userIds: [userId], statuses: ["ACTIVE"], limit: 100 })).items;
+  // Только для сервисов, включённых у роли: ключ невключённого Composio
+  // отклоняет всю сессию (400 «not in the enabled list»), 28.10.2026.
+  const enabled = options.toolkits?.enable ? new Set(options.toolkits.enable) : null;
   const own = {};
   for (const account of accounts) {
     const slug = account.toolkit?.slug;
     const config = account.authConfig;
+    if (enabled && !enabled.has(slug)) continue;
     if (slug && config?.id && !config.isComposioManaged && !own[slug]) own[slug] = config.id;
   }
   if (!Object.keys(own).length) return options;
