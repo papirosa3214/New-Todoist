@@ -24,7 +24,8 @@
 # встроенный auto-merge GitHub. Слияние токеном GITHUB_TOKEN не запускает
 # CI на main повторно — тесты уже прошли в PR.
 #
-# PR только с документацией (*.md, docs/) тесты не гоняет.
+# PR только с документацией и данными (*.md, docs/, server/data/ — там
+# лишь текст, например переводы описаний Composio) тесты не гоняет.
 # Тесты разбиты на 4 параллельных куска (--shard), гейт — на каждом.
 name: CI — сервер TaskFlow
 
@@ -49,12 +50,12 @@ jobs:
         with:
           fetch-depth: 0
       - id: diff
-        name: Есть ли правки кроме документации
+        name: Есть ли правки кроме документации и данных
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           files=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "$files"
-          if echo "$files" | grep -qvE '(\.md$|^docs/)'; then echo "code=true" >> "$GITHUB_OUTPUT"; else echo "code=false" >> "$GITHUB_OUTPUT"; fi
+          if echo "$files" | grep -qvE '(\.md$|^docs/|^server/data/)'; then echo "code=true" >> "$GITHUB_OUTPUT"; else echo "code=false" >> "$GITHUB_OUTPUT"; fi
 
   typecheck:
     name: Типы (tsc --noEmit)
