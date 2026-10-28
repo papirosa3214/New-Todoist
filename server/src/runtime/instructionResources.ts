@@ -56,7 +56,7 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  const discovered=await discoverChatResources(role,true);
  const append=discovered.agentsFiles.map(x=>'# '+x.path+'\n'+composeLayer(role,keyFor(x.path))!.effective);
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
- append.push(composeLayer(role,'rules')!.effective);
+ // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).
  append.push(behaviorInstruction(role));
  append.push(chatModeInstruction(mode));
  append.push('ПРОМЕЖУТОЧНЫЕ ПОЯСНЕНИЯ: краткость относится к итогу. Чек-лист (taskflow_work_plan) заводится до начала работы; дальше обычный текст идёт по нему — начал этап, одной фразой что делаешь; закрыл этап, одной-двумя фразами что по нему вышло. Внутри этапа по операциям не отчитывайся: одна операция почти ничего не меняет. Вне плана пиши только при смене подхода, значимой находке, содержательной проверке или блоке. Обычный текст должен быть понятен владельцу без открытия инструментов. Не выдумывай прогресс. Не раскрывай внутренние рассуждения. Это правило уточняет запреты пересказа хода работы в старых инструкциях.');
@@ -242,7 +242,7 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  // про свои навыки. Возвращены оба, файлом и текстом соответственно.
  for(const file of discovered.agentsFiles)append.push('# '+file.path+'\n'+composeLayer(role,keyFor(file.path))!.effective);
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
- append.push(composeLayer(role,'rules')!.effective);
+ // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).
  append.push(roleHomeInstruction(role));
  append.push(behaviorInstruction(role));
  append.push(renderPromptAddendum('chat',role,ensureRoleHome(role)));

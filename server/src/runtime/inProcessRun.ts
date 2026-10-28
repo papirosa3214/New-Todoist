@@ -1059,8 +1059,6 @@ function roleSliceBlock(role: string, taskId: string): string | null {
   }
 }
 
-export { LOCAL_EXECUTION_POLICY } from "./instructionDefaults.js";
-const LOCAL_EXECUTION_POLICY = INSTRUCTION_DEFAULTS.local_policy;
 
 /** Репозиторий проекта карточки — из того же файла, что читала Система
  *  (прежняя внешняя автоматика).
@@ -1531,7 +1529,6 @@ async function runRoleInProcessUnserialized(input: {
     // Общий шаблон + AGENTS.md роли — один источник (20.10.2026).
     rolePrompt(role)
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
-    composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
     teamStructureText(role),
     clockLine(),
     ROLE_TOOL_INSTRUCTION,

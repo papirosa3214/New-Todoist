@@ -48,7 +48,7 @@ import { AGENT_RULES } from "../agentState.js";
 // (например, defineTool), которые в тестах без живого приложения не нужны.
 // Тесты для этого модуля обходят inProcessRun через прямой source-kind
 // в обёртке readOriginal — здесь импорт ровно ради константы.
-import { LOCAL_EXECUTION_POLICY, INSTRUCTION_DEFAULTS } from "../runtime/instructionDefaults.js";
+import { INSTRUCTION_DEFAULTS } from "../runtime/instructionDefaults.js";
 
 /** Какие режимы запуска поддерживает compose() — дизайн §3. */
 export type RunMode = "work" | "resume" | "reply" | "review" | "subtask" | "chat" | "voice" | "summary";
@@ -111,14 +111,6 @@ export const LAYER_CATALOG: LayerSpec[] = [
     modes: ["work", "resume", "reply", "review", "subtask", "chat", "voice"],
     sourceKind: "code",
     originRef: "server/src/agentState.ts:AGENT_RULES",
-    readOnly: false,
-  },
-  {
-    key: "local_policy",
-    scope: "command",
-    modes: ["work", "resume", "reply", "review", "subtask", "chat", "voice"],
-    sourceKind: "code",
-    originRef: "server/src/runtime/inProcessRun.ts:LOCAL_EXECUTION_POLICY",
     readOnly: false,
   },
   {
@@ -211,7 +203,7 @@ const BLOCK_META: Record<string, [string, string, RunMode[], string[]]> = {
   "task.orchestrate_assemble": ["Оркестратор: принять и собрать итог", "План", ["subtask"], ["roleTitle", "taskId", "subtaskId", "planId", "rules"]],
   "task.documentation": ["Поиск документации", "Задача", ["work", "resume", "subtask"], []],
   "task.knowledge": ["Библиотека TaskFlow", "База знаний", ["work", "resume", "subtask", "review"], []],
-  "chat.wrapper": ["Чат роли", "Чат", ["chat"], ["roleInstruction", "localPolicy", "roleTitle", "role", "participants", "history", "userText"]],
+  "chat.wrapper": ["Чат роли", "Чат", ["chat"], ["roleInstruction", "roleTitle", "role", "participants", "history", "userText"]],
   "chat.followup": ["Продолжение чата роли", "Чат", ["chat"], ["roleTitle", "role", "history", "userText"]],
   "secretary.chat": ["Чат и быстрые ответы Помощника владельца", "Чат", ["chat"], ["roleInstruction", "history", "userText"]],
   "secretary.summary": ["Разбор сводки", "Контекст", ["summary"], ["today", "timezone", "periods", "users"]],
@@ -230,7 +222,7 @@ export function ownerPromptKey(ownerId?:string): string {
 }
 const META: Record<string, [string,string]> = {
  "role.prompt": ["Инструкция роли", "Роль"], rules: ["Правила работы", "Общие"],
- local_policy: ["Среда выполнения", "Общие"], role_skills: ["Навыки роли (метаданные)", "Возможности"],
+ role_skills: ["Навыки роли (метаданные)", "Возможности"],
  mcp_tools: ["Доступные MCP-инструменты", "Возможности"], model_policy: ["Модель и маршрутизация", "Возможности"],
  "plan.role_node": ["Данные узла плана", "Контекст"], "chat.submission": ["История чата", "Контекст"],
  "chat.voice_intake": ["Голосовые данные", "Контекст"], "intake.summary": ["Память и база знаний", "Контекст"],
@@ -324,10 +316,6 @@ function readOriginal(layer: LayerSpec, role: string, ownerId?: string): string 
         for (const line of lines) flat.push(line);
       }
       return flat.map((line) => `- ${line}`).join("\n");
-    }
-    case "local_policy": {
-      // LOCAL_EXECUTION_POLICY — уже склеенный через .join("\n") текст.
-      return LOCAL_EXECUTION_POLICY;
     }
     case "role_skills": {
       // Список навыков — read_only, для UI. Текстом: «name: description»

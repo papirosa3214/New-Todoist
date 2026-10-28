@@ -44,7 +44,7 @@ describe('Pi instruction snapshot',()=>{
    expect(tools.map(t=>t.name)).toEqual(['read','bash','edit','write','grep','find','ls']);
    expect(tools.find(t=>t.name==='grep')!.description).toBe('Искать точное совпадение');
    expect(args).toContain('--no-context-files');
-   expect(fs.readFileSync(args[args.indexOf('--append-system-prompt')+1],'utf8')).toContain('ПУСТАЯ ЛЕНТА');
+   expect(fs.readFileSync(args[args.indexOf('--append-system-prompt')+1],'utf8')).not.toContain('РЕЖИМ КАРТОЧКИ');
    db.prepare('DELETE FROM role_context_overrides WHERE scope=? AND role_key=? AND layer=?').run('role','builder',key);
    db.prepare('DELETE FROM role_context_overrides_history WHERE scope=? AND role_key=? AND layer=?').run('role','builder',key);
    expect(before?.effective ?? '').not.toBe('Искать точное совпадение');

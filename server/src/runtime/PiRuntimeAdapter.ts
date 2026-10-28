@@ -919,7 +919,6 @@ export const piRuntime: RuntimeAdapter = {
       try {
         const composed = [
           composeLayer(role, "role.prompt")?.effective || "",
-          composeLayer(role, "local_policy")?.effective || "",
         ]
           .filter(Boolean)
           .join("\n\n");

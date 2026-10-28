@@ -155,7 +155,6 @@ import {
   composeLayer,
 } from "../lib/roleContextResolver.js";
 import {
-  LOCAL_EXECUTION_POLICY,
 } from "../runtime/inProcessRun.js";
 import {
   attachmentRow,
@@ -3020,7 +3019,6 @@ async function deliverAgentReply(args: {
     const roleInstruction = teamStructureText(role);
     prompt = renderInstruction(role, "chat.wrapper", {
       roleInstruction,
-      localPolicy: composeLayer(role, "local_policy")!.effective,
       roleTitle,
       role,
       participants: participantsText(chatId, roleUserId),
@@ -3069,7 +3067,6 @@ async function deliverAgentReply(args: {
     const roleInstruction = teamStructureText(role);
     prompt = renderInstruction(role, "chat.wrapper", {
       roleInstruction,
-      localPolicy: composeLayer(role, "local_policy")!.effective,
       roleTitle,
       role,
       participants: participantsText(chatId, roleUserId),
