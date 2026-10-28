@@ -42,6 +42,35 @@ export function ensureCoordinationCard(questionId:string,recipientId:string){
   .run(id,origin.requester_id,c.requester_name+" → "+c.recipient_name+": вопрос в очереди",origin.chat_id,origin.message_id,JSON.stringify({duration_ms:0,items:[],coordination:c}));
  publish(id);
 }
+/**
+ * Карточка обращения субагента: вызов роли внутри хода, без сообщения-вопроса
+ * в чате. Идентификатор синтетический ("subagent:…"), поэтому карточка не
+ * конфликтует с обычной веткой ensureCoordinationCard.
+ */
+export function ensureSubagentCoordinationCard(input: {
+ chatId:string;requesterId:string;recipientId:string;question:string;originMessageId?:string;
+}): string | undefined {
+ if(!input.chatId || !input.question.trim() || !input.requesterId || !input.recipientId)return undefined;
+ const questionId="subagent:"+crypto.randomUUID(),now=new Date().toISOString();
+ const c:Coordination={
+  question_id:questionId,recipient_id:input.recipientId,
+  requester_name:title(input.requesterId),recipient_name:title(input.recipientId),
+  question:input.question,child_chat_id:input.chatId,origin_message_id:input.originMessageId??"",
+  status:"queued",activity:"Вопрос принят и передан роли",
+  created_at:now,last_activity_at:now,terminal:false,
+ };
+ const id=crypto.randomUUID();
+ try{
+  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,message_type,reply_to_message_id,steps) VALUES(?,?,?,'chat',?,'system',?,?)")
+   .run(id,input.requesterId,c.requester_name+" → "+c.recipient_name+": "+c.activity,input.chatId,input.originMessageId??null,JSON.stringify({duration_ms:0,items:[],coordination:c}));
+ }catch(error){
+  console.warn("[chat-coordination] карточка субагента не создана:",error instanceof Error?error.message:String(error));
+  return undefined;
+ }
+ publish(id);
+ return questionId;
+}
+
 /** Исток обращения для сообщения владельца: сам вопрос — исток. */
 export function registerCoordinationOriginSelf(questionId:string,requesterId:string){
  const row=db.prepare("SELECT chat_id,steps FROM chat_messages WHERE id=?").get(questionId) as {chat_id:string;steps:string|null}|undefined;

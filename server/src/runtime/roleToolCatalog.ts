@@ -12,6 +12,7 @@ import {toolRequestStore} from "./toolRequestStore.js";
 import {recordToolAudit} from "./toolAuditStore.js";
 import {MISTAKE_LIMIT,stopRoleOnErrorLoop} from "./errorLoopStop.js";
 import {createToolLoader,onDemandScopeKey,onDemandTools,rememberOnDemandTool,TOOL_LOADER_NAME} from "./nativeToolLoader.js";
+import {createRoleSubagentCallTool,isSubagentRun,resetSubagentCallCounters,ROLE_SUBAGENT_CALL_TOOL} from "./roleSubagentCall.js";
 export {UNIVERSAL_INSTRUCTION};
 export const ROLE_TOOL_INSTRUCTION = "Инструменты доступны отдельными именами с точными JSON Schema. Вызывай нужный инструмент напрямую: параметры передавай ровно по его схеме, без обёртки operation/arguments и без предварительного discover/describe. Не выдумывай поля, имена инструментов и значения-заглушки. Проверка прав, контекста и аргументов выполняется до действия. Если вызов отклонён, прочитай ошибку и исправь указанный параметр; не повторяй прежний неверный вызов. После трёх одинаковых неверных вызовов ход останавливается. Старый taskflow в истории — прежний способ вызова тех же операций; в новом ходе используй показанные нативные инструменты. Нужного инструмента может не быть в списке: тогда вызови taskflow_tools — он покажет индекс операций и подключит нужные; права при этом не расширяются. Возможность не означает разрешение: соблюдай режим чата/карточки и явное поручение владельца.";
 /** Ядро: операции, без которых ход не начинается (сориентироваться, взять
@@ -30,6 +31,10 @@ const CORE_OPERATIONS = new Set([
   "taskflow_status", "taskflow_agents", "taskflow_rules",
   "taskflow_review", "taskflow_tool_request", "taskflow_work_start",
   "taskflow_ask_user_question",
+  // Вызов роли как субагента: активен только у ролей с правом (Помощник,
+  // Оркестратор) — у остальных операции нет вовсе, поэтому в ядре она
+  // безвредна.
+  "taskflow_call_role",
 ]);
 
 /** Текст отказа Pi: args в событие tool_execution_end не кладутся, причина
@@ -57,7 +62,14 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const taskflowOperations=taskflowTools(input.role,input.model??null,input.taskId,input.subtaskId,true,{chatId:input.chatId??"",messageId:input.messageId??""});
  const adapterNames=new Set(adapters.map(tool=>tool.name));
  const hostTools=createHostRoleTools(input.role,input.taskId,input.subtaskId);
- const operations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...hostTools,...adapters];
+ // Вызов роли как субагента: только Помощник и Оркестратор (правило доступа
+ // в roleToolScope). В каталоге СУБАГЕНТА инструмента нет — иначе роли
+ // вызывают друг друга цепочкой (роль → роль → роль).
+ const subagentCallTools = !isSubagentRun() && roleToolAllowed(input.role,ROLE_SUBAGENT_CALL_TOOL)
+  ? [createRoleSubagentCallTool(context)] : [];
+ // Новый ход роли — счётчик вызовов субагента сбрасывается: лимит «3 за ход».
+ if(subagentCallTools.length)resetSubagentCallCounters(input.role,input.chatId??"");
+ const operations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...hostTools,...subagentCallTools,...adapters];
  const universal=createUniversalTaskflow(operations,context,toolRequestStore);
  const handledCalls=new Set<string>();
  const sdkMistakes=new Map<string,number>();
