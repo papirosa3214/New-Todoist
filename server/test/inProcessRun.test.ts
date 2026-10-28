@@ -159,6 +159,16 @@ describe("агент роли внутри сервера", () => {
     expect(taskExecutionState(taskId).can_launch).toBe(true);
   });
 
+  it("owner manual run restores completed archived task and clears completion stamp",async()=>{
+    const {taskId}=builderTask('Archived recovery');
+    db.prepare("UPDATE tasks SET status='completed',completed_at=datetime('now'),archived_at=datetime('now'),agent_state='blocked' WHERE id=?").run(taskId);
+    script.steps=async()=>{};
+    const res=await app.inject({method:'POST',url:'/api/tasks/'+taskId+'/run',headers:{authorization:'Bearer '+ownerToken},payload:{mode:'executor'}});
+    expect(res.statusCode,res.body).toBe(200);
+    await _settleInProcessRunsForTests();
+    expect(db.prepare('SELECT status,completed_at,archived_at FROM tasks WHERE id=?').get(taskId)).toEqual({status:'active',completed_at:null,archived_at:null});
+  });
+
   beforeAll(async () => {
     app = await buildApp();
     demoteSeededOwner(db);

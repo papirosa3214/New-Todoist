@@ -25,7 +25,7 @@ POST /subtasks/:id/run может восстановить и запустить
 - RED: 7 новых сценариев ручного запуска получали 409 на исходном коде.
 - RED: can_launch был false для blocked, in_progress и review.
 - RED на чистом main: 12 новых сценариев падают, один штатный idle-запуск уже проходил.
-- GREEN: 47/47 inProcessRun + serverSystemControl; целевые сценарии в inProcessRun.test.ts, включая рабочий шаг и Критика
+- GREEN: 48/48 inProcessRun + serverSystemControl; целевые сценарии в inProcessRun.test.ts, включая рабочий шаг и Критика
   в draft-плане с невыполненным предшественником и завершённым заблокированным шагом.
 - tsc --noEmit.
 - reviewHistoryReplay.test.ts: 2 прежних падения; taskExecutionState.test.ts:
@@ -36,3 +36,6 @@ POST /subtasks/:id/run может восстановить и запустить
 Сервер: отдельная ветка codex/owner-manual-review, PR и автоматическая доставка при пустой очереди.
 iOS: доступность кнопки на завершённых/пропущенных/работающих шагах исправляется отдельно;
 новая версия приложения нужна только для появления кнопки там, где она раньше скрывалась.
+
+Допроверка завершённой архивной карточки: RED — оставалась completed_at; GREEN — при явном запуске статус active, completed_at и archived_at очищаются.
+PR: https://github.com/papirosa3214/New-Todoist/pull/12
