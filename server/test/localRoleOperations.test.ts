@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { guardPath, isolatedLocalOperations, roleRoots, ROLE_USER } from "../src/runtime/localRoleOperations.js";
+import { guardPath, isolatedLocalOperations, roleRoots, ROLE_USER, roleProxyExports } from "../src/runtime/localRoleOperations.js";
 
 const work = fs.mkdtempSync(path.join(os.homedir(), ".local", "state", "taskflow-runs", "worktrees", "iso-test-"));
 const roleReady = (() => {
@@ -53,5 +53,19 @@ describe.skipIf(!roleReady)("bash роли", () => {
     process.env.TF_TEST_SECRET = "s3cr3t";
     const r = await run("echo [$TF_TEST_SECRET]");
     expect(r.out).toContain("[]");
+  });
+});
+
+describe("roleProxyExports", () => {
+  it("routes role bash through the smart gateway entry by default", () => {
+    const line = roleProxyExports({});
+    expect(line).toContain("https_proxy='http://127.0.0.1:10818'");
+    expect(line).toContain("HTTPS_PROXY='http://127.0.0.1:10818'");
+    expect(line).toContain("no_proxy='localhost,127.0.0.1");
+    expect(line).toContain("NODE_USE_ENV_PROXY=1");
+  });
+  it("can be switched off or pointed elsewhere", () => {
+    expect(roleProxyExports({ TASKFLOW_ROLE_PROXY: "" })).toBe("");
+    expect(roleProxyExports({ TASKFLOW_ROLE_PROXY: "http://h:1" })).toContain("http_proxy='http://h:1'");
   });
 });
