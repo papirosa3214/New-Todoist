@@ -41,7 +41,11 @@ export function composioCommand(policy: ComposioPolicy, mode: string, context: s
     TASKFLOW_COMPOSIO_OPTIONS: JSON.stringify(composioSessionOptions(policy, mode)),
     TASKFLOW_COMPOSIO_MODE: mode,
     TASKFLOW_COMPOSIO_CACHE_KEY: crypto.createHash("sha256").update(JSON.stringify({ policy, mode, context })).digest("hex"),
-    NODE_USE_ENV_PROXY: "1",
+    // Composio с .110 доступен напрямую (~1,5 с), а через прокси сервера
+    // каталог отвечал 10–60 с и не укладывался в таймаут: карточка роли
+    // получала «Composio не ответил вовремя». Переменные прокси остаются в
+    // окружении, но Node их не использует (замер 28.10.2026).
+    NODE_USE_ENV_PROXY: "0",
   };
   if (process.env.COMPOSIO_API_KEY) return { command: process.execPath, args: [script], env };
   return {
