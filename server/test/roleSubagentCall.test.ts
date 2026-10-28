@@ -146,7 +146,36 @@ describe("вызов роли как субагента: аргументы", ()
     expect(calls).toHaveLength(1);
     expect(calls[0].role).toBe("researcher");
     expect(calls[0].roleId).toBe(RESEARCHER_ID);
-    expect(calls[0].chatId).toBe(CHAT_ID);
+    // Роль работает в своей комнате-ветке исходного чата (владелец 28.10.2026).
+    expect(calls[0].chatId).not.toBe(CHAT_ID);
+    const room = db
+      .prepare("SELECT branch_of_chat_id FROM chats WHERE id=?")
+      .get(calls[0].chatId) as { branch_of_chat_id: string } | undefined;
+    expect(room?.branch_of_chat_id).toBe(CHAT_ID);
+    expect(result.details.room_chat_id).toBe(calls[0].chatId);
+  });
+
+  it("в комнате субагента лежат вопрос и ответ, карточка ведёт в комнату", async () => {
+    const { runner, calls } = stubRunner("Ответ из комнаты.");
+    const tool = toolOf(callerContext(), runner);
+    const result: any = await tool.execute("call-room", { role: "researcher", question: "Что в комнате?" });
+    const roomId = calls[0].chatId;
+    const rows = db
+      .prepare("SELECT from_user_id, text, reply_to_message_id FROM chat_messages WHERE chat_id=? ORDER BY rowid")
+      .all(roomId) as Array<{ from_user_id: string; text: string; reply_to_message_id: string | null }>;
+    expect(rows.map((r) => r.text)).toEqual(["Что в комнате?", "Ответ из комнаты."]);
+    expect(rows[0].from_user_id).toBe(SECRETARY_ID);
+    expect(rows[1].from_user_id).toBe(RESEARCHER_ID);
+    expect(rows[1].reply_to_message_id).not.toBeNull();
+    const members = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(roomId) as Array<{ member_id: string }>)
+      .map((m) => m.member_id);
+    expect(members).toEqual(expect.arrayContaining([SECRETARY_ID, RESEARCHER_ID]));
+    const card = db
+      .prepare("SELECT steps FROM chat_messages WHERE chat_id=? AND message_type='system' AND json_extract(steps,'$.coordination.question_id')=?")
+      .get(CHAT_ID, result.details.question_id) as { steps: string };
+    const coordination = JSON.parse(card.steps).coordination;
+    expect(coordination.child_chat_id).toBe(roomId);
+    expect(coordination.answer).toBe("Ответ из комнаты.");
   });
 });
 
