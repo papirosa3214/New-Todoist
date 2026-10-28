@@ -1,3 +1,4 @@
+import {registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import { roleInstructionText } from "./roleHome.js";
 import {connectRoleMcp} from "./graftMcp.js";
 import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION } from "./roleToolCatalog.js";
@@ -60,9 +61,11 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
   const secretary=input.role==="secretary"?secretaryThings3Tools({role:input.role,taskId:input.taskId,subtaskId:input.subtaskId,chatId:input.chatId,messageId:input.messageId}):[];
   const catalog=buildRoleToolCatalog({role:input.role,model:model.id??modelId,taskId:input.taskId,subtaskId:input.subtaskId,chatId:input.chatId,messageId:input.messageId,mode:"discussion",runId},[...infra.tools,...secretary]);
     const custom=catalog.customTools;
+    registerProviderSession(manager.getSessionId(), {role:input.role, task_id:input.taskId, subtask_id:input.subtaskId, chat_id:input.chatId, run_id:runId, origin:"slot_conversation"});
     ({session}=await createAgentSession({cwd,model,thinkingLevel:resolveThinkingLevel(model as any, input.role) ?? undefined,modelRuntime:runtime,resourceLoader:resources,
       tools:[...builtin.map(tool=>tool.name),...catalog.registeredNames],customTools:[...builtin,...custom],sessionManager:manager,
       settingsManager:SettingsManager.inMemory({compaction:{enabled:true},retry:{enabled:true,maxRetries:2}})} as any));
+    observeProviderRetries(session, manager.getSessionId());
     installNativeToolSchemas(session, catalog);
     // Активно только ядро операций: остальное подключает taskflow_tools по
     // требованию (setActiveToolsByName). Реестр сессии полный — подключать можно

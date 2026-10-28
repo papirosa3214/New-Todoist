@@ -1,3 +1,4 @@
+import {registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 // Ход обсуждения карточки (карточка 252c400e, этапы 3–4 плана).
 //
 // Ключевые свойства (контракт архитектора f3ada2e0, §5):
@@ -120,6 +121,7 @@ async function runDiscussionTurnInternal(input: DiscussionTurnInput): Promise<Di
       },
       infra.tools,
     );
+    registerProviderSession(manager.getSessionId(), {role:input.role, task_id:discussion.task_id, discussion_id:input.discussionId, run_id:runId, origin:"task_discussion"});
     ({ session } = await createAgentSession({
       cwd,
       model,
@@ -132,6 +134,7 @@ async function runDiscussionTurnInternal(input: DiscussionTurnInput): Promise<Di
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
     } as any));
 
+    observeProviderRetries(session, manager.getSessionId());
     installNativeToolCore(session, catalog, builtin.map(tool => tool.name));
     installNativeToolSchemas(session, catalog);
     let timedOut = false;
