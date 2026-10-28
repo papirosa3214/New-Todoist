@@ -118,9 +118,12 @@ jobs:
         run: python3 -m pip install --quiet "markdown==3.5.2"
       - name: Прогнать тесты
         working-directory: server
-        # Потолок потоков — по правилу проекта (AGENTS.md). Вывод пишем в
-        # файл: его разбирает гейт (шаг ниже).
-        run: npx vitest run --shard=${{ matrix.shard }}/4 --maxWorkers=4 --reporter=dot 2>&1 | tee vitest-output.log
+        # У приватного репозитория на раннере 2 ядра: 4 потока на кусок
+        # душили процессор, и тесты с таймаутом (acpAgentSession) падали по
+        # времени. Один повтор упавшего теста отсекает гонки и флаки —
+        # настоящая поломка падает и на повторе. Вывод пишем в файл: его
+        # разбирает гейт (шаг ниже).
+        run: npx vitest run --shard=${{ matrix.shard }}/4 --maxWorkers=2 --retry=1 --reporter=dot 2>&1 | tee vitest-output.log
       - name: Гейт — новые падения
         working-directory: server
         # Падает только если упали файлы, которых нет в эталоне
