@@ -19,6 +19,17 @@ function publish(id:string){
  const audience=(db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(message.chat_id) as {member_id:string}[]).map(r=>r.member_id);
  broadcastToUsers(audience,{type:"chat:new",message});
 }
+/**
+ * Исток вопроса из другой сессии (владелец 29.10.2026): вопрос пришёл из
+ * сессии отправителя, а работа идёт в сессии адресата. Карточка живёт в
+ * сессии отправителя — там, откуда вопрос поступил.
+ */
+export function registerCrossSessionOrigin(questionId:string,originChatId:string,requesterId:string){
+ const row=db.prepare("SELECT chat_id,steps FROM chat_messages WHERE id=?").get(questionId) as {chat_id:string;steps:string|null}|undefined;
+ if(!row||!member(originChatId,requesterId))return;
+ const steps={duration_ms:0,items:[],...parse(row.steps),coordination_origin:{chat_id:originChatId,message_id:questionId,requester_id:requesterId}};
+ db.prepare("UPDATE chat_messages SET steps=? WHERE id=?").run(JSON.stringify(steps),questionId);
+}
 export function registerCoordinationOrigin(questionId:string,parentId:string,senderId:string){
  const parent=db.prepare("SELECT chat_id,steps FROM chat_messages WHERE id=?").get(parentId) as {chat_id:string;steps:string|null}|undefined;
  if(!parent || !member(parent.chat_id,senderId))return;
@@ -49,19 +60,15 @@ export function ensureCoordinationCard(questionId:string,recipientId:string,deli
  if(card(questionId,recipientId))return;
  const question=db.prepare("SELECT chat_id,text,steps,from_user_id FROM chat_messages WHERE id=?").get(questionId) as {chat_id:string;text:string;steps:string;from_user_id:string}|undefined;
  if(!question)return;
- // Заводим карточку ТОЛЬКО на пересечении сессий: сообщение из одной
- // комнаты ушло в другую. Внутри одной сессии карточка не нужна.
- const crosses=!!deliveryChatId&&deliveryChatId!==question.chat_id;
- if(!crosses)return;
- let origin:Origin|undefined=parse(question.steps??null).coordination_origin;
- if(!origin&&crosses&&member(question.chat_id,question.from_user_id)){
-  origin={chat_id:question.chat_id,message_id:questionId,requester_id:question.from_user_id};
-  const steps={duration_ms:0,items:[],...parse(question.steps),coordination_origin:origin};
-  db.prepare("UPDATE chat_messages SET steps=? WHERE id=?").run(JSON.stringify(steps),questionId);
- }
+ // Исток — сессия, откуда вопрос поступил. Без истока карточки нет:
+ // внутри одной сессии обращения не заводим (владелец 29.10.2026).
+ const origin:Origin|undefined=parse(question.steps??null).coordination_origin;
  if(!origin||!member(origin.chat_id,origin.requester_id))return;
+ // Пересечение сессий: работа идёт не там, откуда вопрос. Если доставка
+ // ушла в ту же сессию — карточка не нужна.
+ if(deliveryChatId&&deliveryChatId===origin.chat_id)return;
  const id=crypto.randomUUID(),now=new Date().toISOString();
- const c:Coordination={question_id:questionId,recipient_id:recipientId,requester_name:title(question.from_user_id),recipient_name:title(recipientId),question:question.text,child_chat_id:deliveryChatId??question.chat_id,origin_message_id:origin.message_id,status:"queued",activity:"Вопрос принят сервером и ожидает обработки",created_at:now,last_activity_at:now,terminal:false};
+ const c:Coordination={question_id:questionId,recipient_id:recipientId,requester_name:title(question.from_user_id),recipient_name:title(recipientId),question:question.text,child_chat_id:deliveryChatId??origin.chat_id,origin_message_id:origin.message_id,status:"queued",activity:"Вопрос принят сервером и ожидает обработки",created_at:now,last_activity_at:now,terminal:false};
  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,message_type,reply_to_message_id,steps) VALUES(?,?,?,'chat',?,'system',?,?)")
  .run(id,origin.requester_id,c.requester_name+" → "+c.recipient_name+": вопрос в очереди",origin.chat_id,origin.message_id,JSON.stringify({duration_ms:0,items:[],coordination:c}));
  publish(id);

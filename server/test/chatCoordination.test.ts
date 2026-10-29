@@ -43,7 +43,7 @@ it("task folder is created once and retained",()=>{
 });
 
 // Сохранённый связанный ответ — единственное подтверждение answered.
-import {queueWorkCoordination,registerCoordinationOrigin,markDeliveredToWork,markCoordinationAnswered,ensureCoordinationCard} from "../src/runtime/chatCoordination.js";
+import {queueWorkCoordination,registerCoordinationOrigin,registerCrossSessionOrigin,markDeliveredToWork,markCoordinationAnswered,ensureCoordinationCard} from "../src/runtime/chatCoordination.js";
 // Вопрос владельца уходит роли В ДРУГУЮ комнату — сообщение пересекает
 // сессии, поэтому карточка обращения заводится (правило владельца
 // 29.10.2026: карточка — только для пересечения сессий).
@@ -56,6 +56,8 @@ function workQuestion(id:string){
  ensureRoom();
  db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES(?,?)").run(chat,"coordination_agent");
  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)").run(id,user,"Уточнение",chat);
+ // Исток: вопрос пришёл из сессии отправителя; работа — в другой.
+ registerCrossSessionOrigin(id,chat,user);
  ensureCoordinationCard(id,"coordination_agent",ROOM);
  markDeliveredToWork(id,"coordination_agent",user);
  return ()=>{const row=db.prepare("SELECT steps FROM chat_messages WHERE json_valid(steps) AND json_extract(steps,'$.coordination.question_id')=?").get(id) as any;return row?JSON.parse(row.steps).coordination:undefined;};
@@ -121,6 +123,7 @@ it("вопрос из одной комнаты, работа в другой: �
  db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES('outside','Личный','direct',?)").run(user);
  db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES('outside','coordination_agent')").run();
  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES('outside-question',?,'Вопрос','chat',?)").run(user,chat);
+ registerCrossSessionOrigin("outside-question",chat,user);
  ensureCoordinationCard("outside-question","coordination_agent","outside");
  markDeliveredToWork("outside-question","coordination_agent");
  const card=db.prepare("SELECT chat_id,steps FROM chat_messages WHERE json_valid(steps) AND json_extract(steps,'$.coordination.question_id')='outside-question'").get() as any;
