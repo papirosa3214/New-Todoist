@@ -15,6 +15,7 @@ import crypto from "node:crypto";
 import db from "../../db.js";
 import { logEvent } from "../../agentState.js";
 import { localDateParts, type ScheduleRule, type ScheduleRuleKind } from "./rules.js";
+import { criticApproved } from "../../lib/criticApproved.js";
 
 export type ScheduleStatus = "active" | "paused" | "finished";
 export type RunStatus = "created" | "skipped" | "failed" | "error";
@@ -371,4 +372,50 @@ export function logScheduleEvent(
 ): void {
   if (!taskId) return;
   logEvent({ taskId, actorId, kind, field: field ?? null, toValue: toValue ?? null });
+}
+
+
+/**
+ * Экземпляр рутины, работа которого одобрена, закрывается сам.
+ *
+ * Иначе карточка рутины навсегда остаётся «на проверке»: она висит во
+ * «Входящих» и требует внимания владельца, а следующий запуск рутины
+ * пропускается с причиной «прошлый экземпляр не закрыт» (владелец
+ * 29.10.2026). Закрываем только то, что действительно сделано: работа
+ * одобрена критиком.
+ */
+export function closeApprovedInstances(): number {
+  const rows = db
+    .prepare(
+      `SELECT current_task_id AS task_id FROM task_schedules
+        WHERE status = 'active' AND current_task_id IS NOT NULL`,
+    )
+    .all() as { task_id: string }[];
+  let closed = 0;
+  for (const row of rows) {
+    const task = db
+      .prepare("SELECT status FROM tasks WHERE id = ?")
+      .get(row.task_id) as { status?: string } | undefined;
+    if (!task || task.status !== "active") continue;
+    if (!criticApproved(row.task_id)) continue;
+    const done = db
+      .prepare(
+        `UPDATE tasks SET status = 'completed', agent_state = NULL,
+                completed_at = datetime('now'), updated_at = datetime('now')
+          WHERE id = ? AND status = 'active'`,
+      )
+      .run(row.task_id);
+    if (done.changes > 0) {
+      closed += 1;
+      logEvent({
+        taskId: row.task_id,
+        actorId: null,
+        kind: "state_changed",
+        field: "status",
+        fromValue: "active",
+        toValue: "completed",
+      });
+    }
+  }
+  return closed;
 }
