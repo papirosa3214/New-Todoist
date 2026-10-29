@@ -1,4 +1,5 @@
 import { applyOverride, revision } from "../lib/roleContextResolver.js";
+import { projectRoleForList, projectionOf } from "../lib/windowProjection.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -432,7 +433,7 @@ export function registerRoleRoutes(app: FastifyInstance): void {
     };
   });
 
-  app.get<{ Querystring: { all?: string } }>(
+  app.get<{ Querystring: { all?: string; projection?: string } }>(
     "/api/roles",
     { preHandler: authPre },
     async (req) => {
@@ -441,7 +442,17 @@ export function registerRoleRoutes(app: FastifyInstance): void {
       // ?all=1 — вместе с отключёнными: экрану «Команда» их надо показать,
       // чтобы было что включить обратно. Без него — только рабочие роли.
       const keys = req.query.all === "1" ? allRoles().map((r) => r.key) : ROLE_NAMES;
-      return { roles: keys.map((role) => roleDetails(role, alive)) };
+      // Лёгкая проекция для списка (29.10.2026): без системного промпта,
+      // навыков и описаний операций — они весили 517 КБ из 839 КБ ответа,
+      // а показываются только в карточке роли и редакторе инструкции.
+      // Полный профиль берётся точечно: GET /api/roles/:role.
+      const projection = projectionOf(req.query);
+      return {
+        roles: keys.map((role) => {
+          const details = roleDetails(role, alive);
+          return projection === "list" ? projectRoleForList(details) : details;
+        }),
+      };
     },
   );
 
