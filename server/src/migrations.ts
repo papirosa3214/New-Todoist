@@ -5398,6 +5398,19 @@ const migrations: Migration[] = [
     if (settings) db.prepare("UPDATE server_settings SET value = ?, updated_at = datetime('now'), updated_by = NULL WHERE key = 'auto_merge_mode' AND value = ?").run(JSON.stringify("pr"), JSON.stringify("on"));
   } },
 
+  // Комнаты субагента (владелец 28.10.2026): роль, вызванная инструментом
+  // taskflow_call_role, работает в своей комнате-ветке исходного чата.
+  // Комната не должна попадать в список сессий владельца — она живёт в
+  // боковой панели сессии, по ролям, со статусом. Отдельная метка нужна
+  // потому, что branch_of_chat_id занимает и фича «Ветка:» (ветка чата
+  // владельцем) — по нему одному комнаты субагента не отличить.
+  { id: "185_subagent_rooms", description: "Комнаты субагента: chats.subagent_role_id (вызванная роль) и chats.subagent_state (open|finished|failed)", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!cols.has("subagent_role_id")) db.exec("ALTER TABLE chats ADD COLUMN subagent_role_id TEXT");
+    if (!cols.has("subagent_state")) db.exec("ALTER TABLE chats ADD COLUMN subagent_state TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_chats_subagent_rooms ON chats(branch_of_chat_id, subagent_role_id)");
+  } },
+
 ];
 /**
  * Опции прогона миграций.

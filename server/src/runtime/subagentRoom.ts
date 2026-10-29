@@ -18,6 +18,8 @@ export type SubagentRoom = {
   onEvent: (event: unknown) => void;
   /** Закрыть живой ход и положить ответ (или причину сбоя) в комнату. */
   finish: (text: string, failed: boolean) => void;
+  /** Пометить состояние комнаты: 'finished' — выжимка ушла в главную сессию, 'failed' — ход не состоялся. */
+  close: (state: "finished" | "failed") => void;
 };
 
 function memberIds(chatId: string): string[] {
@@ -48,8 +50,8 @@ export function openSubagentRoom(input: {
   const recipientName = userName(input.recipientId);
   const title = `${userName(input.requesterId)} → ${recipientName}: ${input.question.replace(/\s+/g, " ").slice(0, 60)}`;
   db.transaction(() => {
-    db.prepare("INSERT INTO chats (id, title, kind, created_by, branch_of_chat_id, branch_of_message_id) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(chatId, title, origin.kind, input.requesterId, input.originChatId, input.originMessageId ?? null);
+    db.prepare("INSERT INTO chats (id, title, kind, created_by, branch_of_chat_id, branch_of_message_id, subagent_role_id, subagent_state) VALUES (?, ?, ?, ?, ?, ?, ?, 'open')")
+      .run(chatId, title, origin.kind, input.requesterId, input.originChatId, input.originMessageId ?? null, input.recipientId);
     db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, member_id) SELECT ?, member_id FROM chat_members WHERE chat_id = ?")
       .run(chatId, input.originChatId);
     for (const member of [input.requesterId, input.recipientId]) {
@@ -74,6 +76,17 @@ export function openSubagentRoom(input: {
     chatId,
     questionMessageId,
     onEvent: (event) => live.onEvent(event),
+    close: (state) => {
+      // Статус комнаты для боковой панели сессии: «завершена» — выжимка ушла
+      // в главную сессию, «сбой» — ход роли не состоялся. Закрытую комнату
+      // владелец всё ещё может открыть и посмотреть, как роль работала.
+      try {
+        db.prepare("UPDATE chats SET subagent_state=?, closed_at=COALESCE(closed_at, datetime('now')) WHERE id=?")
+          .run(state, chatId);
+      } catch (error) {
+        console.warn("[subagent-room] статус комнаты не обновлён:", error instanceof Error ? error.message : String(error));
+      }
+    },
     finish: (text, failed) => {
       if (finished) return;
       finished = true;

@@ -315,6 +315,11 @@ export function createRoleSubagentCallTool(
             /* карточка — украшение */
           }
         }
+        try {
+          room?.close("failed");
+        } catch {
+          /* статус комнаты — украшение */
+        }
         throw new Error(`ХОД РОЛИ «${role}» НЕ СОСТОЯЛСЯ: ${message}`);
       } finally {
         restoreSession(runChatId, recipientId, priorSession);
@@ -332,6 +337,13 @@ export function createRoleSubagentCallTool(
         } catch {
           /* карточка — украшение */
         }
+      }
+      // Выжимка ушла в главную сессию — комната закрывается сама (владелец
+      // 28.10.2026): в боковой панели сессии у неё статус «завершена».
+      try {
+        room?.close("finished");
+      } catch {
+        /* статус комнаты — украшение */
       }
       return {
         content: [{ type: "text", text: answer }],

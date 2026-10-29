@@ -462,7 +462,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       .prepare(
         `SELECT c.* FROM chats c
            JOIN chat_members cm ON cm.chat_id = c.id
-          WHERE cm.member_id = ?
+          WHERE cm.member_id = ? AND c.subagent_role_id IS NULL
           ORDER BY c.updated_at DESC`,
       )
       .all(req.userId) as Array<{ id: string; task_id: string | null; parent_chat_id: string | null; closed_at: string | null }>;
@@ -535,6 +535,77 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       }),
     };
   });
+
+  // Комнаты субагента сессии (владелец 28.10.2026): роли, вызванные
+  // инструментом taskflow_call_role, работают в своих комнатах-ветках.
+  // В списке сессий их нет (см. GET /api/chats) — они живут в боковой
+  // панели сессии: по ролям, со статусом (открыта / завершена / сбой).
+  app.get<{ Params: { id: string } }>(
+    "/api/chats/:id/subagent-rooms",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const chatId = req.params.id;
+      if (!isMember(chatId, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const rooms = db
+        .prepare(
+          `SELECT c.id, c.title, c.subagent_role_id AS role_id, c.subagent_state AS state,
+                  c.created_at, c.closed_at,
+                  (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
+             FROM chats c
+            WHERE c.branch_of_chat_id = ? AND c.subagent_role_id IS NOT NULL
+            ORDER BY c.created_at DESC`,
+        )
+        .all(chatId) as Array<{
+          id: string;
+          title: string | null;
+          role_id: string;
+          state: string | null;
+          created_at: string;
+          closed_at: string | null;
+          message_count: number;
+        }>;
+      return {
+        rooms: rooms.map((room) => {
+          const roleName = (
+            db.prepare("SELECT name FROM users WHERE id = ?").get(room.role_id) as { name?: string } | undefined
+          )?.name ?? room.role_id;
+          const question = db
+            .prepare(
+              "SELECT text FROM chat_messages WHERE chat_id = ? AND from_user_id != ? ORDER BY rowid LIMIT 1",
+            )
+            .get(room.id, room.role_id) as { text: string } | undefined;
+          const answer = db
+            .prepare(
+              "SELECT text FROM chat_messages WHERE chat_id = ? AND from_user_id = ? AND reply_to_message_id IS NOT NULL ORDER BY rowid DESC LIMIT 1",
+            )
+            .get(room.id, room.role_id) as { text: string } | undefined;
+          const unread = db
+            .prepare(
+              `SELECT COUNT(*) AS n FROM chat_messages
+                WHERE chat_id = ? AND from_user_id != ?
+                  AND created_at > COALESCE((SELECT last_read_at FROM chat_members WHERE chat_id = ? AND member_id = ?), '1970-01-01')`,
+            )
+            .get(room.id, req.userId, room.id, req.userId) as { n: number };
+          return {
+            id: room.id,
+            title: room.title,
+            role_id: room.role_id,
+            role_name: roleName,
+            // «open» — роль работает, «finished» — выжимка ушла в главную
+            // сессию, «failed» — ход роли не состоялся.
+            state: room.state ?? "open",
+            question: question?.text ?? "",
+            answer_preview: answer ? previewText(answer.text) : "",
+            message_count: room.message_count,
+            unread_count: unread.n,
+            created_at: room.created_at,
+            closed_at: room.closed_at,
+          };
+        }),
+      };
+    },
+  );
 
   // Один чат с участниками. Доступ — только участнику.
   app.get<{ Params: { id: string } }>(
