@@ -170,7 +170,7 @@ export async function sweepFailedDeliveries(options?: {
       await recoverAgentDelivery({
         chatId: row.chat_id,
         roleId: row.role_id,
-        deliveryId: row.id,
+        queueRowId: row.id,
       });
       report.retried += 1;
     } catch (error) {

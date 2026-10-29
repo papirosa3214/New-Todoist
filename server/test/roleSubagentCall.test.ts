@@ -77,6 +77,16 @@ function callerContext(role = "secretary") {
   };
 }
 
+/** Подождать, пока состояние строки очереди изменится. */
+const waitFor = async (predicate: () => boolean, ms = 8000) => {
+  const started = Date.now();
+  while (Date.now() - started < ms) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+};
+
 /** Раннер-заглушка: ход роли не настоящий, ответ задан заранее. */
 function stubRunner(answer = "Разбор готов: шаг контракта не меняем.") {
   const calls: Array<{ role: string; roleId: string; chatId: string; prompt: string }> = [];
@@ -171,16 +181,29 @@ describe("вызов роли как субагента: аргументы", ()
     const tool = toolOf(callerContext(), runner);
     await tool.execute("call-wake", { role: "researcher", question: "Сколько строк?" });
     await pendingSubagentRuns();
-    const digest = db
+    const digestRow = db
       .prepare("SELECT id,from_user_id,text FROM chat_messages WHERE chat_id=? AND text LIKE 'Ответ субагента%' ORDER BY rowid DESC LIMIT 1")
       .get(CHAT_ID) as { id: string; from_user_id: string; text: string } | undefined;
-    expect(digest).toBeTruthy();
-    expect(digest!.text).toContain("12 строк");
-    // Очередь: доставка поднимет ход вызывающей роли с этой выжимкой.
+    expect(digestRow).toBeTruthy();
+    expect(digestRow!.text).toContain("12 строк");
+    // Очередь: доставка поднимает ход вызывающей роли с этой выжимкой.
     const queued = db
       .prepare("SELECT role_id,status FROM chat_message_queue WHERE message_id=?")
-      .get(digest!.id) as { role_id: string; status: string } | undefined;
+      .get(digestRow!.id) as { role_id: string; status: string } | undefined;
     expect(queued?.role_id).toBe(SECRETARY_ID);
+    // Доставка должна УЙТИ из очереди: с delivery_id вместо id строки
+    // recoverAgentDelivery молчал, и вызывающая роль не просыпалась
+    // (29.10.2026 — этот баг проскочил мимо первых тестов).
+    const settled = await waitFor(
+      () => {
+        const row = db
+          .prepare("SELECT status FROM chat_message_queue WHERE message_id=?")
+          .get(digestRow!.id) as { status: string } | undefined;
+        return row?.status !== "pending" && row?.status !== "picked";
+      },
+      15000,
+    );
+    expect(settled).toBe(true);
   });
 
   it("в комнате субагента лежат вопрос и ответ, карточка ведёт в комнату", async () => {

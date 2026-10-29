@@ -196,14 +196,29 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     if(returned){
       const audience=(db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(returned.chatId) as {member_id:string}[]).map(r=>r.member_id);
       broadcastToUsers(audience,{type:"chat:new",message:loadChatMessage(returned.messageId)});
-      void import("./chats.js").then(({recoverAgentDelivery})=>recoverAgentDelivery(returned)).catch(error=>console.warn("[review-return] delivery pending",error));
+      void import("./chats.js")
+        .then(({recoverAgentDelivery}) =>
+          recoverAgentDelivery({
+            chatId: returned.chatId,
+            roleId: returned.roleId,
+            queueRowId: returned.deliveryId,
+          }),
+        )
+        .catch(error=>console.warn("[review-return] delivery pending",error));
     }
     const committedHandoff=handoff as ReturnType<typeof enqueueIntegrationHandoff>;
     if (committedHandoff) {
       const audience=(db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(committedHandoff.chatId) as Array<{member_id:string}>).map(r=>r.member_id);
       broadcastToUsers(audience,{type:"chat:new",message:loadChatMessage(committedHandoff.messageId)});
-      void import("./chats.js").then(({recoverAgentDelivery}) =>
-        recoverAgentDelivery(committedHandoff)).catch(error => console.warn("[integration-handoff] delivery pending",error));
+      void import("./chats.js")
+        .then(({recoverAgentDelivery}) =>
+          recoverAgentDelivery({
+            chatId: committedHandoff.chatId,
+            roleId: committedHandoff.roleId,
+            queueRowId: committedHandoff.deliveryId,
+          }),
+        )
+        .catch(error => console.warn("[integration-handoff] delivery pending",error));
     }
     const managedPlan = planReturn as ReturnType<typeof completePlanFinalReview>;
     if (managedPlan) await unlockReadyPlanSubtasks(managedPlan.planId,taskId,req.userId);
