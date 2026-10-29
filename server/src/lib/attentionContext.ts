@@ -98,7 +98,11 @@ export const attentionHint = (ctx: AttentionContext): string | null => {
     in_progress: [ctx.activeStepTitle, ctx.openStepTitle, ctx.openStepResult],
     review: [ctx.verdictResult, ctx.lastStepResult, ctx.openStepTitle, ctx.lastStepTitle],
   };
-  const found = byGroup[ctx.group].map(oneLine).find((value) => value !== null);
+  // Источник, повторяющий название задачи, на карточке смысла не несёт:
+  // у части задач шаг назван так же, как и сама задача.
+  const found = byGroup[ctx.group]
+    .map(oneLine)
+    .find((value) => value !== null && !repeatsTitle(value, ctx.title));
   if (found) return found;
 
   const description = descriptionLine(ctx.description);
