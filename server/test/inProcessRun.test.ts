@@ -440,7 +440,7 @@ describe("агент роли внутри сервера", () => {
     await started;
     try{
       expect((await app.inject({method:"DELETE",url:`/api/chats/${chat}/members/role_builder`,headers})).statusCode).toBe(200);
-      expect(await recoverAgentDelivery({chatId:chat,roleId:'role_builder',deliveryId:queued.id})).toMatchObject({status:'fenced'});
+      expect(await recoverAgentDelivery({chatId:chat,roleId:'role_builder',queueRowId:queued.id})).toMatchObject({status:'fenced'});
       expect(script.steering).toHaveLength(0);
     }finally{release();await run.completion;script.steps=null;}
   });

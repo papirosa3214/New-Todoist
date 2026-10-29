@@ -6,7 +6,9 @@ import crypto from "node:crypto";
 import {logEvent} from "../agentState.js";
 import {MAX_PLAN_NODES} from "./planMutations.js";
 
-type Handoff={chatId:string;roleId:string;deliveryId:string;messageId:string};
+// queueRowId — id СТРОКИ очереди (chat_message_queue.id), а не delivery_id:
+// recoverAgentDelivery ищет именно по нему (29.10.2026).
+type Handoff={chatId:string;roleId:string;queueRowId:string;messageId:string};
 const PREFIX="integration-review:";
 /** Called in the review transaction: receipt and outbox commit together. */
 export function enqueueIntegrationHandoff(reviewId:string):Handoff|null {
@@ -26,7 +28,7 @@ export function enqueueIntegrationHandoff(reviewId:string):Handoff|null {
   const previous=db.prepare(`SELECT q.id,q.chat_id,q.role_id,q.message_id FROM chat_message_queue q
     JOIN chat_messages m ON m.id=q.message_id JOIN reviews r ON m.id='integration-review:'||r.id
     WHERE r.version_id=? AND r.verdict='approved' AND q.role_id=? ORDER BY q.rowid LIMIT 1`).get(version.id,recipient.id) as any;
-  if(previous)return {chatId:previous.chat_id,roleId:previous.role_id,deliveryId:previous.id,messageId:previous.message_id};
+  if(previous)return {chatId:previous.chat_id,roleId:previous.role_id,queueRowId:previous.id,messageId:previous.message_id};
   // A single channel per integrator serializes accepted versions across cards.
   const chatId="integration:"+recipient.id, messageId=PREFIX+review.id;
   db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by,room_kind) VALUES (?,'Передача принятых изменений','direct',?,'handoff')").run(chatId,task.creator_id);
@@ -35,7 +37,7 @@ export function enqueueIntegrationHandoff(reviewId:string):Handoff|null {
   db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,work_mode) VALUES (?,?,?,'chat',?,?,'work')").run(messageId,review.reviewer_id,text,chatId,task.id);
   db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(chatId);
   const queued=enqueueMessageDelivery({chatId,roleId:recipient.id,deliveryId:messageId,messageId,payload:{mode:"work",hop:0,integrationReviewId:review.id}});
-  return {chatId,roleId:recipient.id,deliveryId:queued.id,messageId};
+  return {chatId,roleId:recipient.id,queueRowId:queued.id,messageId};
  })();
 }
 /** Only a server-created receipt, for the still-current reviewed version, authorizes this continuation. */

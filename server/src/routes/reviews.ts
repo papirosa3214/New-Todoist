@@ -201,7 +201,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
           recoverAgentDelivery({
             chatId: returned.chatId,
             roleId: returned.roleId,
-            queueRowId: returned.deliveryId,
+            queueRowId: returned.queueRowId,
           }),
         )
         .catch(error=>console.warn("[review-return] delivery pending",error));
@@ -215,7 +215,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
           recoverAgentDelivery({
             chatId: committedHandoff.chatId,
             roleId: committedHandoff.roleId,
-            queueRowId: committedHandoff.deliveryId,
+            queueRowId: committedHandoff.queueRowId,
           }),
         )
         .catch(error => console.warn("[integration-handoff] delivery pending",error));
