@@ -377,7 +377,9 @@ function finishSubagentWithAnswer(input: BackgroundInput, answer: string): void 
   }
   if (input.questionId) {
     try {
-      coordinationAnswered(input.questionId, input.roleId, answer, false);
+      // Выжимка ложится в чат вызывающей роли — там же, где карточка, —
+      // значит текст в карточку не копируем (иначе дубль).
+      coordinationAnswered(input.questionId, input.roleId, answer, false, input.callerChatId);
     } catch {
       /* карточка — украшение */
     }
