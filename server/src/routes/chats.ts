@@ -1,4 +1,5 @@
 import {snapshotChatPreferences,messageThinkingLevel,readChatPreferences} from "../lib/chatSessionPreferences.js";
+import { projectionOf } from "../lib/windowProjection.js";
 import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
 import {visibleChatSql} from "../lib/serviceNoise.js";
 import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
@@ -844,7 +845,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // История сообщений чата (по возрастанию времени).
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { projection?: string } }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
     async (req: any, reply) => {
@@ -861,7 +862,41 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
             WHERE m.chat_id = ? ORDER BY m.created_at ASC, m.rowid ASC`,
         )
         .all(req.params.id);
-      return { messages: formatChatHistory(messages) };
+      // Лёгкая проекция (29.10.2026): без вывода инструмента и аргументов
+      // вызова в шагах — они весили 3,2 МБ на 20 чатов и рисуются только в
+      // раскрытой шторке шага. Полные тела — по шагу, адресом ниже.
+      const projection = projectionOf(req.query);
+      return { messages: formatChatHistory(messages, projection) };
+    },
+  );
+
+  // Тело одного шага (29.10.2026): вывод инструмента и аргументы вызова.
+  //
+  // В ленте их нет — они рисуются только в раскрытой шторке шага, а
+  // присылать их в каждом сообщении означало разбирать на телефоне
+  // megabytes, которые нужны одному шагу за раз. Владелец раскрыл шаг —
+  // телефон спросил ровно этот шаг.
+  app.get<{ Params: { id: string; messageId: string; stepId: string } }>(
+    "/api/chats/:id/messages/:messageId/steps/:stepId",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isMember(req.params.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const row = db
+        .prepare("SELECT steps FROM chat_messages WHERE id=? AND chat_id=?")
+        .get(req.params.messageId, req.params.id) as { steps: string | null } | undefined;
+      if (!row?.steps) return reply.code(404).send({ error: "Шаг не найден" });
+      let parsed: any;
+      try {
+        parsed = JSON.parse(row.steps);
+      } catch {
+        return reply.code(404).send({ error: "Шаг не найден" });
+      }
+      const item = (parsed?.items ?? []).find(
+        (it: any) => it && typeof it === "object" && String(it.id ?? "") === req.params.stepId,
+      );
+      if (!item) return reply.code(404).send({ error: "Шаг не найден" });
+      return { step: item };
     },
   );
 

@@ -1,4 +1,5 @@
 import { commentWithBlocks, ownerBlocks } from "../lib/chatBlocks.js";
+import { listDescription, projectionOf } from "../lib/windowProjection.js";
 import {visibleTaskComments, isQuietSystemMessage} from "../lib/serviceNoise.js";
 import { registerIntegrationResponsibilityRoutes } from '../lib/integrationResponsibility.js';
 import { taskExecutionState } from "../runtime/taskExecutionState.js";
@@ -620,6 +621,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
     }
 
     const includeChildren = req.query.include_children === "true";
+    // Лёгкая проекция для списка (29.10.2026): телефон рисует, считает
+    // сервер. Старый клиент её не просит — ответ прежний.
+    const listProjection = projectionOf(req.query) === "list";
     const parentFilter = includeChildren ? "" : "t.parent_id IS NULL AND ";
     const columns = taskColumnsForOutput();
     const joins = TASK_JOINS;
@@ -760,12 +764,30 @@ export function registerTaskRoutes(app: FastifyInstance) {
       );
       return {
         ...withAgentStale(t, subtasks, children),
+        // Описание в списке рисуется одной строкой (`lineLimit(1)` в
+        // TFTaskRowContent), а присылалось целиком: 210 КБ на 126 задач, из
+        // которых видно было первые сорок символов. В лёгкой проекции —
+        // одна строка (29.10.2026, «телефон — чисто окошко»).
+        ...(listProjection ? { description: listDescription(t.description) } : {}),
         // Снимок промпта списку не нужен: 2 МБ из 5 МБ ответа (20.10.2026),
         // телефон перекачивал его на каждом обновлении. В базе остаётся.
         composed_prompt_snapshot: undefined,
         mine: session ? t.agent_session_id === session || bySubtask : null,
         labels: labelMap.get(t.id) ?? [],
-        subtasks,
+        // Подзадачи в списке — ДВУМЯ ЧИСЛАМИ, а не массивом (29.10.2026).
+        //
+        // Подзадачи были 1,85 МБ из 2,9 МБ ответа: 716 штук по 22 поля.
+        // Телефон разбирал их в объекты, чтобы нарисовать чип «2/5 шагов»,
+        // а подробности шагов показываются в карточке — она берёт задачу
+        // целиком (`GET /api/tasks/:id`).
+        //
+        // Как и с `children` (10.09.2026): под прежним именем в списке нельзя
+        // класть обрезанную версию — у типизированного клиента это не
+        // «меньше данных», а невалидный ответ. Поэтому в списке их нет, а
+        // числа приходят новыми полями.
+        subtasks: listProjection ? undefined : subtasks,
+        subtask_total: subtasks.length,
+        subtask_done: subtasks.filter((s: any) => Boolean(s.done)).length,
         // Прогресс родителя в списке — ДВУМЯ ЧИСЛАМИ, а не массивом детей.
         //
         // Сначала здесь отдавался сам `children` в усечённом виде (id +
