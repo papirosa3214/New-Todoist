@@ -59,8 +59,23 @@ it("ответ на другой вопрос не закрывает обращ
  const card=workQuestion("linked-answer");
  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES('unrelated',?,'Другой ответ','chat',?)").run("coordination_agent",chat);
  markCoordinationAnswered("linked-answer","coordination_agent");expect(card().terminal).toBe(false);
- db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES('linked',?,'Вот ответ','chat',?,'linked-answer')").run("coordination_agent",chat);
- markCoordinationAnswered("linked-answer","coordination_agent");expect(card().status).toBe("answered");expect(card().answer).toBe("Вот ответ");
+ db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES('linked',?,'Вот ответ','chat',?,?)").run("coordination_agent",chat,"linked-answer");
+ markCoordinationAnswered("linked-answer","coordination_agent");expect(card().status).toBe("answered");
+ // Текст ответа в карточку НЕ копируется: ответ лежит в этой же нитке,
+ // копия была вторым дублем (владелец 29.10.2026, скриншот чата).
+ expect(card().answer).toBeUndefined();
+ expect(card().activity).toBe("Ответ получен");
+});
+it("ответ в нитке не дублируется текстом в карточке",()=>{
+ // Сценарий владельца (29.10.2026): он спросил роль в общем чате, вопрос ушёл
+ // в работу, карточка завелась — и ответ показался ДВАЖДЫ: текстом в карточке
+ // и сообщением в нитке. Карточка — статус, а не копия ответа.
+ const card=workQuestion("dup-question");
+ db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES('dup-answer',?,'Ответ роли','chat',?,?)").run("coordination_agent",chat,"dup-question");
+ markCoordinationAnswered("dup-question","coordination_agent");
+ expect(card().status).toBe("answered");
+ expect(card().terminal).toBe(true);
+ expect(card().answer??"").toBe("");
 });
 it("вопрос коллеги в той же комнате не порождает отдельное обращение",()=>{
  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES('room-parent',?,'Обсудите','chat',?)").run(user,chat);
