@@ -43,10 +43,12 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
       id,
       provider,
       reasoning: script.reasoningByModel.get(`${provider}:${id}`) ?? false,
+      // Реальный каталог MiniMax (models.json): max поддержан, off — нет.
+      thinkingLevelMap: { off: null, max: "max" },
     }),
     getAvailable: async () => [
-      { id: "minimax-m3", provider: "minimax", reasoning: true },
-      { id: "minimax-text", provider: "minimax", reasoning: false },
+      { id: "minimax-m3", provider: "minimax", reasoning: true, thinkingLevelMap: { off: null, max: "max" } },
+      { id: "minimax-text", provider: "minimax", reasoning: false, thinkingLevelMap: { off: null, max: "max" } },
     ],
   };
   return {
@@ -197,13 +199,13 @@ describe("MiniMax thinking: effective model/payload", () => {
       await runRoleInProcess({ taskId, role: "builder", model: "minimax/minimax-m3" });
       await _settleInProcessRunsForTests();
       // С 916c0c00 уровень задаётся per-role: resolveThinkingLevel(model, role)
-      // читает scripts/role-thinking.json. Для builder там нет записи, значит
-      // берётся default ("low"). Раньше (до per-role уровней) здесь ожидался
-      // null — тест устарел, а не прод-код сломался.
+      // читает scripts/role-thinking.json. С 29.10.2026 там max для всех
+      // ролей (рекомендация MiniMax для Anthropic-совместимого API), а
+      // модель MiniMax-M3.1-Flash поддерживает max (models.json).
       //
       // Миграция persisted-значений при этом НЕ срабатывает: effective != "off".
       const last = script.requestedThinkingLevels.at(-1);
-      expect(last).toBe("low");
+      expect(last).toBe("max");
       expect(script.setThinkingCalls).toHaveLength(0);
     } finally {
       script.reasoningByModel.delete("minimax:minimax-m3");
@@ -245,7 +247,7 @@ describe("MiniMax thinking: effective model/payload", () => {
       // Раньше здесь ждали миграцию setThinkingLevel("medium", {persist:true})
       // — её удалили намеренно (уровень теперь всегда из роли).
       const last = script.requestedThinkingLevels.at(-1);
-      expect(last).toBe("low");
+      expect(last).toBe("max");
       // Миграции с persist больше нет — уровень и так приходит из роли.
       expect(
         script.setThinkingCalls.find((c) => c.persist === true),

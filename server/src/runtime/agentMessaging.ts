@@ -1,4 +1,5 @@
 import { ensureDirectRoom, ensurePersonalRoom } from "../lib/chatRooms.js";
+import { postToRoleSession, startRoleSessionDelivery } from "./roleCrossSessionMessage.js";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import db from "../db.js";
@@ -30,9 +31,10 @@ export function agentMessagingTools(role: string, context: Context = {}) {
     sentCount++;
     return {id:result.message.id,chat_id:chatId,отправлено:result.message.text};
   };
-  // Личка роль↔роль — постоянная переписка пары (21.10.2026). Владелец —
-  // в своей личной комнате с ролью; служебные чаты сюда не подбираются.
-  const directChat = (recipientId: string) => recipientId===ownerAccountId() ? (ensurePersonalRoom(senderId) ?? ensureDirectRoom(senderId,recipientId)) : ensureDirectRoom(senderId,recipientId);
+  // Отдельных чатов «роль↔роль» больше нет (владелец 29.10.2026): вопрос
+  // идёт в ПОСТОЯННУЮ сессию адресата — его личку, где владелец тоже
+  // участник. Ничего лишнего не создаётся.
+  const directChat = (recipientId: string) => recipientId===ownerAccountId() ? (ensurePersonalRoom(senderId) ?? ensureDirectRoom(senderId,recipientId)) : ensurePersonalRoom(recipientId) ?? ensureDirectRoom(senderId,recipientId);
   return [
     tool("taskflow_chat_send","Написать коллеге. Без chat_id: если коллега участник текущего чата — сообщение уходит в этот чат (в группе с @), иначе в личку. to: имя, id или role_key; всем — контекст группы, без автоматического вызова всех. В личке @ не нужен; в группе адресный вызов добавляет @. Работающий коллега получает вопрос в свою сессию; свободный отвечает разговорным ходом. chat_id задаёт конкретную группу, task_id — контекст задачи; slot_key нужен при нескольких этапах адресата. Максимум 4 сообщения за ход.",Type.Object({to:Type.String(),text:Type.String(),chat_id:optional("Личный или групповой чат"),task_id:optional("Контекст задачи"),slot_key:optional("Конкретный этап адресата")}),async p=>{
       const raw=String(p.to??"").trim().toLowerCase();
@@ -52,12 +54,34 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       // Владелец 21.10.2026: если коллега уже участник чата, где идёт ход, —
       // говорим здесь же, при всех (в группе с @). В личку — только когда в
       // этом чате его нет: «завёл группу и сказал решать — решайте в ней».
-      if(!chatId && recipient && context.chatId && db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(context.chatId,recipient.id))
-        chatId=context.chatId;
+      const sameSession=!!recipient && !!context.chatId && !!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(context.chatId,recipient.id);
+      if(!chatId && sameSession) chatId=context.chatId;
+      const recipientRole=recipient?.role_key;
+      // Отдельных чатов «роль↔роль» больше нет (владелец 29.10.2026).
+      // Вопрос идёт в постоянную сессию адресата — его личку, где владелец
+      // тоже участник. В сессии отправителя появляется карточка обращения
+      // («кто кому», вопрос, статус), само сообщение не дублируется.
+      if(!chatId && recipient && recipient.id!==ownerAccountId()){
+        // Адресат работает на нескольких этапах — адресовать нельзя:
+        // вопрос ушёл бы непонятно куда (те же правила, что и раньше).
+        if(recipientRole && listActiveInProcessRuns().filter(run=>run.role===recipientRole).length>1)
+          throw new ToolError("У адресата несколько работающих этапов; используй тему задачи и slot_key");
+        if(p.slot_key) throw new ToolError("slot_key задаётся в теме задачи");
+        // Сессия отправителя: его личка (постоянная) — в ней живёт карточка.
+        const senderSession=context.chatId??ensurePersonalRoom(senderId);
+        if(!senderSession) throw new ToolError("Нет сессии отправителя для обращения");
+        if(sentCount>=4) throw new ToolError("Лимит 4 сообщений за ход исчерпан; продолжи работу или зафиксируй препятствие");
+        const posted=postToRoleSession({
+          senderId, senderChatId:senderSession, recipientId:recipient.id, text:String(p.text),
+        });
+        sentCount++;
+        void startRoleSessionDelivery({roomId:posted.roomId, recipientId:recipient.id, queueRowId:posted.queueRowId})
+          .catch(error=>console.warn("[agent-messaging] ход адресата не поднялся:",error));
+        return {id:posted.questionId,chat_id:posted.roomId,отправлено:String(p.text)};
+      }
       if(!chatId && recipient) chatId=directChat(recipient.id);
       const chat=(await asRole(role,"GET",`/api/chats/${chatId}`)).chat;
       if(recipient && !chat.members.some((m:any)=>m.id===recipient.id)) throw new ToolError("Адресат не участвует в этом чате");
-      const recipientRole=recipient?.role_key;
       let targetSlot:string|undefined;
       if(chat.parent_chat_id && recipientRole){
         const slots=db.prepare("SELECT id FROM subtasks WHERE task_id=? AND agent_id=? AND collaboration_plan_id IN (SELECT id FROM task_collaboration_plans WHERE status='approved')").all(chat.task_id,recipient.id);

@@ -5411,6 +5411,23 @@ const migrations: Migration[] = [
     db.exec("CREATE INDEX IF NOT EXISTS idx_chats_subagent_rooms ON chats(branch_of_chat_id, subagent_role_id)");
   } },
 
+  // Уточнения субагенту на ходу (владелец 29.10.2026): вызывающая роль
+  // докидывает корректировку работающему субагенту — он прерывается,
+  // наработка уходит в чекпоинт, ход перезапускается с новым заданием.
+  // Таблица переживает перезапуск сервера: уточнение может прийти, пока
+  // ход субагента идёт.
+  { id: "186_subagent_steers", description: "Уточнения субагенту на ходу: subagent_steers (комната, вопрос, текст, отметка о прочтении)", up: () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS subagent_steers(
+      id TEXT PRIMARY KEY,
+      room_chat_id TEXT NOT NULL,
+      question_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      consumed_at TEXT
+    )`);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_subagent_steers_room ON subagent_steers(room_chat_id, consumed_at)");
+  } },
+
 ];
 /**
  * Опции прогона миграций.

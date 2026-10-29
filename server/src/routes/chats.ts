@@ -23,7 +23,7 @@ import {
   submitChatWorkItem,
   validateWorkPlan,
 } from "../lib/subtaskWorkPlan.js";
-import {hasCoordinationCard,registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination,markDeliveredToWork,markCoordinationAnswered} from "../runtime/chatCoordination.js";
+import {hasCoordinationCard,registerCoordinationOrigin,registerCoordinationOriginSelf,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination,markDeliveredToWork,markCoordinationAnswered} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
@@ -1316,6 +1316,79 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Обращение владельца к роли (владелец 29.10.2026): владелец спрашивает
+  // роль, которой нет в этом чате. Вопрос уходит в КОМНАТУ РОЛИ (личная
+  // переписка владельца с ней — там у роли свой контекст), а в чате
+  // владельца появляется карточка «Максим → Лайф-тестировщик» с тем же
+  // жизненным циклом, что у обращения роль→роль: статус, ответ роли в
+  // карточке, кнопка «Остановить обращение».
+  //
+  // Механика ровно та, что заведена для ролей: исток обращения
+  // (coordination_origin) + строка очереди доставки + deliverAgentReply,
+  // который закрывает карточку ответом. Отдельная ветка маршрута: обычный
+  // путь сообщений не трогаем — там владелец просто пишет в общий чат, и
+  // роль отвечает там же.
+  app.post<{ Params: { id: string }; Body: { role?: unknown; text?: unknown } }>(
+    "/api/chats/:id/role-requests",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const chatId = req.params.id;
+      if (!isMember(chatId, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+      if (!isOwner(req.userId))
+        return reply.code(403).send({ error: "Обращаться к роли может владелец" });
+      const role = String(req.body?.role ?? "").trim();
+      const text = String(req.body?.text ?? "").trim();
+      if (!role) return reply.code(400).send({ error: "Нужна роль" });
+      if (!text) return reply.code(400).send({ error: "Пустой вопрос" });
+      if (!ROLE_NAMES.includes(role))
+        return reply.code(400).send({ error: `Неизвестная роль «${role}»` });
+      const accountId = roleAccountId(role as RoleName);
+      if (!accountId) return reply.code(400).send({ error: `У роли «${role}» нет учётки` });
+      // Комната роли — личная переписка с ней. Роль работает в своём
+      // контексте, лента владельца не засоряется.
+      const roomId = ensurePersonalRoom(accountId);
+      if (!roomId)
+        return reply.code(500).send({ error: "Не удалось открыть комнату роли" });
+      // Вопрос остаётся в чате владельца — отсюда и карточка обращения
+      // («кто кого позвал»), и исходный разговор не рвётся.
+      const questionId = uid();
+      db.prepare(
+        "INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)",
+      ).run(questionId, req.userId, text, chatId);
+      // Исток: вопрос пришёл из этого чата — карточка обращения живёт тут.
+      registerCoordinationOriginSelf(questionId, req.userId);
+      // Копия вопроса — в комнате роли: там её читает роль, там отвечает,
+      // и владелец, открыв личку роли, видит, что именно ей спросили.
+      const copyId = uid();
+      db.prepare(
+        "INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES(?,?,?,'chat',?,?)",
+      ).run(copyId, req.userId, text, roomId, questionId);
+      // Доставка роли: строка очереди (переживает перезапуск) + запуск хода.
+      const deliveryId = `owner-request:${questionId}`;
+      const durable = recordDurableDelivery({
+        chatId: roomId,
+        roleId: accountId,
+        deliveryId,
+        // Триггер — вопрос в чате владельца: по нему заводится карточка
+        // (сообщение пересекает сессии: чат владельца → комната роли).
+        messageId: questionId,
+        payload: { triggerMessageId: questionId, text, hop: 0, mode: "work" },
+      });
+      if (!durable.created)
+        return reply.code(409).send({ error: "Обращение уже создано" });
+      // Ход роли идёт в фоне: запрос владельца не ждёт ответа.
+      // queueRowId — id строки очереди (durable.id), не delivery_id.
+      void recoverAgentDelivery({
+        chatId: roomId,
+        roleId: accountId,
+        queueRowId: durable.id,
+      }).catch((error) =>
+        console.warn("[chats] обращение владельца к роли не поехало:", error),
+      );
+      return { chat_id: chatId, question_id: questionId, room_chat_id: roomId, role };
+    },
+  );
+
   // Ответ владельца на уточнение роли (26.10.2026). Один POST: сервер
   // сохраняет ответ, кладёт его в чат обычным сообщением владельца и
   // поднимает новый ход роли — работа продолжается с места остановки.
@@ -1998,22 +2071,31 @@ function retainForwardedDelivery(deliveryId:string):void {
 }
 
 const recoveringDeliveries = new Set<string>();
+/**
+ * Поднять доставку из строки очереди.
+ *
+ * ВНИМАНИЕ: queueRowId — это id СТРОКИ chat_message_queue (колонка id),
+ * а НЕ delivery_id. Имя прежнее («deliveryId») путало: подмена молча
+ * оставляла ход в очереди навсегда (29.10.2026 — так потерялось пробуждение
+ * роли после выжимки субагента).
+ */
 export async function recoverAgentDelivery(
   input: Parameters<typeof recoverAgentDeliveryOnce>[0],
 ): ReturnType<typeof recoverAgentDeliveryOnce> {
-  if (recoveringDeliveries.has(input.deliveryId)) return {status:"skipped",replyId:null};
+  if (recoveringDeliveries.has(input.queueRowId)) return {status:"skipped",replyId:null};
   // Reserve before any await without claiming that a queued delivery is executing.
-  recoveringDeliveries.add(input.deliveryId);
+  recoveringDeliveries.add(input.queueRowId);
   try { return await recoverAgentDeliveryOnce(input); }
-  finally { recoveringDeliveries.delete(input.deliveryId); }
+  finally { recoveringDeliveries.delete(input.queueRowId); }
 }
 
 async function recoverAgentDeliveryOnce(input: {
   chatId: string;
   roleId: string;
-  deliveryId: string;
+  queueRowId: string;
 }): Promise<{ status: "done" | "failed" | "fenced" | "skipped"; replyId: string | null }> {
-  const { chatId, roleId, deliveryId } = input;
+  const { chatId, roleId } = input;
+  const deliveryId = input.queueRowId;
   const row = db
     .prepare(
       `SELECT message_id, session_generation, status, payload_json FROM chat_message_queue
@@ -3364,7 +3446,10 @@ async function deliverAgentReply(args: {
        VALUES (?, ?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(replyId, roleUserId, replyText, storedRoleEnvelope, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(trimThinkingItems(steps)) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null,stopReason,cancelled ? 1 : 0);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
-    traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure));
+    // answerChatId: ответ лег в этой комнате — если карточка тут же,
+    // текст в неё не копируем (иначе дубль), если карточка в другой
+    // комнате (обращение роли к роли) — копируем, иначе итог негде увидеть.
+    traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure,chatId));
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
     for(const material of overflow){
       const materialId=uid();

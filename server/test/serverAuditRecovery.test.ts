@@ -12,8 +12,8 @@ beforeAll(() => {
 beforeEach(() => {
   db.prepare("DELETE FROM chat_message_queue").run();
   vi.mocked(recoverAgentDelivery).mockReset();
-  vi.mocked(recoverAgentDelivery).mockImplementation(async ({ deliveryId }) => {
-    db.prepare("UPDATE chat_message_queue SET status='done' WHERE id=?").run(deliveryId);
+  vi.mocked(recoverAgentDelivery).mockImplementation(async ({ queueRowId }) => {
+    db.prepare("UPDATE chat_message_queue SET status='done' WHERE id=?").run(queueRowId);
     return { status: "done", replyId: null };
   });
 });

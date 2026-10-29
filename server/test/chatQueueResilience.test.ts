@@ -189,7 +189,7 @@ describe("доставка: очередь, независимость и бюд
     seedDelivery("wait-row");
     const gate = deferred();
     const first = enqueueChatReply("chat_recovery_test", ROLE_USER, () => gate.promise);
-    const second = recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,deliveryId:"wait-row"});
+    const second = recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,queueRowId:"wait-row"});
     try {
       await new Promise(r => setTimeout(r, 25));
       expect(getMessageDelivery("wait-row")?.status).toBe("pending");
@@ -259,7 +259,7 @@ describe("границы очереди и восстановление", () => 
     seedDelivery("once-row");
     const gate=deferred();
     const first=enqueueChatReply("chat_recovery_test",ROLE_USER,()=>gate.promise);
-    const recovery=recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,deliveryId:"once-row"});
+    const recovery=recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,queueRowId:"once-row"});
     try {
       await new Promise(r=>setTimeout(r,20));
       await sweepRecoverableDeliveries();
@@ -272,7 +272,7 @@ describe("границы очереди и восстановление", () => 
     seedDelivery("fenced-wait");
     const gate=deferred();
     const first=enqueueChatReply("chat_recovery_test",ROLE_USER,()=>gate.promise);
-    const recovery=recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,deliveryId:"fenced-wait"});
+    const recovery=recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,queueRowId:"fenced-wait"});
     await new Promise(r=>setTimeout(r,20));
     recoveryBumpChatGeneration("chat_recovery_test",ROLE_USER);
     gate.resolve();
@@ -343,13 +343,13 @@ it("зависшая подготовка освобождает чат; опо�
   const late=deferred();
   creationControl.before=async()=>{creationControl.before=async()=>{};await late.promise;};
   process.env.TASKFLOW_CHAT_PREPARATION_TIMEOUT_MS="1000";
-  const first=recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,deliveryId:"preparation-held"});
+  const first=recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,queueRowId:"preparation-held"});
   try {
     const outcome=await Promise.race([first,new Promise(r=>setTimeout(()=>r("still-held"),2000))]);
     expect(outcome).toMatchObject({status:"failed"});
     expect(getMessageDelivery("preparation-held")?.status).toBe("failed");
     seedDelivery("preparation-next");
-    const second=await recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,deliveryId:"preparation-next"});
+    const second=await recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,queueRowId:"preparation-next"});
     expect(second.status).toBe("done");
     late.resolve();
     await new Promise(r=>setTimeout(r,30));
@@ -377,7 +377,7 @@ it.each([true,false])("сервер собирает один отчёт пос�
     expect(JSON.parse(getMessageDelivery(triggerId)!.payload_json).sharedReportMaterials).toEqual([material]);
     promptControl.answer=JSON.stringify({schema_version:1,ok:true,output:[{type:"report",report_kind:"final",sections:{result:[{type:"text",text:"Готово"}],work:[],checks:[],limitations:[],materials:included?[material]:[]}}],artifacts:included?[material]:[],plan_artifact:null,error:null,next_hint:null});
   };
-  const result=await recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,deliveryId:triggerId});
+  const result=await recoverAgentDelivery({chatId:"chat_recovery_test",roleId:ROLE_USER,queueRowId:triggerId});
   expect(result.status).toBe("done");
   const messages=db.prepare("SELECT role_envelope_json FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=?").all(triggerId,ROLE_USER) as any[];
   expect(messages).toHaveLength(1);

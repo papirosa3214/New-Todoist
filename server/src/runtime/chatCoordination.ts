@@ -19,6 +19,17 @@ function publish(id:string){
  const audience=(db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(message.chat_id) as {member_id:string}[]).map(r=>r.member_id);
  broadcastToUsers(audience,{type:"chat:new",message});
 }
+/**
+ * Исток вопроса из другой сессии (владелец 29.10.2026): вопрос пришёл из
+ * сессии отправителя, а работа идёт в сессии адресата. Карточка живёт в
+ * сессии отправителя — там, откуда вопрос поступил.
+ */
+export function registerCrossSessionOrigin(questionId:string,originChatId:string,requesterId:string){
+ const row=db.prepare("SELECT chat_id,steps FROM chat_messages WHERE id=?").get(questionId) as {chat_id:string;steps:string|null}|undefined;
+ if(!row||!member(originChatId,requesterId))return;
+ const steps={duration_ms:0,items:[],...parse(row.steps),coordination_origin:{chat_id:originChatId,message_id:questionId,requester_id:requesterId}};
+ db.prepare("UPDATE chat_messages SET steps=? WHERE id=?").run(JSON.stringify(steps),questionId);
+}
 export function registerCoordinationOrigin(questionId:string,parentId:string,senderId:string){
  const parent=db.prepare("SELECT chat_id,steps FROM chat_messages WHERE id=?").get(parentId) as {chat_id:string;steps:string|null}|undefined;
  if(!parent || !member(parent.chat_id,senderId))return;
@@ -31,15 +42,35 @@ export function registerCoordinationOrigin(questionId:string,parentId:string,sen
 function card(questionId:string,recipientId:string){
  return db.prepare("SELECT id,chat_id,steps FROM chat_messages WHERE message_type='system' AND json_valid(steps) AND json_extract(steps,'$.coordination.question_id')=? AND json_extract(steps,'$.coordination.recipient_id')=? LIMIT 1").get(questionId,recipientId) as {id:string;chat_id:string;steps:string}|undefined;
 }
-export function ensureCoordinationCard(questionId:string,recipientId:string){
+/**
+ * Карточка обращения.
+ *
+ * Правило владельца (29.10.2026): карточка появляется РОВНО тогда, когда
+ * сообщение пересекает сессии — из одной комнаты в другую. Внутри одной
+ * сессии карточки нет: там и так видно, кому написан вопрос, и ответ
+ * приходит в ту же нитку.
+ *
+ * deliveryChatId — комната доставки (где роль реально работает). Если она
+ * совпадает с комнатой вопроса — доставка внутри сессии, карточка не
+ * заводится. Если отличается — вопрос сам себе исток, карточка живёт в
+ * комнате вопроса, а child_chat_id указывает на комнату доставки (там
+ * останавливается ход роли).
+ */
+export function ensureCoordinationCard(questionId:string,recipientId:string,deliveryChatId?:string){
  if(card(questionId,recipientId))return;
  const question=db.prepare("SELECT chat_id,text,steps,from_user_id FROM chat_messages WHERE id=?").get(questionId) as {chat_id:string;text:string;steps:string;from_user_id:string}|undefined;
- const origin:Origin|undefined=parse(question?.steps??null).coordination_origin;
- if(!question||!origin||!member(origin.chat_id,origin.requester_id))return;
+ if(!question)return;
+ // Исток — сессия, откуда вопрос поступил. Без истока карточки нет:
+ // внутри одной сессии обращения не заводим (владелец 29.10.2026).
+ const origin:Origin|undefined=parse(question.steps??null).coordination_origin;
+ if(!origin||!member(origin.chat_id,origin.requester_id))return;
+ // Пересечение сессий: работа идёт не там, откуда вопрос. Если доставка
+ // ушла в ту же сессию — карточка не нужна.
+ if(deliveryChatId&&deliveryChatId===origin.chat_id)return;
  const id=crypto.randomUUID(),now=new Date().toISOString();
- const c:Coordination={question_id:questionId,recipient_id:recipientId,requester_name:title(question.from_user_id),recipient_name:title(recipientId),question:question.text,child_chat_id:question.chat_id,origin_message_id:origin.message_id,status:"queued",activity:"Вопрос принят сервером и ожидает обработки",created_at:now,last_activity_at:now,terminal:false};
+ const c:Coordination={question_id:questionId,recipient_id:recipientId,requester_name:title(question.from_user_id),recipient_name:title(recipientId),question:question.text,child_chat_id:deliveryChatId??origin.chat_id,origin_message_id:origin.message_id,status:"queued",activity:"Вопрос принят сервером и ожидает обработки",created_at:now,last_activity_at:now,terminal:false};
  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,message_type,reply_to_message_id,steps) VALUES(?,?,?,'chat',?,'system',?,?)")
-  .run(id,origin.requester_id,c.requester_name+" → "+c.recipient_name+": вопрос в очереди",origin.chat_id,origin.message_id,JSON.stringify({duration_ms:0,items:[],coordination:c}));
+ .run(id,origin.requester_id,c.requester_name+" → "+c.recipient_name+": вопрос в очереди",origin.chat_id,origin.message_id,JSON.stringify({duration_ms:0,items:[],coordination:c}));
  publish(id);
 }
 /**
@@ -89,6 +120,11 @@ export function queueWorkCoordination(questionId:string,recipientId:string,taskI
  if(!question)return;
  // Возврат ответа коллеге не создаёт нового встречного обращения.
  if(question.reply_to_message_id && card(question.reply_to_message_id,question.from_user_id))return;
+ // Вопрос уходит из комнаты в рабочую сессию роли — это пересечение
+ // сессий, карточка нужна: в комнате владелец видит «кто кому», статус
+ // («в очереди» → «доставлено в работу») и может остановить ход. Исток —
+ // сама комната вопроса (registerCoordinationOriginSelf не перетирает
+ // исток, если вопрос уже пришёл из другой сессии).
  registerCoordinationOriginSelf(questionId,question.from_user_id);
  ensureCoordinationCard(questionId,recipientId);
  const task=db.prepare("SELECT title FROM tasks WHERE id=?").get(taskId) as {title:string}|undefined;
@@ -97,16 +133,29 @@ export function queueWorkCoordination(questionId:string,recipientId:string,taskI
 
 /** Сообщение доставлено в текущую работу адресата: строка в чате показывает это. */
 export function markDeliveredToWork(questionId:string,recipientId:string,requesterId?:string){
+ // Вопрос ушёл из комнаты в рабочую сессию роли — пересечение сессий, карточка
+ // нужна в комнате вопроса («кто кому», статус, остановить). Исток не
+ // перетирается, если вопрос уже пришёл из другой сессии.
  if(requesterId)registerCoordinationOriginSelf(questionId,requesterId);
  ensureCoordinationCard(questionId,recipientId);
  updateCoordination(questionId,recipientId,{status:"delivered",activity:"Доставлено в работу",last_activity_at:new Date().toISOString()});
 }
 
-/** Адресат ответил — служебная строка закрывается (клиент её прячет). */
-export function markCoordinationAnswered(questionId:string,recipientId:string){
- const answer=db.prepare("SELECT text FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=? AND COALESCE(message_type,'')!='system' ORDER BY rowid DESC LIMIT 1").get(questionId,recipientId) as {text:string}|undefined;
+/**
+ * Адресат ответил — карточка закрывается.
+ *
+ * Текст ответа в карточку НЕ копируем: ответ лежит в этой же нитке
+ * сообщением, и копия была вторым дублем (владелец 29.10.2026: «внизу ещё
+ * пришло, как обычно, в чат… то есть оно задублировалось»). Карточка — это
+ * статус обращения, а не вторая копия ответа.
+ *
+ * Текст в карточке нужен только там, где ответа в нитке нет (вызов роли:
+ * ответ приезжает из другой комнаты) — за это отвечает coordinationAnswered.
+ */
+export function markCoordinationAnswered(questionId:string,recipientId:string,answerChatId?:string){
+ const answer=db.prepare("SELECT id,chat_id,text FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=? AND COALESCE(message_type,'')!='system' ORDER BY rowid DESC LIMIT 1").get(questionId,recipientId) as {id:string;chat_id:string;text:string}|undefined;
  if(!answer)return false;
- updateCoordination(questionId,recipientId,{status:"answered",activity:"Ответ получен",answer:answer.text,terminal:true,last_activity_at:new Date().toISOString()});
+ coordinationAnswered(questionId,recipientId,answer.text,false,answerChatId??answer.chat_id);
  return true;
 }
 
@@ -154,8 +203,33 @@ export function coordinationActivity(questionId:string|undefined,recipientId:str
  lastUpdate.set(key,now);if(lastUpdate.size>1000)lastUpdate.delete(lastUpdate.keys().next().value!);
  updateCoordination(questionId,recipientId,{status,activity,last_activity_at:new Date(now).toISOString()});
 }
-export function coordinationAnswered(questionId:string,recipientId:string,answer:string,failed=false){
- updateCoordination(questionId,recipientId,{status:failed?"error":"answered",activity:failed?"Ход завершился ошибкой":"Ответ получен",answer,terminal:true,last_activity_at:new Date().toISOString()});
+/**
+ * Обращение закрыто: ответ получен (или ход сорвался).
+ *
+ * Где лежит ответ — важно (владелец 29.10.2026):
+ *  - ответ в ДРУГОЙ комнате, чем карточка (обращение роли к роли: карточка
+ *    у отправителя, ответ — в личке получателя) → текст ответа КЛАДЁМ в
+ *    карточку: в нитке отправителя ответа нет, иначе итог нигде не виден;
+ *  - ответ в ТОЙ ЖЕ комнате, где карточка (обычный разговор) → текст в
+ *    карточку НЕ кладём: он уже рядом, и копия была вторым дублем.
+ *
+ * answerChatId — комната, куда лег ответ. Не передан — считаем, что ответ
+ * в другой комнате (текст кладём).
+ *
+ * При сбое причина сходит в activity: ответа нет нигде, иначе её негде
+ * показать.
+ */
+export function coordinationAnswered(questionId:string,recipientId:string,answer:string,failed=false,answerChatId?:string){
+ const row=card(questionId,recipientId);
+ if(!row)return;
+ const sameRoom=!!answerChatId&&answerChatId===row.chat_id;
+ updateCoordination(questionId,recipientId,{
+   status:failed?"error":"answered",
+   activity:failed?("Ход завершился ошибкой: "+String(answer).slice(0,200)):"Ответ получен",
+   answer:sameRoom?undefined:answer,
+   terminal:true,
+   last_activity_at:new Date().toISOString(),
+ });
 }
 
 // Probe writes and reads the same card mechanism inside a rolled-back transaction.

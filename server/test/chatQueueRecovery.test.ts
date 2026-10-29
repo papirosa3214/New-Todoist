@@ -235,7 +235,7 @@ describe("chatQueue: recovery", () => {
     const result = await recoverAgentDelivery({
       chatId: "chat_recovery_test",
       roleId: ROLE_USER,
-      deliveryId: "cmq_picked",
+      queueRowId: "cmq_picked",
     });
     expect(result.status).toBe("skipped");
   });
@@ -263,7 +263,7 @@ describe("chatQueue: recovery", () => {
     const result = await recoverAgentDelivery({
       chatId: "chat_recovery_test",
       roleId: ROLE_USER,
-      deliveryId: "cmq_fence",
+      queueRowId: "cmq_fence",
     });
     expect(result.status).toBe("fenced");
 
