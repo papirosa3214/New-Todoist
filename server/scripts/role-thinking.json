@@ -1,9 +1,16 @@
 {
-  "default": "low",
+  "default": "max",
   "roles": {
-    "code_orchestrator": "max",
+    "analyst": "max",
     "architect": "max",
-    "critic_verifier": "low",
-    "secretary": "low"
+    "builder": "max",
+    "claude_code": "max",
+    "code_orchestrator": "max",
+    "critic_verifier": "max",
+    "designer": "max",
+    "infra_engineer": "max",
+    "qa": "max",
+    "researcher": "max",
+    "secretary": "max"
   }
 }
