@@ -114,7 +114,7 @@ describe("режим «Оркестратор»", () => {
       const text = (db.prepare("SELECT text FROM chat_messages WHERE id=?").get(wake!.messageId) as { text: string }).text;
       expect(text).toContain("Тебя разбудили, потому что шаг встал в блок");
       expect(text).toContain("Вид блока: capability");
-      for (const tool of ["taskflow_plan_read", "taskflow_plan_ops", "taskflow_team_read", "taskflow_slot_restart", "taskflow_topic_send", "taskflow_comment"]) expect(text).toContain(tool);
+      for (const tool of ["taskflow_plan_read", "taskflow_plan_ops", "taskflow_team_read", "taskflow_slot_restart", "taskflow_topic_send", "taskflow_ask_user_question", "taskflow_notify_owner_urgent"]) expect(text).toContain(tool);
       expect(wakeOrchestrator(sid, roleUserId("qa")!, "returned", "дефект")).toBeNull();
       expect(wakeOrchestrator(sid, roleUserId("builder")!, "retry", null)).toBeNull();
     } finally {
