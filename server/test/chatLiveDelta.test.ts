@@ -10,7 +10,7 @@ vi.mock("../src/ws.js", () => ({
   }),
 }));
 
-import { LIVE_BROADCAST_MS, _resetLiveTurnsForTests, liveTurnsOfChat, startLiveTurn } from "../src/runtime/chatLiveTurn.js";
+import { LIVE_SNAPSHOT_MS, LIVE_BROADCAST_MS, _resetLiveTurnsForTests, liveTurnsOfChat, startLiveTurn } from "../src/runtime/chatLiveTurn.js";
 import { liveDeltaOps } from "../src/runtime/chatLiveDelta.js";
 
 const text = (delta: string) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } });
@@ -65,11 +65,29 @@ describe("рассылка хода", () => {
     expect(patches[0].ops[0]).toMatchObject({ op: "item_add", item: { kind: "text", text: "При" } });
     expect(patches[1].ops[0]).toEqual({ op: "text_append", item_id: patches[0].ops[0].item.id, text: "вет" });
     expect(patches[1].ops.slice(1).map((o: any) => o.op)).toEqual(["blocks"]);
-    expect(of("chats:live")).toHaveLength(2);
+    expect(of("chats:live")).toHaveLength(1);
     live.finish({ deferAnnounce: true });
     expect(of("chats:live:end")).toHaveLength(0);
     live.announceEnd("m-planned");
     expect(of("chats:live:end")).toEqual([{ type: "chats:live:end", chat_id: "c1", user_id: "role_qa", turn_id: start.turn_id, seq: 3, message_id: "m-planned" }]);
+  });
+  it("полный снимок — первый и на границе 10 секунд; дельты не ждут его", () => {
+    vi.setSystemTime(new Date("2026-10-29T12:00:00Z"));
+    const live = turn();
+    live.onEvent(text("А")); vi.advanceTimersByTime(LIVE_BROADCAST_MS);
+    live.onEvent(text("Б")); vi.advanceTimersByTime(LIVE_BROADCAST_MS);
+    expect(of("chats:live")).toHaveLength(1);
+    expect(of("chats:live:patch").map(p => p.seq)).toEqual([1,2]);
+    vi.advanceTimersByTime(LIVE_SNAPSHOT_MS - LIVE_BROADCAST_MS - 1);
+    live.onEvent({type:"tool_execution_start",toolCallId:"boundary",toolName:"read",args:{path:"a"}});
+    expect(of("chats:live")).toHaveLength(1);
+    expect(of("chats:live:patch").at(-1).ops).toContainEqual(expect.objectContaining({op:"item_add",item:expect.objectContaining({id:"boundary",status:"running"})}));
+    vi.advanceTimersByTime(1);
+    live.onEvent({type:"tool_execution_end",toolCallId:"boundary",toolName:"read",isError:false});
+    const snapshots=of("chats:live");
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[1].turn.items).toMatchObject([{text:"АБ"},{id:"boundary",status:"done"}]);
+    expect(of("chats:live:patch").map(p => p.seq)).toEqual([1,2,3,4]);
   });
   it("снимок для восстановления несёт turn_id, message_id и seq", () => {
     const live = turn();
