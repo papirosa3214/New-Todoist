@@ -43,7 +43,6 @@ import {
   updateCoordination,
 } from "./chatCoordination.js";
 import { applyOwnerBoundary } from "./chatOwnerBoundary.js";
-import { carryCheckpoint } from "./chatCheckpoint.js";
 import { bumpChatGeneration, enqueueMessageDelivery, fencePairDeliveries } from "./chatQueue.js";
 import { openSubagentRoom, type SubagentRoom } from "./subagentRoom.js";
 import type { Context, Tool } from "./universalTaskflow.js";
@@ -66,10 +65,18 @@ export type SubagentRunInput = {
   chatId: string;
   prompt: string;
   timeoutMs: number;
+  /** Сессия предыдущего attempt'а — ход продолжает ту же сессию. */
+  sessionId?: string | null;
   onEvent?: (event: unknown) => void;
 };
 
-export type SubagentRunner = (input: SubagentRunInput) => Promise<string>;
+export type SubagentTurnResult = {
+  text: string;
+  /** id сессии Pi — чтобы следующий attempt продолжил её, а не начал заново. */
+  sessionId: string | null;
+};
+
+export type SubagentRunner = (input: SubagentRunInput) => Promise<SubagentTurnResult>;
 
 /**
  * Пометка «сейчас идёт ход субагента». Живёт в асинхронном контексте, поэтому
@@ -171,8 +178,16 @@ function restoreSession(chatId: string, roleId: string, prior: SessionRow): void
   }
 }
 
-/** Ход субагента по умолчанию: живая сессия Pi, своя сессия роли. */
-async function runSubagentTurn(input: SubagentRunInput): Promise<string> {
+/**
+ * Ход субагента по умолчанию: живая сессия Pi в комнате вызова.
+ *
+ * Сессия передаётся из attempt'а в attempt: при корректировке ход
+ * прерывается, но следующий attempt продолжает ТУ ЖЕ сессию — в ней вся
+ * собранная работа (файлы, команды, выводы). Без этого роль начинала бы
+ * заново, а правка приходила бы «в пустоту»: наработка субагента живёт в
+ * сессии Pi, а не в сообщениях чата, поэтому чекпоинт её не заменяет.
+ */
+async function runSubagentTurn(input: SubagentRunInput): Promise<SubagentTurnResult> {
   // Динамический импорт: PiRuntimeAdapter сам строит каталог ролей —
   // статический импорт дал бы цикл модулей.
   const { startChatRun } = await import("./PiRuntimeAdapter.js");
@@ -182,9 +197,11 @@ async function runSubagentTurn(input: SubagentRunInput): Promise<string> {
     roleId: input.roleId,
     prompt: input.prompt,
     timeoutMs: input.timeoutMs,
+    // Продолжить прежнюю сессию, если она есть (корректировка на ходу).
+    sessionId: input.sessionId ?? undefined,
     onEvent: input.onEvent,
   });
-  return result?.text ?? "";
+  return { text: result?.text ?? "", sessionId: result?.sessionId ?? null };
 }
 
 function subagentPrompt(requesterRole: string, role: string, question: string): string {
@@ -275,12 +292,14 @@ export async function pendingSubagentRuns(): Promise<void> {
 async function runSubagentInBackground(input: BackgroundInput): Promise<void> {
   const priorSession = readSession(input.runChatId, input.roleId);
   let prompt = subagentPrompt(input.requesterRole, input.role, input.question);
+  // Сессия хода: при корректировке она продолжается, а не начинается заново.
+  let sessionId: string | null = null;
   try {
     for (let attempt = 0; attempt <= SUBAGENT_STEER_LIMIT; attempt++) {
       let text = "";
       let failure: string | undefined;
       try {
-        text = await runAsSubagent(
+        const turn = await runAsSubagent(
           { requesterRole: input.requesterRole, recipientRole: input.role },
           () =>
             input.runner({
@@ -289,6 +308,7 @@ async function runSubagentInBackground(input: BackgroundInput): Promise<void> {
               chatId: input.runChatId,
               prompt,
               timeoutMs: SUBAGENT_TIMEOUT_MS,
+              sessionId,
               onEvent: (event: unknown) => {
                 try {
                   input.room?.onEvent(event);
@@ -303,6 +323,8 @@ async function runSubagentInBackground(input: BackgroundInput): Promise<void> {
               },
             }),
         );
+        text = turn.text;
+        if (turn.sessionId) sessionId = turn.sessionId;
       } catch (error) {
         failure = errorText(error);
       }
@@ -310,7 +332,12 @@ async function runSubagentInBackground(input: BackgroundInput): Promise<void> {
       // Нас перебили уточнением? Тогда ход не провален — продолжаем с правкой.
       const steer = takeSubagentSteer(input.runChatId);
       if (steer) {
-        prompt = steer.text;
+        // Правка продолжает ту же работу: контекст уже в сессии.
+        prompt = [
+          "Уточнение от вызывающей роли — продолжи ту же работу с учётом правки:",
+          "",
+          steer.text,
+        ].join("\n");
         try {
           if (input.questionId) {
             updateCoordination(input.questionId, input.roleId, {
@@ -642,11 +669,11 @@ export function createRoleSubagentSteerTool(context: Context): Tool {
           waitIdle: (c, r, timeoutMs) => waitChatRunsIdle(c, r, timeoutMs).then(() => undefined),
         },
       );
-      carryCheckpoint({
-        roleId: recipientId,
-        rootChatId: rootChatIdOf(roomChatId),
-        sourceChatId: roomChatId,
-      });
+      // Наработку несёт ПРОДОЛЖЕНИЕ СЕССИИ: следующий attempt открывает тот же
+      // файл сессии Pi (startChatRun ищет файл по sessionId и открывает его).
+      // Чекпоинт здесь не нужен: он собирается из сообщений чата, а работа
+      // субагента живёт в сессии — и незакрытый указатель на перенос утек бы
+      // в обычный ход чата.
       // Доставки прежнего поколения — не доставлять: ход уже перезапущен.
       try {
         fencePairDeliveries({

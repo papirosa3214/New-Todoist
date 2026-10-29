@@ -89,10 +89,22 @@ const waitFor = async (predicate: () => boolean, ms = 8000) => {
 
 /** Раннер-заглушка: ход роли не настоящий, ответ задан заранее. */
 function stubRunner(answer = "Разбор готов: шаг контракта не меняем.") {
-  const calls: Array<{ role: string; roleId: string; chatId: string; prompt: string }> = [];
+  const calls: Array<{
+    role: string;
+    roleId: string;
+    chatId: string;
+    prompt: string;
+    sessionId: string | null | undefined;
+  }> = [];
   const runner: SubagentRunner = async (input) => {
-    calls.push({ role: input.role, roleId: input.roleId, chatId: input.chatId, prompt: input.prompt });
-    return answer;
+    calls.push({
+      role: input.role,
+      roleId: input.roleId,
+      chatId: input.chatId,
+      prompt: input.prompt,
+      sessionId: input.sessionId,
+    });
+    return { text: answer, sessionId: "pi-session-stub" };
   };
   return { runner, calls };
 }
@@ -331,7 +343,10 @@ describe("вызов роли как субагента: фоновый режи
     let release!: (value: string) => void;
     const gate = new Promise<string>((resolve) => { release = resolve; });
     const calls: string[] = [];
-    const runner: SubagentRunner = async (input) => { calls.push(input.prompt); return gate; };
+    const runner: SubagentRunner = async (input) => {
+      calls.push(input.prompt);
+      return { text: await gate, sessionId: "pi-session-stub" };
+    };
     const tool = toolOf(callerContext(), runner);
     const started = Date.now();
     const result: any = await tool.execute("bg-1", { role: "researcher", question: "Долгий вопрос" });
@@ -362,11 +377,13 @@ describe("вызов роли как субагента: корректиров�
     const gate = new Promise<string>((resolve) => { release = resolve; });
     const prompts: string[] = [];
     let call = 0;
+    const sessionIds: Array<string | null | undefined> = [];
     const runner: SubagentRunner = async (input) => {
       prompts.push(input.prompt);
+      sessionIds.push(input.sessionId);
       call += 1;
-      if (call === 1) return gate;
-      return "Работа сделана с учётом правки.";
+      if (call === 1) return { text: await gate, sessionId: "pi-session-stub" };
+      return { text: "Работа сделана с учётом правки.", sessionId: "pi-session-stub" };
     };
     const tool = toolOf(callerContext(), runner);
     const result: any = await tool.execute("steer-1", { role: "researcher", question: "Разберись" });
@@ -394,6 +411,10 @@ describe("вызов роли как субагента: корректиров�
     await pendingSubagentRuns();
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain("последние 10 коммитов");
+    // Наработка сохраняется: второй ход ПРОДОЛЖАЕТ ту же сессию Pi, а не
+    // начинает заново (startChatRun открывает файл сессии по sessionId).
+    expect(sessionIds[0] ?? undefined).toBeUndefined();
+    expect(sessionIds[1]).toBe("pi-session-stub");
 
     // Карточка закрыта итоговым ответом.
     const card = db
@@ -408,7 +429,10 @@ describe("вызов роли как субагента: корректиров�
 
   it("лимит уточнений ограничен", async () => {
     const prompts: string[] = [];
-    const runner: SubagentRunner = async (input) => { prompts.push(input.prompt); return ""; };
+    const runner: SubagentRunner = async (input) => {
+      prompts.push(input.prompt);
+      return { text: "", sessionId: "pi-session-stub" };
+    };
     const tool = toolOf(callerContext(), runner);
     const result: any = await tool.execute("steer-limit", { role: "researcher", question: "Вопрос" });
     const steer = createRoleSubagentSteerTool(callerContext());
