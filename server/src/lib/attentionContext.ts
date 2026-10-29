@@ -34,7 +34,7 @@ export interface AttentionContext {
 }
 
 /** Сколько символов влезает в строку карточки (две строки на телефоне). */
-export const HINT_LIMIT = 140;
+export const HINT_LIMIT = 120;
 
 /** Текст в одну строку: переводы строк — в пробелы, длинное обрезано. */
 export const oneLine = (text: string | null | undefined): string | null => {
