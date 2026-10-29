@@ -13,7 +13,7 @@ import uuid
 LOOKUP = """
 on run argv
  tell application "Reminders"
-  repeat with r in reminders of default list
+  repeat with r in reminders of list "TaskFlow"
    if body of r contains item 1 of argv then return id of r
   end repeat
  end tell
@@ -24,7 +24,7 @@ NORMAL = """
 on run argv
  set alertTime to (current date) + (item 3 of argv as real)
  tell application "Reminders"
-  set r to make new reminder at end of reminders of default list with properties {name:item 1 of argv, body:item 2 of argv, due date:alertTime, remind me date:alertTime}
+  set r to make new reminder at end of reminders of list "TaskFlow" with properties {name:item 1 of argv, body:item 2 of argv, due date:alertTime, remind me date:alertTime}
   return id of r
  end tell
 end run
