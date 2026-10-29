@@ -399,19 +399,22 @@ function deliverDigest(input: BackgroundInput, answer: string): void {
       "INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)",
     ).run(messageId, input.requesterId, text, input.callerChatId);
     const deliveryId = `subagent:${input.questionId ?? messageId}`;
-    enqueueMessageDelivery({
+    const queued = enqueueMessageDelivery({
       chatId: input.callerChatId,
       roleId: input.requesterId,
       deliveryId,
       messageId,
       payload: { mode: "work", hop: 0 },
     });
+    // queueRowId — id СТРОКИ очереди (queued.id), а не delivery_id:
+    // recoverAgentDelivery ищет именно по колонке id. С delivery_id
+    // выжимка молча оставалась в очереди и роль не просыпалась.
     void import("../routes/chats.js")
       .then(({ recoverAgentDelivery }) =>
         recoverAgentDelivery({
           chatId: input.callerChatId,
           roleId: input.requesterId,
-          deliveryId,
+          queueRowId: queued.id,
         }),
       )
       .catch((error) => console.warn("[subagent-call] доставка выжимки отложена:", errorText(error)));

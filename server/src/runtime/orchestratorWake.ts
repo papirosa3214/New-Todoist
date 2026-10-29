@@ -110,7 +110,15 @@ export function deliverWake(wake: Wake | null): void {
   if (!wake) return;
   const audience = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(wake.chatId) as Array<{ member_id: string }>).map(r => r.member_id);
   broadcastToUsers(audience, { type: "chat:new", message: loadChatMessage(wake.messageId) });
-  void import("../routes/chats.js").then(({ recoverAgentDelivery }) => recoverAgentDelivery(wake))
+  // queueRowId — id строки очереди (wake.deliveryId = queued.id).
+  void import("../routes/chats.js")
+    .then(({ recoverAgentDelivery }) =>
+      recoverAgentDelivery({
+        chatId: wake.chatId,
+        roleId: wake.roleId,
+        queueRowId: wake.deliveryId,
+      }),
+    )
     .catch(error => console.warn("[orchestrator-wake] доставка отложена", error));
 }
 
