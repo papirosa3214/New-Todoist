@@ -23,7 +23,7 @@ import {
   submitChatWorkItem,
   validateWorkPlan,
 } from "../lib/subtaskWorkPlan.js";
-import {hasCoordinationCard,registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination,markDeliveredToWork,markCoordinationAnswered} from "../runtime/chatCoordination.js";
+import {hasCoordinationCard,registerCoordinationOrigin,registerCoordinationOriginSelf,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination,markDeliveredToWork,markCoordinationAnswered} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
@@ -1355,7 +1355,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       db.prepare(
         "INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)",
       ).run(questionId, req.userId, text, chatId);
-      // Копия вопроса — в комнате роли: там его читает роль, там отвечает,
+      // Исток: вопрос пришёл из этого чата — карточка обращения живёт тут.
+      registerCoordinationOriginSelf(questionId, req.userId);
+      // Копия вопроса — в комнате роли: там её читает роль, там отвечает,
       // и владелец, открыв личку роли, видит, что именно ей спросили.
       const copyId = uid();
       db.prepare(
