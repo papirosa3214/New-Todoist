@@ -97,16 +97,27 @@ it("вопрос коллеги в той же комнате не порожд�
  expect(JSON.parse(row.steps??"{}").coordination_origin).toBeUndefined();
 });
 
-it("внутри одной сессии карточка обращения не заводится",()=>{
+it("внутри одной сессии карточка заводится только когда вопрос уходит в работу роли",()=>{
  // Правило владельца (29.10.2026): карточка — только когда сообщение
- // пересекает сессии. Здесь вопрос и работа в одном чате — карточки нет.
+ // пересекает сессии.
+ //
+ // 1. Разговор в комнате: вопрос и ответ в одной нитке — карточки нет
+ //    (видно и так, кому написан вопрос).
+ db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES('same-room',?,'Обсуждение','chat',?)").run(user,chat);
+ markDeliveredToWork("same-room","coordination_agent");
+ const plain=db.prepare("SELECT steps FROM chat_messages WHERE json_valid(steps) AND json_extract(steps,'$.coordination.question_id')='same-room'").get() as any;
+ expect(plain).toBeUndefined();
+ // 2. Вопрос уходит в рабочую сессию роли — сессии разные: карточка в
+ //    комнате вопроса («кто кому», статус, остановить). Поведение main,
+ //    на нём держится карточка занятой роли (inProcessRun).
  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES('work-pending',?,'Уточнение','chat',?)").run(user,chat);
  queueWorkCoordination("work-pending","coordination_agent","coordination_task","step-1");
  const row=db.prepare("SELECT steps FROM chat_messages WHERE json_valid(steps) AND json_extract(steps,'$.coordination.question_id')='work-pending'").get() as any;
- expect(row).toBeUndefined();
+ expect(row).toBeTruthy();
+ expect(JSON.parse(row.steps).coordination.status).toBe("queued");
  markDeliveredToWork("work-pending","coordination_agent");
  const after=db.prepare("SELECT steps FROM chat_messages WHERE json_valid(steps) AND json_extract(steps,'$.coordination.question_id')='work-pending'").get() as any;
- expect(after).toBeUndefined();
+ expect(JSON.parse(after.steps).coordination.status).toBe("delivered");
 });
 it("пересечение сессий: карточка заводится и указывает на комнату доставки",()=>{
  const card=workQuestion("cross-question");
