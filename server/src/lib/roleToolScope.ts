@@ -37,6 +37,7 @@ const ONLY: Record<string, string[]> = {
   // владельца (совет по своей работе) и Оркестратор (разбор результата по
   // ролям). Остальным роль звать незачем — и опасно: цепочка ролей.
   taskflow_call_role: ["secretary", "code_orchestrator"],
+  taskflow_call_role_steer: ["secretary", "code_orchestrator"],
 };
 
 const DENY: Record<string, string[]> = {
