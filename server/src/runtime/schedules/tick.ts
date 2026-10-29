@@ -27,6 +27,7 @@ import { getSetting } from "../../lib/serverSettings.js";
 import {
   anchorFromCreatedAt,
   claimRun,
+  closeApprovedInstances,
   currentInstanceOpen,
   listSchedules,
   markScheduleRun,
@@ -35,8 +36,8 @@ import {
   repairInterruptedRuns,
   ruleOf,
   toUtcIso,
-  updateRun,
   type ScheduleRow,
+  updateRun,
 } from "./store.js";
 
 type Api = (method: "GET" | "POST" | "PATCH", url: string, body?: unknown) => Promise<any>;
@@ -124,6 +125,11 @@ export async function runSchedulesTick(
   // Чиним брошенные записи запуска: процесс мог упасть между «заняли слот»
   // и «появилась карточка» — в истории лежал бы «создана» без карточки (D5).
   repairInterruptedRuns();
+
+  // Экземпляр рутины с одобренной работой закрываем сами: иначе карточка
+  // навсегда остаётся «на проверке» (висит во «Входящих») и блокирует
+  // следующий запуск рутины.
+  closeApprovedInstances();
 
   // Срабатывание по расписанию берёт только активные рутины: пауза
   // останавливает создание карточек (критерий приёмки 12 из спеки).

@@ -37,6 +37,7 @@ import {
   type ScheduleRule,
 } from "../src/runtime/schedules/rules.js";
 import {
+  closeApprovedInstances,
   createSchedule,
   getSchedule,
   listRuns,
@@ -680,4 +681,63 @@ describe("рутины в базе и тик планировщика", () => {
     expect(refused.statusCode).toBe(403);
   });
 
+});
+
+// Экземпляр рутины с одобренной работой закрывается сам: иначе карточка
+// навсегда остаётся «на проверке» (висит во «Входящих») и блокирует
+// следующий запуск рутины («прошлый экземпляр не закрыт»).
+describe("закрытие экземпляра рутины", () => {
+  const makeTask = (title: string, state: string, approved: boolean): string => {
+    const id = `rt-${Math.random().toString(36).slice(2, 10)}`;
+    db.prepare(
+      "INSERT INTO tasks (id, title, description, status, creator_id, agent_state) VALUES (?,?,?,'active',?, ?)",
+    ).run(id, title, "", "u1", state);
+    db.prepare(
+      "INSERT INTO task_events (id, task_id, actor_id, kind, field, from_value, to_value, created_at) VALUES (?,?,?,?,?,?,?,?)",
+    ).run(`ev1-${id}`, id, "u1", "state_changed", "agent_state", "in_progress", state, "2026-10-29 10:00:00");
+    if (approved) {
+      db.prepare(
+        "INSERT INTO task_events (id, task_id, actor_id, kind, field, from_value, to_value, created_at) VALUES (?,?,?,?,?,?,?,?)",
+      ).run(`ev2-${id}`, id, "u1", "review_recorded", "verdict", null, "critic_verifier:approved", "2026-10-29 10:00:05");
+    }
+    return id;
+  };
+
+  const attach = (taskId: string): string => {
+    const schedule = createSchedule({
+      title: "Рутина",
+      taskPayload: { title: "Карточка рутины" } as never,
+      rule: rule(),
+      nextRunAt: new Date(Date.now() - 60_000),
+      catchUp: true,
+      overlapPolicy: "skip",
+      createdBy: "u1",
+    });
+    markScheduleRun(schedule.id, { currentTaskId: taskId });
+    return schedule.id;
+  };
+
+  it("одобренная работа закрывает карточку рутины", () => {
+    const taskId = makeTask("Отчёт за день", "review", true);
+    attach(taskId);
+
+    closeApprovedInstances();
+
+    const task = db.prepare("SELECT status, agent_state FROM tasks WHERE id = ?").get(taskId) as {
+      status: string;
+      agent_state: string | null;
+    };
+    expect(task.status).toBe("completed");
+    expect(task.agent_state).toBeNull();
+  });
+
+  it("неодобренная работа остаётся открытой", () => {
+    const taskId = makeTask("Ещё работа", "in_progress", false);
+    attach(taskId);
+
+    closeApprovedInstances();
+
+    const task = db.prepare("SELECT status FROM tasks WHERE id = ?").get(taskId) as { status: string };
+    expect(task.status).toBe("active");
+  });
 });
