@@ -9,6 +9,7 @@ import type { AttentionContext } from "../src/lib/attentionContext.js";
 
 const ctx = (patch: Partial<AttentionContext> = {}): AttentionContext => ({
   group: "blocked",
+  title: null,
   blockedReason: null,
   clarificationQuestion: null,
   openStepTitle: null,
@@ -106,6 +107,17 @@ describe("наводящая строка карточки «Входящих»"
       }),
     );
     expect(hint).toBe("Чат агента работает не так, как задумано.");
+  });
+
+  it("описание, повторяющее название задачи, строкой не становится", () => {
+    const hint = attentionHint(
+      ctx({
+        group: "review",
+        title: "1. Единый допуск запуска, восстановление и отсечение устаревших событий",
+        description: "## Работа\n\n4. Единый допуск запуска, восстановление и отсечение устаревших событий",
+      }),
+    );
+    expect(hint).toBeNull();
   });
 
   it("нет ни своих данных, ни описания — строки нет", () => {

@@ -13,6 +13,8 @@ export type AttentionGroupKey = "blocked" | "in_progress" | "review";
 /** Данные задачи, из которых собирается наводящая строка. */
 export interface AttentionContext {
   group: AttentionGroupKey;
+  /** Название задачи — чтобы не повторять его в строке. */
+  title: string | null;
   /** Причина блокировки задачи (`tasks.blocked_reason`). */
   blockedReason: string | null;
   /** Вопрос роли, на который нужен ответ владельца. */
@@ -59,6 +61,21 @@ export const descriptionLine = (description: string | null | undefined): string 
   return oneLine(paragraph ?? null);
 };
 
+/** Текст без номера в начале и без регистра — чтобы сравнивать с названием. */
+const normalize = (text: string): string =>
+  text.toLowerCase().replace(/^[^\p{L}]+/u, "").replace(/\s+/g, " ").trim();
+
+/** Одно и то же ли: описание, начинающееся с названия задачи (или наоборот),
+ *  на карточке смысла не несёт — такую строку не показываем.
+ */
+export const repeatsTitle = (text: string, title: string | null | undefined): boolean => {
+  if (!title) return false;
+  const a = normalize(text);
+  const b = normalize(title);
+  if (!a || !b) return false;
+  return a.startsWith(b) || b.startsWith(a);
+};
+
 /** Наводящая строка карточки: что с задачей делать прямо сейчас.
  *
  * Порядок источников — по тому, что владелец делает первым:
@@ -66,7 +83,8 @@ export const descriptionLine = (description: string | null | undefined): string 
  *   2. причина блокировки — она и про другие группы объясняет, что ждёт
  *      решения владельца (у задачи «На проверке» она тоже бывает);
  *   3. свой источник группы: текущий шаг, вердикт проверки, результат шага;
- *   4. описание задачи — последний запас.
+ *   4. описание задачи — последний запас (и только если это не повтор
+ *      названия задачи).
  */
 export const attentionHint = (ctx: AttentionContext): string | null => {
   const question = oneLine(ctx.clarificationQuestion);
@@ -81,5 +99,9 @@ export const attentionHint = (ctx: AttentionContext): string | null => {
     review: [ctx.verdictResult, ctx.lastStepResult, ctx.openStepTitle, ctx.lastStepTitle],
   };
   const found = byGroup[ctx.group].map(oneLine).find((value) => value !== null);
-  return found ?? descriptionLine(ctx.description);
+  if (found) return found;
+
+  const description = descriptionLine(ctx.description);
+  if (!description || repeatsTitle(description, ctx.title)) return null;
+  return description;
 };
