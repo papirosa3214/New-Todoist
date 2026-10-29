@@ -1,0 +1,16 @@
+import { chromium } from "playwright";
+const B="http://127.0.0.1:3141";
+const br=await chromium.launch({channel:"chrome",args:["--no-sandbox"]});
+const p=await (await br.newContext({viewport:{width:420,height:912}})).newPage();
+const reqs=[];
+p.on("request",r=>{ if(r.url().includes("/api/agent/chat/send")) reqs.push(r.postData()); });
+await p.goto(`${B}/static/app/index.html#/chat`,{waitUntil:"load"});
+await p.waitForTimeout(3000);
+const ta=p.locator("textarea").last(); await ta.click();
+await ta.fill("Ответь одним словом: работает?"); await ta.press("Enter");
+await p.waitForTimeout(75000);
+const t=await p.locator("body").innerText();
+console.log("request payload:", reqs.join(" | "));
+console.log("last chat text:", t.split("\n").filter(s=>s.trim()).slice(-6).join(" / "));
+await p.screenshot({path:"qa-shots/dorabotka3/07-answer-local-qwen.png"});
+await br.close();
