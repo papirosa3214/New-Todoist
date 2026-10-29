@@ -44,3 +44,37 @@ it("заблокированная задача попадает в «Забло
   for (const g of others) expect(g.tasks.some((t: { id: string }) => t.id === id)).toBe(false);
   db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
 });
+
+it("карточка отдаёт наводящую строку: что делать с задачей, не открывая её", async () => {
+  const owner = db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as { id: string };
+  const id = "attn4-" + Math.random().toString(36).slice(2, 8);
+  db.prepare(
+    "INSERT INTO tasks (id, title, description, status, creator_id, agent_state, blocked_reason) VALUES (?,?,?,'active',?, 'blocked', ?)",
+  ).run(id, "Проверить окно", "", owner.id, "Проверка заблокирована: нужно решения владельца.");
+
+  const body = (await app.inject({ method: "GET", url: "/api/attention", headers: auth() })).json();
+  const blocked = body.groups.find((g: { key: string }) => g.key === "blocked");
+  const task = blocked.tasks.find((t: { id: string }) => t.id === id);
+  expect(task).toBeTruthy();
+  expect(task.hint).toBe("Проверка заблокирована: нужно решения владельца.");
+  db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+});
+
+it("задача на проверке показывает вердикт проверки", async () => {
+  const owner = db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as { id: string };
+  const id = "attn5-" + Math.random().toString(36).slice(2, 8);
+  const stepId = "attn5s-" + Math.random().toString(36).slice(2, 8);
+  db.prepare(
+    "INSERT INTO tasks (id, title, description, status, creator_id, agent_state) VALUES (?,?,?,'active',?, 'review')",
+  ).run(id, "Принять сводку", "", owner.id);
+  db.prepare(
+    "INSERT INTO subtasks (id, task_id, title, done, position, result) VALUES (?,?,?,1,1,?)",
+  ).run(stepId, id, "Итоговая проверка результата", "approved: Проверено по артефактам.");
+
+  const body = (await app.inject({ method: "GET", url: "/api/attention", headers: auth() })).json();
+  const review = body.groups.find((g: { key: string }) => g.key === "review");
+  const task = review.tasks.find((t: { id: string }) => t.id === id);
+  expect(task).toBeTruthy();
+  expect(task.hint).toBe("approved: Проверено по артефактам.");
+  db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+});

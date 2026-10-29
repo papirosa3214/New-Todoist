@@ -3,9 +3,16 @@
 // «На проверке». Строка списка — карточка задачи, тап открывает стандартную
 // карточку задачи. Всё остальное (сроки, ближайшие рутины, история падений)
 // отсюда убрано: владелец сказал «не соответствует действительности, хуй поймёшь».
+//
+// Наводящая строка (владелец 29.10.2026): карточка должна сама отвечать на
+// вопрос «что делать» — иначе каждую задачу приходится открывать и вникать
+// в неё заново. Строку собирает сервер из живых данных задачи
+// (`src/lib/attentionContext.ts`), телефон её только рисует.
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { attentionHint } from "../lib/attentionContext.js";
+import type { AttentionGroupKey } from "../lib/attentionContext.js";
 
 interface AttentionTask {
   id: string;
@@ -14,10 +21,12 @@ interface AttentionTask {
   role: string | null;
   age_seconds: number | null;
   overdue: boolean;
+  /** Наводящая строка: что делать с задачей, не открывая карточку. */
+  hint: string | null;
 }
 
 interface AttentionGroup {
-  key: "blocked" | "in_progress" | "review";
+  key: AttentionGroupKey;
   title: string;
   count: number;
   tasks: AttentionTask[];
@@ -32,10 +41,33 @@ const secs = (iso: string | null | undefined): number | null => {
 // Задача попадает в группу, если её собственный agent_state такой ИЛИ такой есть
 // у живого шага внутри неё: в вебе «В работе» на плитке считается именно так —
 // иначе задача без своего agent_state (обычный случай) пропадала из списка.
+//
+// Дополнительно тянутся данные для наводящей строки: причина блокировки,
+// вопрос роли, шаги задачи (заголовок, результат, вердикт проверки).
 const TASKS_SQL = `
   SELECT t.id, t.title, p.name AS project, t.due_date, t.updated_at,
+         t.blocked_reason, t.clarification_question, t.description,
          (SELECT u.name FROM attempts a JOIN users u ON u.id = a.executor_id
-           WHERE a.task_id = t.id ORDER BY a.started_at DESC LIMIT 1) AS role
+           WHERE a.task_id = t.id ORDER BY a.started_at DESC LIMIT 1) AS role,
+         (SELECT s.title FROM subtasks s
+           WHERE s.task_id = t.id AND s.done = 0
+           ORDER BY s.position DESC LIMIT 1) AS open_step_title,
+         (SELECT s.result FROM subtasks s
+           WHERE s.task_id = t.id AND s.done = 0 AND s.result IS NOT NULL AND s.result <> ''
+           ORDER BY s.position DESC LIMIT 1) AS open_step_result,
+         (SELECT s.title FROM subtasks s
+           WHERE s.task_id = t.id AND s.agent_state = 'in_progress'
+           ORDER BY s.position DESC LIMIT 1) AS active_step_title,
+         (SELECT s.result FROM subtasks s
+           WHERE s.task_id = t.id AND s.done = 1 AND s.result IS NOT NULL
+             AND (s.result LIKE 'approved:%' OR s.result LIKE 'changes_requested:%')
+           ORDER BY s.position DESC LIMIT 1) AS verdict_result,
+         (SELECT s.title FROM subtasks s
+           WHERE s.task_id = t.id AND s.done = 1
+           ORDER BY s.position DESC LIMIT 1) AS last_step_title,
+         (SELECT s.result FROM subtasks s
+           WHERE s.task_id = t.id AND s.done = 1 AND s.result IS NOT NULL AND s.result <> ''
+           ORDER BY s.position DESC LIMIT 1) AS last_step_result
     FROM tasks t
     LEFT JOIN projects p ON p.id = t.project_id
    WHERE t.status = 'active'
@@ -45,7 +77,7 @@ const TASKS_SQL = `
    ORDER BY t.updated_at DESC
    LIMIT 60`;
 
-const GROUPS: { key: AttentionGroup["key"]; title: string }[] = [
+const GROUPS: { key: AttentionGroupKey; title: string }[] = [
   { key: "blocked", title: "Заблокировано" },
   { key: "in_progress", title: "В работе" },
   { key: "review", title: "На проверке" },
@@ -66,7 +98,16 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
         project: string | null;
         due_date: string | null;
         updated_at: string | null;
+        blocked_reason: string | null;
+        clarification_question: string | null;
+        description: string | null;
         role: string | null;
+        open_step_title: string | null;
+        open_step_result: string | null;
+        active_step_title: string | null;
+        verdict_result: string | null;
+        last_step_title: string | null;
+        last_step_result: string | null;
       }[]) ?? [];
       const tasks: AttentionTask[] = rows.map((r) => ({
         id: r.id,
@@ -75,6 +116,18 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
         role: r.role,
         age_seconds: secs(r.updated_at),
         overdue: Boolean(r.due_date && r.due_date.slice(0, 10) < today),
+        hint: attentionHint({
+          group: key,
+          blockedReason: r.blocked_reason,
+          clarificationQuestion: r.clarification_question,
+          openStepTitle: r.open_step_title,
+          openStepResult: r.open_step_result,
+          activeStepTitle: r.active_step_title,
+          verdictResult: r.verdict_result,
+          lastStepTitle: r.last_step_title,
+          lastStepResult: r.last_step_result,
+          description: r.description,
+        }),
       }));
       return { key, title, count: tasks.length, tasks };
     });
