@@ -4,12 +4,14 @@ import { resolveThinkingLevel } from "../src/runtime/PiRuntimeAdapter.js";
 const model = { reasoning: true, thinkingLevelMap: { max: "max" } };
 describe("owner role thinking policy", () => {
   it.each([
+    // Размышления у ролей — на максимуме (владелец 29.10.2026: рекомендация
+    // MiniMax для Anthropic-совместимого API; конфиг приведён к факту —
+    // scripts/role-thinking.json).
     ["architect", "max"], ["code_orchestrator", "max"],
-    ["critic_verifier", "low"], ["secretary", "low"],
-    // Дефолт ролей — low с 24.10.2026 (648f6eec, scripts/role-thinking.json).
-    ["researcher", "low"], ["analyst", "low"], ["builder", "low"],
-    ["qa", "low"], ["designer", "low"], ["infra_engineer", "low"],
-    ["new_role", "low"],
+    ["critic_verifier", "max"], ["secretary", "max"],
+    ["researcher", "max"], ["analyst", "max"], ["builder", "max"],
+    ["qa", "max"], ["designer", "max"], ["infra_engineer", "max"],
+    ["new_role", "max"],
   ])("%s gets %s on a capable model", (role, level) => {
     expect(resolveThinkingLevel(model, role)).toBe(level);
   });

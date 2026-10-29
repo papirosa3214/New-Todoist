@@ -31,13 +31,13 @@ function fixture(mode="manual",parent:string|null=null,verdict="approved"){
 it("accepted root writes one persistent addressed work message and delivery, no new slots",()=>{
  const f=fixture(), a=enqueueIntegrationHandoff(f.review);
  expect(a).not.toBeNull();
- const q=db.prepare("SELECT * FROM chat_message_queue WHERE id=?").get(a!.deliveryId) as any;
+ const q=db.prepare("SELECT * FROM chat_message_queue WHERE id=?").get(a!.queueRowId) as any;
  expect(q.role_id).toBe("role_builder");expect(q.status).toBe("pending");
  expect(integrationHandoffContext(a!.messageId,"role_builder")).toContain("main");
  expect(integrationHandoffContext(a!.messageId,"role_builder")).toContain(f.v.id);
  expect((db.prepare("SELECT count(*) n FROM subtasks WHERE task_id=?").get(f.id) as any).n).toBe(0);
  const b=enqueueIntegrationHandoff(f.review);
- expect(b!.deliveryId).toBe(a!.deliveryId);
+ expect(b!.queueRowId).toBe(a!.queueRowId);
  expect((db.prepare("SELECT count(*) n FROM chat_messages WHERE id=?").get(a!.messageId) as any).n).toBe(1);
 });
 it("does not send non-approved, not-required, child or archived work",()=>{
@@ -70,7 +70,7 @@ it("idle integrator gets a work continuation, while ordinary colleague messages 
  const id=crypto.randomUUID();
  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,work_mode) VALUES (?,'role_critic_verifier','Hello','chat',?,?,'work')").run(id,a.chatId,f.id);
  const q=enqueueMessageDelivery({chatId:a.chatId,roleId:a.roleId,deliveryId:id,messageId:id,payload:{mode:"work"}});
- await recoverAgentDelivery({chatId:a.chatId,roleId:a.roleId,deliveryId:q.id});
+ await recoverAgentDelivery({chatId:a.chatId,roleId:a.roleId,queueRowId:q.id});
  expect(vi.mocked(startChatRun).mock.calls.at(-1)![0].mode).toBe("discussion");
 });
 it("review API commits handoff with accepted version",async()=>{
@@ -98,7 +98,7 @@ it("occupied integrator receives the receipt in existing work without another mo
  expect(result.status).toBe("skipped");
  expect(startChatRun).not.toHaveBeenCalled();
  expect(vi.mocked(deliverChatToWork).mock.calls.at(-1)![3]).toContain("СЕРВЕРНАЯ ПЕРЕДАЧА");
- expect((db.prepare("SELECT status FROM chat_message_queue WHERE id=?").get(a.deliveryId) as any).status).toBe("picked");
+ expect((db.prepare("SELECT status FROM chat_message_queue WHERE id=?").get(a.queueRowId) as any).status).toBe("picked");
 });
 it("recipient change fences the old receipt",()=>{
  const f=fixture(), a=enqueueIntegrationHandoff(f.review)!;
@@ -109,5 +109,5 @@ it("two approval receipts for the same accepted version do not duplicate integra
  const f=fixture(), a=enqueueIntegrationHandoff(f.review)!;
  const second=crypto.randomUUID();
  db.prepare("INSERT INTO reviews(id,task_id,version_id,task_revision,reviewer_id,artifact_hash,criteria_version,verdict,findings) VALUES (?,?,?,?,?, ?,1,'approved','Checked again')").run(second,f.id,f.v.id,f.v.task_revision,owner,f.v.artifact_hash);
- expect(enqueueIntegrationHandoff(second)!.deliveryId).toBe(a.deliveryId);
+ expect(enqueueIntegrationHandoff(second)!.queueRowId).toBe(a.queueRowId);
 });
