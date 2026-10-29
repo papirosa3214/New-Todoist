@@ -1,0 +1,18 @@
+[Unit]
+Description=TaskFlow Apple Reminders event delivery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/maksim/.local/share/taskflow-apple-reminders
+ExecStart=/usr/bin/python3 /home/maksim/.local/share/taskflow-apple-reminders/events.py --db /home/maksim/Проекты/New-Todoist/server/taskflow.db
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=10
+MemoryMax=192M
+CPUQuota=20%
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

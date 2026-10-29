@@ -1,3 +1,4 @@
+import {appleReminderTools} from "./appleReminderTools.js";
 import {secretaryRoutineTools} from "./secretaryRoutineTools.js";
 import {prepareReportMaterial} from "./chatPreparedMaterials.js";
 // Инструменты роли в чате — внутри сервера (владелец 02.10.2026: «у нас всё
@@ -72,6 +73,7 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
 
   return [
     ...secretaryRoutineTools(role,T),
+    ...appleReminderTools(role,T),
     T("taskflow_runtime", "Что реально доступно сейчас в runtime Pi: подключённые провайдеры и их доступные модели. Только факт, без всего каталога.",
       None, async () => {
         const providers = ((await asRole(role, "GET", "/api/runtime/providers"))?.providers ?? []) as any[];
