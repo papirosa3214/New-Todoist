@@ -28,6 +28,14 @@ import { TurnFileTracker, type TurnCodeChanges } from "../lib/turnFileChanges.js
 import { emptyAssistantAnswer } from "./providerFailover.js";
 
 export const LIVE_BROADCAST_MS = 150;
+
+/** Полный снимок хода (`chats:live`) — тот, что несёт ВЕСЬ текст и разметку
+ *  всех шагов. Дельты (`chats:live:patch`) уходят каждые LIVE_BROADCAST_MS,
+ *  а снимок нужен только как опора: первому кадру и тем, кто открыл чат
+ *  посреди хода. Раньше он уходил на КАЖДОМ flush — телефон разбирал весь
+ *  выросший текст ~7 раз в секунду, и профиль CPU на iPhone (29.10.2026)
+ *  показывал 62% в декодере JSON. Теперь снимок — раз в 10 секунд. */
+export const LIVE_SNAPSHOT_MS = 10_000;
 const DETAIL_MAX = 140;
 const TEXT_MAX = 20_000;
 const ITEMS_MAX = 200;
@@ -382,6 +390,7 @@ export class LiveTurn {
   readonly messageId: string | null;
   private seq = 0;
   private sentView: LiveView | null = null;
+  private lastSnapshotAt = 0;
   private readonly audience: () => string[];
   private readonly publish?: (turn: LiveTurnSnapshot | null) => void;
   private readonly startedAt = new Date();
@@ -679,8 +688,15 @@ export class LiveTurn {
     if (this.publish) { this.publish(this.snapshot()); return; }
     const turn = liveTurnForClient(this.snapshot());
     const audience = this.audience();
-    // Старый полный снимок — пока клиенты не переехали на дельты.
-    broadcastToUsers(audience, { type: "chats:live", chat_id: this.chatId, user_id: this.userId, turn });
+    // Полный снимок — редко: он несёт весь текст и разметку, и телефон
+    // платит за него разбором всего хода. Дельты ниже несут то же самое
+    // приращением, поэтому снимок нужен только как опора для тех, кто
+    // открыл чат посреди хода или не знает про дельты.
+    const now = Date.now();
+    if (!this.lastSnapshotAt || now - this.lastSnapshotAt >= LIVE_SNAPSHOT_MS) {
+      this.lastSnapshotAt = now;
+      broadcastToUsers(audience, { type: "chats:live", chat_id: this.chatId, user_id: this.userId, turn });
+    }
     const view: LiveView = { items: turn.items.map((it) => ({ ...it, id: (it as { id?: string }).id ?? "" })), thinking: turn.thinking };
     const ops = liveDeltaOps(this.sentView, view);
     if (!ops.length) return;
