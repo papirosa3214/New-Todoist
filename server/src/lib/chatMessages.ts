@@ -1,4 +1,5 @@
 import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
+import { projectStepsForList, type Projection } from "./windowProjection.js";
 import {isQuietSystemMessage} from "./serviceNoise.js";
 import { chatBlocksCached, withTextBlocks } from "./chatBlocks.js";
 import {compactChatReportMaterials} from "./chatReportMaterials.js";
@@ -53,8 +54,14 @@ function savedSteps(raw: string): SavedSteps | null {
   }
 }
 
-/** Строку chat_messages (с join-полями автора) привести к формату клиента. */
-export function formatChatMessage(message: any) {
+/** Строку chat_messages (с join-полями автора) привести к формату клиента.
+ *
+ * `projection` — «full» (по умолчанию) или «list»: в лёгкой проекции из
+ * шагов убираются вывод инструмента и аргументы вызова (29.10.2026,
+ * «телефон — чисто окошко»). Полные тела телефон берёт по шагу, когда
+ * владелец раскрывает его: GET /api/chats/:id/messages/:messageId/steps/:stepId.
+ */
+export function formatChatMessage(message: any, projection: Projection = "full") {
   if (!message) return message;
   attachmentsOf ??= db.prepare(
     `SELECT id, file_name, mime, size FROM attachments
@@ -165,7 +172,7 @@ export function formatChatMessage(message: any) {
     // (карточка 252c400e, §2.1). Поля аддитивные — старый клиент их игнорирует.
     stop_reason: message.stop_reason ?? null,
     partial: Boolean(message.partial),
-    steps: parsedSteps ? stepDetails(parsedSteps) : null,
+    steps: parsedSteps ? stepDetails(projection === "list" ? projectStepsForList(parsedSteps) as any : parsedSteps) : null,
     handoff: withTextBlocks(chatHandoff(message), ["summary"]),
     role_envelope: withTextBlocks(storedEnvelope
       ? compactChatReportMaterials(storedEnvelope).envelope
@@ -195,8 +202,8 @@ export function loadChatMessage(id: string) {
 
 /** Compact legacy share cards only within the same author's answer to one request.
  * Stored history remains intact; unique cards and other conversations are preserved. */
-export function formatChatHistory(rows:any[]) {
-  const messages=rows.map(formatChatMessage).filter(message=>!isQuietSystemMessage(message));
+export function formatChatHistory(rows:any[], projection: Projection = "full") {
+  const messages=rows.map((row:any)=>formatChatMessage(row,projection)).filter(message=>!isQuietSystemMessage(message));
   const answerKey=(message:any)=>JSON.stringify([message.chat_id,message.from_user_id,message.reply_to_message_id]);
   const reported=new Map<string,Set<string>>();
   for(const message of messages){
