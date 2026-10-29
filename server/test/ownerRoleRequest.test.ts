@@ -144,7 +144,14 @@ describe("обращение владельца к роли", () => {
     const closed = await waitFor(() => cardOf(questionId)?.terminal === true);
     expect(closed).toBe(true);
     const card = cardOf(questionId);
-    expect(card!.answer).toContain("сценарий входа сломан");
+    // Ответ лежит в комнате роли и в нитке — карточка его не повторяет
+    // (владелец 29.10.2026: «внизу ещё пришло… оно задублировалось»).
+    expect(card!.answer??"").toBe("");
+    expect(card!.activity).toBe("Ответ получен");
+    const answer = db
+      .prepare("SELECT text FROM chat_messages WHERE chat_id=? AND from_user_id='role_qa' ORDER BY rowid DESC LIMIT 1")
+      .get(card!.child_chat_id) as { text: string } | undefined;
+    expect(answer?.text).toContain("сценарий входа сломан");
   });
 
   it("не-владелец обращаться к роли не может", async () => {

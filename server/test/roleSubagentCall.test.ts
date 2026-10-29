@@ -239,7 +239,12 @@ describe("вызов роли как субагента: аргументы", ()
       .get(CHAT_ID, result.details.question_id) as { steps: string };
     const coordination = JSON.parse(card.steps).coordination;
     expect(coordination.child_chat_id).toBe(roomId);
-    expect(coordination.answer).toBe("Ответ из комнаты.");
+    // Текст ответа лежит в комнате субагента, карточка — статус (без копии).
+    expect(card.answer??"").toBe("");
+    const roomAnswer = db
+      .prepare("SELECT text FROM chat_messages WHERE chat_id=? AND from_user_id=? ORDER BY rowid DESC LIMIT 1")
+      .get(roomId, RESEARCHER_ID) as { text: string } | undefined;
+    expect(roomAnswer?.text).toBe("Ответ из комнаты.");
   });
 });
 
@@ -318,7 +323,14 @@ describe("вызов роли как субагента: карточка коо
     expect(coordination.recipient_id).toBe(RESEARCHER_ID);
     expect(coordination.terminal).toBe(true);
     expect(coordination.status).toBe("answered");
-    expect(coordination.answer).toContain("Ответ субагента");
+    // Карточка — статус обращения, текст ответа живёт в нитке один раз
+    // (владелец 29.10.2026: дублирование «карточка + сообщение»).
+    expect(coordination.answer??"").toBe("");
+    expect(coordination.activity).toBe("Ответ получен");
+    const digest = db
+      .prepare("SELECT text FROM chat_messages WHERE chat_id=? AND text LIKE 'Ответ субагента%' ORDER BY rowid DESC LIMIT 1")
+      .get(CHAT_ID) as { text: string } | undefined;
+    expect(digest?.text).toContain("Ответ субагента");
   });
 });
 
@@ -424,7 +436,10 @@ describe("вызов роли как субагента: корректиров�
       .get(CHAT_ID, questionId) as { steps: string } | undefined;
     const coordination = JSON.parse(card!.steps).coordination;
     expect(coordination.terminal).toBe(true);
-    expect(coordination.answer).toContain("с учётом правки");
+    // Текст ответа в карточку не копируется: он лежит в нитке (выжимка),
+    // карточка — статус обращения (владелец 29.10.2026, дублирование).
+    expect(coordination.answer??"").toBe("");
+    expect(coordination.activity).toBe("Ответ получен");
   });
 
   it("лимит уточнений ограничен", async () => {

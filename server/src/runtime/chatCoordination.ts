@@ -102,12 +102,22 @@ export function markDeliveredToWork(questionId:string,recipientId:string,request
  updateCoordination(questionId,recipientId,{status:"delivered",activity:"Доставлено в работу",last_activity_at:new Date().toISOString()});
 }
 
-/** Адресат ответил — служебная строка закрывается (клиент её прячет). */
+/**
+ * Адресат ответил — карточка закрывается.
+ *
+ * Текст ответа в карточку НЕ копируем: ответ лежит в этой же нитке
+ * сообщением, и копия была вторым дублем (владелец 29.10.2026: «внизу ещё
+ * пришло, как обычно, в чат… то есть оно задублировалось»). Карточка — это
+ * статус обращения, а не вторая копия ответа.
+ *
+ * Текст в карточке нужен только там, где ответа в нитке нет (вызов роли:
+ * ответ приезжает из другой комнаты) — за это отвечает coordinationAnswered.
+ */
 export function markCoordinationAnswered(questionId:string,recipientId:string){
- const answer=db.prepare("SELECT text FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=? AND COALESCE(message_type,'')!='system' ORDER BY rowid DESC LIMIT 1").get(questionId,recipientId) as {text:string}|undefined;
- if(!answer)return false;
- updateCoordination(questionId,recipientId,{status:"answered",activity:"Ответ получен",answer:answer.text,terminal:true,last_activity_at:new Date().toISOString()});
- return true;
+  const answer=db.prepare("SELECT id FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=? AND COALESCE(message_type,'')!='system' ORDER BY rowid DESC LIMIT 1").get(questionId,recipientId) as {id:string}|undefined;
+  if(!answer)return false;
+  updateCoordination(questionId,recipientId,{status:"answered",activity:"Ответ получен",terminal:true,last_activity_at:new Date().toISOString()});
+  return true;
 }
 
 export function hasCoordinationCard(questionId:string,recipientId:string):boolean { return !!card(questionId,recipientId); }
@@ -154,8 +164,24 @@ export function coordinationActivity(questionId:string|undefined,recipientId:str
  lastUpdate.set(key,now);if(lastUpdate.size>1000)lastUpdate.delete(lastUpdate.keys().next().value!);
  updateCoordination(questionId,recipientId,{status,activity,last_activity_at:new Date(now).toISOString()});
 }
+/**
+ * Обращение закрыто: ответ получен (или ход сорвался).
+ *
+ * Текст ответа в карточку НЕ пишем — единое правило (владелец 29.10.2026):
+ * ответ лежит в нитке ровно один раз, карточка — это статус обращения
+ * («кто кого спросил» и «что с этим»), а не вторая копия ответа. Иначе одно и
+ * то же видно дважды: текстом в карточке и сообщением в чате.
+ *
+ * При сбое текст сходит в activity: сообщения с ответом в нитке нет, и
+ * причину сбоя иначе негде показать.
+ */
 export function coordinationAnswered(questionId:string,recipientId:string,answer:string,failed=false){
- updateCoordination(questionId,recipientId,{status:failed?"error":"answered",activity:failed?"Ход завершился ошибкой":"Ответ получен",answer,terminal:true,last_activity_at:new Date().toISOString()});
+ updateCoordination(questionId,recipientId,{
+   status:failed?"error":"answered",
+   activity:failed?("Ход завершился ошибкой: "+String(answer).slice(0,200)):"Ответ получен",
+   terminal:true,
+   last_activity_at:new Date().toISOString(),
+ });
 }
 
 // Probe writes and reads the same card mechanism inside a rolled-back transaction.
