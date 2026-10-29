@@ -72,9 +72,9 @@ function callerContext(role = "secretary") {
 
 /** Раннер-заглушка: ход роли не настоящий, ответ задан заранее. */
 function stubRunner(answer = "Разбор готов: шаг контракта не меняем.") {
-  const calls: Array<{ role: string; roleId: string; chatId: string }> = [];
+  const calls: Array<{ role: string; roleId: string; chatId: string; prompt: string }> = [];
   const runner: SubagentRunner = async (input) => {
-    calls.push({ role: input.role, roleId: input.roleId, chatId: input.chatId });
+    calls.push({ role: input.role, roleId: input.roleId, chatId: input.chatId, prompt: input.prompt });
     return answer;
   };
   return { runner, calls };
@@ -254,5 +254,19 @@ describe("вызов роли как субагента: карточка коо
     expect(coordination.terminal).toBe(true);
     expect(coordination.status).toBe("answered");
     expect(coordination.answer).toContain("Ответ субагента");
+  });
+});
+
+describe("вызов роли как субагента: выжимка", () => {
+  it("роли ставится задача собрать данные и вернуть выжимку (владелец 29.10.2026)", async () => {
+    // Субагент одноразовый: он сам набирает контекст, сжимает его в выжимку
+    // и исчезает. Вызывающая роль первичные источники не перебирает.
+    const { runner, calls } = stubRunner();
+    const tool = toolOf(callerContext(), runner);
+    await tool.execute("call-1", { role: "researcher", question: "Что в последних правках по хранилищу?" });
+    const prompt = calls[0].prompt;
+    expect(prompt).toContain("Собери нужные данные сам");
+    expect(prompt).toMatch(/выжимк/i);
+    expect(prompt).not.toMatch(/Ответь по делу/);
   });
 });
