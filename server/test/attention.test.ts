@@ -1,6 +1,5 @@
-// «Входящие» (владелец 28.10.2026): один ответ на весь экран важного.
-// Проверяем не вёрстку, а контракт: пустая база даёт пять пустых секций,
-// а карточка, ждущая владельца, попадает в решения, упавшая попытка — в сбои.
+// «Входящие» (владелец 28.10.2026, переделка 29.10.2026): три группы по статусам
+// — «Заблокировано», «В работе», «На проверке». Строка — карточка задачи.
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
@@ -18,29 +17,30 @@ afterAll(async () => {
   await app.close();
 });
 
-it("на пустых данных отдаёт все пять секций и нулевые счётчики", async () => {
+it("отдаёт ровно три группы в нужном порядке", async () => {
   const res = await app.inject({ method: "GET", url: "/api/attention", headers: auth() });
   expect(res.statusCode).toBe(200);
   const body = res.json();
-  for (const key of ["decisions", "failures", "today", "running", "upcoming"]) {
-    expect(Array.isArray(body[key]), key).toBe(true);
-  }
-  expect(body.ok).toBe(true);
-  expect(typeof body.counts).toBe("object");
+  expect(body.groups.map((g: { key: string }) => g.key)).toEqual(["blocked", "in_progress", "review"]);
+  expect(body.groups.map((g: { title: string }) => g.title)).toEqual([
+    "Заблокировано",
+    "В работе",
+    "На проверке",
+  ]);
+  for (const group of body.groups) expect(Array.isArray(group.tasks)).toBe(true);
 });
 
-it("карточка, ждущая решения, попадает во «Входящие»", async () => {
+it("заблокированная задача попадает в «Заблокировано», а не в другие группы", async () => {
   const owner = db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as { id: string };
-  const id = "attn-task-" + Math.random().toString(36).slice(2, 8);
+  const id = "attn3-" + Math.random().toString(36).slice(2, 8);
   db.prepare(
     "INSERT INTO tasks (id, title, description, status, creator_id, agent_state) VALUES (?,?,?,'active',?, 'blocked')",
   ).run(id, "Проверить окно", "", owner.id);
 
-  const res = await app.inject({ method: "GET", url: "/api/attention", headers: auth() });
-  const body = res.json();
-  const found = body.decisions.find((d: { id: string }) => d.id === id);
-  expect(found).toBeTruthy();
-  expect(found.kind).toBe("task");
-  expect(found.actions).toContain("answer");
+  const body = (await app.inject({ method: "GET", url: "/api/attention", headers: auth() })).json();
+  const blocked = body.groups.find((g: { key: string }) => g.key === "blocked");
+  const others = body.groups.filter((g: { key: string }) => g.key !== "blocked");
+  expect(blocked.tasks.some((t: { id: string }) => t.id === id)).toBe(true);
+  for (const g of others) expect(g.tasks.some((t: { id: string }) => t.id === id)).toBe(false);
   db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
 });
