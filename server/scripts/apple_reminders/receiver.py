@@ -98,7 +98,7 @@ def create(p):
         # output contains the new reminder UUID; rename only that reminder.
         with tempfile.TemporaryDirectory(prefix="taskflow-reminder-") as d:
             source=Path(d)/"date.txt"
-            source.write_text(when.isoformat())
+            source.write_text(when.isoformat(timespec="seconds"))
             result=subprocess.run(["/usr/bin/shortcuts","run","GeoPhotoMarks Urgent Failure",
                                    "--input-path",str(source)],capture_output=True,text=True,
                                   check=True,timeout=45)

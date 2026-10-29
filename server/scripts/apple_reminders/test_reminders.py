@@ -73,6 +73,15 @@ class ReminderTests(unittest.TestCase):
         self.assertEqual(p['title'],'$(danger) \"quote\"')
         self.assertEqual(p['mode'],'urgent')
 
+    def test_urgent_passes_whole_second_iso_to_shortcuts(self):
+        p=validate(dict(title='T',at='2026-10-30T11:00:00.123456+03:00',mode='urgent',key='u-time'))
+        def invoke(args,**kwargs):
+            content=Path(args[-1]).read_text()
+            self.assertEqual(content,'2026-10-30T11:00:00+03:00')
+            return subprocess.CompletedProcess(args,0,stdout='UID:AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\n')
+        with patch('receiver.existing',return_value=None),patch('receiver.subprocess.run',side_effect=invoke),patch('receiver.applescript',return_value='apple:test'):
+            self.assertEqual(create(p)['id'],'apple:test')
+
     def test_urgent_failure_is_reported_not_silently_downgraded(self):
         p=validate(dict(title='T',at='2026-10-30T11:00:00+03:00',mode='urgent',key='u1'))
         with patch('receiver.existing',return_value=None), patch('receiver.subprocess.run',side_effect=subprocess.CalledProcessError(1,'shortcuts')):
