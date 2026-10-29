@@ -1349,24 +1349,26 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const roomId = ensurePersonalRoom(accountId);
       if (!roomId)
         return reply.code(500).send({ error: "Не удалось открыть комнату роли" });
-      // Вопрос остаётся в чате владельца — видно, что он спросил.
-      const echoId = uid();
-      db.prepare(
-        "INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)",
-      ).run(echoId, req.userId, text, chatId);
-      // Тот же вопрос — в комнате роли: там его читает роль, там отвечает.
+      // Вопрос остаётся в чате владельца — отсюда и карточка обращения
+      // («кто кого позвал»), и исходный разговор не рвётся.
       const questionId = uid();
       db.prepare(
+        "INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)",
+      ).run(questionId, req.userId, text, chatId);
+      // Копия вопроса — в комнате роли: там его читает роль, там отвечает,
+      // и владелец, открыв личку роли, видит, что именно ей спросили.
+      const copyId = uid();
+      db.prepare(
         "INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES(?,?,?,'chat',?,?)",
-      ).run(questionId, req.userId, text, roomId, echoId);
-      // Исток обращения: карточка — в чате владельца, работа — в комнате роли.
-      registerCoordinationOrigin(questionId, echoId, req.userId);
+      ).run(copyId, req.userId, text, roomId, questionId);
       // Доставка роли: строка очереди (переживает перезапуск) + запуск хода.
       const deliveryId = `owner-request:${questionId}`;
       const durable = recordDurableDelivery({
         chatId: roomId,
         roleId: accountId,
         deliveryId,
+        // Триггер — вопрос в чате владельца: по нему заводится карточка
+        // (сообщение пересекает сессии: чат владельца → комната роли).
         messageId: questionId,
         payload: { triggerMessageId: questionId, text, hop: 0, mode: "work" },
       });

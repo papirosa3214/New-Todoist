@@ -143,7 +143,9 @@ export function enqueueMessageDelivery(input: EnqueueInput): EnqueueResult {
       payloadJson,
     );
   if (inserted.changes > 0) {
-    if(input.messageId)traceCoordination(()=>ensureCoordinationCard(input.messageId!,input.roleId));
+    // Комната доставки — по ней видно, пересекает ли сообщение сессии:
+    // внутри одной сессии карточка обращения не заводится (29.10.2026).
+    if(input.messageId)traceCoordination(()=>ensureCoordinationCard(input.messageId!,input.roleId,input.chatId));
     return { id, created: true, generation };
   }
   const row = db
