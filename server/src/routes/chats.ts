@@ -1666,6 +1666,19 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const origin=db.prepare("SELECT from_user_id FROM chat_messages WHERE id=?").get(c.origin_message_id) as {from_user_id:string}|undefined;
       if(!isOwner(req.userId) && origin?.from_user_id!==req.userId)return reply.code(403).send({error:"Остановить может автор вопроса или владелец"});
       if(c.terminal)return {stopped:0};
+      // Обращение субагента идёт мимо очереди сообщений: строки в
+      // chat_message_queue у него нет, а question_id синтетический
+      // («subagent:<uuid>»). Живой ленты хода субагента тоже нет —
+      // startLiveTurn зовут только роуты чата, а вызов роли идёт
+      // напрямую через startChatRun. Поэтому прежняя проверка всегда
+      // отвечала 409, и кнопка «Остановить обращение» на карточке
+      // субагента была безвредной, но бесполезной. Гасим ход роли
+      // напрямую: в паре (чат, роль) он один (acquireChatRoleLock).
+      if(typeof c.question_id==="string"&&c.question_id.startsWith("subagent:")){
+        const stopped=await cancelChatRunsFor(c.child_chat_id,c.recipient_id);
+        updateCoordination(c.question_id,c.recipient_id,{status:"cancelled",activity:stopped?"Обращение остановлено":"Обращение уже завершено",terminal:true,last_activity_at:new Date().toISOString()});
+        return {stopped};
+      }
       const q=db.prepare("SELECT id,status FROM chat_message_queue WHERE message_id=? AND role_id=?").get(c.question_id,c.recipient_id) as {id:string;status:string}|undefined;
       const live=liveTurnsOfChat(c.child_chat_id).find(t=>t.user_id===c.recipient_id && t.trigger_message_id===c.question_id);
       if(!q || (q.status==="done" && !live))return reply.code(409).send({error:"Вопрос уже передан в рабочую сессию. Остановить только это обращение отдельно от работы нельзя."});
