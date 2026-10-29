@@ -120,17 +120,24 @@ export function queueWorkCoordination(questionId:string,recipientId:string,taskI
  if(!question)return;
  // Возврат ответа коллеге не создаёт нового встречного обращения.
  if(question.reply_to_message_id && card(question.reply_to_message_id,question.from_user_id))return;
- // Карточку здесь не заводим: вопрос и работа идут в одной сессии, а
- // карточка живёт только для пересечения сессий (29.10.2026). Если
- // карточка уже есть (вопрос шёл из другой комнаты) — обновляем её.
+ // Вопрос уходит из комнаты в рабочую сессию роли — это пересечение
+ // сессий, карточка нужна: в комнате владелец видит «кто кому», статус
+ // («в очереди» → «доставлено в работу») и может остановить ход. Исток —
+ // сама комната вопроса (registerCoordinationOriginSelf не перетирает
+ // исток, если вопрос уже пришёл из другой сессии).
+ registerCoordinationOriginSelf(questionId,question.from_user_id);
+ ensureCoordinationCard(questionId,recipientId);
  const task=db.prepare("SELECT title FROM tasks WHERE id=?").get(taskId) as {title:string}|undefined;
  updateCoordination(questionId,recipientId,{status:"queued",activity:`Ожидает завершения текущего действия · ${task?.title??taskId}`,task_id:taskId,subtask_id:subtaskId,last_activity_at:new Date().toISOString()});
 }
 
 /** Сообщение доставлено в текущую работу адресата: строка в чате показывает это. */
 export function markDeliveredToWork(questionId:string,recipientId:string,requesterId?:string){
- // Карточку здесь не заводим: доставка внутри сессии, а карточка обращения
- // живёт только для пересечения сессий (29.10.2026).
+ // Вопрос ушёл из комнаты в рабочую сессию роли — пересечение сессий, карточка
+ // нужна в комнате вопроса («кто кому», статус, остановить). Исток не
+ // перетирается, если вопрос уже пришёл из другой сессии.
+ if(requesterId)registerCoordinationOriginSelf(questionId,requesterId);
+ ensureCoordinationCard(questionId,recipientId);
  updateCoordination(questionId,recipientId,{status:"delivered",activity:"Доставлено в работу",last_activity_at:new Date().toISOString()});
 }
 

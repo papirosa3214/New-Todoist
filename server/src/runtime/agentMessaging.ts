@@ -56,14 +56,25 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       // этом чате его нет: «завёл группу и сказал решать — решайте в ней».
       const sameSession=!!recipient && !!context.chatId && !!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(context.chatId,recipient.id);
       if(!chatId && sameSession) chatId=context.chatId;
-      // Другая сессия (владелец 29.10.2026): вопрос уходит в постоянную
-      // сессию адресата — обычным сообщением там; в сессии отправителя
-      // появляется только карточка обращения («кто кому», вопрос, статус),
-      // само сообщение не дублируется.
-      if(!chatId && recipient && context.chatId){
+      const recipientRole=recipient?.role_key;
+      // Отдельных чатов «роль↔роль» больше нет (владелец 29.10.2026).
+      // Вопрос идёт в постоянную сессию адресата — его личку, где владелец
+      // тоже участник. В сессии отправителя появляется карточка обращения
+      // («кто кому», вопрос, статус), само сообщение не дублируется.
+      if(!chatId && recipient && recipient.id!==ownerAccountId()){
+        // Адресат работает на нескольких этапах — адресовать нельзя:
+        // вопрос ушёл бы непонятно куда (те же правила, что и раньше).
+        if(recipientRole && listActiveInProcessRuns().filter(run=>run.role===recipientRole).length>1)
+          throw new ToolError("У адресата несколько работающих этапов; используй тему задачи и slot_key");
+        if(p.slot_key) throw new ToolError("slot_key задаётся в теме задачи");
+        // Сессия отправителя: его личка (постоянная) — в ней живёт карточка.
+        const senderSession=context.chatId??ensurePersonalRoom(senderId);
+        if(!senderSession) throw new ToolError("Нет сессии отправителя для обращения");
+        if(sentCount>=4) throw new ToolError("Лимит 4 сообщений за ход исчерпан; продолжи работу или зафиксируй препятствие");
         const posted=postToRoleSession({
-          senderId, senderChatId:context.chatId, recipientId:recipient.id, text:String(p.text),
+          senderId, senderChatId:senderSession, recipientId:recipient.id, text:String(p.text),
         });
+        sentCount++;
         void startRoleSessionDelivery({roomId:posted.roomId, recipientId:recipient.id, queueRowId:posted.queueRowId})
           .catch(error=>console.warn("[agent-messaging] ход адресата не поднялся:",error));
         return {id:posted.questionId,chat_id:posted.roomId,отправлено:String(p.text)};
@@ -71,7 +82,6 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       if(!chatId && recipient) chatId=directChat(recipient.id);
       const chat=(await asRole(role,"GET",`/api/chats/${chatId}`)).chat;
       if(recipient && !chat.members.some((m:any)=>m.id===recipient.id)) throw new ToolError("Адресат не участвует в этом чате");
-      const recipientRole=recipient?.role_key;
       let targetSlot:string|undefined;
       if(chat.parent_chat_id && recipientRole){
         const slots=db.prepare("SELECT id FROM subtasks WHERE task_id=? AND agent_id=? AND collaboration_plan_id IN (SELECT id FROM task_collaboration_plans WHERE status='approved')").all(chat.task_id,recipient.id);
