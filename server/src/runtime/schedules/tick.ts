@@ -215,6 +215,7 @@ export async function runSchedulesTick(
 
     const payload = parsePayload(row);
     const role = String(payload.assignee_id ?? "").trim();
+    const profile = payload.plan_profile ?? null;
     if (role && !ROLE_NAMES.includes(role)) {
       updateRun({
         scheduleId: row.id,
@@ -234,6 +235,7 @@ export async function runSchedulesTick(
     const labels = resolveLabelIds(payload.labels ?? [], row.created_by);
 
     const created = await makeApi(app, row.created_by)("POST", "/api/tasks", {
+      skip_auto_plan: Boolean(role || profile),
       title: payload.title || row.title,
       description: payload.description ?? undefined,
       project_id: payload.project_id ?? undefined,
@@ -267,7 +269,19 @@ export async function runSchedulesTick(
     // роль, ревью.
     let roleStarted = false;
     let roleError: string | null = null;
-    if (role) {
+    if (profile) {
+      // Тот же контракт, что у «Предложить план по шаблону» в карточке.
+      // Расписание — заранее согласованный владельцем запуск этого пакета.
+      const api = makeApi(app, row.created_by);
+      const proposed = await api("POST", `/api/tasks/${taskId}/collaboration-plans/propose`, { profile });
+      if (!proposed.plan?.id) {
+        roleError = proposed.error ?? "не удалось создать выбранный план рутины";
+      } else {
+        const approved = await api("POST", `/api/tasks/${taskId}/collaboration-plans/${proposed.plan.id}/approve`, {});
+        roleStarted = approved.plan?.status === "approved";
+        if (!roleStarted) roleError = approved.error ?? "не удалось утвердить выбранный план рутины";
+      }
+    } else if (role) {
       const outcome = await startSingleExecutorPlan(taskId, SCHEDULER_USER_ID, {
         roleKey: role,
         expectedResult: payload.title || row.title,
@@ -281,7 +295,7 @@ export async function runSchedulesTick(
       }
     }
 
-    if (role && !roleStarted) {
+    if ((role || profile) && !roleStarted) {
       // Карточка создана, роль не поднялась — это ошибка запуска, а не
       // тихий пропуск: пишем в историю и в ленту карточки.
       updateRun({
