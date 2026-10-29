@@ -4,7 +4,7 @@ import {enqueueMessageDelivery} from "./chatQueue.js";
 
 /** Same durable message/outbox mechanism as the integration handoff. Called
  * inside the review transaction: a negative verdict must wake its requester too. */
-export function enqueueReviewReturn(reviewId:string):{chatId:string;roleId:string;deliveryId:string;messageId:string}|null {
+export function enqueueReviewReturn(reviewId:string):{chatId:string;roleId:string;queueRowId:string;messageId:string}|null {
  const review=db.prepare("SELECT r.*,t.title FROM reviews r JOIN tasks t ON t.id=r.task_id WHERE r.id=?").get(reviewId) as any;
  if(!review)return null;
  const launch=db.prepare("SELECT l.* FROM chat_work_launches l JOIN task_collaboration_plans p ON p.id=l.plan_id WHERE l.task_id=? AND l.status='started' AND p.profile IN ('result_review','code_review') ORDER BY l.rowid DESC LIMIT 1").get(review.task_id) as any;
@@ -19,6 +19,6 @@ export function enqueueReviewReturn(reviewId:string):{chatId:string;roleId:strin
  db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,reply_to_message_id,work_mode) VALUES(?,?,?,'chat',?,?,?,'work')").run(messageId,review.reviewer_id,text,launch.chat_id,review.task_id,replyTo);
  db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(launch.chat_id);
  const q=enqueueMessageDelivery({chatId:launch.chat_id,roleId,deliveryId:messageId,messageId,payload:{mode:"work",hop:0,chatOnly:true}});
- return {chatId:launch.chat_id,roleId,deliveryId:q.id,messageId};
+ return {chatId:launch.chat_id,roleId,queueRowId:q.id,messageId};
 }
 

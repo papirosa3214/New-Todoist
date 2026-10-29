@@ -68,7 +68,7 @@ export async function sweepRecoverableDeliveries(now?: number): Promise<number> 
       const result = await recoverAgentDelivery({
         chatId: row.chat_id,
         roleId: row.role_id,
-        deliveryId: row.id,
+        queueRowId: row.id,
       });
       if (result.status === "done") recovered += 1;
     } catch (error) {

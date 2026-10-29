@@ -1,3 +1,4 @@
+import { TEMPLATE_PROFILES } from "../lib/collaborationTemplates.js";
 // Ручки рутин (крон-задач): /api/schedules.
 //
 // Контракт — из заметки «Рутины и расписание TaskFlow», раздел «6. API»:
@@ -76,6 +77,15 @@ function present(row: ScheduleRow) {
 
 function isService(userId: string): boolean {
   return userId === SCHEDULER_USER_ID;
+}
+
+function planSelectionError(payload: Record<string, unknown>): string | null {
+  const profile = payload.plan_profile;
+  if (profile != null && (typeof profile !== "string" || !(TEMPLATE_PROFILES as readonly string[]).includes(profile))) {
+    return "неизвестный шаблон плана рутины";
+  }
+  if (profile != null && payload.assignee_id) return "выберите шаблон плана или исполнителя";
+  return null;
 }
 
 export function registerScheduleRoutes(app: FastifyInstance) {
@@ -223,6 +233,8 @@ export function registerScheduleRoutes(app: FastifyInstance) {
 
     const payload = (body.task_payload ?? {}) as Record<string, unknown>;
     if (!payload.title) payload.title = title;
+    const selectionError = planSelectionError(payload);
+    if (selectionError) return reply.code(400).send({ error: selectionError });
     if (payload.priority != null) {
       const priority = Number(payload.priority);
       if (!Number.isInteger(priority) || priority < 1 || priority > 4) {
@@ -335,6 +347,8 @@ export function registerScheduleRoutes(app: FastifyInstance) {
       const mergedPayload = body.task_payload
         ? ({ ...parsePayload(existing), ...(body.task_payload as object) } as Record<string, unknown>)
         : (parsePayload(existing) as unknown as Record<string, unknown>);
+      const selectionError = planSelectionError(mergedPayload);
+      if (selectionError) return reply.code(400).send({ error: selectionError });
       const labelCheck = resolveLabelIds(
         (mergedPayload.labels as string[] | null | undefined) ?? [],
         existing.created_by,

@@ -1263,6 +1263,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // shaped like { title } — TaskFormScreen currently sends plain
       // strings (see localSubtasks), objects are accepted too so a future
       // richer payload doesn't need a server change.
+      skip_auto_plan?: boolean;
       preparation?: unknown;
       subtasks?: (string | { title?: string })[];
     };
@@ -1303,6 +1304,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
         if (actorRow?.type === "ai" && !isOrchestrator(req.userId) && actorRow.role !== "owner") {
           return reply.code(403).send({error:"Назначения выполняет сервер"});
         }
+      }
+      // Рутины с явным планом/исполнителем готовят план сами. Решение
+      // принимается до запуска любой асинхронной JEV-подготовки.
+      if (req.body.skip_auto_plan !== undefined && typeof req.body.skip_auto_plan !== "boolean") {
+        return reply.code(400).send({ error: "skip_auto_plan должен быть boolean" });
+      }
+      if (req.body.skip_auto_plan === true && !isOwner(req.userId)) {
+        return reply.code(403).send({ error: "отключить автоподготовку может владелец" });
       }
       const trimmedTitle = typeof title === "string" ? title.trim() : "";
       if (!trimmedTitle)
@@ -1572,10 +1581,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
       try {
         // Карточка с подзадачами — план из них (асинхронно: классификатор
         // ролей локальный, ждать его в ответе на создание незачем).
-        if (!preparation && !isPrivateProject && subtaskTitles.length) {
+        if (!req.body.skip_auto_plan && !preparation && !isPrivateProject && subtaskTitles.length) {
           void autoProposeFromSubtasksOnCreate(id).catch((error) =>
             req.log?.error?.({ err: error, taskId: id }, "auto plan from subtasks failed"));
-        } else if (!preparation && !isPrivateProject) {
+        } else if (!req.body.skip_auto_plan && !preparation && !isPrivateProject) {
           // Галочка «JEV для выбора шаблона плана» включена — шаблон выбирает
           // он (сетевой вызов, поэтому фоном, как и план из подзадач выше).
           // Выключена — прежний синхронный путь, ровно как было.

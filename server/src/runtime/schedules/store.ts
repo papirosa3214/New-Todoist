@@ -25,6 +25,8 @@ export interface TaskPayload {
   project_id?: string | null;
   /** Роль-исполнитель (ключ роли: builder, qa, …). */
   assignee_id?: string | null;
+  /** Явный профиль штатного collaboration template; null — автоматический подбор. */
+  plan_profile?: string | null;
   priority?: number | null;
   duration_min?: number | null;
   labels?: string[] | null;
