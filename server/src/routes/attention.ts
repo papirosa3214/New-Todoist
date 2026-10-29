@@ -23,6 +23,15 @@ interface AttentionTask {
   overdue: boolean;
   /** Наводящая строка: что делать с задачей, не открывая карточку. */
   hint: string | null;
+  /** Идентификатор исполнителя (`role_qa`, `u-secretary`…) — телефон рисует по нему аватар роли. */
+  role_id: string | null;
+  /** Приоритет задачи (1 — срочный … 4 — низкий). */
+  priority: number | null;
+  /** Срок задачи — телефон рисует его чипом, как в остальных списках. */
+  due_date: string | null;
+  /** Шаги задачи: сколько всего и сколько закрыто. */
+  subtask_total: number | null;
+  subtask_done: number | null;
 }
 
 interface AttentionGroup {
@@ -43,12 +52,18 @@ const secs = (iso: string | null | undefined): number | null => {
 // иначе задача без своего agent_state (обычный случай) пропадала из списка.
 //
 // Дополнительно тянутся данные для наводящей строки: причина блокировки,
-// вопрос роли, шаги задачи (заголовок, результат, вердикт проверки).
+// вопрос роли, шаги задачи (заголовок, результат, вердикт, текущий шаг) — и
+// то, из чего телефон рисует карточку как остальные списки: аватар роли,
+// приоритет, срок, шаги.
 const TASKS_SQL = `
-  SELECT t.id, t.title, p.name AS project, t.due_date, t.updated_at,
+  SELECT t.id, t.title, p.name AS project, t.due_date, t.updated_at, t.priority,
          t.blocked_reason, t.clarification_question, t.description,
          (SELECT u.name FROM attempts a JOIN users u ON u.id = a.executor_id
            WHERE a.task_id = t.id ORDER BY a.started_at DESC LIMIT 1) AS role,
+         (SELECT u.id FROM attempts a JOIN users u ON u.id = a.executor_id
+           WHERE a.task_id = t.id ORDER BY a.started_at DESC LIMIT 1) AS role_id,
+         (SELECT count(*) FROM subtasks s WHERE s.task_id = t.id) AS subtask_total,
+         (SELECT count(*) FROM subtasks s WHERE s.task_id = t.id AND s.done = 1) AS subtask_done,
          (SELECT s.title FROM subtasks s
            WHERE s.task_id = t.id AND s.done = 0
            ORDER BY s.position DESC LIMIT 1) AS open_step_title,
@@ -98,10 +113,14 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
         project: string | null;
         due_date: string | null;
         updated_at: string | null;
+        priority: number | null;
         blocked_reason: string | null;
         clarification_question: string | null;
         description: string | null;
         role: string | null;
+        role_id: string | null;
+        subtask_total: number | null;
+        subtask_done: number | null;
         open_step_title: string | null;
         open_step_result: string | null;
         active_step_title: string | null;
@@ -118,6 +137,7 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
         overdue: Boolean(r.due_date && r.due_date.slice(0, 10) < today),
         hint: attentionHint({
           group: key,
+          title: r.title,
           blockedReason: r.blocked_reason,
           clarificationQuestion: r.clarification_question,
           openStepTitle: r.open_step_title,
@@ -128,6 +148,11 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
           lastStepResult: r.last_step_result,
           description: r.description,
         }),
+        role_id: r.role_id,
+        priority: r.priority,
+        due_date: r.due_date,
+        subtask_total: r.subtask_total,
+        subtask_done: r.subtask_done,
       }));
       return { key, title, count: tasks.length, tasks };
     });

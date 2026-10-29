@@ -78,3 +78,29 @@ it("задача на проверке показывает вердикт пр�
   expect(task.hint).toBe("approved: Проверено по артефактам.");
   db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
 });
+
+it("карточка отдаёт поля для рисования строки как в остальных списках", async () => {
+  const owner = db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as { id: string };
+  const id = "attn6-" + Math.random().toString(36).slice(2, 8);
+  const stepId = "attn6s-" + Math.random().toString(36).slice(2, 8);
+  db.prepare(
+    "INSERT INTO tasks (id, title, description, status, creator_id, agent_state, priority, due_date) VALUES (?,?,?,'active',?, 'blocked', 2, '2026-11-05')",
+  ).run(id, "Проверить окно", "", owner.id);
+  db.prepare(
+    "INSERT INTO subtasks (id, task_id, title, done, position) VALUES (?,?,?,0,1)",
+  ).run(stepId, id, "Шаг");
+  db.prepare(
+    "INSERT INTO subtasks (id, task_id, title, done, position) VALUES (?,?,?,?,?)",
+  ).run(stepId + "b", id, "Шаг закрытый", 1, 2);
+
+  const body = (await app.inject({ method: "GET", url: "/api/attention", headers: auth() })).json();
+  const blocked = body.groups.find((g: { key: string }) => g.key === "blocked");
+  const task = blocked.tasks.find((t: { id: string }) => t.id === id);
+  expect(task).toBeTruthy();
+  expect(task.priority).toBe(2);
+  expect(task.due_date).toBe("2026-11-05");
+  expect(task.subtask_total).toBe(2);
+  expect(task.subtask_done).toBe(1);
+  expect(task).toHaveProperty("role_id");
+  db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+});
