@@ -595,4 +595,89 @@ describe("рутины в базе и тик планировщика", () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toContain("паузе");
   });
+  it("шаблон рутины: явная роль не получает конкурирующий автоплан", async () => {
+    const schedule = createDaily({ payload: { title: "Исследовать и сравнить источники", assignee_id: "builder" } });
+    await runSchedulesTick(app, { now: new Date(), scheduleId: schedule.id, force: true });
+    const run = listRuns(schedule.id)[0];
+    const plans = db.prepare("SELECT profile,status FROM task_collaboration_plans WHERE task_id=?").all(run.task_id) as any[];
+    expect(plans).toEqual([{ profile: "single_executor", status: "approved" }]);
+  });
+
+  it.each(["single_executor", "research"])("шаблон рутины: выбранный %s создаётся без автоподбора", async (profile) => {
+    const schedule = createDaily({ payload: { title: "Исправить API сервер", plan_profile: profile } });
+    await runSchedulesTick(app, { now: new Date(), scheduleId: schedule.id, force: true });
+    const run = listRuns(schedule.id)[0];
+    const plans = db.prepare("SELECT id,profile,status FROM task_collaboration_plans WHERE task_id=?").all(run.task_id) as any[];
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({ profile, status: "approved" });
+    const nodes = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id=? ORDER BY role_key").all(plans[0].id);
+    expect(nodes).toEqual(profile === "single_executor" ? [{ role_key: "builder" }] : [{ role_key: "analyst" }, { role_key: "researcher" }]);
+  });
+
+  it("шаблон рутины: автоматически сохраняет штатный автоплан", async () => {
+    const schedule = createDaily({ payload: { title: "Исследовать и сравнить источники", assignee_id: null, plan_profile: null } });
+    await runSchedulesTick(app, { now: new Date(), scheduleId: schedule.id, force: true });
+    const run = listRuns(schedule.id)[0];
+    expect(db.prepare("SELECT profile,status FROM task_collaboration_plans WHERE task_id=?").all(run.task_id))
+      .toEqual([{ profile: "research", status: "draft" }]);
+    expect((db.prepare("SELECT assignee_id FROM tasks WHERE id=?").get(run.task_id) as any).assignee_id).toBeNull();
+  });
+
+  it("шаблон рутины: создание, редактирование и очистка выбора", async () => {
+    const headers = { authorization: `Bearer ${ownerToken}` };
+    const created = await app.inject({ method: "POST", url: "/api/schedules", headers,
+      payload: { title: "Выбор шаблона", rule_kind: "daily", time_local: "09:00", task_payload: { title: "Исследовать и сравнить источники", plan_profile: "research" } } });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().schedule.id;
+    expect(created.json().schedule.task_payload.plan_profile).toBe("research");
+    const edit = await app.inject({ method: "PATCH", url: `/api/schedules/${id}`, headers,
+      payload: { task_payload: { plan_profile: "single_executor", assignee_id: null } } });
+    expect(edit.statusCode).toBe(200);
+    expect(edit.json().schedule.task_payload.plan_profile).toBe("single_executor");
+    const clear = await app.inject({ method: "PATCH", url: `/api/schedules/${id}`, headers,
+      payload: { task_payload: { plan_profile: null, assignee_id: null } } });
+    expect(clear.statusCode).toBe(200);
+    expect(clear.json().schedule.task_payload.plan_profile).toBeNull();
+    expect(clear.json().schedule.task_payload.assignee_id).toBeNull();
+    await runSchedulesTick(app, { now: new Date(), scheduleId: id, force: true });
+    const run = listRuns(id)[0];
+    expect(db.prepare("SELECT profile,status FROM task_collaboration_plans WHERE task_id=?").all(run.task_id))
+      .toEqual([{ profile: "research", status: "draft" }]);
+  });
+
+  it("шаблон рутины: неизвестный профиль и конфликт назначений отклоняются", async () => {
+    const headers = { authorization: `Bearer ${ownerToken}` };
+    for (const task_payload of [{ plan_profile: "typo" }, { plan_profile: "research", assignee_id: "builder" }]) {
+      const res = await app.inject({ method: "POST", url: "/api/schedules", headers,
+        payload: { title: "Некорректный шаблон", rule_kind: "daily", time_local: "09:00", task_payload } });
+      expect(res.statusCode).toBe(400);
+      const schedule = createDaily();
+      const edit = await app.inject({ method: "PATCH", url: `/api/schedules/${schedule.id}`, headers, payload: { task_payload } });
+      expect(edit.statusCode).toBe(400);
+    }
+  });
+
+  it("шаблон рутины: создание сразу в Автоматически без назначения", async () => {
+    const headers = { authorization: `Bearer ${ownerToken}` };
+    const res = await app.inject({ method: "POST", url: "/api/schedules", headers,
+      payload: { title: "Автоматически", rule_kind: "daily", time_local: "09:00", task_payload: { title: "Исследовать и сравнить источники", assignee_id: null, plan_profile: null } } });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().schedule.task_payload.assignee_id).toBeNull();
+    const id = res.json().schedule.id;
+    await runSchedulesTick(app, { now: new Date(), scheduleId: id, force: true });
+    const run = listRuns(id)[0];
+    expect(db.prepare("SELECT profile,status FROM task_collaboration_plans WHERE task_id=?").all(run.task_id))
+      .toEqual([{ profile: "research", status: "draft" }]);
+  });
+
+  it("шаблон рутины: suppression валидируется и доступен владельцу", async () => {
+    const invalid = await app.inject({ method: "POST", url: "/api/tasks",
+      headers: { authorization: `Bearer ${ownerToken}` }, payload: { title: "Task", skip_auto_plan: "true" } });
+    expect(invalid.statusCode).toBe(400);
+    const token = app.jwt.sign({ id: "role_builder" });
+    const refused = await app.inject({ method: "POST", url: "/api/tasks",
+      headers: { authorization: `Bearer ${token}` }, payload: { title: "Task", skip_auto_plan: true } });
+    expect(refused.statusCode).toBe(403);
+  });
+
 });
