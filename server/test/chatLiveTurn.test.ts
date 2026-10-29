@@ -3,10 +3,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent: Array<{ ids: unknown; event: any }> = [];
+const patches: any[] = [];
 vi.mock("../src/ws.js", () => ({
   broadcastToUsers: vi.fn((ids: unknown, event: any) => {
     // Дельты хода (chats:live:start/patch/end) проверяет chatLiveDelta.test.ts;
     // здесь — прежний полный снимок chats:live.
+    if (event?.type === "chats:live:patch") patches.push(JSON.parse(JSON.stringify(event)));
     if (String(event?.type ?? "").startsWith("chats:live:")) return;
     sent.push({ ids, event: JSON.parse(JSON.stringify(event)) });
   }),
@@ -54,6 +56,7 @@ function newTurn() {
 
 beforeEach(() => {
   sent.length = 0;
+  patches.length = 0;
   _resetLiveTurnsForTests();
 });
 afterEach(() => vi.useRealTimers());
@@ -66,7 +69,7 @@ describe("живой ход", () => {
     expect(sent.at(-1)?.event.turn.trigger_message_id).toBe("question-1");
   });
 
-  it("склеивает текст по словам и рассылает пачкой, а шаг — сразу", async () => {
+  it("текст идёт пачкой, шаг — немедленной дельтой без повторного полного снимка", async () => {
     vi.useFakeTimers();
     const turn = newTurn();
     turn.onEvent(text("Сейчас "));
@@ -79,12 +82,13 @@ describe("живой ход", () => {
     expect(sent[0].event.turn.items).toMatchObject([{ kind: "text", text: "Сейчас проверю.", blocks: [{ type: "doc" }] }]);
 
     turn.onEvent(toolStart("t1", "bash", { command: "ls -la /home/maksim/x" }));
-    expect(sent).toHaveLength(2);
-    const step = sent[1].event.turn.items[1];
+    expect(sent).toHaveLength(1);
+    const step = patches.at(-1).ops.find((op: any) => op.op === "item_add").item;
     expect(step).toMatchObject({ kind: "step", tool: "bash", status: "running", detail: "ls -la /home/maksim/x" });
 
     turn.onEvent(toolEnd("t1"));
-    expect(sent[2].event.turn.items[1].status).toBe("done");
+    expect(sent).toHaveLength(1);
+    expect(patches.at(-1).ops).toContainEqual(expect.objectContaining({op:"item_update",item_id:"t1",fields:expect.objectContaining({status:"done"})}));
   });
 
   it("вызов инструмента — один шаг от toolcall_start до конца исполнения", () => {
@@ -95,9 +99,9 @@ describe("живой ход", () => {
     expect(sent.at(-1)?.event.turn.items).toMatchObject([{ kind: "step", id: "t1", tool: "bash", status: "running" }]);
     turn.onEvent(toolStart("t1", "bash", { command: "ls" }));
     expect(sent.at(-1)?.event.turn.items).toHaveLength(1);
-    expect(sent.at(-1)?.event.turn.items[0]).toMatchObject({ id: "t1", status: "running", detail: "ls" });
+    expect(liveTurnsOfChat("c1")[0].items[0]).toMatchObject({ id: "t1", status: "running", detail: "ls" });
     turn.onEvent(toolEnd("t1"));
-    expect(sent.at(-1)?.event.turn.items).toMatchObject([{ id: "t1", status: "done" }]);
+    expect(liveTurnsOfChat("c1")[0].items).toMatchObject([{ id: "t1", status: "done" }]);
   });
 
   it("внешний агент: toolcall_start с id и toolName сверху", () => {
@@ -112,7 +116,7 @@ describe("живой ход", () => {
     turn.onEvent(toolStart("w1", "taskflow_work_plan", { items: [{ text: "a" }] }));
     turn.onEvent({ type: "tool_execution_end", toolCallId: "w1", toolName: "x", isError: true,
       result: { content: [{ type: "text", text: '{"ok":false,"error":{"message":"Нужен base_revision"}}' }] } });
-    const step = sent.at(-1)!.event.turn.items[0];
+    const step = liveTurnsOfChat("c1")[0].items[0] as any;
     expect(step.status).toBe("error");
     expect(JSON.parse(step.args)).toEqual({ items: [{ text: "a" }] });
     expect(step.output).toContain("Нужен base_revision");
@@ -184,14 +188,14 @@ describe("размышления роли (28.09.2026)", () => {
 
     turn.onEvent(think("thinking_delta", "Пользователь просит сводку. Сначала посмотрю до"));
     vi.advanceTimersByTime(LIVE_BROADCAST_MS);
-    expect(sent.at(-1)!.event.turn.thinking).toBe("Пользователь просит сводку.");
+    expect(liveTurnsOfChat("c1")[0].thinking).toBe("Пользователь просит сводку.");
 
     turn.onEvent(think("thinking_delta", "ску.\n"));
     vi.advanceTimersByTime(LIVE_BROADCAST_MS);
-    expect(sent.at(-1)!.event.turn.thinking).toBe("Сначала посмотрю доску.");
+    expect(liveTurnsOfChat("c1")[0].thinking).toBe("Сначала посмотрю доску.");
 
     turn.onEvent(think("thinking_end"));
-    expect(sent.at(-1)!.event.turn.thinking).toBeNull();
+    expect(liveTurnsOfChat("c1")[0].thinking).toBeNull();
   });
 
   it("полный текст размышления — элементом хода (30.09.2026)", () => {
@@ -204,11 +208,11 @@ describe("размышления роли (28.09.2026)", () => {
     turn.onEvent(think("thinking_delta", "Смотрю доску. token=abcdef123 "));
     turn.onEvent(think("thinking_delta", "и сравниваю"));
     vi.advanceTimersByTime(LIVE_BROADCAST_MS);
-    const live = sent.at(-1)!.event.turn.items[0];
+    const live = liveTurnsOfChat("c1")[0].items[0] as any;
     expect(live.text).toBe("Смотрю доску. token=••• и сравниваю");
     expect(live.status).toBe("running");
     turn.onEvent(think("thinking_end"));
-    const done = sent.at(-1)!.event.turn.items[0];
+    const done = liveTurnsOfChat("c1")[0].items[0] as any;
     expect(done.status).toBe("done");
     expect(done.ended_at).toBeTruthy();
   });
@@ -219,7 +223,7 @@ describe("размышления роли (28.09.2026)", () => {
     turn.onEvent(think("thinking_start"));
     turn.onEvent(think("thinking_delta", "Надо проверить файл."));
     turn.onEvent(toolStart("t1", "read", { path: "/tmp/a" }));
-    expect(sent.at(-1)!.event.turn.thinking).toBeNull();
+    expect(liveTurnsOfChat("c1")[0].thinking).toBeNull();
     turn.onEvent(toolEnd("t1"));
     const saved = turn.finish()!.items;
     expect(saved.map((it) => it.kind)).toEqual(["thinking", "step"]);
