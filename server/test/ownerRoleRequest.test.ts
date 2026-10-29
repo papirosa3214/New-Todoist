@@ -144,9 +144,10 @@ describe("обращение владельца к роли", () => {
     const closed = await waitFor(() => cardOf(questionId)?.terminal === true);
     expect(closed).toBe(true);
     const card = cardOf(questionId);
-    // Ответ лежит в комнате роли и в нитке — карточка его не повторяет
-    // (владелец 29.10.2026: «внизу ещё пришло… оно задублировалось»).
-    expect(card!.answer??"").toBe("");
+    // Ответ лег в комнату РОЛИ, а карточка — в чат владельца: в нитке
+    // владельца ответа нет, поэтому итог кладём в карточку (владелец
+    // 29.10.2026: «итоговый ответ… парсится и ответом в эту табличку»).
+    expect(card!.answer??"").toContain("сценарий входа сломан");
     expect(card!.activity).toBe("Ответ получен");
     const answer = db
       .prepare("SELECT text FROM chat_messages WHERE chat_id=? AND from_user_id='role_qa' ORDER BY rowid DESC LIMIT 1")

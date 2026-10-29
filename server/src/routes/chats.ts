@@ -3444,7 +3444,10 @@ async function deliverAgentReply(args: {
        VALUES (?, ?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(replyId, roleUserId, replyText, storedRoleEnvelope, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(trimThinkingItems(steps)) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null,stopReason,cancelled ? 1 : 0);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
-    traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure));
+    // answerChatId: ответ лег в этой комнате — если карточка тут же,
+    // текст в неё не копируем (иначе дубль), если карточка в другой
+    // комнате (обращение роли к роли) — копируем, иначе итог негде увидеть.
+    traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure,chatId));
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
     for(const material of overflow){
       const materialId=uid();

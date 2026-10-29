@@ -138,11 +138,11 @@ export function markDeliveredToWork(questionId:string,recipientId:string,request
  * Текст в карточке нужен только там, где ответа в нитке нет (вызов роли:
  * ответ приезжает из другой комнаты) — за это отвечает coordinationAnswered.
  */
-export function markCoordinationAnswered(questionId:string,recipientId:string){
-  const answer=db.prepare("SELECT id FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=? AND COALESCE(message_type,'')!='system' ORDER BY rowid DESC LIMIT 1").get(questionId,recipientId) as {id:string}|undefined;
-  if(!answer)return false;
-  updateCoordination(questionId,recipientId,{status:"answered",activity:"Ответ получен",terminal:true,last_activity_at:new Date().toISOString()});
-  return true;
+export function markCoordinationAnswered(questionId:string,recipientId:string,answerChatId?:string){
+ const answer=db.prepare("SELECT id,chat_id,text FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=? AND COALESCE(message_type,'')!='system' ORDER BY rowid DESC LIMIT 1").get(questionId,recipientId) as {id:string;chat_id:string;text:string}|undefined;
+ if(!answer)return false;
+ coordinationAnswered(questionId,recipientId,answer.text,false,answerChatId??answer.chat_id);
+ return true;
 }
 
 export function hasCoordinationCard(questionId:string,recipientId:string):boolean { return !!card(questionId,recipientId); }
@@ -192,18 +192,27 @@ export function coordinationActivity(questionId:string|undefined,recipientId:str
 /**
  * Обращение закрыто: ответ получен (или ход сорвался).
  *
- * Текст ответа в карточку НЕ пишем — единое правило (владелец 29.10.2026):
- * ответ лежит в нитке ровно один раз, карточка — это статус обращения
- * («кто кого спросил» и «что с этим»), а не вторая копия ответа. Иначе одно и
- * то же видно дважды: текстом в карточке и сообщением в чате.
+ * Где лежит ответ — важно (владелец 29.10.2026):
+ *  - ответ в ДРУГОЙ комнате, чем карточка (обращение роли к роли: карточка
+ *    у отправителя, ответ — в личке получателя) → текст ответа КЛАДЁМ в
+ *    карточку: в нитке отправителя ответа нет, иначе итог нигде не виден;
+ *  - ответ в ТОЙ ЖЕ комнате, где карточка (обычный разговор) → текст в
+ *    карточку НЕ кладём: он уже рядом, и копия была вторым дублем.
  *
- * При сбое текст сходит в activity: сообщения с ответом в нитке нет, и
- * причину сбоя иначе негде показать.
+ * answerChatId — комната, куда лег ответ. Не передан — считаем, что ответ
+ * в другой комнате (текст кладём).
+ *
+ * При сбое причина сходит в activity: ответа нет нигде, иначе её негде
+ * показать.
  */
-export function coordinationAnswered(questionId:string,recipientId:string,answer:string,failed=false){
+export function coordinationAnswered(questionId:string,recipientId:string,answer:string,failed=false,answerChatId?:string){
+ const row=card(questionId,recipientId);
+ if(!row)return;
+ const sameRoom=!!answerChatId&&answerChatId===row.chat_id;
  updateCoordination(questionId,recipientId,{
    status:failed?"error":"answered",
    activity:failed?("Ход завершился ошибкой: "+String(answer).slice(0,200)):"Ответ получен",
+   answer:sameRoom?undefined:answer,
    terminal:true,
    last_activity_at:new Date().toISOString(),
  });
