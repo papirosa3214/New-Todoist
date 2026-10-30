@@ -15,12 +15,13 @@ import { beforeAll, afterAll, beforeEach, describe, it, expect, vi } from "vites
 import { buildApp } from "../src/index.js";
 import { ROLE_NAMES } from "../src/roleRouting.js";
 import { saveComposioPolicy } from "../src/runtime/composioPolicy.js";
-import { inspectComposio } from "../src/runtime/composioRuntime.js";
-import { clearComposioCache } from "../src/runtime/roleIntegrations.js";
+import { inspectComposio, inspectComposioSlugs } from "../src/runtime/composioRuntime.js";
+import { CACHE_TTL_MS, clearComposioCache, composioCatalog } from "../src/runtime/roleIntegrations.js";
 
 vi.mock("../src/runtime/composioRuntime.js", async importOriginal => ({
   ...await importOriginal<typeof import("../src/runtime/composioRuntime.js")>(),
   inspectComposio: vi.fn(async () => ({ items: [] })),
+  inspectComposioSlugs: vi.fn(async () => ({ items: [] })),
 }));
 
 describe("интеграции в профиле роли", () => {
@@ -52,12 +53,12 @@ describe("интеграции в профиле роли", () => {
     vi.unstubAllEnvs();
     await app.close();
   });
-  // Копия каталога живёт минуту: без сброса один тест читал бы ответ другого.
+  // Копия каталога живёт пять минут: без сброса один тест читал бы ответ другого.
   beforeEach(() => clearComposioCache());
 
   it("отдаёт разрешённые сервисы и их состояние из каталога Composio", async () => {
     saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["todoist"] });
-    vi.mocked(inspectComposio).mockResolvedValue({
+    vi.mocked(inspectComposioSlugs).mockResolvedValue({
       items: [{ slug: "todoist", name: "Todoist", connected: true, noAuth: false }],
     } as any);
     const res = await app.inject({ method: "GET", url: `/api/roles/${role}`, headers: auth(ownerToken) });
@@ -72,7 +73,7 @@ describe("интеграции в профиле роли", () => {
 
   it("не выдаёт «не подключено», когда каталог не пришёл: состояние неизвестно", async () => {
     saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["github"] });
-    vi.mocked(inspectComposio).mockRejectedValue(new Error("Composio не отвечает или ключ недействителен"));
+    vi.mocked(inspectComposioSlugs).mockRejectedValue(new Error("Composio не отвечает или ключ недействителен"));
     const res = await app.inject({ method: "GET", url: `/api/roles/${role}`, headers: auth(ownerToken) });
     const integrations = res.json().integrations;
     expect(integrations.connected_known).toBe(false);
@@ -83,14 +84,16 @@ describe("интеграции в профиле роли", () => {
   it("выключенная роль не спрашивает каталог: сервисы разрешены, состояние не важно", async () => {
     saveComposioPolicy({ role, ownerId, enabled: false, toolkits: ["linear"] });
     vi.mocked(inspectComposio).mockClear();
+    vi.mocked(inspectComposioSlugs).mockClear();
     const res = await app.inject({ method: "GET", url: `/api/roles/${role}`, headers: auth(ownerToken) });
     expect(res.json().integrations).toMatchObject({ enabled: false, toolkits: [{ slug: "linear" }] });
     expect(vi.mocked(inspectComposio)).not.toHaveBeenCalled();
+    expect(vi.mocked(inspectComposioSlugs)).not.toHaveBeenCalled();
   });
 
   it("профиль роли читают и не владельцы, а сводка по Composio — только владельцу", async () => {
     saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["linear"] });
-    vi.mocked(inspectComposio).mockResolvedValue({
+    vi.mocked(inspectComposioSlugs).mockResolvedValue({
       items: [{ slug: "linear", name: "Linear", connected: false, noAuth: false }],
     } as any);
     const member = await app.inject({ method: "GET", url: `/api/roles/${role}`, headers: auth(memberToken) });
@@ -118,12 +121,12 @@ describe("интеграции в профиле роли", () => {
   it("сводка отдаёт сервис роли по ключу, даже если его нет на первой странице каталога", async () => {
     saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["todoist"] });
     // Первая страница каталога todoist не содержит — так и бывает у Composio.
-    vi.mocked(inspectComposio).mockImplementation(async (_policy: any, _action: any, search = "") => {
-      if (search === "todoist") {
-        return { items: [{ slug: "todoist", name: "Todoist", connected: true, noAuth: false }] } as any;
-      }
-      return { items: [{ slug: "gmail", name: "Gmail", connected: true, noAuth: false }] } as any;
-    });
+    vi.mocked(inspectComposio).mockResolvedValue({
+      items: [{ slug: "gmail", name: "Gmail", connected: true, noAuth: false }],
+    } as any);
+    vi.mocked(inspectComposioSlugs).mockResolvedValue({
+      items: [{ slug: "todoist", name: "Todoist", logo: null, description: null, connected: true, noAuth: false }],
+    } as any);
     const res = await app.inject({ method: "GET", url: "/api/integrations/composio", headers: auth(ownerToken) });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -159,10 +162,48 @@ describe("интеграции в профиле роли", () => {
   it("сводка не выдумывает подключение, когда Composio не ответил", async () => {
     saveComposioPolicy({ role, ownerId, enabled: true, toolkits: ["todoist"] });
     vi.mocked(inspectComposio).mockRejectedValue(new Error("Composio не отвечает"));
+    vi.mocked(inspectComposioSlugs).mockRejectedValue(new Error("Composio не отвечает"));
     const res = await app.inject({ method: "GET", url: "/api/integrations/composio", headers: auth(ownerToken) });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.services).toEqual([]);
     expect(body.error).toContain("Composio");
+  });
+});
+
+describe("копия каталога Composio", () => {
+  const ttlOwnerId = "owner-cache-ttl";
+
+  beforeEach(() => {
+    clearComposioCache();
+    vi.mocked(inspectComposio).mockReset();
+  });
+
+  it("удачный ответ каталога живёт пять минут: на четвёртой минуте ещё не переспрашиваем Composio", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = Date.now();
+      vi.mocked(inspectComposio).mockResolvedValue({
+        items: [{ slug: "todoist", name: "Todoist", connected: true, noAuth: false }],
+      } as any);
+      const first = await composioCatalog(ttlOwnerId, "todoist");
+      expect(first.items).toHaveLength(1);
+      expect(vi.mocked(inspectComposio)).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(start + 4 * 60_000);
+      const second = await composioCatalog(ttlOwnerId, "todoist");
+      expect(vi.mocked(inspectComposio)).toHaveBeenCalledTimes(1);
+      expect(second.items).toEqual(first.items);
+
+      vi.setSystemTime(start + 6 * 60_000);
+      await composioCatalog(ttlOwnerId, "todoist");
+      expect(vi.mocked(inspectComposio)).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("TTL успешного ответа каталога — пять минут", () => {
+    expect(CACHE_TTL_MS).toBe(300_000);
   });
 });

@@ -17,7 +17,7 @@
  *     подключённые: подключение — это `connected` из каталога.
  */
 import { composioCredentialConfigured, roleComposioPolicy, type ComposioPolicy } from "./composioPolicy.js";
-import { inspectComposio } from "./composioRuntime.js";
+import { inspectComposio, inspectComposioSlugs, type ComposioCatalogItem } from "./composioRuntime.js";
 
 /** Один сервис в карточке роли. */
 export type RoleIntegrationToolkit = {
@@ -45,24 +45,16 @@ export type RoleIntegrations = {
   error: string | null;
 };
 
-/** Строка каталога Composio — ровно та, что отдаёт `session.toolkits`. */
-export type ComposioCatalogItem = {
-  slug: string;
-  name: string | null;
-  logo: string | null;
-  description: string | null;
-  connected: boolean;
-  noAuth: boolean;
-};
-
-/** Как долго живёт удачный ответ каталога. */
-const CACHE_TTL_MS = 60_000;
+/** Как долго живёт удачный ответ каталога: пять минут. */
+export const CACHE_TTL_MS = 300_000;
 /** Как долго живёт неудачный ответ: чтобы не слать запрос в каждом кадре. */
 const CACHE_ERROR_TTL_MS = 15_000;
 /** Сколько ждём внешний процесс, прежде чем честно сказать «не ответил». */
 const CATALOG_TIMEOUT_MS = 5_000;
 
 type CacheEntry = { at: number; items: ComposioCatalogItem[]; error: string | null; cursor: string | null; totalPages: number | null };
+
+export type { ComposioCatalogItem };
 
 const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<{ items: ComposioCatalogItem[]; cursor: string | null; totalPages: number | null }>>();
@@ -217,14 +209,23 @@ export async function resolveToolkits(
   ownerId: string,
   slugs: string[],
 ): Promise<{ items: ComposioCatalogItem[]; error: string | null }> {
-  const answers = await Promise.all(slugs.map((slug) => composioCatalog(ownerId, slug)));
-  const items: ComposioCatalogItem[] = [];
-  slugs.forEach((slug, index) => {
-    const found = answers[index].items.find((item) => item.slug === slug);
-    if (found) items.push(found);
+  const wanted = [...new Set(slugs.filter((slug) => typeof slug === "string" && slug))];
+  if (!wanted.length) return { items: [], error: null };
+  const policy: ComposioPolicy = { role: "integrations", ownerId, enabled: true, toolkits: [] };
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Composio не ответил вовремя")), CATALOG_TIMEOUT_MS);
   });
-  const error = answers.map((answer) => answer.error).find((message) => !!message) ?? null;
-  return { items, error };
+  const call = inspectComposioSlugs(policy, wanted);
+  call.catch(() => {});
+  try {
+    const result = await Promise.race([call, timeout]);
+    return { items: result.items, error: null };
+  } catch (error) {
+    return { items: [], error: messageOf(error) };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
