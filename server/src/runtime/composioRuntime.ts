@@ -5,6 +5,16 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { composioCommand, roleComposioPolicy, type ComposioPolicy } from "./composioPolicy.js";
 
+/** Строка каталога Composio — ровно та, что отдаёт `session.toolkits`. */
+export type ComposioCatalogItem = {
+  slug: string;
+  name: string | null;
+  logo: string | null;
+  description: string | null;
+  connected: boolean;
+  noAuth: boolean;
+};
+
 export async function connectRoleComposio(role: string, mode: string, context: string) {
   const policy = roleComposioPolicy(role);
   if (!policy.enabled) return { tools: [], close: async () => {} };
@@ -63,6 +73,53 @@ export async function inspectComposio(
       timeout: 35_000, maxBuffer: 2 * 1024 * 1024,
     });
     return JSON.parse(result.stdout);
+  } catch {
+    throw new Error("Composio не отвечает или ключ недействителен. Обновите ключ в хранилище и проверьте сеть сервера.");
+  }
+}
+
+/**
+ * Состояние подключения нескольких сервисов — одним внешним процессом.
+ *
+ * Маршрут обзора спрашивает каталог плюс состояние каждого сервиса,
+ * разрешённого ролям (замер 30.10.2026 на .110: 8 ключей). Раньше это были
+ * 8 отдельных вызовов `inspectComposio` — по внешнему процессу на ключ, со
+ * своим запуском Node, импортом SDK и созданием сессии Composio; на пике
+ * висело 18 мостов, маршрут отвечал 5,6–6,2 с.
+ *
+ * Теперь это ОДИН процесс с одной сессией: мост ищет ключи параллельно
+ * внутри себя (замер: 1 405 мс вместо 5 600 мс, все 8 ключей найдены).
+ */
+export async function inspectComposioSlugs(
+  policy: ComposioPolicy,
+  slugs: string[],
+): Promise<{ items: ComposioCatalogItem[] }> {
+  const command = composioCommand(policy, "work", "settings");
+  const wanted = [...new Set(slugs.filter(slug => typeof slug === "string" && slug))];
+  if (!wanted.length) return { items: [] };
+  try {
+    const result = await promisify(execFile)(command.command, [...command.args, "--slugs"], {
+      env: {
+        ...process.env,
+        ...command.env,
+        TASKFLOW_COMPOSIO_SLUGS: JSON.stringify(wanted),
+      },
+      timeout: 35_000, maxBuffer: 2 * 1024 * 1024,
+    });
+    const raw = JSON.parse(result.stdout);
+    const items = Array.isArray(raw?.items) ? raw.items : [];
+    return {
+      items: items
+        .map((item: any) => ({
+          slug: String(item?.slug ?? ""),
+          name: item?.name == null ? null : String(item.name),
+          logo: typeof item?.logo === "string" && /^https:\/\//.test(item.logo) ? item.logo : null,
+          description: typeof item?.description === "string" && item.description ? item.description : null,
+          connected: !!item?.connected,
+          noAuth: !!item?.noAuth,
+        }))
+        .filter((item: ComposioCatalogItem) => !!item.slug),
+    };
   } catch {
     throw new Error("Composio не отвечает или ключ недействителен. Обновите ключ в хранилище и проверьте сеть сервера.");
   }
