@@ -3,7 +3,7 @@
   "roles": {
     "analyst": "max",
     "architect": "max",
-    "builder": "max",
+    "builder": "off",
     "claude_code": "max",
     "code_orchestrator": "max",
     "critic_verifier": "max",

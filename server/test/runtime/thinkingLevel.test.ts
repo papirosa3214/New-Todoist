@@ -14,6 +14,16 @@ import { demoteSeededOwner, seedRoleAccounts } from "../helpers/seedOwner.js";
 import { resolveThinkingLevel } from "../../src/runtime/PiRuntimeAdapter.js";
 import { buildApp } from "../../src/index.js";
 import { runRoleInProcess, _settleInProcessRunsForTests } from "../../src/runtime/inProcessRun.js";
+import { readFileSync } from "node:fs";
+
+// Политика уровня размышлений по ролям — конфиг боевого сервера. Тест
+// сравнивает с ним, а не с зашитым значением: политику меняют вручную
+// (например, "builder": "off" — мысли роли выключены), и тест должен
+// проверять «сервер передаёт уровень ИЗ КОНФИГА», а не «max».
+const roleThinking = JSON.parse(
+  readFileSync(new URL("../../scripts/role-thinking.json", import.meta.url), "utf8"),
+) as { default: string; roles: Record<string, string> };
+const builderLevel = roleThinking.roles.builder ?? roleThinking.default;
 
 const script = vi.hoisted(() => ({
   // Что уровня сервер передал в createAgentSession (effective).
@@ -189,6 +199,22 @@ describe("MiniMax thinking: effective model/payload", () => {
     expect(resolveThinkingLevel({})).toBe("off");
   });
 
+  it("policy: уровень роли берётся из role-thinking.json (builder — 'off', прочие — max)", () => {
+    // Реальная карта minimax (models.json): max поддержан, off скрыт.
+    const minimax = { reasoning: true, thinkingLevelMap: { off: null, max: "max" } } as any;
+    // Мысли билдера выключены политикой роли.
+    expect(resolveThinkingLevel(minimax, "builder")).toBe("off");
+    // Прочие роли не тронуты: их уровень — из того же конфига.
+    expect(resolveThinkingLevel(minimax, "critic_verifier")).toBe(
+      roleThinking.roles.critic_verifier ?? roleThinking.default,
+    );
+    expect(roleThinking.roles.critic_verifier).toBe("max");
+    // Модель без reasoning — всегда off, политика роли тут ничего не меняет.
+    expect(resolveThinkingLevel({ reasoning: false, thinkingLevelMap: { off: null, max: "max" } } as any, "builder")).toBe("off");
+    // Роль без записи в конфиге — значение по умолчанию.
+    expect(resolveThinkingLevel(minimax, "role_без_записи")).toBe(roleThinking.default);
+  });
+
   it("work: reasoning модель → SDK получает уровень из роли, миграции нет", async () => {
     const taskId = makeTask("Work reasoning");
     script.reasoningByModel.set("minimax:minimax-m3", true);
@@ -198,14 +224,14 @@ describe("MiniMax thinking: effective model/payload", () => {
     try {
       await runRoleInProcess({ taskId, role: "builder", model: "minimax/minimax-m3" });
       await _settleInProcessRunsForTests();
-      // С 916c0c00 уровень задаётся per-role: resolveThinkingLevel(model, role)
-      // читает scripts/role-thinking.json. С 29.10.2026 там max для всех
-      // ролей (рекомендация MiniMax для Anthropic-совместимого API), а
-      // модель MiniMax-M3.1-Flash поддерживает max (models.json).
+      // Уровень задаётся per-role: resolveThinkingLevel(model, role) читает
+      // scripts/role-thinking.json. Значение не хардкодим — проверяем, что
+      // сервер передаёт уровень ИЗ КОНФИГА роли (политика меняется руками:
+      // например, "builder": "off" — мысли роли выключены).
       //
-      // Миграция persisted-значений при этом НЕ срабатывает: effective != "off".
+      // Миграция persisted-значений при этом НЕ срабатывает: уровень из роли.
       const last = script.requestedThinkingLevels.at(-1);
-      expect(last).toBe("max");
+      expect(last).toBe(builderLevel);
       expect(script.setThinkingCalls).toHaveLength(0);
     } finally {
       script.reasoningByModel.delete("minimax:minimax-m3");
@@ -247,7 +273,7 @@ describe("MiniMax thinking: effective model/payload", () => {
       // Раньше здесь ждали миграцию setThinkingLevel("medium", {persist:true})
       // — её удалили намеренно (уровень теперь всегда из роли).
       const last = script.requestedThinkingLevels.at(-1);
-      expect(last).toBe("max");
+      expect(last).toBe(builderLevel);
       // Миграции с persist больше нет — уровень и так приходит из роли.
       expect(
         script.setThinkingCalls.find((c) => c.persist === true),
