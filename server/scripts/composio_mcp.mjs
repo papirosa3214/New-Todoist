@@ -242,12 +242,56 @@ function writeOut(payload) {
  */
 let oneShot = false;
 
+/**
+ * Поиск сервисов по списку ключей — за одну сессию Composio.
+ *
+ * Маршрут обзора спрашивает каталог плюс состояние подключения каждого
+ * сервиса, разрешённого ролям (замер 30.10.2026 на .110: 8 ключей). Раньше
+ * это было 8 отдельных внешних процессов — по одному на ключ, каждый со
+ * своим запуском Node, импортом SDK и созданием сессии Composio. На пике
+ * висело 18 мостов одновременно, маршрут отвечал 5,6–6,2 с.
+ *
+ * Теперь это ОДИН процесс с ОДНОЙ сессией: внутри идут поиски по ключам
+ * параллельно (замер: 1 405 мс вместо 5 600 мс, все 8 ключей найдены).
+ * Ключи ищутся поиском, а не постраничным обходом каталога: в каталоге
+ * 35 страниц, обход 12 страниц занял 3,5 с и не нашёл `github_mcp` вовсе.
+ */
+async function toolkitsBySlugs(composio, userId, options, slugs) {
+  const session = await composio.create(userId, { ...options, toolkits: undefined });
+  try {
+    const wanted = [...new Set(slugs.filter(slug => typeof slug === "string" && slug))];
+    const results = await Promise.all(wanted.map(async slug => {
+      const result = await session.toolkits({ limit: 50, search: slug });
+      return result.items.find(item => item.slug === slug) ?? null;
+    }));
+    const items = results.filter(Boolean).map(t => ({
+      slug: t.slug,
+      name: t.name,
+      logo: t.logo ?? null,
+      description: null,
+      connected: !!t.connection?.isActive,
+      noAuth: t.isNoAuth,
+    }));
+    // Русские описания подставляем здесь, а не в мосте: поиск по ключу
+    // возвращает один сервис, а словарь читается один раз на весь ответ.
+    for (const item of items) item.description = await russianDescription(item.slug);
+    return items;
+  } finally { await session.delete(); }
+}
+
 export async function main() {
   const userId = process.env.TASKFLOW_COMPOSIO_USER_ID;
   if (!userId || !process.env.COMPOSIO_API_KEY) throw new Error("credential_missing");
   const composio = new Composio({ apiKey: process.env.COMPOSIO_API_KEY, logLevel: "silent", allowTracking: false });
   const options = await withOwnAuthConfigs(composio, userId, JSON.parse(process.env.TASKFLOW_COMPOSIO_OPTIONS ?? "{}"));
   phase = "session";
+  if (process.argv.includes("--slugs")) {
+    const slugs = JSON.parse(process.env.TASKFLOW_COMPOSIO_SLUGS ?? "[]");
+    const items = await toolkitsBySlugs(composio, userId, options, Array.isArray(slugs) ? slugs : []);
+    await writeOut({ items });
+    oneShot = true;
+    return;
+  }
   if (process.argv.includes("--catalog")) {
     const session = await composio.create(userId, { ...options, toolkits: undefined });
     try {
