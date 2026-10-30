@@ -218,6 +218,30 @@ export async function manageAccounts(composio, userId, toolkit, action, input) {
   throw new Error("unknown_action");
 }
 
+/**
+ * Одноразовый режим: напечатать ответ и выйти.
+ *
+ * SDK Composio держит открытым keep-alive сокет, поэтому после записи в
+ * stdout процесс сам не завершается — под node 22 он живёт ещё ~10 с
+ * (замер 30.10.2026: работа 1,1 с, выход на 10,6 с). Сервер ждёт именно
+ * выход процесса, и каталог упирался в свой таймаут: пустой список
+ * сервисов и «Composio не ответил вовремя», а на телефоне — «Сеть
+ * недоступна». Поэтому ответ пишем и уходим сразу, дожидаясь сброса
+ * stdout: иначе процесс обрежет вывод на середине.
+ */
+function writeOut(payload) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(JSON.stringify(payload), (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+/**
+ * Одноразовый вызов (--catalog, --authorize, аккаунты, почта) — ответ уже
+ * напечатан, и процесс должен уйти. Режим MCP — это stdio-сервер, он
+ * должен жить дальше, поэтому флаг ставится только в одноразовых ветках.
+ */
+let oneShot = false;
+
 export async function main() {
   const userId = process.env.TASKFLOW_COMPOSIO_USER_ID;
   if (!userId || !process.env.COMPOSIO_API_KEY) throw new Error("credential_missing");
@@ -232,7 +256,8 @@ export async function main() {
       const limit = Math.min(100, Math.max(1, Number(process.env.TASKFLOW_COMPOSIO_LIMIT) || 50));
       const cursor = process.env.TASKFLOW_COMPOSIO_CURSOR || undefined;
       const result = await session.toolkits({ limit, cursor, search: process.env.TASKFLOW_COMPOSIO_SEARCH || undefined });
-      process.stdout.write(JSON.stringify({ items: await Promise.all(result.items.map(async t => ({ slug: t.slug, name: t.name, logo: t.logo ?? null, description: await russianDescription(t.slug), connected: !!t.connection?.isActive, noAuth: t.isNoAuth }))), cursor: result.cursor ?? null, totalPages: result.totalPages ?? null }));
+      await writeOut({ items: await Promise.all(result.items.map(async t => ({ slug: t.slug, name: t.name, logo: t.logo ?? null, description: await russianDescription(t.slug), connected: !!t.connection?.isActive, noAuth: t.isNoAuth }))), cursor: result.cursor ?? null, totalPages: result.totalPages ?? null });
+      oneShot = true;
     } finally { await session.delete(); }
     return;
   }
@@ -240,12 +265,14 @@ export async function main() {
     // Keep the session alive while the owner completes the redirect flow.
     const session = await composio.create(userId, { ...options, toolkits: undefined });
     const connection = await session.authorize(process.env.TASKFLOW_COMPOSIO_TOOLKIT);
-    process.stdout.write(JSON.stringify({ url: connection.redirectUrl }));
+    await writeOut({ url: connection.redirectUrl });
+    oneShot = true;
     return;
   }
   for (const action of ["accounts", "account-link", "account-delete", "mail-list", "mail-read", "mail-attachment", "mail-draft", "mail-archive", "mail-spam", "mail-send"]) {
     if (!process.argv.includes("--" + action)) continue;
-    process.stdout.write(JSON.stringify(await manageAccounts(composio, userId, process.env.TASKFLOW_COMPOSIO_TOOLKIT, action, await readJsonInput())));
+    await writeOut(await manageAccounts(composio, userId, process.env.TASKFLOW_COMPOSIO_TOOLKIT, action, await readJsonInput()));
+    oneShot = true;
     return;
   }
   if (process.argv.includes("--linear-read")) {
@@ -255,7 +282,8 @@ export async function main() {
       if (raw.length > 100_000) throw new Error("input_too_large");
     }
     const input = JSON.parse(raw);
-    process.stdout.write(JSON.stringify(await readLinearComposio(composio, userId, input)));
+    await writeOut(await readLinearComposio(composio, userId, input));
+    oneShot = true;
     return;
   }
   const hash = process.env.TASKFLOW_COMPOSIO_CACHE_KEY;
@@ -296,7 +324,9 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(error => {
+  main()
+    .then(() => { if (oneShot) process.exit(0); })
+    .catch(error => {
     // Never echo SDK request config, headers, or raw exception text.
     const status = error.status ?? error.statusCode ?? error.cause?.status;
     process.stderr.write(`Composio unavailable (${phase})` + (Number.isInteger(status) ? ` (HTTP ${status})` : "") + "\n");
