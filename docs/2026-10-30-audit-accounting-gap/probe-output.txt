@@ -1,0 +1,51 @@
+(node:2581061) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[apns] ключ не настроен — островок будет обновляться только при открытом приложении
+=== 1. здоровый прибор ===
+ok: true
+problems: []
+probes: [{"kind":"rejected","operation":"taskflow_task","code":"INVALID_ARGUMENTS","message":"arguments.id: ожидается строка; получен число 424242.  arguments.id: ожидается строка; получен число 424242. Получи полную схему: {\"action\":\"describe\",\"operation\":\"taskflow_task\"}. Исправь указанные поля и повтори invoke. Операция ещё не выполнялась."},{"kind":"rejected","operation":"taskflow_probe_accounting_0b4d2201c7bc","code":"UNKNOWN_OPERATION","message":"Операция не найдена. Используй discover."},{"kind":"accepted","operation":"taskflow_rules","code":"OK"}]
+следы пробы до: {"probeRows":0,"probeCalls":0,"probeErrors":0}
+следы пробы после (до уборки сторожа — их уже чистит сам сторож): {"probeRows":0,"probeCalls":0,"probeErrors":0}
+
+=== 2. сломанный прибор (триггер RAISE ABORT на role_tool_audit) ===
+[tool-audit] вызов не записан: SqliteError: тест: запись отказа запрещена
+    at file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/toolAuditStore.js:97:55
+    at sqliteTransaction (/home/maksim/Проекты/New-Todoist/server/node_modules/better-sqlite3/lib/methods/transaction.js:65:24)
+    at recordToolAudit (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/toolAuditStore.js:99:9)
+    at recordCall (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/universalTaskflow.js:170:9)
+    at Object.execute (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/universalTaskflow.js:1043:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async runProbe (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/toolErrorAccountingWatcher.js:104:21)
+    at async checkToolErrorAccounting (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/toolErrorAccountingWatcher.js:363:22)
+    at async file:///tmp/watcher_probe_test.mjs:46:12 {
+  code: 'SQLITE_CONSTRAINT_TRIGGER'
+}
+[tool-audit] вызов не записан: SqliteError: тест: запись отказа запрещена
+    at file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/toolAuditStore.js:97:55
+    at sqliteTransaction (/home/maksim/Проекты/New-Todoist/server/node_modules/better-sqlite3/lib/methods/transaction.js:65:24)
+    at recordToolAudit (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/toolAuditStore.js:99:9)
+    at recordCall (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/universalTaskflow.js:170:9)
+    at Object.execute (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/universalTaskflow.js:1043:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async runProbe (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/toolErrorAccountingWatcher.js:104:21)
+    at async checkToolErrorAccounting (file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/dist/runtime/toolErrorAccountingWatcher.js:363:22)
+    at async file:///tmp/watcher_probe_test.mjs:46:12 {
+  code: 'SQLITE_CONSTRAINT_TRIGGER'
+}
+ok: false
+problems: ["запись отказов сломана: отказ пробного вызова не попал в учёт — строки об отказах не пишутся (счётчик успешных вызовов при этом цел: в счётчиках вызовов 1, ошибок 0)"]
+faults: [{"area":"audit","text":"запись отказов сломана: отказ пробного вызова не попал в учёт — строки об отказах не пишутся (счётчик успешных вызовов при этом цел: в счётчиках вызовов 1, ошибок 0)"}]
+
+=== 3. тревога при поломке ===
+получателей тревоги в копии: 1
+тревога записана: true
+уведомление в копии: [
+ {
+  "type": "tool_error_accounting_watch",
+  "text": "Учёт ошибок вызовов инструментов ролей сломан. Что сломано: запись отказов сломана: отказ пробного вызова не попал в учёт — строки об отказах не пишутся (счётчик успешных вызовов при этом цел: в счётчиках вызовов 1, ошибок 0). Что от этого ломается дальше: сво"
+ }
+]
+
+готово
+EXIT=0
