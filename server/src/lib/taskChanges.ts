@@ -68,7 +68,22 @@ let pruneTimer: NodeJS.Timeout | null = null;
 export function ensureTaskChangesLedger(): void {
   if (installed) return;
   installed = true;
+  installTaskChangesLedger();
+}
 
+/**
+ * Пересоздать журнал и его триггеры, даже если они уже стоят.
+ *
+ * Нужно для самолечения: старое определение триггера переживает правку кода
+ * (CREATE TRIGGER IF NOT EXISTS не заменяет определение), и тогда любая
+ * вставка в task_events падает с «no such column: OLD.id» — так сломался
+ * общий счётчик сдач 25.10 (сборка d96358f9).
+ */
+export function reinstallTaskChangesLedger(): void {
+  installTaskChangesLedger();
+}
+
+function installTaskChangesLedger(): void {
   db.exec(`CREATE TABLE IF NOT EXISTS task_changes (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
