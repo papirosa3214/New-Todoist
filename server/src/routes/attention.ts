@@ -10,6 +10,7 @@
 // (`src/lib/attentionContext.ts`), телефон её только рисует.
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
+import {ownerInbox} from "../lib/ownerInbox.js";
 import { authOrApiToken } from "../auth.js";
 import { attentionHint } from "../lib/attentionContext.js";
 import type { AttentionGroupKey } from "../lib/attentionContext.js";
@@ -104,7 +105,7 @@ const todayMoscow = (): string => {
 };
 
 export async function registerAttentionRoutes(app: FastifyInstance) {
-  app.get("/api/attention", { preHandler: authOrApiToken }, async () => {
+  app.get("/api/attention", { preHandler: authOrApiToken }, async (req: any) => {
     const today = todayMoscow();
     const groups: AttentionGroup[] = GROUPS.map(({ key, title }) => {
       const rows = (db.prepare(TASKS_SQL).all(key, key) as {
@@ -159,6 +160,7 @@ export async function registerAttentionRoutes(app: FastifyInstance) {
 
     return {
       ok: true,
+      tickets: ownerInbox(req.userId),
       generated_at: new Date().toISOString(),
       groups,
       counts: Object.fromEntries(groups.map((g) => [g.key, g.count])),
