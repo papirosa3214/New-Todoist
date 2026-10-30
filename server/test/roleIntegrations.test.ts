@@ -16,7 +16,7 @@ import { buildApp } from "../src/index.js";
 import { ROLE_NAMES } from "../src/roleRouting.js";
 import { saveComposioPolicy } from "../src/runtime/composioPolicy.js";
 import { inspectComposio, inspectComposioSlugs } from "../src/runtime/composioRuntime.js";
-import { clearComposioCache } from "../src/runtime/roleIntegrations.js";
+import { CACHE_TTL_MS, clearComposioCache, composioCatalog } from "../src/runtime/roleIntegrations.js";
 
 vi.mock("../src/runtime/composioRuntime.js", async importOriginal => ({
   ...await importOriginal<typeof import("../src/runtime/composioRuntime.js")>(),
@@ -53,7 +53,7 @@ describe("интеграции в профиле роли", () => {
     vi.unstubAllEnvs();
     await app.close();
   });
-  // Копия каталога живёт минуту: без сброса один тест читал бы ответ другого.
+  // Копия каталога живёт пять минут: без сброса один тест читал бы ответ другого.
   beforeEach(() => clearComposioCache());
 
   it("отдаёт разрешённые сервисы и их состояние из каталога Composio", async () => {
@@ -168,5 +168,42 @@ describe("интеграции в профиле роли", () => {
     const body = res.json();
     expect(body.services).toEqual([]);
     expect(body.error).toContain("Composio");
+  });
+});
+
+describe("копия каталога Composio", () => {
+  const ttlOwnerId = "owner-cache-ttl";
+
+  beforeEach(() => {
+    clearComposioCache();
+    vi.mocked(inspectComposio).mockReset();
+  });
+
+  it("удачный ответ каталога живёт пять минут: на четвёртой минуте ещё не переспрашиваем Composio", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = Date.now();
+      vi.mocked(inspectComposio).mockResolvedValue({
+        items: [{ slug: "todoist", name: "Todoist", connected: true, noAuth: false }],
+      } as any);
+      const first = await composioCatalog(ttlOwnerId, "todoist");
+      expect(first.items).toHaveLength(1);
+      expect(vi.mocked(inspectComposio)).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(start + 4 * 60_000);
+      const second = await composioCatalog(ttlOwnerId, "todoist");
+      expect(vi.mocked(inspectComposio)).toHaveBeenCalledTimes(1);
+      expect(second.items).toEqual(first.items);
+
+      vi.setSystemTime(start + 6 * 60_000);
+      await composioCatalog(ttlOwnerId, "todoist");
+      expect(vi.mocked(inspectComposio)).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("TTL успешного ответа каталога — пять минут", () => {
+    expect(CACHE_TTL_MS).toBe(300_000);
   });
 });
