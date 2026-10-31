@@ -211,6 +211,61 @@ describe("Синхронизация чатов: отпечаток и пост�
     expect(sequences).toEqual([...sequences].sort((a: number, b: number) => a - b));
   });
 
+  it("без курсора, но с limit — окно последних N сообщений", async () => {
+    const all = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/messages`,
+      headers: auth(),
+    }).then((res) => res.json());
+    const sequences = all.messages.map((m: any) => m.sequence) as number[];
+
+    const body = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/messages?limit=3`,
+      headers: auth(),
+    }).then((res) => res.json());
+    // Последние три, по возрастанию — не первые три.
+    expect(body.messages.map((m: any) => m.sequence)).toEqual(sequences.slice(-3));
+    // Старше окна ещё есть — их заберут курсором `before`.
+    expect(body.has_more).toBe(true);
+  });
+
+  it("ответ несёт cursor — до последнего сообщения страницы", async () => {
+    const body = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/messages?after=0&limit=5`,
+      headers: auth(),
+    }).then((res) => res.json());
+    const last = body.messages[body.messages.length - 1].sequence;
+    expect(body.cursor).toBe(last);
+  });
+
+  it("история приходит без тела шагов: только счётчик", async () => {
+    // 31.10.2026 (владелец): «в прошлых сообщениях никаких шагов не
+    // отображается, только в живом ходе». Тело шага в истории — это 45 КБ
+    // на сообщение, телефон их не рисует.
+    db.prepare(
+      `INSERT INTO chat_messages (id, chat_id, from_user_id, text, created_at, steps)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "m-with-steps",
+      chatId,
+      userId,
+      "Сообщение со шагами",
+      "2026-10-31 10:30:00",
+      JSON.stringify({ items: [{ kind: "step", tool: "taskflow", output: "большой вывод", args: { a: 1 } }] }),
+    );
+
+    const body = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/messages?limit=1`,
+      headers: auth(),
+    }).then((res) => res.json());
+    const message = body.messages[0];
+    expect(message.steps.items).toEqual([]);
+    expect(message.steps.steps_total).toBe(1);
+  });
+
   it("after и before вместе дают 400", async () => {
     const res = await app.inject({
       method: "GET",

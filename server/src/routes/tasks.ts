@@ -584,13 +584,24 @@ export function registerTaskRoutes(app: FastifyInstance) {
         projectId: typeof req.query.project_id === "string" ? req.query.project_id : null,
         assigneeId:
           typeof req.query.assignee_id === "string" ? req.query.assignee_id : null,
-        limit: 200,
+        // 31.10.2026 (владелец): «в архиве мне достаточно последних 20
+        // карточек, чтобы при необходимости восстановить». Больше не возим.
+        limit: 20,
       });
       const items = rows.map((r) => {
         const row = getTaskRow(r.id) as any;
         const hydrated = hydrateTask(row) as any;
+        // 31.10.2026 (владелец): «по архивным карточкам вы до сих пор шлёте
+        // историю активности, которую я не вижу». Экран Архива рисует
+        // строку: название, проект, дата, чип подзадач. Полную карточку
+        // клиент берёт по id, если владелец её откроет. Поэтому лента
+        // попыток (attempts), подзадачи и дочерние карточки в архивном
+        // списке больше не передаются — остаются числа.
+        hydrated.attempts = [];
+        hydrated.subtasks = [];
+        hydrated.children = [];
+        hydrated.subtask_count = r.subtask_count;
         if (includeChildrenFlag) {
-          hydrated.subtask_count = r.subtask_count;
           // Число архивных потомков корня поддерева — для iOS-чипа
           // «в архиве с детьми» (политика B: при архивировании корня всё
           // поддерево ушло вместе).
@@ -663,6 +674,16 @@ export function registerTaskRoutes(app: FastifyInstance) {
       ? "(p.id IS NULL OR p.archived_at IS NULL)"
       : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
 
+    // 31.10.2026 (владелец): «всё, что завершено, — мне на телефон не слать,
+    // ноль байт». Завершённые карточки в обычный список больше не попадают:
+    // на телефоне они не открываются, а полная карточка по-прежнему
+    // доступна из GET /api/tasks/:id. Вернуть их в ответ можно явно —
+    // ?include_closed=true (сторожа, отладка, скрипты).
+    const closedClause =
+      req.query.include_closed === "true"
+        ? "1 = 1"
+        : "(t.status <> 'completed' AND t.completed_at IS NULL)";
+
     const tasks = (
       seesEveryTask(userId)
         ? db
@@ -670,6 +691,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
               `SELECT ${columns} ${joins}
       WHERE ${baseParent}
         AND t.archived_at IS NULL
+        AND ${closedClause}
         AND ${privacy}
         ${extraWhere}
       ORDER BY t.created_at DESC`,
@@ -680,6 +702,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
               `SELECT ${columns} ${joins}
       WHERE ${baseParent}
         AND t.archived_at IS NULL
+        AND ${closedClause}
         AND (t.creator_id = ? OR t.assignee_id = ?
            OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))
         AND ${privacy}
@@ -740,6 +763,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const items = tasks.map((t: any) => {
       const subtasks = (subtaskMap.get(t.id) ?? []).map(withSubtaskState);
       const children = childMap.get(t.id) ?? [];
+      // Закрытая карточка: завершена или в архиве. Для неё список не возит
+      // подзадачи (см. ниже) — только числа.
+      const closed =
+        Boolean(t.archived_at) || t.status === "completed" || Boolean(t.completed_at);
       const bySubtask = subtasks.some(
         (s: any) => s.agent_session_id && s.agent_session_id === session,
       );
@@ -749,7 +776,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // TFTaskRowContent), а присылалось целиком: 210 КБ на 126 задач, из
         // которых видно было первые сорок символов. В лёгкой проекции —
         // одна строка (29.10.2026, «телефон — чисто окошко»).
-        ...(listProjection ? { description: listDescription(t.description) } : {}),
+        //
+        // 31.10.2026 (владелец): «по выполненным карточкам вы тоже можете
+        // слать кучу информации, которая мне нахуй не нужна». У закрытой
+        // карточки (completed/archived) строка списка тем более не
+        // раскрывается — там название, проект и дата. Поэтому её описание
+        // уходит одной строкой в любом случае: 341 КБ из 616 КБ ответа
+        // приходили на 125 завершённых карточек, которые никто не откроет.
+        ...(listProjection || closed ? { description: listDescription(t.description) } : {}),
         // Снимок промпта списку не нужен: 2 МБ из 5 МБ ответа (20.10.2026),
         // телефон перекачивал его на каждом обновлении. В базе остаётся.
         composed_prompt_snapshot: undefined,
@@ -766,7 +800,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // класть обрезанную версию — у типизированного клиента это не
         // «меньше данных», а невалидный ответ. Поэтому в списке их нет, а
         // числа приходят новыми полями.
-        subtasks: listProjection ? undefined : subtasks,
+        //
+        // 31.10.2026 (владелец): «по выполненным карточкам вы тоже можете
+        // слать кучу информации, которая мне нахуй не нужна». Поэтому
+        // закрытые карточки (completed/archived) отдают подзадачи теми же
+        // двумя числами, что и лёгкая проекция: из 990 подзадач базы 827
+        // висят на завершённых карточках, и все они уходили в список, где
+        // рисуется чип «2/5 шагов».
+        subtasks: listProjection || closed ? undefined : subtasks,
         subtask_total: subtasks.length,
         subtask_done: subtasks.filter((s: any) => Boolean(s.done)).length,
         // Прогресс родителя в списке — ДВУМЯ ЧИСЛАМИ, а не массивом детей.

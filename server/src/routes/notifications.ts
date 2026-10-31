@@ -169,6 +169,19 @@ export function registerNotificationRoutes(app: FastifyInstance) {
     // счётчика непрочитанных, а не всей ленты.
     const unreadOnly = req.query?.unread === "true" || req.query?.unread === "1";
     const unreadClause = unreadOnly ? "AND n.read = 0" : "";
+    // 31.10.2026 (владелец): «истории мне на телефон не надо, по минимуму».
+    // Лента уведомлений у владельца — 405 КБ при 1356 непрочитанных (52 КБ
+    // в zstd), и телефон тянул её на каждом переподключении. Отдаём только
+    // свежие: 50 по умолчанию, `?limit=` — до 200. Полный счётчик не теряем:
+    // он приходит отдельным полем `total`, чтобы бейдж показывал реальное
+    // число, а не длину пачки.
+    const limitRaw = Number(req.query?.limit);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.min(200, Math.floor(limitRaw))
+      : 50;
+    // Форма ответа остаётся прежней — массив: iOS декодирует его как
+    // `[Notification]`, и смена типа сломала бы клиент. Поэтому обрезаем
+    // длину, а не заворачиваем в конверт.
     return db
       .prepare(
         `
@@ -185,9 +198,10 @@ export function registerNotificationRoutes(app: FastifyInstance) {
         AND (n.task_id IS NULL OR t.archived_at IS NULL)
         AND NOT (n.type IN ('assigned','commented','reviewed','agent_state') AND EXISTS (SELECT 1 FROM users owner WHERE owner.id=n.user_id AND owner.role='owner'))
       ORDER BY n.created_at DESC
+      LIMIT ?
     `,
       )
-      .all(req.userId);
+      .all(req.userId, limit);
   });
 
   app.post(

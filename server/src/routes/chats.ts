@@ -1,5 +1,4 @@
 import {snapshotChatPreferences,messageThinkingLevel,readChatPreferences} from "../lib/chatSessionPreferences.js";
-import { projectionOf } from "../lib/windowProjection.js";
 import { etagFor, etagMatches } from "../lib/etag.js";
 import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
 import {visibleChatSql} from "../lib/serviceNoise.js";
@@ -898,9 +897,19 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
   // Обратное направление — `before` — это прокрутка вверх: нужны сообщения
   // СТАРШЕ курсора.
   //
-  // Старый вызов без параметров работает как раньше: вся история, без
-  // усечения. Старые клиенты (веб, телефон без локальной базы) не должны
-  // ничего потерять.
+  // Итоговый контракт:
+  //   • без параметров     — вся история, без усечения: старый клиент (веб,
+  //                          телефон без локальной базы) не должен ничего
+  //                          потерять, и первое открытие чата на телефоне
+  //                          отдаёт переписку целиком;
+  //   • ?after=<sequence>  — только новее курсора (догон после разрыва
+  //                          связи, перезапуска, возврата в приложение);
+  //   • ?before=<sequence> — предыдущая страница при прокрутке вверх;
+  //   • ?limit=<1..200>    — размер страницы; без курсора — окно последних
+  //                          N сообщений.
+  //
+  // Ответ несёт `has_more` («есть ещё в направлении запроса») и `cursor`
+  // (rowid последнего сообщения страницы).
   app.get<{ Params: { id: string }; Querystring: { projection?: string; after?: string; before?: string; limit?: string } }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
@@ -937,21 +946,26 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
              LEFT JOIN tasks t ON t.id = m.task_id
             WHERE ${conditions.join(" AND ")}`;
 
+      // Порядок — по rowid (`sequence`): он монотонен, не меняется и совпадает
+      // с курсором клиента. `created_at` в сортировке не участвует: при
+      // одинаковых метках времени страница по `created_at` могла бы
+      // перескочить через сообщение, а курсор телефона — это rowid.
       let messages: any[];
-      if (before.value !== null && limit.value !== null) {
-        // Для курсора «назад» нужны сообщения, БЛИЖАЙШИЕ к курсору, а не самые
-        // старые: внутри порядок обратный, наружу отдаём по возрастанию —
-        // порядок выдачи для клиента не меняется.
+      if (limit.value !== null && (before.value !== null || after.value === null)) {
+        // Курсор «назад» — нужны сообщения, БЛИЖАЙШИЕ к нему, а не самые
+        // старые; без курсора — окно последних N сообщений. Внутри порядок
+        // обратный, наружу отдаём по возрастанию — порядок выдачи для
+        // клиента не меняется.
         messages = db
           .prepare(
-            `SELECT * FROM (${select} ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?)
-              ORDER BY created_at ASC, sequence ASC`,
+            `SELECT * FROM (${select} ORDER BY m.rowid DESC LIMIT ?)
+              ORDER BY sequence ASC`,
           )
           .all(...params, limit.value) as any[];
       } else {
         messages = db
           .prepare(
-            `${select} ORDER BY m.created_at ASC, m.rowid ASC${limit.value !== null ? " LIMIT ?" : ""}`,
+            `${select} ORDER BY m.rowid ASC${limit.value !== null ? " LIMIT ?" : ""}`,
           )
           .all(...(limit.value !== null ? [...params, limit.value] : params)) as any[];
       }
@@ -978,14 +992,38 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
               .prepare("SELECT 1 FROM chat_messages m WHERE m.chat_id = ? AND m.rowid > ? LIMIT 1")
               .get(req.params.id, lastSequence),
           );
+        } else if (limit.value !== null) {
+          // Окно последних N: «есть ещё» — есть сообщения старше окна
+          // (их клиент заберёт курсором `before`).
+          hasMore = Boolean(
+            db
+              .prepare("SELECT 1 FROM chat_messages m WHERE m.chat_id = ? AND m.rowid < ? LIMIT 1")
+              .get(req.params.id, firstSequence),
+          );
         }
       }
 
       // Лёгкая проекция (29.10.2026): без вывода инструмента и аргументов
       // вызова в шагах — они весили 3,2 МБ на 20 чатов и рисуются только в
       // раскрытой шторке шага. Полные тела — по шагу, адресом ниже.
-      const projection = projectionOf(req.query);
-      return { messages: formatChatHistory(messages, projection), has_more: hasMore };
+      //
+      // 31.10.2026 (владелец): «в прошлых сообщениях никаких шагов не
+      // отображается, только в живом ходе — так нахуя вы их мне
+      // присылаете». Проверено по журналу: телефон без `?projection=list`
+      // получал полное тело шагов — в среднем 45 КБ на сообщение и до
+      // 1,3 МБ на комнату. Поэтому историю отдаём без тела шагов ВСЕГДА,
+      // независимо от query: живой ход приходит из GET /api/chats/:id/live
+      // и из WS-события сообщения (loadChatMessage, там шаги остаются).
+      // Под прежним именем `steps` — та же форма с пустым `items` и
+      // счётчиком `steps_total`, чтобы типизированный клиент не получил
+      // другой тип.
+      const formatted = formatChatHistory(messages, "list");
+      // Курсор — до куда дочитали (rowid последнего сообщения страницы).
+      // Клиент держит свой, но серверный помогает скриптам и ролям.
+      const cursor = messages.length
+        ? Number(messages[messages.length - 1].sequence) || 0
+        : after.value ?? 0;
+      return { messages: formatted, cursor, has_more: hasMore };
     },
   );
 

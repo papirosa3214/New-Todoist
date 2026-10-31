@@ -327,6 +327,19 @@ export async function buildApp(): Promise<FastifyInstance> {
     if (id && typeof reply.getHeader === "function") {
       reply.header("X-Request-ID", id);
     }
+    // Ответы API не кэшируются на устройстве (требование владельца
+    // 31.10.2026: «без онлайна вообще ничего не грузилось, всё — на стороне
+    // сервера»). До этого заголовков кэша не было вовсе, и URLSession на iOS
+    // мог показать вчерашний ответ из своего кэша вместо свежего — то есть
+    // «данные без сети» и «старый чат вместо нового». SSE
+    // (/api/runtime/events) пишет в reply.raw напрямую и сюда не попадает.
+    if (
+      typeof reply.getHeader === "function" &&
+      req.url?.startsWith("/api/") &&
+      !reply.getHeader("cache-control")
+    ) {
+      reply.header("Cache-Control", "no-store, max-age=0");
+    }
     if (reply.statusCode >= 400) {
       // reqId в строку добавляет сам логгер запроса.
       const entry = {
