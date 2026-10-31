@@ -22,6 +22,7 @@ import { setInProcessApp } from "./runtime/inProcessRun.js";
 import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
 import { collapseDuplicateQueuedJobs } from "./runtime/roleRunQueue.js";
 import { startChatQueueRecovery, scheduleChatQueueRecovery } from "./runtime/chatQueueRecovery.js";
+import { recoverLiveDrafts } from "./runtime/chatLiveDraft.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startModelUsageRetention } from "./lib/modelUsageRetention.js";
@@ -1074,6 +1075,18 @@ if (isMain) {
     // идёт через живой /messages, который кладёт delivery_id в
     // pending и поднимает in-memory очередь сам.
     if (!sandbox && process.env.TASKFLOW_QUEUE_RECOVERY !== "off") {
+      // Ходы, оборванные падением/перезапуском сервера: сохраняем то, что
+      // роль успела написать и передумать, частичным ответом (владелец
+      // 31.10.2026). Живых ходов в памяти после старта нет — все строки
+      // running заведомо осиротели.
+      try {
+        const healed = recoverLiveDrafts();
+        if (healed > 0) {
+          console.log(`[chatLiveDraft] восстановлено оборванных ходов: ${healed}`);
+        }
+      } catch (error) {
+        console.error("[chatLiveDraft] восстановление черновиков не удалось:", error);
+      }
       void resumePendingHandoffs().catch(error => console.error("[discussion] восстановление доставки не удалось:", error));
       const queueRecovery = startChatQueueRecovery();
       if (queueRecovery.recovered > 0) {

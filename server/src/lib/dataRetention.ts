@@ -63,6 +63,12 @@ export const THINKING_ITEMS_LIMIT = 20;
 /** Как часто проходить уборку (мс). Раз в сутки. */
 export const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+/** Живые черновики ходов (chat_live_drafts) — полный архив текста и
+ *  размышлений хода. Храним 90 дней: этого хватает, чтобы разобрать
+ *  инцидент, и таблица не растёт бесконечно. Незакрытые (running) не
+ *  удаляем никогда — по ним идёт восстановление после падения. */
+export const LIVE_DRAFT_RETENTION_DAYS = 90;
+
 /**
  * Обрезает размышления в снимке хода.
  *
@@ -163,13 +169,35 @@ export function trimStoredThinking(): number {
   return обрезано;
 }
 
+/** Убирает старые закрытые черновики ходов (архив размышлений). */
+export function pruneLiveDrafts(days = LIVE_DRAFT_RETENTION_DAYS): number {
+  const есть = db
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_live_drafts'",
+    )
+    .get();
+  if (!есть) return 0;
+  const res = db
+    .prepare(
+      `DELETE FROM chat_live_drafts
+        WHERE status <> 'running' AND datetime(updated_at) < datetime('now', ?)`,
+    )
+    .run(`-${days} days`);
+  return res.changes;
+}
+
 /**
  * Полный проход уборки. Вызывается при старте сервера и по таймеру.
  */
-export function runRetention(): { toolRequests: number; thinkingTrimmed: number } {
+export function runRetention(): {
+  toolRequests: number;
+  thinkingTrimmed: number;
+  liveDrafts: number;
+} {
   const toolRequests = pruneToolRequests();
   const thinkingTrimmed = trimStoredThinking();
-  return { toolRequests, thinkingTrimmed };
+  const liveDrafts = pruneLiveDrafts();
+  return { toolRequests, thinkingTrimmed, liveDrafts };
 }
 
 /**
@@ -212,9 +240,9 @@ export function startRetention(): () => void {
   const timer = setInterval(() => {
     try {
       const итог = runRetention();
-      if (итог.toolRequests || итог.thinkingTrimmed) {
+      if (итог.toolRequests || итог.thinkingTrimmed || итог.liveDrafts) {
         console.log(
-          `[retention] убрано записей журнала: ${итог.toolRequests}, обрезано снимков ходов: ${итог.thinkingTrimmed}`,
+          `[retention] убрано записей журнала: ${итог.toolRequests}, обрезано снимков ходов: ${итог.thinkingTrimmed}, старых черновиков ходов: ${итог.liveDrafts}`,
         );
       }
     } catch (error) {

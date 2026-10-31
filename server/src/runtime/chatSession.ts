@@ -79,6 +79,31 @@ export function getChatSessionGeneration(chatId: string, roleId: string): number
   return row?.generation ?? 1;
 }
 
+/**
+ * Остановка владельцем (31.10.2026): поколение пары поднимается, чтобы
+ * погасить старые доставки, но живая сессия остаётся действующей. Владелец
+ * сформулировал правило прямо: «если я его прерываю или останавливаю, новое
+ * поколение не стартует — продолжается та же сессия, прежняя память
+ * подгружается вся». Поэтому после bump поколение сохранённой сессии
+ * догоняет текущее: следующий ход идёт в тот же pi_session_id, а не в
+ * свежий с трёхсекционной выжимкой.
+ *
+ * Возвращает true, если сессия была и её поколение обновлено.
+ */
+export function adoptChatSessionGeneration(
+  chatId: string,
+  roleId: string,
+  generation: number,
+): boolean {
+  const changed = db
+    .prepare(
+      "UPDATE chat_sessions SET generation = ?, updated_at = datetime('now') " +
+        "WHERE chat_id = ? AND role_id = ? AND pi_session_id <> ''",
+    )
+    .run(generation, chatId, roleId).changes;
+  return (changed ?? 0) > 0;
+}
+
 /** Полная строка сессии (chat_id, role_id, sessionId, updated_at) или null,
  *  если её ещё нет. Используется в тестах и при отладке. */
 export function getChatSession(

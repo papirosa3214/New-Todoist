@@ -26,6 +26,7 @@ import { broadcastToUsers } from "../ws.js";
 import { unwrapRoleEnvelopeText } from "../lib/roleContractV1.js";
 import { TurnFileTracker, type TurnCodeChanges } from "../lib/turnFileChanges.js";
 import { emptyAssistantAnswer } from "./providerFailover.js";
+import { LIVE_DRAFT_MS, beginLiveDraft, finishLiveDraft, saveLiveDraft } from "./chatLiveDraft.js";
 
 export const LIVE_BROADCAST_MS = 150;
 
@@ -414,6 +415,12 @@ export class LiveTurn {
   private emptyReason: string | null = null;
   /** Исходный вид файлов до правок роли — для «Изменений кода» хода. */
   private readonly files = new TurnFileTracker();
+  /** Когда последний раз обновляли живой черновик в БД (владелец 31.10.2026). */
+  private lastDraftAt = 0;
+  /** Отложенная запись черновика: события кончились, а троттлинг ещё не
+   *  отпустил — текст не должен ждать следующего события. */
+  private draftTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly draftStartedAt: string;
 
   constructor(args: {
     chatId: string;
@@ -433,7 +440,21 @@ export class LiveTurn {
     this.audience = args.audience;
     this.publish = args.publish;
     this.detached = args.detached ?? false;
+    this.draftStartedAt = this.startedAt.toISOString();
     if (this.detached) this.closed = true;
+    // Живой черновик в базе: остановка или падение сервера не должны
+    // стирать уже написанное и размышления (владелец 31.10.2026).
+    if (!this.detached) {
+      beginLiveDraft({
+        turnId: this.turnId,
+        chatId: this.chatId,
+        roleId: this.userId,
+        roleName: this.name,
+        triggerMessageId: this.triggerMessageId ?? null,
+        replyMessageId: this.messageId,
+        startedAt: this.draftStartedAt,
+      });
+    }
     if (!this.closed && !this.publish) {
       broadcastToUsers(this.audience(), {
         type: "chats:live:start",
@@ -679,12 +700,67 @@ export class LiveTurn {
     this.timer = setTimeout(() => this.flush(), LIVE_BROADCAST_MS);
   }
 
+  /** Черновик для БД: все текстовые куски и все размышления хода.
+   *  Размышления чистятся от ключей, но не обрезаются — это архив. */
+  private draftPayload(items?: LiveItem[]) {
+    const source = (items ?? this.items).map((it) =>
+      it.kind === "thinking" ? { ...it, text: redactSecrets(it.text) } : { ...it },
+    );
+    const texts = source
+      .filter((it): it is Extract<LiveItem, { kind: "text" }> => it.kind === "text")
+      .map((it) => {
+        const raw = stripQuickRepliesLine(it.text).trim();
+        // Конверт роли (JSON v1) раскрывается по мере стриминга; пока он
+        // невалиден, unwrap отдаёт пусто. Тогда сохраняем сырой кусок —
+        // при аварийном восстановлении лучше некрасивый текст, чем ничего.
+        return unwrapRoleEnvelope(raw).trim() || raw;
+      })
+      .filter(Boolean);
+    const answer = this.partialText() || texts[texts.length - 1] || "";
+    return {
+      turnId: this.turnId,
+      chatId: this.chatId,
+      roleId: this.userId,
+      roleName: this.name,
+      triggerMessageId: this.triggerMessageId ?? null,
+      replyMessageId: this.messageId,
+      text: texts.join("\n\n"),
+      answerText: answer,
+      items: source,
+    };
+  }
+
+  /** Не чаще LIVE_DRAFT_MS, но обязательно перед закрытием хода. */
+  private persistDraft(force: boolean, items?: LiveItem[]): void {
+    if (this.detached || this.closed) return;
+    const now = Date.now();
+    const wait = LIVE_DRAFT_MS - (now - this.lastDraftAt);
+    if (!force && wait > 0) {
+      // Не теряем последний кусок: после троттлинга черновик допишется сам.
+      if (!this.draftTimer) {
+        this.draftTimer = setTimeout(() => {
+          this.draftTimer = null;
+          this.persistDraft(true);
+        }, wait);
+        this.draftTimer.unref?.();
+      }
+      return;
+    }
+    if (this.draftTimer) {
+      clearTimeout(this.draftTimer);
+      this.draftTimer = null;
+    }
+    this.lastDraftAt = now;
+    saveLiveDraft(this.draftPayload(items));
+  }
+
   private flush(): void {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
     if (this.closed) return;
+    this.persistDraft(false);
     if (this.publish) { this.publish(this.snapshot()); return; }
     const turn = liveTurnForClient(this.snapshot());
     const audience = this.audience();
@@ -754,6 +830,9 @@ export class LiveTurn {
         it.ended_at = now;
       }
     }
+    // Последний снимок в черновик — до того, как ход закроется для событий:
+    // даже если ответ не успеет лечь в chat_messages, база уже знает текст.
+    if (!this.detached) finishLiveDraft(this.draftPayload(items));
     const usage = this.usage && this.usage.input + this.usage.output > 0 ? this.usage : null;
     if (!usage && !items.some((it) => it.kind !== "text")) return null;
     let codeChanges: TurnCodeChanges | null = null;
@@ -832,7 +911,9 @@ export class LiveTurn {
 
   dispose(): void {
     if (this.timer) clearTimeout(this.timer);
+    if (this.draftTimer) clearTimeout(this.draftTimer);
     this.timer = null;
+    this.draftTimer = null;
   }
 }
 

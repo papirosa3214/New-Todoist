@@ -5,10 +5,11 @@
 //   1. владелец пишет — роль начинает ход (фальшивый Pi виснет на долгом
 //      действии);
 //   2. владелец пишет ещё раз — прежняя работа останавливается: поколение
-//      пары увеличивается, ход прежнего поколения закрыт, частичный ответ
-//      сохранён с признаком прерывания;
-//   3. следующий ход идёт в СВЕЖУЮ сессию с трёхсекционной выжимкой, а не
-//      продолжает прежний файл сессии; в промпте нет сырых размышлений.
+//      пары увеличивается (старые доставки гасятся), ход прежнего поколения
+//      закрыт, частичный ответ сохранён с признаком прерывания;
+//   3. следующий ход продолжает ТУ ЖЕ сессию со всей прежней памятью
+//      (владелец 31.10.2026): новое поколение не стартует, выжимка не
+//      подменяет прежний разговор.
 //
 // Pi замокан: внешняя работа имитируется «висящим» prompt, который
 // отпускается по abort. Сети и живых моделей нет.
@@ -29,8 +30,10 @@ const PRIMARY = liveCatalogEntryOf("qa");
 
 /** Журнал вызовов фальшивого Pi: какие сессии открывались и с каким промптом. */
 const sessions: Array<{ sessionId: string; prompts: string[]; aborted: boolean; waiting: boolean }> = [];
-/** Индекс сессии, которая должна висеть до abort. */
-let hangIndex = -1;
+/** Сессия, чей промпт содержит эту строку, висит до abort. Признак по
+ *  тексту, а не по индексу: фоновые ходы прошлых сценариев могут создать
+ *  сессию раньше и сдвинуть индекс. */
+let hangText = "";
 
 function makeSession(sessionId: string) {
   const record = { sessionId, prompts: [] as string[], aborted: false, waiting: false };
@@ -42,8 +45,7 @@ function makeSession(sessionId: string) {
       subscribe: () => () => {},
       prompt: async (text: string) => {
         record.prompts.push(text);
-        const index = sessions.length - 1;
-        if (index === hangIndex) {
+        if (hangText && text.includes(hangText)) {
           record.waiting = true;
           // Висим, пока ход не отменят.
           await new Promise<void>((resolve) => {
@@ -69,6 +71,11 @@ function makeSession(sessionId: string) {
       getLastAssistantText: () => "ок",
     },
   };
+}
+
+/** Сессия, которую тест удерживает открытой. */
+function hung() {
+  return sessions.find((s) => hangText && s.prompts.some((p) => p.includes(hangText)));
 }
 
 const mockRuntime = {
@@ -99,7 +106,9 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     createAgentSession: vi.fn(async (opts: any) => {
       sessionCounter += 1;
       const existing = opts.sessionManager?.getSessionId?.();
-      const id = existing && String(existing).startsWith("sess-old") ? String(existing) : `sess-new-${sessionCounter}`;
+      // Продолжение той же сессии владелец теперь требует и после
+      // остановки (31.10.2026): сохранённый id должен дойти до адаптера.
+      const id = existing ? String(existing) : `sess-new-${sessionCounter}`;
       return makeSession(id);
     }),
   };
@@ -139,27 +148,32 @@ beforeAll(async () => {
   roleUserId = (db
     .prepare("SELECT id FROM users WHERE role_key='builder' AND type='ai' LIMIT 1")
     .get() as { id: string }).id;
-  const chat = await app.inject({
+});
+
+beforeEach(async () => {
+  sessions.length = 0;
+  hangText = "";
+  sessionCounter = 0;
+  _resetActiveChatRunsForTests();
+  _resetChatRoleLocksForTests();
+  _resetChatRoleQueuesForTests();
+  // Свой чат на каждый сценарий: фоновые ходы прошлого теста дописывают
+  // сессию в свой чат и больше не могут подменить её в следующем.
+  const chat = await app!.inject({
     method: "POST",
     url: "/api/chats",
     headers: ownerHeader,
     payload: { kind: "direct", member_ids: ["role_builder"] },
   });
   chatId = chat.json().chat.id;
-});
-
-beforeEach(() => {
-  sessions.length = 0;
-  hangIndex = -1;
-  sessionCounter = 0;
-  _resetActiveChatRunsForTests();
-  _resetChatRoleLocksForTests();
-  _resetChatRoleQueuesForTests();
   db.prepare("DELETE FROM chat_sessions WHERE chat_id=?").run(chatId);
   // Таблицы выжимки на старом коде ещё нет — чистка не должна падать,
   // чтобы падение теста было про поведение, а не про схему.
   try {
     db.prepare("DELETE FROM chat_checkpoints WHERE chat_id=?").run(chatId);
+    // Указатель переноса выжимки переживает чат: без очистки следующий
+    // сценарий увидел бы «перенесённую выжимку» и стартовал бы заново.
+    db.prepare("DELETE FROM chat_checkpoint_transfers").run();
   } catch {
     /* на старом коде таблицы нет */
   }
@@ -167,7 +181,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Даём фоновым ходам прошлого теста действительно встать: иначе их
+  // поздний upsert сессии прилетает уже после очистки и ломает следующий
+  // сценарий (тот же класс гонки, что и в живом сервере после «Стоп»).
+  await new Promise((resolve) => setTimeout(resolve, 300));
 });
 
 afterAll(async () => {
@@ -179,17 +196,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 describe("обычный чат: уточнение прерывает прежнюю работу", () => {
   it("прежний ход остановлен, поколение увеличено, новый ход идёт с выжимкой", async () => {
     // Первая сессия «висит» на долгом действии.
-    hangIndex = 0;
+    hangText = "Начни долгую работу А";
     const first = await app!.inject({
       method: "POST",
       url: `/api/chats/${chatId}/messages`,
       headers: ownerHeader,
-      payload: { text: "@builder Начни долгую работу" },
+      payload: { text: "@builder Начни долгую работу А" },
     });
     expect(first.statusCode).toBe(200);
     // Ждём, пока ход действительно начался и повис.
-    for (let i = 0; i < 100 && !(sessions[0]?.waiting ?? false); i += 1) await sleep(20);
-    expect(sessions[0]?.waiting).toBe(true);
+    for (let i = 0; i < 100 && !(hung()?.waiting ?? false); i += 1) await sleep(20);
+    expect(hung()?.waiting).toBe(true);
     const generationBefore = currentChatGeneration(chatId, roleUserId);
 
     // Второе сообщение владельца — уточнение: прежняя работа прерывается.
@@ -197,7 +214,7 @@ describe("обычный чат: уточнение прерывает преж�
       method: "POST",
       url: `/api/chats/${chatId}/messages`,
       headers: ownerHeader,
-      payload: { text: "@builder Стоп, теперь другое" },
+      payload: { text: "@builder Стоп, хватит А" },
     });
     expect(second.statusCode).toBe(200);
 
@@ -205,7 +222,11 @@ describe("обычный чат: уточнение прерывает преж�
     expect(currentChatGeneration(chatId, roleUserId)).toBeGreaterThan(generationBefore);
     // Прежний ход реально остановлен (abort дошёл до фальшивого Pi).
     await sleep(50);
-    expect(sessions[0]?.aborted).toBe(true);
+    expect(
+      sessions
+        .filter((s) => hangText && s.prompts.some((p) => p.includes(hangText)))
+        .some((s) => s.aborted),
+    ).toBe(true);
     // Ходы прежнего поколения закрыты — восстановление их не повторит.
     const stale = db
       .prepare("SELECT status FROM chat_message_queue WHERE chat_id=? AND role_id=? AND session_generation<=?")
@@ -214,20 +235,20 @@ describe("обычный чат: уточнение прерывает преж�
   });
 
   it("прерванный ответ помечен: почему прерван и что он частичный", async () => {
-    hangIndex = 0;
+    hangText = "Начни работу, потом уточню Б";
     await app!.inject({
       method: "POST",
       url: `/api/chats/${chatId}/messages`,
       headers: ownerHeader,
-      payload: { text: "@builder Начни работу, потом уточню" },
+      payload: { text: "@builder Начни работу, потом уточню Б" },
     });
-    for (let i = 0; i < 100 && !(sessions[0]?.waiting ?? false); i += 1) await sleep(20);
-    expect(sessions[0]?.waiting).toBe(true);
+    for (let i = 0; i < 100 && !(hung()?.waiting ?? false); i += 1) await sleep(20);
+    expect(hung()?.waiting).toBe(true);
     await app!.inject({
       method: "POST",
       url: `/api/chats/${chatId}/messages`,
       headers: ownerHeader,
-      payload: { text: "@builder Стоп" },
+      payload: { text: "@builder Стоп Б" },
     });
     for (let i = 0; i < 100; i += 1) {
       const marked = db
@@ -245,38 +266,44 @@ describe("обычный чат: уточнение прерывает преж�
     throw new Error("прерванный ответ не помечен stop_reason");
   });
 
-  it("после прерывания следующий ход идёт в свежую сессию с выжимкой, а не продолжает прежнюю", async () => {
+  it("после прерывания продолжается та же сессия со всей прежней памятью", async () => {
     // Первая сессия «висит» на долгом действии.
-    hangIndex = 0;
+    hangText = "Начни долгую работу В";
     await app!.inject({
       method: "POST",
       url: `/api/chats/${chatId}/messages`,
       headers: ownerHeader,
-      payload: { text: "@builder Начни долгую работу" },
+      payload: { text: "@builder Начни долгую работу В" },
     });
-    for (let i = 0; i < 100 && !(sessions[0]?.waiting ?? false); i += 1) await sleep(20);
-    expect(sessions[0]?.waiting).toBe(true);
-    const firstSessionId = sessions[0].sessionId;
+    for (let i = 0; i < 100 && !(hung()?.waiting ?? false); i += 1) await sleep(20);
+    expect(hung()?.waiting).toBe(true);
 
     // Уточнение владельца прерывает прежнюю работу.
     await app!.inject({
       method: "POST",
       url: `/api/chats/${chatId}/messages`,
       headers: ownerHeader,
-      payload: { text: "@builder Стоп, теперь другое" },
+      payload: { text: "@builder Стоп, теперь другое В" },
     });
-    for (let i = 0; i < 100 && sessions.length < 2; i += 1) await sleep(20);
-    expect(sessions.length).toBeGreaterThanOrEqual(2);
-
-    const next = sessions[sessions.length - 1];
-    // Свежая сессия: прежний файл не продолжается.
-    expect(next.sessionId).not.toBe(firstSessionId);
-    const prompt = next.prompts.join("\n");
-    // В промпте — выжимка тремя разделами.
-    expect(prompt).toContain("Что было");
-    expect(prompt).toContain("Цель и задача");
-    expect(prompt).toContain("Что выполнить");
-    // Сырых размышлений в промпте нет.
-    expect(prompt).not.toContain("[Assistant thinking]");
+    let next: (typeof sessions)[number] | undefined;
+    for (let i = 0; i < 200 && !next; i += 1) {
+      next = [...sessions]
+        .reverse()
+        .find((s) => s.prompts.some((p) => p.includes("Стоп, теперь другое В")));
+      if (!next) await sleep(20);
+    }
+    expect(next).toBeDefined();
+    if (!next) throw new Error("ход на уточнение не стартовал");
+    // Та же сессия: продолжение разговора, а не свежий ход с выжимкой.
+    const prompt = next!.prompts.join("\n");
+    expect(prompt).toContain("Продолжаем разговор в чате TaskFlow");
+    expect(prompt).not.toContain("Что выполнить");
+    // Следующий ход — обычное продолжение разговора.
+    expect(prompt).toContain("Стоп, теперь другое В");
+    // Поколение сессии догнало текущее: next-ход не считается устаревшим.
+    const savedAfter = db
+      .prepare("SELECT generation FROM chat_sessions WHERE chat_id=? AND role_id=?")
+      .get(chatId, roleUserId) as { generation: number } | undefined;
+    expect(savedAfter?.generation).toBe(currentChatGeneration(chatId, roleUserId));
   });
 });

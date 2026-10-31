@@ -107,6 +107,7 @@ import {
 } from "../lib/chatQuestions.js";
 import { deliverAnswer } from "../lib/questionWait.js";
 import { trimThinkingItems } from "../lib/dataRetention.js";
+import { markLiveDraftSaved } from "../runtime/chatLiveDraft.js";
 import {
   ChecklistItemError,
   checklistStateOfChat,
@@ -128,6 +129,7 @@ import {
   enqueueChatReply,
   getChatSessionId,
   getChatSessionGeneration,
+  adoptChatSessionGeneration,
   recordDurableDelivery,
   pickDurableDelivery,
   completeDurableDelivery,
@@ -142,7 +144,6 @@ import {
 import { applyOwnerBoundary } from "../runtime/chatOwnerBoundary.js";
 import {
   buildCheckpointForChat,
-  carryCheckpoint,
   acknowledgeCarriedCheckpoint,
   planChatResume,
   renderCheckpointPrompt,
@@ -1719,6 +1720,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     for (const role of roles) {
       const { generation } = bumpChatGeneration({ chatId, roleId: role, reason });
       fencePairDeliveries({ chatId, roleId: role, generation });
+      // Остановка не сбрасывает память: та же сессия продолжается
+      // (владелец 31.10.2026).
+      adoptChatSessionGeneration(chatId, role, generation);
       stopped += await cancelChatRunsFor(chatId, role);
     }
     return stopped;
@@ -1739,6 +1743,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       for(const room of roomChatIds(chatId)){
         const { generation } = bumpChatGeneration({ chatId:room, roleId, reason: "owner_stop" });
         fencePairDeliveries({ chatId:room, roleId, generation });
+        adoptChatSessionGeneration(room, roleId, generation);
         broadcastToUsers(memberIds(room).concat(ownerIdsForChat(room)), { type: "chat:work_plan", chat_id: room, plan: view });
         stopped += await cancelChatRunsFor(room, roleId);
       }
@@ -1895,6 +1900,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         for(const room of roomChatIds(chatId)){
           const { generation } = bumpChatGeneration({ chatId:room, roleId: target, reason: "owner_stop" });
           fencePairDeliveries({ chatId:room, roleId: target, generation });
+          adoptChatSessionGeneration(room, target, generation);
           if (plan) broadcastToUsers(memberIds(room).concat(ownerIdsForChat(room)), { type: "chat:work_plan", chat_id: room, plan });
         }
       }
@@ -2548,6 +2554,32 @@ function roomChatIds(chatId: string): string[] {
   return [root, ...branches.map((b) => b.id)];
 }
 
+/** Дождаться, пока прерванный ход запишет свой частичный ответ с меткой
+ *  stop_reason (владелец 31.10.2026). Отмена гасит сессию, но сохранение
+ *  ответа идёт отдельным шагом; без ожидания новое сообщение стартует
+ *  раньше, чем написанное прежним ходом попало в историю. */
+async function waitForStopMarker(
+  chatId: string,
+  roleId: string,
+  triggerMessageId: string | undefined,
+  timeoutMs = 3_000,
+): Promise<void> {
+  if (!triggerMessageId) return;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const row = db
+      .prepare(
+        `SELECT 1 FROM chat_messages
+          WHERE chat_id = ? AND from_user_id = ? AND reply_to_message_id = ?
+            AND stop_reason IS NOT NULL
+          LIMIT 1`,
+      )
+      .get(chatId, roleId, triggerMessageId);
+    if (row) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 async function interruptChatTurnForOwner(chatId: string, ownerId: string): Promise<boolean> {
   if (!isMember(chatId, ownerId) || !isOwner(ownerId)) return false;
   const roleIds = chatMemberRoles(chatId)
@@ -2558,7 +2590,6 @@ async function interruptChatTurnForOwner(chatId: string, ownerId: string): Promi
   const live = roomChatIds(chatId).flatMap((roomChat) => liveTurnsOfChat(roomChat));
   const running = roleIds.filter((roleId) => live.some((turn) => turn.user_id === roleId));
   if (!running.length) return false;
-  const rootChat = rootChatIdOf(chatId);
   for (const roleId of running) {
     try {
       // Граница применяется в той комнате, где реально идёт ход.
@@ -2578,10 +2609,22 @@ async function interruptChatTurnForOwner(chatId: string, ownerId: string): Promi
       // Ходы старого поколения закрыты: поднятый заново после перезапуска
       // сервера он не должен ни начать новое действие, ни повторить эффект.
       fencePairDeliveries({ chatId: turnChatId, roleId, generation: result.generation });
-      // Выжимка прежней работы — для свежего хода с новым контекстом.
-      // Сама собирается в начале следующего хода: прерванный ход дописывает
-      // частичный ответ в историю после остановки.
-      carryCheckpoint({ roleId, rootChatId: rootChat, sourceChatId: turnChatId });
+      // Прерывание не начинает заново: та же сессия продолжается со всей
+      // прежней памятью (владелец 31.10.2026). Поколение сессии догоняет
+      // текущее, выжимка не переносится — следующее сообщение идёт в тот же
+      // pi_session_id, а не в свежий ход с трёхсекционным пересказом.
+      adoptChatSessionGeneration(turnChatId, roleId, result.generation);
+      // Ход остановлен — но его частичный ответ пишет не отмена, а сам ход.
+      // Ждём, пока он действительно ляжет в историю: новое сообщение не
+      // должно обгонять сохранение написанного.
+      const interruptedTurn = live.find(
+        (turn) => turn.user_id === roleId && turn.chat_id === turnChatId,
+      );
+      await waitForStopMarker(
+        turnChatId,
+        roleId,
+        interruptedTurn?.trigger_message_id,
+      );
     } catch (error) {
       console.warn(`[chats] не удалось остановить ход ${roleId} в ${chatId}:`, error instanceof Error ? error.message : error);
     }
@@ -3489,6 +3532,9 @@ async function deliverAgentReply(args: {
     // текст в неё не копируем (иначе дубль), если карточка в другой
     // комнате (обращение роли к роли) — копируем, иначе итог негде увидеть.
     traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure,chatId));
+    // Живой черновик закрыт итоговым сообщением: текст уже в истории,
+    // страховка больше не нужна (владелец 31.10.2026).
+    markLiveDraftSaved(live.turnId, replyId);
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
     for(const material of overflow){
       const materialId=uid();
