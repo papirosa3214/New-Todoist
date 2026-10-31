@@ -59,7 +59,7 @@ describe("Проекция ответа: телефон рисует, счита
     expect(cut.length).toBeLessThanOrEqual(241);
   });
 
-  it("шаги для списка: без вывода и аргументов, но с признаками", () => {
+  it("шаги для списка: тело не уходит, остаётся счётчик", () => {
     const steps = {
       duration_ms: 10,
       items: [
@@ -68,16 +68,17 @@ describe("Проекция ответа: телефон рисует, счита
       ],
     };
     const projected = projectStepsForList(steps) as any;
-    const step = projected.items[0];
-    expect(step.output).toBeUndefined();
-    expect(step.args).toBeUndefined();
-    expect(step.has_output).toBe(true);
-    expect(step.has_args).toBe(true);
-    expect(step.tool).toBe("bash");
-    // Размышление остаётся: его показывают в окне мыслей.
-    expect(projected.items[1].text).toBe("думаю");
+    // 31.10.2026: лента прошлых сообщений шаги не рисует (владелец:
+    // «нету возможности посмотреть предыдущие шаги»), живой ход берётся
+    // из /api/chats/:id/live. Тело шагов в списке не передаём.
+    expect(projected.items).toEqual([]);
+    expect(projected.steps_total).toBe(2);
+    expect(projected.has_steps).toBe(true);
+    // Форма сохранена: items остаётся массивом.
+    expect(Array.isArray(projected.items)).toBe(true);
     // Полный ответ не тронут.
     expect((steps.items[0] as any).output).toBe("итог");
+    expect((steps.items[1] as any).text).toBe("думаю");
   });
 
   it("профиль роли для списка: без промпта, навыков и описаний операций", () => {

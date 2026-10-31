@@ -68,20 +68,18 @@ export function projectStepsForList(steps: unknown): unknown {
   if (!steps || typeof steps !== "object") return steps;
   const source = steps as { items?: unknown };
   if (!Array.isArray(source.items)) return steps;
-  const items = source.items.map((item: unknown) => {
-    if (!item || typeof item !== "object") return item;
-    const step = item as Record<string, unknown>;
-    if (step.kind !== "step") return step;
-    const { output, args, ...rest } = step;
-    return {
-      ...rest,
-      output: undefined,
-      args: undefined,
-      has_output: typeof output === "string" && output.length > 0,
-      has_args: typeof args === "string" && args.length > 0,
-    };
-  });
-  return { ...source, items };
+  // 31.10.2026, владелец: «на телефоне нету возможности посмотреть
+  // предыдущие шаги, так нахуя вы их мне присылаете». Живой ход приходит
+  // из GET /api/chats/:id/live (in-memory снимок идущего хода), а лента
+  // прошлых сообщений шагов не рисует вовсе — ни шторки, ни строки.
+  // Поэтому в списке от шагов остаётся только счётчик: тело весило в
+  // среднем 45 КБ на сообщение и до 1,3 МБ на комнату, и всё это уходило
+  // на телефон, который эти поля не показывал.
+  // Форму сохраняем (`items` — массив, как и было), чтобы типизированный
+  // клиент не получил другой тип: пустой массив — это «меньше данных»,
+  // а не «другая форма». Счётчик — новым именем.
+  const total = source.items.length;
+  return { ...source, items: [], steps_total: total, has_steps: total > 0 };
 }
 
 /** Профиль роли для списка: без системного промпта, навыков и описаний

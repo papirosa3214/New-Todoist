@@ -1,5 +1,4 @@
 import {snapshotChatPreferences,messageThinkingLevel,readChatPreferences} from "../lib/chatSessionPreferences.js";
-import { projectionOf } from "../lib/windowProjection.js";
 import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
 import {visibleChatSql} from "../lib/serviceNoise.js";
 import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
@@ -870,8 +869,18 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // Лёгкая проекция (29.10.2026): без вывода инструмента и аргументов
       // вызова в шагах — они весили 3,2 МБ на 20 чатов и рисуются только в
       // раскрытой шторке шага. Полные тела — по шагу, адресом ниже.
-      const projection = projectionOf(req.query);
-      return { messages: formatChatHistory(messages, projection) };
+      //
+      // 31.10.2026 (владелец): «в прошлых сообщениях никаких шагов не
+      // отображается, только в живом ходе — так нахуя вы их мне
+      // присылаете». Проверено по журналу: iOS просит историю БЕЗ
+      // `?projection=list`, то есть получал полное тело шагов — в среднем
+      // 45 КБ на сообщение и до 1,3 МБ на комнату. Поэтому историю отдаём
+      // без тела шагов ВСЕГДА, независимо от query: живой ход приходит из
+      // GET /api/chats/:id/live и из WS-события сообщения (loadChatMessage,
+      // там шаги остаются). Под прежним именем `steps` — та же форма с
+      // пустым `items` и счётчиком `steps_total`, чтобы типизированный
+      // клиент не получил другой тип.
+      return { messages: formatChatHistory(messages, "list") };
     },
   );
 
