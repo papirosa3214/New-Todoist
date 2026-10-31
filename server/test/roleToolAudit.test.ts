@@ -150,6 +150,35 @@ describe("учёт вызовов инструментов", () => {
     expect(codes).toContain("ACTION_CONFLICT");
   });
 
+  // P0 карточки e73e7314 (A1/B1): событие на КАЖДОЕ действие роли, и на
+  // успех тоже. Без строки об успехе сторож считал ok=0 и гасил живой ход
+  // после трёх любых отказов за 10 минут.
+  it("успешный вызов пишется строкой события действия", async () => {
+    const api = createUniversalTaskflow([operation], context);
+    const out = decode(
+      await api.execute("ok-event", {
+        action: "invoke",
+        operation: operation.name,
+        version: 1,
+        arguments: { query: "сводка" },
+      }),
+    );
+    expect(out.ok).toBe(true);
+    const rows = toolAuditRecords({ role: ROLE, model: MODEL }, 100, true).filter(
+      (row) => row.outcome === "ok" && row.operation === operation.name,
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const row = rows[0];
+    expect(row.error_code).toBeNull();
+    expect(row.item_id).toBe("step-audit");
+    expect(row.scope).toBe("task");
+    // Длительность вызова заполняет нативный каталог; у старого шлюза её нет.
+    expect(row.duration_ms === null || typeof row.duration_ms === "number").toBe(true);
+    // Выгрузка отказов и панель ошибок остаются про отказы: успехи в неё не лезут.
+    const refusals = toolAuditRecords({ role: ROLE, model: MODEL }, 1000);
+    expect(refusals.some((r) => r.outcome === "ok")).toBe(false);
+  });
+
   it("проба учёта проходит и не оставляет мусора", () => {
     expect(checkToolAudit()).toEqual({ ok: true });
     expect(

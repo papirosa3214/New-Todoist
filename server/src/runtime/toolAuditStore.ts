@@ -1,16 +1,21 @@
-// Учёт вызовов инструментов ролями (карточка 64af4c85-93ed-4926-bd78-5cdfaf6a9ba5).
+// Учёт вызовов инструментов ролями (карточка 64af4c85-93ed-4926-bd78-5cdfaf6a9ba5,
+// P0 карточки e73e7314).
 //
 // Два хранилища, одно — рядом с уже существующим журналом операций
 // (`role_tool_requests`, toolRequestStore.ts), второе — счётчики:
 //
-//   • role_tool_audit — по одной строке на ОТКАЗАННЫЙ вызов: время, роль,
-//     модель и провайдер, инструмент и операция, код ошибки, короткое
-//     сообщение, карточка и шаг. Значения аргументов НЕ сохраняются:
+//   • role_tool_audit — по одной строке на КАЖДОЕ действие роли (P0/A1):
+//     время, роль, модель и провайдер, инструмент и операция, исход
+//     (`ok`/`error`/`repaired`), код ошибки, короткое сообщение, область
+//     (`scope`: chat|task), элемент (`item_id`), на что похож повтор
+//     (`dup_of`) и длительность вызова. Значения аргументов НЕ сохраняются:
 //     только путь поля и ожидаемый тип (см. `error_field`/`error_expected`).
+//     До P0 успешные вызовы сюда не писались, поэтому сторож видел `ok = 0`
+//     и гасил работающий ход после трёх любых отказов за 10 минут.
 //
 //   • role_tool_audit_counters — счётчики по часу и разрезам (роль, модель,
-//     провайдер, операция, инструмент): успешные вызовы идут только сюда,
-//     чтобы по ним считать долю ошибок. Строка на успех не нужна.
+//     провайдер, операция, инструмент): успешные вызовы, отказы и доля
+//     ошибок считаются отсюда.
 //
 // Отдельного журнала операций не заводим: успешные вызовы с request_id
 // уже пишутся в `role_tool_requests`.
@@ -27,6 +32,8 @@ CREATE TABLE IF NOT EXISTS role_tool_audit (
  model TEXT,
  provider TEXT,
  mode TEXT,
+ scope TEXT,
+ item_id TEXT,
  run_id TEXT,
  task_id TEXT,
  subtask_id TEXT,
@@ -38,11 +45,14 @@ CREATE TABLE IF NOT EXISTS role_tool_audit (
  error_message TEXT,
  error_field TEXT,
  error_expected TEXT,
+ dup_of TEXT,
+ duration_ms INTEGER,
  request_id TEXT
 );
 CREATE INDEX IF NOT EXISTS role_tool_audit_created_at ON role_tool_audit(created_at);
 CREATE INDEX IF NOT EXISTS role_tool_audit_role ON role_tool_audit(role);
 CREATE INDEX IF NOT EXISTS role_tool_audit_code ON role_tool_audit(error_code);
+CREATE INDEX IF NOT EXISTS role_tool_audit_item ON role_tool_audit(item_id, created_at);
 CREATE TABLE IF NOT EXISTS role_tool_audit_counters (
  bucket TEXT NOT NULL,
  role TEXT NOT NULL,
@@ -62,9 +72,15 @@ export type ToolAuditEvent = {
   model?: string | null;
   provider?: string | null;
   mode?: string | null;
+  /** Область действия роли: чат или шаг карточки (A1). */
+  scope?: string | null;
+  /** Элемент действия: шаг, карточка или чат (A1). */
+  itemId?: string | null;
   runId?: string | null;
   taskId?: string | null;
   subtaskId?: string | null;
+  /** Чат — когда действие идёт в чате, а не в шаге карточки. */
+  chatId?: string | null;
   action?: string | null;
   tool?: string | null;
   operation?: string | null;
@@ -73,6 +89,10 @@ export type ToolAuditEvent = {
   errorMessage?: string | null;
   errorField?: string | null;
   errorExpected?: string | null;
+  /** На какой прежний вызов похож этот (дедупликация, P1). */
+  dupOf?: string | null;
+  /** Сколько шёл вызов, миллисекунды (A1). */
+  durationMs?: number | null;
   requestId?: string | null;
 };
 
@@ -83,6 +103,8 @@ export type ToolAuditRecord = {
   model: string | null;
   provider: string | null;
   mode: string | null;
+  scope: string | null;
+  item_id: string | null;
   run_id: string | null;
   task_id: string | null;
   subtask_id: string | null;
@@ -94,6 +116,8 @@ export type ToolAuditRecord = {
   error_message: string | null;
   error_field: string | null;
   error_expected: string | null;
+  dup_of: string | null;
+  duration_ms: number | null;
   request_id: string | null;
 };
 
@@ -120,8 +144,13 @@ function isoToSqlite(value: string): string | null {
 }
 
 /**
- * Записать вызов: ошибка — строкой в `role_tool_audit`, любой вызов —
- * счётчиком в `role_tool_audit_counters`.
+ * Записать действие роли: строка в `role_tool_audit` на любой исход
+ * (успех, отказ, починенная форма вызова) и счётчик в
+ * `role_tool_audit_counters`.
+ *
+ * Строка на успешный вызов нужна: по ней сторож отличает живой ход от
+ * цикла неверных вызовов (P0/B1). Без неё `ok` всегда был 0, и три любых
+ * отказа за 10 минут гасили работающий шаг.
  *
  * Учёт не должен ломать сам вызов: любая ошибка записи гасится здесь и
  * пишется в журнал сервера.
@@ -138,8 +167,17 @@ export function recordToolAudit(event: ToolAuditEvent): void {
     const bucket = hourBucket();
     const operation = event.operation ?? "";
     const tool = event.tool ?? "taskflow";
+    // A1: события действия одинаковой формы у всех путей записи — и у
+    // нативного каталога, и у старого шлюза, и у пробы. Кто пишет явно, тот
+    // главнее; иначе область и элемент выводятся из карточки и шага.
+    const scope = event.scope ?? (event.taskId ? "task" : "chat");
+    const itemId = event.itemId ?? event.subtaskId ?? event.taskId ?? event.chatId ?? null;
     const isError = event.outcome === "error";
-    const write = db.transaction(() => {
+    // Две записи — ДВЕ отдельные транзакции (D3 карточки 64af4c85): сломанная
+    // запись строки учёта не должна откатывать счётчики. Сторож учёта ищет
+    // ровно эту разницу — «отказы не пишутся, а счётчики целы» — и обязан
+    // сохранить её и теперь, когда строка пишется на каждый вызов.
+    const writeCounters = db.transaction(() => {
       db.prepare(
         `INSERT INTO role_tool_audit_counters
            (bucket,role,model,provider,operation,tool,calls,errors)
@@ -155,18 +193,22 @@ export function recordToolAudit(event: ToolAuditEvent): void {
         tool,
         isError ? 1 : 0,
       );
-      if (event.outcome === "ok") return;
+    });
+    const writeRow = db.transaction(() => {
       db.prepare(
         `INSERT INTO role_tool_audit
-           (id,role,model,provider,mode,run_id,task_id,subtask_id,action,tool,
-            operation,outcome,error_code,error_message,error_field,error_expected,request_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           (id,role,model,provider,mode,scope,item_id,run_id,task_id,subtask_id,
+            action,tool,operation,outcome,error_code,error_message,error_field,
+            error_expected,dup_of,duration_ms,request_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ).run(
         crypto.randomUUID(),
         event.role,
         model,
         provider,
         event.mode ?? null,
+        scope,
+        itemId,
         event.runId ?? null,
         event.taskId ?? null,
         event.subtaskId ?? null,
@@ -178,10 +220,21 @@ export function recordToolAudit(event: ToolAuditEvent): void {
         event.errorMessage ?? null,
         event.errorField ?? null,
         event.errorExpected ?? null,
+        event.dupOf ?? null,
+        typeof event.durationMs === "number" ? Math.round(event.durationMs) : null,
         event.requestId ?? null,
       );
     });
-    write();
+    try {
+      writeCounters();
+    } catch (error) {
+      console.warn("[tool-audit] счётчики вызова не записаны:", error);
+    }
+    try {
+      writeRow();
+    } catch (error) {
+      console.warn("[tool-audit] строка вызова не записана:", error);
+    }
   } catch (error) {
     console.warn("[tool-audit] вызов не записан:", error);
   }
@@ -368,20 +421,30 @@ export function toolAuditSummary(filters: ToolAuditFilters): ToolAuditSummary {
   };
 }
 
-/** Сырые записи об отказах — то, что уходит в выгрузку. */
+/**
+ * Сырые записи об отказах — то, что уходит в выгрузку.
+ *
+ * Успешные вызовы теперь тоже лежат в `role_tool_audit` (A1: событие на
+ * каждое действие), но выгрузка и панель ошибок остаются про отказы:
+ * иначе 87 % строк — успехи и отказ не найти. Поток действий целиком
+ * читается тем же фильтром с `includeOk`.
+ */
 export function toolAuditRecords(
   filters: ToolAuditFilters,
   limit = 1000,
+  includeOk = false,
 ): ToolAuditRecord[] {
   const where = recordWhere(filters);
   const capped = Math.max(1, Math.min(Number(limit) || 1000, 10_000));
+  const onlyRefusals = includeOk ? "" : " AND outcome <> 'ok'";
   return db
     .prepare(
-      `SELECT id, created_at, role, model, provider, mode, run_id, task_id,
-              subtask_id, action, tool, operation, outcome, error_code,
-              error_message, error_field, error_expected, request_id
+      `SELECT id, created_at, role, model, provider, mode, scope, item_id,
+              run_id, task_id, subtask_id, action, tool, operation, outcome,
+              error_code, error_message, error_field, error_expected, dup_of,
+              duration_ms, request_id
          FROM role_tool_audit
-        WHERE ${where.sql}
+        WHERE ${where.sql}${onlyRefusals}
         ORDER BY datetime(created_at) DESC, id DESC
         LIMIT ?`,
     )
@@ -394,6 +457,8 @@ const CSV_COLUMNS: Array<keyof ToolAuditRecord> = [
   "model",
   "provider",
   "mode",
+  "scope",
+  "item_id",
   "run_id",
   "task_id",
   "subtask_id",
@@ -405,6 +470,8 @@ const CSV_COLUMNS: Array<keyof ToolAuditRecord> = [
   "error_message",
   "error_field",
   "error_expected",
+  "dup_of",
+  "duration_ms",
   "request_id",
 ];
 

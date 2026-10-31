@@ -83,6 +83,36 @@ it("отказ самого сервера (уточнение посреди х
  }
  const invalid=db.prepare("SELECT COUNT(*) AS n FROM role_tool_audit WHERE run_id=? AND error_code=?").get("server-refusal","INVALID_ARGUMENTS") as {n:number};
  expect(invalid.n).toBe(0);
+ // P0 карточки e73e7314: отказ сервера остаётся в учёте, но своим кодом —
+ // по нему видно, что роль ждала зря, и что аргументы тут ни при чём.
+ const codes=db.prepare("SELECT error_code, COUNT(*) AS n FROM role_tool_audit WHERE run_id=? GROUP BY error_code").all("server-refusal") as Array<{error_code:string;n:number}>;
+ const codeOf=(c:string)=>codes.find(r=>r.error_code===c)?.n ?? 0;
+ expect(codeOf("STEERING_REFUSAL")).toBe(2);
+ expect(codeOf("PLANNING_REFUSAL")).toBe(2);
+});
+it("действие в чате пишется событием с областью chat и id чата",async()=>{
+ const c=buildRoleToolCatalog({role:"builder",mode:"work",runId:"chat-action",chatId:"chat-x",messageId:"msg-x"});
+ const out=(await c.customTools[0].execute("e",{action:"invoke",operation:"taskflow_plan_read",version:1,arguments:{}})) as any;
+ expect(out).toBeTruthy();
+ const rows=db.prepare("SELECT scope, item_id, outcome FROM role_tool_audit WHERE run_id=? ORDER BY rowid DESC LIMIT 1").get("chat-action") as any;
+ expect(rows.scope).toBe("chat");
+ expect(rows.item_id).toBe("chat-x");
+ // Исход любой (в чате операция может быть ограничена режимом) — важно, что
+ // событие действия есть и у чата: раньше чатовые действия не имели ни
+ // области, ни элемента, и метрика по ним не считалась.
+ expect(["ok","error","repaired"]).toContain(rows.outcome);
+});
+it("успешное действие роли пишет событие с областью, элементом и длительностью",async()=>{
+ const c=buildRoleToolCatalog({role:"builder",mode:"work",runId:"action-event",taskId:"task-ae",subtaskId:"slot-ae"});
+ const rules=c.customTools.find((t:any)=>t.name==="taskflow_rules");
+ expect(rules).toBeTruthy();
+ await (rules as any).execute("call-ae",{});
+ const row=db.prepare("SELECT scope, item_id, outcome, error_code, duration_ms FROM role_tool_audit WHERE run_id=? ORDER BY rowid DESC LIMIT 1").get("action-event") as any;
+ expect(row.outcome).toBe("ok");
+ expect(row.error_code).toBeNull();
+ expect(row.scope).toBe("task");
+ expect(row.item_id).toBe("slot-ae");
+ expect(typeof row.duration_ms).toBe("number");
 });
 it("автоподключение возвращает операцию в активный набор",()=>{
  const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"auto-connect"});

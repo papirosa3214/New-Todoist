@@ -5,6 +5,7 @@ import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { logStepAbandoned } from "./abandonedStep.js";
 import { wakeAndDeliverStalled } from "./orchestratorWake.js";
 import { postOwnerNotification, postRoleNote, taskHeads } from "./stepNotes.js";
+import { serviceRefusalCodeList } from "./toolRefusalCodes.js";
 
 /** Сколько неверных вызовов одной операции подряд терпим до остановки роли.
  *  Правило владельца: «если три раза неправильно вызвал инструмент — роль
@@ -160,20 +161,38 @@ export async function stopRoleOnErrorLoop(args: {
  * в журнал каждый ход, поэтому файл свежий и ход выглядит живым (24.10.2026,
  * карточка 252c400e — три часа висящего слота). Успешных вызовов при этом
  * ноль: работа не идёт.
+ *
+ * P0/B1 (карточка e73e7314): в цикл идут только НАСТОЯЩИЕ ошибки одной
+ * операции. Служебные отказы (`STEERING_REFUSAL`, `CHAT_RUN_STALE`,
+ * `CHAT_PLAN_CLOSED`, `PLANNING_REFUSAL`, `TOOL_NOT_CONNECTED`) — не вина
+ * роли: три таких отказа за 10 минут гасили живой ход. Успешные вызовы с
+ * P0 пишутся в `role_tool_audit` строкой, поэтому `ok` больше не всегда 0.
  */
 export function toolOutcomeStats(
   subtaskId: string,
   windowMinutes: number,
 ): {
+  /** Настоящие отказы (без служебных) за окно — все операции вместе. */
   errors: number;
+  /** Служебные отказы за окно: в цикл не идут, но видны. */
+  serviceRefusals: number;
+  /** Успешные вызовы за окно: если они есть, это работа, а не цикл. */
   ok: number;
+  /** Больше всего настоящих отказов по одной операции — признак цикла. */
+  loopErrors: number;
+  /** Операция, на которой роль зациклилась. */
+  loopOperation: string | null;
   lastErrorAt: string | null;
   lastOperation: string | null;
 } {
+  const window = `-${Math.max(1, Math.floor(windowMinutes))} minutes`;
+  const serviceCodes = serviceRefusalCodeList();
+  const marks = serviceCodes.map(() => "?").join(",");
   const row = db
     .prepare(
       `SELECT
-         SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors,
+         SUM(CASE WHEN outcome = 'error' AND COALESCE(error_code,'') NOT IN (${marks}) THEN 1 ELSE 0 END) AS errors,
+         SUM(CASE WHEN outcome = 'error' AND error_code IN (${marks}) THEN 1 ELSE 0 END) AS service_refusals,
          SUM(CASE WHEN outcome = 'ok' THEN 1 ELSE 0 END) AS ok,
          MAX(CASE WHEN outcome = 'error' THEN created_at END) AS last_error_at,
          (SELECT operation FROM role_tool_audit
@@ -184,21 +203,41 @@ export function toolOutcomeStats(
         WHERE subtask_id = ? AND created_at >= datetime('now', ?)`,
     )
     .get(
+      ...serviceCodes,
+      ...serviceCodes,
       subtaskId,
-      `-${Math.max(1, Math.floor(windowMinutes))} minutes`,
+      window,
       subtaskId,
-      `-${Math.max(1, Math.floor(windowMinutes))} minutes`,
+      window,
     ) as
     | {
         errors: number | null;
+        service_refusals: number | null;
         ok: number | null;
         last_error_at: string | null;
         last_operation: string | null;
       }
     | undefined;
+  // Отказы по операциям: цикл — это три отказа ОДНОЙ операции. Две ошибки в
+  // одном инструменте и одна в другом — не цикл, а обычные промахи.
+  const byOperation = db
+    .prepare(
+      `SELECT operation, COUNT(*) AS n FROM role_tool_audit
+        WHERE subtask_id = ? AND created_at >= datetime('now', ?)
+          AND outcome = 'error' AND COALESCE(error_code,'') NOT IN (${marks})
+        GROUP BY operation
+        ORDER BY n DESC, operation ASC
+        LIMIT 1`,
+    )
+    .get(subtaskId, window, ...serviceCodes) as
+    | { operation: string | null; n: number }
+    | undefined;
   return {
     errors: Number(row?.errors ?? 0),
+    serviceRefusals: Number(row?.service_refusals ?? 0),
     ok: Number(row?.ok ?? 0),
+    loopErrors: Number(byOperation?.n ?? 0),
+    loopOperation: byOperation?.operation ?? null,
     lastErrorAt: row?.last_error_at ?? null,
     lastOperation: row?.last_operation ?? null,
   };

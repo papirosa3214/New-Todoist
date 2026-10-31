@@ -1,7 +1,7 @@
 import {chatExecutionMode,type ChatExecutionMode} from "./chatExecutionMode.js";
 import {roleHostAccessTools} from "./roleHostAccess.js";
 import {createHostRoleTools} from "./hostRoleTools.js";
-import {isServerRefusal} from "./serverRefusal.js";
+import {serviceRefusalCodeOf,TOOL_NOT_CONNECTED} from "./toolRefusalCodes.js";
 import {Check,Errors} from "typebox/value";
 import {createHash} from "node:crypto";
 import {taskflowTools} from "./inProcessRun.js";
@@ -87,7 +87,12 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const requestScope=JSON.stringify({taskId:context.taskId??null,subtaskId:context.subtaskId??null,chatId:context.chatId??null});
  const aliases=operations.filter(t=>!operationRestriction(t.name,context)).map(tool=>({...tool,execute:async(id:string,args:any,signal?:AbortSignal,onUpdate?:any)=>{
   handledCalls.add(id);
-  const audit=(outcome:"ok"|"error",errorCode?:string,errorMessage?:string)=>recordToolAudit({...context,action:"invoke",tool:tool.name,operation:tool.name,outcome,errorCode,errorMessage});
+  // A1: на каждое действие роли — событие с областью, элементом, инструментом,
+  // исходом, кодом отказа, повтором и длительностью. Пишется и на успех, и на
+  // отказ: без строки об успехе сторож считал ok=0 и гасил живой ход.
+  const startedAt=Date.now();
+  const actionEvent={scope:input.taskId?"task":"chat",itemId:input.subtaskId??input.taskId??input.chatId??null};
+  const audit=(outcome:"ok"|"error",errorCode?:string,errorMessage?:string)=>recordToolAudit({...context,...actionEvent,action:"invoke",tool:tool.name,operation:tool.name,outcome,errorCode,errorMessage,durationMs:Date.now()-startedAt});
   const restriction=operationRestriction(tool.name,context);
   if(restriction){audit("error",restriction.code,restriction.message);throw new Error(restriction.message);}
   // request_id — служебное поле прежнего шлюза, в схему операции не входит.
@@ -125,12 +130,21 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
    if(write)try{toolRequestStore.finish(context.actor,requestId!,"unknown_outcome",null);}catch{}
    const status=(error as {status?:number}).status;
    const rejected=(error as Error)?.name==="ToolError"&&(status===undefined||status<500);
-   audit("error",rejected?"REJECTED":"OPERATION_FAILED",String((error as Error)?.message??error).slice(0,500));
+   const message=String((error as Error)?.message??error).slice(0,500);
+   // Служебный отказ (устаревший ход, закрытый чек-лист, уточнение) — не
+   // ошибка аргументов: пишется своим кодом и в цикл неверных вызовов не идёт.
+   const serviceCode=serviceRefusalCodeOf({code:(error as {code?:string})?.code??null,text:message});
+   audit("error",serviceCode??(rejected?"REJECTED":"OPERATION_FAILED"),message);
    throw error;
   }
  }}));
  const nativeByName=new Map(aliases.map(tool=>[tool.name,tool]));
  const loader=createToolLoader({operations:aliases});
+ // A1: отказы, которые доходят только сюда (SDK отклонил вызов до запуска
+ // операции), пишутся в учёт с той же формой события действия: область,
+ // элемент, инструмент, исход и код. Успешные вызовы здесь не видны — их
+ // пишет сама операция, вместе с длительностью.
+ const refusalEvent={scope:input.taskId?"task":"chat",itemId:input.subtaskId??input.taskId??input.chatId??null};
  // SDK validates native schemas before execute(). Such refusals must not vanish
  // from counters or evade the existing three-mistake stop policy.
  const onToolExecutionEnd=(event:any):boolean=>{
@@ -144,16 +158,22 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
   // сами (только из реестра роли — права не расширяются) и НЕ считаем это
   // неверным вызовом: три таких отказа роняли ход роли.
   if(/not found/i.test(text)){
-   recordToolAudit({...context,action:"invoke",tool:event.toolName,operation:event.toolName,outcome:"error",errorCode:"TOOL_NOT_CONNECTED",errorMessage:"Операция не подключена к сессии — подключается автоматически"});
+   recordToolAudit({...context,...refusalEvent,action:"invoke",tool:event.toolName,operation:event.toolName,outcome:"error",errorCode:TOOL_NOT_CONNECTED,errorMessage:"Операция не подключена к сессии — подключается автоматически"});
    if(tool){rememberOnDemandTool(scope,event.toolName);loader.activate([event.toolName]);}
    return false;
   }
   if(!tool)return false;
-  // Отказ самого сервера — вызов верный, ошибкой роли не считается.
-  if(isServerRefusal(text))return false;
+  // Отказ самого сервера — вызов верный, ошибкой роли не считается. В учёте он
+  // остаётся и пишется своим кодом: видно, что роль ждала зря, и видно, что
+  // это не её ошибка аргументов.
+  const serviceCode=serviceRefusalCodeOf({text});
+  if(serviceCode){
+   recordToolAudit({...context,...refusalEvent,action:"invoke",tool:tool.name,operation:tool.name,outcome:"error",errorCode:serviceCode,errorMessage:"Отказ сервера: вызов не выполнялся, аргументы верные"});
+   return false;
+  }
   const issue=parseSchemaIssue(text);
   const reason="SDK отклонил вызов до выполнения";
-  recordToolAudit({...context,action:"invoke",tool:tool.name,operation:tool.name,outcome:"error",errorCode:"INVALID_ARGUMENTS",errorMessage:reason,errorField:issue?.field,errorExpected:issue?.expected});
+  recordToolAudit({...context,...refusalEvent,action:"invoke",tool:tool.name,operation:tool.name,outcome:"error",errorCode:"INVALID_ARGUMENTS",errorMessage:reason,errorField:issue?.field,errorExpected:issue?.expected});
   const attempts=(sdkMistakes.get(tool.name)??0)+1;
   sdkMistakes.set(tool.name,attempts);
   if(attempts<MISTAKE_LIMIT)return false;

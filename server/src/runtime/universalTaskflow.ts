@@ -251,6 +251,9 @@ function recordCall(
       runId: context.runId ?? null,
       taskId: context.taskId ?? null,
       subtaskId: context.subtaskId ?? null,
+      // A1 (P0 карточки e73e7314): действие в чате тоже событие — с областью
+      // chat и id чата, иначе у чатовых действий нет ни элемента, ни места.
+      chatId: (context as { chatId?: string | null }).chatId ?? null,
       action: typeof p?.action === "string" ? p.action : null,
       tool: "taskflow",
       operation: typeof p?.operation === "string" ? p.operation : null,

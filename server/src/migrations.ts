@@ -5455,6 +5455,28 @@ const migrations: Migration[] = [
     db.exec("CREATE INDEX IF NOT EXISTS idx_chat_live_drafts_status ON chat_live_drafts(status, updated_at)");
   } },
 
+  // Карточка e73e7314 (P0: B1 + A1). Строка учёта — теперь событие на КАЖДОЕ
+  // действие роли, а не только на отказ: сторож считал `ok` по таблице, куда
+  // успешные вызовы не попадали, и три любых отказа за 10 минут гасили
+  // работающий ход. Поля события действия (A1): область `scope` (chat|task),
+  // элемент `item_id` (шаг, карточка или чат), `dup_of` — на что похож
+  // повтор (заполняет P1) и `duration_ms` — сколько шёл вызов.
+  { id: "188_role_tool_audit_actions", description:
+      "role_tool_audit: событие на каждое действие роли — колонки scope, item_id, dup_of, duration_ms", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(role_tool_audit)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    for (const [name, decl] of [
+      ["scope", "TEXT"],
+      ["item_id", "TEXT"],
+      ["dup_of", "TEXT"],
+      ["duration_ms", "INTEGER"],
+    ] as const) {
+      if (!cols.has(name)) db.exec(`ALTER TABLE role_tool_audit ADD COLUMN ${name} ${decl}`);
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS role_tool_audit_item ON role_tool_audit(item_id, created_at)");
+  } },
+
 ];
 /**
  * Опции прогона миграций.

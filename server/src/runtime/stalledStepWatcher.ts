@@ -386,14 +386,18 @@ export async function runStalledStepWatch(now: Date = new Date()): Promise<Stall
     // Признак цикла: в журнале вызовов есть отказы, а успешных вызовов нет.
     // Такой ход блокируем, а не перезапускаем: перезапуск приведёт в тот же
     // тупик и сожжёт следующую попытку.
+    // P0/B1 (карточка e73e7314): цикл — это три НАСТОЯЩИХ отказа одной
+    // операции. Служебные отказы (уточнение посреди хода, устаревший ход,
+    // закрытый чек-лист, неподключённая операция) в счёт не идут: они не
+    // вина роли, а раньше именно они гасили живой ход.
     const outcomes = toolOutcomeStats(subtask.id, Math.max(STALL_AFTER_MIN, 10));
-    if (outcomes.errors >= MISTAKE_LIMIT && outcomes.ok === 0) {
+    if (outcomes.loopErrors >= MISTAKE_LIMIT && outcomes.ok === 0) {
       await stopRoleOnErrorLoop({
         taskId: subtask.task_id,
         subtaskId: subtask.id,
         role,
-        operation: outcomes.lastOperation ?? "неверные вызовы",
-        attempts: outcomes.errors,
+        operation: outcomes.loopOperation ?? outcomes.lastOperation ?? "неверные вызовы",
+        attempts: outcomes.loopErrors,
         reason:
           "роль повторяла один и тот же неверный вызов; успешных вызовов за окно не было",
       });

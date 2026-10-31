@@ -23,6 +23,7 @@ import db from "../src/db.js";
 import { buildApp } from "../src/index.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { runStalledStepWatch } from "../src/runtime/stalledStepWatcher.js";
+import { toolOutcomeStats } from "../src/runtime/errorLoopStop.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
 async function setupTaskWithPlan(
@@ -112,6 +113,7 @@ function seedErrors(
   subtaskId: string,
   count: number,
   operation = "taskflow_work_plan",
+  code = "INVALID_ARGUMENTS",
 ): void {
   for (let i = 0; i < count; i += 1) {
     db.prepare(
@@ -119,10 +121,34 @@ function seedErrors(
          (id, created_at, role, mode, run_id, task_id, subtask_id, action, tool,
           operation, outcome, error_code, error_message)
        VALUES (?, datetime('now'), 'builder', 'work', 'run-cycle', ?, ?, 'invoke',
-               'taskflow', ?, 'error', 'INVALID_ARGUMENTS',
+               'taskflow', ?, 'error', ?,
                'arguments.items: ожидается массив; получен объект {"item":{}}')`,
     ).run(
       `audit-cycle-${Math.random().toString(36).slice(2)}`,
+      taskId,
+      subtaskId,
+      operation,
+      code,
+    );
+  }
+}
+
+/** Успешный вызов в журнале: роль работала, а не крутила один неверный вызов. */
+function seedOk(
+  taskId: string,
+  subtaskId: string,
+  count = 1,
+  operation = "taskflow_work_plan",
+): void {
+  for (let i = 0; i < count; i += 1) {
+    db.prepare(
+      `INSERT INTO role_tool_audit
+         (id, created_at, role, mode, run_id, task_id, subtask_id, action, tool,
+          operation, outcome)
+       VALUES (?, datetime('now'), 'builder', 'work', 'run-cycle', ?, ?, 'invoke',
+               'taskflow', ?, 'ok')`,
+    ).run(
+      `audit-ok-${Math.random().toString(36).slice(2)}`,
       taskId,
       subtaskId,
       operation,
@@ -219,13 +245,7 @@ describe("errorLoopStop", () => {
     const attemptId = startAttempt(taskId, subtaskId);
     seedErrors(taskId, subtaskId, 3);
     // Роль работала: успешный вызов есть — это не цикл, а обычная работа.
-    db.prepare(
-      `INSERT INTO role_tool_audit
-         (id, created_at, role, mode, run_id, task_id, subtask_id, action, tool,
-          operation, outcome)
-       VALUES (?, datetime('now'), 'builder', 'work', 'run-cycle', ?, ?, 'invoke',
-               'taskflow', 'taskflow_work_plan', 'ok')`,
-    ).run(`audit-ok-${Math.random().toString(36).slice(2)}`, taskId, subtaskId);
+    seedOk(taskId, subtaskId);
 
     const report = await runStalledStepWatch();
     expect(report.blocked).toBe(0);
@@ -235,5 +255,65 @@ describe("errorLoopStop", () => {
       .get(subtaskId) as { agent_state: string | null; current_attempt_id: string | null };
     expect(step.agent_state).toBe("in_progress");
     expect(step.current_attempt_id).toBe(attemptId);
+  });
+
+  // P0/B1 (карточка e73e7314): служебные отказы — не вина роли. Уточнение
+  // посреди хода, устаревший ход и закрытый чек-лист раньше гасили живой шаг.
+  it("три служебных отказа не блокируют шаг", async () => {
+    const { taskId, subtaskId } = await setupTaskWithPlan(app);
+    const attemptId = startAttempt(taskId, subtaskId);
+    seedErrors(taskId, subtaskId, 1, "taskflow_work_plan", "STEERING_REFUSAL");
+    seedErrors(taskId, subtaskId, 1, "taskflow_work_plan", "CHAT_RUN_STALE");
+    seedErrors(taskId, subtaskId, 1, "taskflow_work_plan", "CHAT_PLAN_CLOSED");
+
+    const stats = toolOutcomeStats(subtaskId, 10);
+    expect(stats.errors).toBe(0);
+    expect(stats.serviceRefusals).toBe(3);
+
+    const report = await runStalledStepWatch();
+    expect(report.blocked).toBe(0);
+    const step = db
+      .prepare("SELECT agent_state, current_attempt_id FROM subtasks WHERE id = ?")
+      .get(subtaskId) as { agent_state: string | null; current_attempt_id: string | null };
+    expect(step.agent_state).toBe("in_progress");
+    expect(step.current_attempt_id).toBe(attemptId);
+  });
+
+  // Цикл — это три отказа ОДНОЙ операции: промах в трёх разных инструментах
+  // не признак зацикливания.
+  it("три отказа разных операций не считаются циклом", async () => {
+    const { taskId, subtaskId } = await setupTaskWithPlan(app);
+    const attemptId = startAttempt(taskId, subtaskId);
+    seedErrors(taskId, subtaskId, 1, "taskflow_work_plan");
+    seedErrors(taskId, subtaskId, 1, "taskflow_comment");
+    seedErrors(taskId, subtaskId, 1, "taskflow_task");
+
+    const stats = toolOutcomeStats(subtaskId, 10);
+    expect(stats.errors).toBe(3);
+    expect(stats.loopErrors).toBe(1);
+
+    const report = await runStalledStepWatch();
+    expect(report.blocked).toBe(0);
+    const step = db
+      .prepare("SELECT agent_state, current_attempt_id FROM subtasks WHERE id = ?")
+      .get(subtaskId) as { agent_state: string | null; current_attempt_id: string | null };
+    expect(step.agent_state).toBe("in_progress");
+    expect(step.current_attempt_id).toBe(attemptId);
+  });
+
+  // Успешные вызовы теперь лежат строкой в учёте, поэтому «ok = 0» больше не
+  // получается само собой: живой ход с отказами не гасится.
+  it("успешные вызовы в учёте видны сторожу и снимают подозрение в цикле", async () => {
+    const { taskId, subtaskId } = await setupTaskWithPlan(app);
+    startAttempt(taskId, subtaskId);
+    seedErrors(taskId, subtaskId, 3);
+    seedOk(taskId, subtaskId, 4);
+
+    const stats = toolOutcomeStats(subtaskId, 10);
+    expect(stats.ok).toBe(4);
+    expect(stats.errors).toBe(3);
+
+    const report = await runStalledStepWatch();
+    expect(report.blocked).toBe(0);
   });
 });
