@@ -281,14 +281,20 @@ export function restoreTask(taskId: string, actorId: string): {
   project_archived?: boolean;
   reason?: string;
   restored_subtree_count?: number;
+  restored_from_closed?: boolean;
 } {
   const txn = db.transaction((id: string, by: string) => {
     const row = db
       .prepare(
-        "SELECT id, archived_at, project_id FROM tasks WHERE id = ?",
+        "SELECT id, archived_at, project_id, status FROM tasks WHERE id = ?",
       )
       .get(id) as
-      | { id: string; archived_at: string | null; project_id: string | null }
+      | {
+          id: string;
+          archived_at: string | null;
+          project_id: string | null;
+          status: string;
+        }
       | undefined;
     if (!row) {
       const err = new Error("task_not_found");
@@ -296,6 +302,15 @@ export function restoreTask(taskId: string, actorId: string): {
       throw err;
     }
     if (!row.archived_at) {
+      // Завершённая, но ещё не архивная карточка: «Вернуть в работу» = снять
+      // выполнение (status=active, completed_at=NULL). Иначе клиент не смог бы
+      // вернуть закрытую задачу в работу (01.11.2026).
+      if (row.status === "completed") {
+        db.prepare(
+          "UPDATE tasks SET status = 'active', completed_at = NULL WHERE id = ? AND status = 'completed'",
+        ).run(id);
+        return { task_id: id, restored_from_closed: true };
+      }
       return { task_id: id, reason: "not_archived" };
     }
     if (row.project_id) {
@@ -374,7 +389,9 @@ export function purgeArchivedTask(taskId: string, actorId: string): {
   // отдельным кодом, чем откатывать журнал. Шаг 4 (purge) — тоже без
   // общей: свою транзакцию держит сам `purgeTasks`.
   const row = db
-    .prepare("SELECT id, title, archived_at, project_id, agent_state FROM tasks WHERE id = ?")
+    .prepare(
+      "SELECT id, title, archived_at, project_id, agent_state, status FROM tasks WHERE id = ?",
+    )
     .get(taskId) as
     | {
         id: string;
@@ -382,10 +399,13 @@ export function purgeArchivedTask(taskId: string, actorId: string): {
         archived_at: string | null;
         project_id: string | null;
         agent_state: string | null;
+        status: string;
       }
     | undefined;
   if (!row) return { ok: false, reason: "not_archived", task_id: taskId, title: "" };
-  if (!row.archived_at) {
+  // Закрытая (выполненная) карточка удаляется окончательно так же, как
+  // архивная: закрытая задача — это архивная по сути (01.11.2026).
+  if (!row.archived_at && row.status !== "completed") {
     return { ok: false, reason: "not_archived", task_id: taskId, title: row.title };
   }
 
@@ -490,11 +510,15 @@ export function listArchivedTasks(input: {
   limit?: number;
 } = {}): Array<{
   id: string;
-  archived_at: string;
+  archived_at: string | null;
+  completed_at: string | null;
   subtask_count: number;
   archived_subtree_count: number;
 }> {
-  const where: string[] = ["t.archived_at IS NOT NULL"];
+  // 01.11.2026 (владелец): «в архив уходят отменённые и выполненные, карточка
+  // одинаковая, отличается только пометка». Поэтому архивный список — и
+  // архивные, и завершённые (archived_at IS NULL, status='completed').
+  const where: string[] = ["(t.archived_at IS NOT NULL OR t.status = 'completed')"];
   const params: unknown[] = [];
   if (input.projectId) {
     where.push("t.project_id = ?");
@@ -530,17 +554,18 @@ export function listArchivedTasks(input: {
            JOIN tasks d ON d.parent_id = a.id
           WHERE d.archived_at IS NOT NULL
        )
-      SELECT r.id, r.archived_at,
+      SELECT r.id, r.archived_at, r.completed_at,
              (SELECT COUNT(*) FROM subtasks s WHERE s.task_id = r.id) AS subtask_count,
              (SELECT COUNT(*) FROM arch_subtree s WHERE s.root_id = r.id) AS archived_subtree_count
         FROM tasks r
        WHERE r.id IN (SELECT id FROM arch_roots)
-       ORDER BY r.archived_at DESC
+       ORDER BY COALESCE(r.archived_at, r.completed_at) DESC
        LIMIT ?`,
     )
     .all(...params, limit) as Array<{
     id: string;
-    archived_at: string;
+    archived_at: string | null;
+    completed_at: string | null;
     subtask_count: number;
     archived_subtree_count: number;
   }>;
