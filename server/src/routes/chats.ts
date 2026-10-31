@@ -1125,10 +1125,12 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({error:"Способ выполнения выбирает владелец"});
     let mode;
     try {mode=parseChatExecutionMode(req.body?.execution_mode);} catch(error) {return reply.code(400).send({error:(error as Error).message});}
-    // Помощник владельца в личной переписке работает только в чате:
-    // переключение «По карточке» ему недоступно (карточка e11eae7a, пункт 2).
-    if (mode === "card" && secretaryChatOnly(req.params.id))
-      return reply.code(403).send({error:"С Помощником владельца работа идёт в чате: «По карточке» недоступно"});
+    // 31.10.2026 (владелец): «у помощника мы делали только чат, но не нужно
+    // отбирать у него возможность создавать карточки». Раньше здесь стоял
+    // запрет «Помощнику — только в чате», и он же прятал карточные операции
+    // (taskflow_create_task и прочие) из набора инструментов. Теперь способ
+    // выполнения выбирает владелец и в чате с Помощником — как в любом
+    // другом. По умолчанию комната по-прежнему «в чате».
     db.prepare("UPDATE chats SET execution_mode=?,updated_at=datetime('now') WHERE id=?").run(mode,req.params.id);
     return {chat:chatRow(req.params.id)};
   });
@@ -1176,9 +1178,6 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       if (req.body?.execution_mode !== undefined) {
         if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({error:"Способ выполнения выбирает владелец"});
         try {requestedExecutionMode=parseChatExecutionMode(req.body.execution_mode);} catch {return reply.code(400).send({error:"Неизвестный способ выполнения"});}
-        // С Помощником владельца «По карточке» недоступно (карточка e11eae7a).
-        if (requestedExecutionMode === "card" && secretaryChatOnly(req.params.id))
-          return reply.code(403).send({error:"С Помощником владельца работа идёт в чате: «По карточке» недоступно"});
       }
       const text = String(req.body?.text || "").trim();
       // MAK-98 и гейт формата ниже используют отправителя — считаем один раз.
@@ -1309,7 +1308,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       const sourceMessage = senderRole && parentMessage ? db.prepare("SELECT chat_id FROM chat_messages WHERE id=?").get(parentMessage) as {chat_id:string}|undefined : undefined;
       const executionMode = senderRole
         ? sourceSlot ? "card" : sourceMessage && isMember(sourceMessage.chat_id,req.userId) ? effectiveExecutionMode(sourceMessage.chat_id,parentMessage) : "chat"
-        : isOwner(req.userId) && isCardHandoffCommand(text) && !secretaryChatOnly(chatId) ? "card" : requestedExecutionMode ?? effectiveExecutionMode(chatId);
+        : isOwner(req.userId) && isCardHandoffCommand(text) ? "card" : requestedExecutionMode ?? effectiveExecutionMode(chatId);
       // Явный вызов команды («/skill:имя » или «/mcp:имя ») проверяется при
       // отправке: неизвестное имя отклоняется и НЕ исполняется; известный
       // навык подключается настоящим текстом, инструмент — реальным вызовом
@@ -3227,23 +3226,12 @@ function isDirectRoleChat(chatId: string): boolean {
 }
 
 /**
- * Помощник владельца в личной переписке — всегда работа в чате.
- * Личная переписка с Помощником — это его личная комната: владелец и
- * Помощник вдвоём. Старый «card» в комнате или в запросе карточку там не
- * запускает, а переключение в «card» недоступно (карточка e11eae7a, пункт 2).
- * Общие комнаты и лички других ролей правило не трогает.
+ * Способ выполнения сообщения: явный выбор комнаты, а если его нет — «в чате».
+ * До 31.10.2026 здесь было исключение для личной комнаты Помощника (всегда
+ * «в чате»); владелец его отменил — Помощник тоже умеет работать по карточке.
  */
-function secretaryChatOnly(chatId: string): boolean {
-  if (!isDirectRoleChat(chatId)) return false;
-  const members = memberIds(chatId);
-  const secretaryId = roleAccountId("secretary");
-  if (!secretaryId || members.length !== 2 || !members.includes(secretaryId)) return false;
-  return chatMemberRoles(chatId).every((role) => role === "secretary");
-}
-
-/** Способ выполнения с учётом правила Помощника: в её чате всегда «в чате». */
 function effectiveExecutionMode(chatId: string, messageId?: string): ChatExecutionMode {
-  return secretaryChatOnly(chatId) ? "chat" : chatExecutionMode(chatId, messageId);
+  return chatExecutionMode(chatId, messageId);
 }
 
 /** Роль для явной команды: названная перед вызовом, упомянутая в тексте или единственная в чате. */
