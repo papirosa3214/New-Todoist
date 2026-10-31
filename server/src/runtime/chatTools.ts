@@ -358,7 +358,11 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           найдено: items.length,
           записи: items.map((m) => ({
             id: m.id, откуда: where[m.scope] ?? m.scope, вид: m.kind, заголовок: m.title,
-            текст: String(m.text ?? "").slice(0, 1500), записал: m.source === "owner" ? "владелец" : "роль",
+            текст: String(m.text ?? "").slice(0, 1500),
+            // Кто именно записал: имя учётки из API. Без имени — по виду
+            // источника. Владелец 01.11.2026: подпись «владелец» у всех
+            // вводила в заблуждение — Оркестратор и Помощник пишут с его правами.
+            записал: String(m.author ?? "") || (m.source === "owner" ? "владелец" : "роль"),
           })),
         };
       }),

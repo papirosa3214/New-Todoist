@@ -503,6 +503,13 @@ export interface RecallItem {
   score: number;
   pinned: boolean;
   source: "owner" | "role";
+  /**
+   * Кто именно записал — имя учётки (владелец, Оркестратор, «Разработчик»).
+   * Владелец 01.11.2026: «каждый сам должен писать от своего имени» — раньше
+   * вывод показывал «записал владелец» у всех, потому что подпись строилась
+   * только по source_kind, а Оркестратор и Помощник пишут с правами владельца.
+   */
+  author: string | null;
 }
 
 function visibleWhere(
@@ -540,7 +547,9 @@ export async function recall(args: {
 
   const notes = db
     .prepare(
-      `SELECT m.id, m.kind, m.scope, m.title, m.text, m.pinned, m.source_kind, m.embedding FROM memories m WHERE ${vis.sql} AND m.kind <> 'file'`,
+      `SELECT m.id, m.kind, m.scope, m.title, m.text, m.pinned, m.source_kind, u.name AS author_name, m.embedding
+         FROM memories m LEFT JOIN users u ON u.id = m.created_by
+        WHERE ${vis.sql} AND m.kind <> 'file'`,
     )
     .all(...vis.args) as Array<{
     id: string;
@@ -550,12 +559,16 @@ export async function recall(args: {
     text: string;
     pinned: number;
     source_kind: "owner" | "role";
+    author_name: string | null;
     embedding: Buffer | null;
   }>;
   const chunks = db
     .prepare(
-      `SELECT m.id, m.scope, m.title, m.pinned, m.source_kind, c.text, c.embedding FROM memory_chunks c
-         JOIN memories m ON m.id = c.memory_id WHERE ${vis.sql}`,
+      `SELECT m.id, m.scope, m.title, m.pinned, m.source_kind, u.name AS author_name, c.text, c.embedding
+         FROM memory_chunks c
+         JOIN memories m ON m.id = c.memory_id
+         LEFT JOIN users u ON u.id = m.created_by
+        WHERE ${vis.sql}`,
     )
     .all(...vis.args) as Array<{
     id: string;
@@ -563,6 +576,7 @@ export async function recall(args: {
     title: string | null;
     pinned: number;
     source_kind: "owner" | "role";
+    author_name: string | null;
     text: string;
     embedding: Buffer | null;
   }>;
@@ -592,6 +606,7 @@ export async function recall(args: {
         score: s,
         pinned: Boolean(n.pinned),
         source: n.source_kind,
+        author: n.author_name,
       });
     }
   }
@@ -607,6 +622,7 @@ export async function recall(args: {
         score: s,
         pinned: false,
         source: c.source_kind,
+        author: c.author_name,
       });
     }
   }

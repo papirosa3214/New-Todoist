@@ -70,6 +70,20 @@ describe("память ролей", () => {
     expect(found.json().items.some((i: any) => i.id === res.json().memory.id)).toBe(true);
   });
 
+  // Владелец 01.11.2026: «каждый сам должен писать от своего имени» — в выводе
+  // recall подпись «записал владелец» стояла у всех, потому что строилась
+  // только по source_kind (Оркестратор и Помощник пишут с правами владельца).
+  it("recall подписывает запись её автором, а не словом «владелец»", async () => {
+    const mine = await post(as("role_designer"), { text: "Дизайн: отступы сетки считаем от 8 пунктов", scope: "team", kind: "fact" });
+    expect(mine.statusCode).toBe(201);
+    const found = await app.inject({ method: "GET", url: "/api/memories/recall?q=" + encodeURIComponent("отступы сетки 8 пунктов"), headers: as("role_designer") });
+    const item = found.json().items.find((i: any) => i.id === mine.json().memory.id);
+    expect(item).toBeTruthy();
+    const expected = (db.prepare("SELECT name FROM users WHERE id = ?").get("role_designer") as { name: string }).name;
+    expect(item.author).toBe(expected);
+    expect(item.author).not.toBe("владелец");
+  });
+
   it("память проекта: id задачи вместо проекта — запись идёт в проект задачи", async () => {
     const projectId = (db.prepare("SELECT id FROM projects LIMIT 1").get() as { id: string }).id;
     const taskId = `mem-task-${Date.now()}`;
