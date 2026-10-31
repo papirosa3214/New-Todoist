@@ -199,7 +199,7 @@ describe("MiniMax thinking: effective model/payload", () => {
     expect(resolveThinkingLevel({})).toBe("off");
   });
 
-  it("policy: уровень роли берётся из role-thinking.json (builder — 'off', прочие — max)", () => {
+  it("policy: уровень роли берётся из role-thinking.json (значение — из политики, не зашитое)", () => {
     // Реальная карта minimax (models.json): max поддержан, off скрыт.
     const minimax = { reasoning: true, thinkingLevelMap: { off: null, max: "max" } } as any;
     // Мысли билдера выключены политикой роли.
@@ -208,7 +208,11 @@ describe("MiniMax thinking: effective model/payload", () => {
     expect(resolveThinkingLevel(minimax, "critic_verifier")).toBe(
       roleThinking.roles.critic_verifier ?? roleThinking.default,
     );
-    expect(roleThinking.roles.critic_verifier).toBe("max");
+    // Значение политики не зашиваем: сверяем, что оно допустимое и что
+    // сервер отдаёт ровно его (31.10.2026 — уровень ролей меняет владелец).
+    expect(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).toContain(
+      roleThinking.roles.critic_verifier ?? roleThinking.default,
+    );
     // Модель без reasoning — всегда off, политика роли тут ничего не меняет.
     expect(resolveThinkingLevel({ reasoning: false, thinkingLevelMap: { off: null, max: "max" } } as any, "builder")).toBe("off");
     // Роль без записи в конфиге — значение по умолчанию.

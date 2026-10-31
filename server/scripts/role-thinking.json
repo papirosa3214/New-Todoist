@@ -1,16 +1,16 @@
 {
-  "default": "max",
+  "default": "minimal",
   "roles": {
-    "analyst": "max",
-    "architect": "max",
+    "analyst": "minimal",
+    "architect": "minimal",
     "builder": "off",
-    "claude_code": "max",
-    "code_orchestrator": "max",
-    "critic_verifier": "max",
-    "designer": "max",
-    "infra_engineer": "max",
-    "qa": "max",
-    "researcher": "max",
-    "secretary": "max"
+    "claude_code": "minimal",
+    "code_orchestrator": "minimal",
+    "critic_verifier": "minimal",
+    "designer": "minimal",
+    "infra_engineer": "minimal",
+    "qa": "minimal",
+    "researcher": "minimal",
+    "secretary": "minimal"
   }
 }

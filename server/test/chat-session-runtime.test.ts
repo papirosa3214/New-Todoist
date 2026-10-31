@@ -32,6 +32,13 @@ import {
 } from "../src/runtime/chatSession.js";
 import {offerChatSteering} from "../src/runtime/chatSteering.js";
 import { liveCatalogEntryOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
+import { readFileSync } from "node:fs";
+
+// Политика уровня размышлений ролей — конфиг боевого сервера. Значение не
+// зашиваем: уровень меняет владелец руками, тест сверяется с конфигом.
+const roleThinkingPolicy = JSON.parse(
+  readFileSync(new URL("../scripts/role-thinking.json", import.meta.url), "utf8"),
+) as { default: string; roles: Record<string, string> };
 
 // === Замоканный Pi SDK ===
 
@@ -242,15 +249,19 @@ describe("startChatRun (ход чата внутри сервера)", () => {
       expect((fakeSessions[0] as any).setThinkingLevel).toHaveBeenCalledWith("low");
     }finally{Object.assign(entry,prior);delete (entry as any).thinkingLevelMap;}
   });
-  // Дефолт ролей — low с 24.10.2026 (648f6eec, scripts/role-thinking.json).
-  it.each([["architect", "max"], ["qa", "low"]])("owner thinking policy reaches chat SDK for %s", async (role, expected) => {
+  // Уровень ролей — из политики scripts/role-thinking.json: значение не
+  // зашиваем (24.10.2026 — low, 30.10.2026 — builder off, 31.10.2026 —
+  // минимальный размер рассуждений для всех ролей на minimax).
+  it.each(["architect", "qa"])("owner thinking policy reaches chat SDK for %s", async (role) => {
     // id в каталоге — без префикса провайдера, как у настоящего Pi.
     const entry = CATALOG.find(m => m.id === liveCatalogEntryOf(role).id && m.provider === liveCatalogEntryOf(role).provider)!;
     const prior = { ...entry };
     Object.assign(entry, {reasoning:true, thinkingLevelMap:{max:"max"}});
     try {
       await startChatRun({chatId:"chat-direct",role,roleId:"role_"+role,prompt:"test"});
-      expect(fakeSessions[0].options.thinkingLevel).toBe(expected);
+      expect(fakeSessions[0].options.thinkingLevel).toBe(
+        roleThinkingPolicy.roles[role] ?? roleThinkingPolicy.default,
+      );
     } finally {
       Object.assign(entry, prior);
       delete (entry as any).thinkingLevelMap;
