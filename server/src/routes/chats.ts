@@ -1,5 +1,6 @@
 import {snapshotChatPreferences,messageThinkingLevel,readChatPreferences} from "../lib/chatSessionPreferences.js";
 import { projectionOf } from "../lib/windowProjection.js";
+import { etagFor, etagMatches } from "../lib/etag.js";
 import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
 import {visibleChatSql} from "../lib/serviceNoise.js";
 import {chatIntentBlockForMessage} from "../lib/jevAssist.js";
@@ -459,7 +460,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     return roomsSnapshot(previewText);
   });
 
-  app.get("/api/chats", { preHandler: authPre }, async (req: any) => {
+  app.get("/api/chats", { preHandler: authPre }, async (req: any, reply: any) => {
     const includeClosed = String(req.query?.include_closed ?? "") === "1";
     const rows = db
       .prepare(
@@ -469,7 +470,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           ORDER BY c.updated_at DESC`,
       )
       .all(req.userId) as Array<{ id: string; task_id: string | null; parent_chat_id: string | null; closed_at: string | null }>;
-    return {
+    // Тело собираем ОТДЕЛЬНО, до отпечатка: при совпадении мы отдаём 0 байт,
+    // а не пересобираем список ради пересчёта хеша (тот же приём, что в
+    // списке задач — `routes/tasks.ts`).
+    const body = {
       chats: rows.filter((c) => isMember(c.id,req.userId) && (includeClosed || !taskTopicClosedAt(c))).map((c) => {
         // Имя отправителя — превью группы идёт с ним («QA: проверка
         // прошла»), счётчики вложений — чтобы клиент мог показать
@@ -537,6 +541,16 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         };
       }),
     };
+    // Соль — по вызывающему: тело списка у разных людей может совпасть, а без
+    // соли один клиент получил бы 304 по чужому отпечатку.
+    const etag = etagFor(JSON.stringify(body), req.userId);
+    reply.header("ETag", etag);
+    const ifNoneMatch = req.headers["if-none-match"];
+    if (typeof ifNoneMatch === "string" && etagMatches(ifNoneMatch, etag)) {
+      return reply.code(304).send();
+    }
+    reply.type("application/json; charset=utf-8");
+    return reply.send(body);
   });
 
   // Комнаты субагента сессии (владелец 28.10.2026): роли, вызванные
@@ -849,29 +863,129 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+// ── Постраничная выдача сообщений (31.10.2026) ─────────────────────────────
+//
+// Курсор — это `sequence` (rowid таблицы сообщений): он глобальный и
+// монотонный, поэтому по нему выборку можно продолжать однозначно.
+
+/** Курсор из query: целое неотрицательное число или ничего. */
+function parseCursorParam(raw: unknown, name: string): { value: number | null } | { error: string } {
+  if (raw === undefined || raw === null || raw === "") return { value: null };
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    return { error: `Параметр ${name} должен быть целым неотрицательным числом` };
+  }
+  return { value };
+}
+
+/** Размер страницы: 1..200. Не задан — вся история (старое поведение). */
+function parseLimitParam(raw: unknown): { value: number | null } | { error: string } {
+  if (raw === undefined || raw === null || raw === "") return { value: null };
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 200) {
+    return { error: "Параметр limit должен быть от 1 до 200" };
+  }
+  return { value };
+}
+
   // История сообщений чата (по возрастанию времени).
-  app.get<{ Params: { id: string }; Querystring: { projection?: string } }>(
+  //
+  // Постраничная выдача (31.10.2026, LOCK-LOCAL-DB-SYNC-20261031): телефон
+  // держит локальную копию переписки и спрашивает только НОВОЕ сообщение
+  // (`after` = курсор, `sequence` = rowid таблицы сообщений). Без этого
+  // повторный вход в комнату стоил всю историю заново.
+  //
+  // Обратное направление — `before` — это прокрутка вверх: нужны сообщения
+  // СТАРШЕ курсора.
+  //
+  // Старый вызов без параметров работает как раньше: вся история, без
+  // усечения. Старые клиенты (веб, телефон без локальной базы) не должны
+  // ничего потерять.
+  app.get<{ Params: { id: string }; Querystring: { projection?: string; after?: string; before?: string; limit?: string } }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
     async (req: any, reply) => {
       if (!isMember(req.params.id, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
-      const messages = db
-        .prepare(
-          `SELECT m.*, m.rowid AS sequence, f.name as from_user_name, f.avatar_color as from_user_color,
+
+      const after = parseCursorParam(req.query?.after, "after");
+      if ("error" in after) return reply.code(400).send({ error: after.error });
+      const before = parseCursorParam(req.query?.before, "before");
+      if ("error" in before) return reply.code(400).send({ error: before.error });
+      // Курсоры в разные стороны одновременно не имеют смысла: клиент не
+      // может указать, в какую сторону продолжать.
+      if (after.value !== null && before.value !== null)
+        return reply.code(400).send({ error: "Параметры after и before нельзя использовать вместе" });
+      const limit = parseLimitParam(req.query?.limit);
+      if ("error" in limit) return reply.code(400).send({ error: limit.error });
+
+      const conditions = ["m.chat_id = ?"];
+      const params: any[] = [req.params.id];
+      if (after.value !== null) {
+        conditions.push("m.rowid > ?");
+        params.push(after.value);
+      }
+      if (before.value !== null) {
+        conditions.push("m.rowid < ?");
+        params.push(before.value);
+      }
+      const select = `SELECT m.*, m.rowid AS sequence, f.name as from_user_name, f.avatar_color as from_user_color,
                   f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
                   t.title as task_title
              FROM chat_messages m
              LEFT JOIN users f ON f.id = m.from_user_id
              LEFT JOIN tasks t ON t.id = m.task_id
-            WHERE m.chat_id = ? ORDER BY m.created_at ASC, m.rowid ASC`,
-        )
-        .all(req.params.id);
+            WHERE ${conditions.join(" AND ")}`;
+
+      let messages: any[];
+      if (before.value !== null && limit.value !== null) {
+        // Для курсора «назад» нужны сообщения, БЛИЖАЙШИЕ к курсору, а не самые
+        // старые: внутри порядок обратный, наружу отдаём по возрастанию —
+        // порядок выдачи для клиента не меняется.
+        messages = db
+          .prepare(
+            `SELECT * FROM (${select} ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?)
+              ORDER BY created_at ASC, sequence ASC`,
+          )
+          .all(...params, limit.value) as any[];
+      } else {
+        messages = db
+          .prepare(
+            `${select} ORDER BY m.created_at ASC, m.rowid ASC${limit.value !== null ? " LIMIT ?" : ""}`,
+          )
+          .all(...(limit.value !== null ? [...params, limit.value] : params)) as any[];
+      }
+
+      // «Есть ли ещё» — отдельным запросом по той же таблице с тем же
+      // фильтром: лишние строки в выборку сообщений не тянутся.
+      //
+      // Граница берётся из СЫРЫХ строк выборки, а не из результата
+      // `formatChatHistory`: та отфильтровывает «тихие» системные сообщения,
+      // и последняя оставшаяся строка могла бы иметь не крайний sequence.
+      let hasMore = false;
+      if (messages.length > 0) {
+        const firstSequence = Number(messages[0].sequence);
+        const lastSequence = Number(messages[messages.length - 1].sequence);
+        if (before.value !== null) {
+          hasMore = Boolean(
+            db
+              .prepare("SELECT 1 FROM chat_messages m WHERE m.chat_id = ? AND m.rowid < ? LIMIT 1")
+              .get(req.params.id, firstSequence),
+          );
+        } else if (after.value !== null) {
+          hasMore = Boolean(
+            db
+              .prepare("SELECT 1 FROM chat_messages m WHERE m.chat_id = ? AND m.rowid > ? LIMIT 1")
+              .get(req.params.id, lastSequence),
+          );
+        }
+      }
+
       // Лёгкая проекция (29.10.2026): без вывода инструмента и аргументов
       // вызова в шагах — они весили 3,2 МБ на 20 чатов и рисуются только в
       // раскрытой шторке шага. Полные тела — по шагу, адресом ниже.
       const projection = projectionOf(req.query);
-      return { messages: formatChatHistory(messages, projection) };
+      return { messages: formatChatHistory(messages, projection), has_more: hasMore };
     },
   );
 
