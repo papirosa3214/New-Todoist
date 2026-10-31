@@ -608,8 +608,17 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const items = rows.map((r) => {
         const row = getTaskRow(r.id) as any;
         const hydrated = hydrateTask(row) as any;
+        // 31.10.2026 (владелец): «по архивным карточкам вы до сих пор шлёте
+        // историю активности, которую я не вижу». Экран Архива рисует
+        // строку: название, проект, дата, чип подзадач. Полную карточку
+        // клиент берёт по id, если владелец её откроет. Поэтому лента
+        // попыток (attempts), подзадачи и дочерние карточки в архивном
+        // списке больше не передаются — остаются числа.
+        hydrated.attempts = [];
+        hydrated.subtasks = [];
+        hydrated.children = [];
+        hydrated.subtask_count = r.subtask_count;
         if (includeChildrenFlag) {
-          hydrated.subtask_count = r.subtask_count;
           // Число архивных потомков корня поддерева — для iOS-чипа
           // «в архиве с детьми» (политика B: при архивировании корня всё
           // поддерево ушло вместе).
@@ -759,6 +768,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const items = tasks.map((t: any) => {
       const subtasks = (subtaskMap.get(t.id) ?? []).map(withSubtaskState);
       const children = childMap.get(t.id) ?? [];
+      // Закрытая карточка: завершена или в архиве. Для неё список не возит
+      // подзадачи (см. ниже) — только числа.
+      const closed =
+        Boolean(t.archived_at) || t.status === "completed" || Boolean(t.completed_at);
       const bySubtask = subtasks.some(
         (s: any) => s.agent_session_id && s.agent_session_id === session,
       );
@@ -785,7 +798,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // класть обрезанную версию — у типизированного клиента это не
         // «меньше данных», а невалидный ответ. Поэтому в списке их нет, а
         // числа приходят новыми полями.
-        subtasks: listProjection ? undefined : subtasks,
+        //
+        // 31.10.2026 (владелец): «по выполненным карточкам вы тоже можете
+        // слать кучу информации, которая мне нахуй не нужна». Поэтому
+        // закрытые карточки (completed/archived) отдают подзадачи теми же
+        // двумя числами, что и лёгкая проекция: из 990 подзадач базы 827
+        // висят на завершённых карточках, и все они уходили в список, где
+        // рисуется чип «2/5 шагов».
+        subtasks: listProjection || closed ? undefined : subtasks,
         subtask_total: subtasks.length,
         subtask_done: subtasks.filter((s: any) => Boolean(s.done)).length,
         // Прогресс родителя в списке — ДВУМЯ ЧИСЛАМИ, а не массивом детей.
