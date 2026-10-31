@@ -5,7 +5,7 @@ import {beforeAll,afterAll,it,expect} from "vitest";
 import db, {migrate} from "../src/db.js";
 import {runMigrations} from "../src/migrations.js";
 import {purgeTasks} from "../src/lib/taskPurge.js";
-import {checkReviewHistory} from "../src/lib/reviewHistory.js";
+import {checkReviewHistory,installReviewHistory,repairReviewHistoryTriggers,startReviewHistoryWatcher} from "../src/lib/reviewHistory.js";
 let app:any;
 beforeAll(async()=>{app=await buildApp();seedRoleAccounts(db);});
 afterAll(async()=>{await app.close();});
@@ -42,6 +42,42 @@ it("watcher exercises write, duplicate recording and purge without leaving data"
  expect((db.prepare("SELECT COUNT(*) n FROM task_review_history").get() as any).n).toBe(before);
 });
 
+it("старое определение триггера не переживает переустановку",()=>{
+ db.exec("DROP TRIGGER IF EXISTS review_history_event");
+ db.exec("CREATE TRIGGER review_history_event AFTER INSERT ON task_events BEGIN SELECT 1; END;");
+ installReviewHistory();
+ const sql=((db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='review_history_event'").get() as any)?.sql)||"";
+ expect(sql).toContain("task_review_history");
+ expect(sql).not.toContain("SELECT 1;");
+});
+it("проба называет шаг, на котором сломалось",()=>{
+ db.exec("CREATE TRIGGER probe_block AFTER INSERT ON task_events BEGIN SELECT RAISE(ABORT,'probe blocked'); END;");
+ try{
+  const result=checkReviewHistory();
+  expect(result.ok).toBe(false);
+  expect(result.reason).toContain("шаг «повторная запись события»");
+  expect(result.reason).toContain("probe blocked");
+ }finally{ db.exec("DROP TRIGGER IF EXISTS probe_block"); }
+});
+it("сломанный триггер журнала изменений ломает пробу — переустановка чинит",()=>{
+ db.exec("DROP TRIGGER IF EXISTS tf_task_changes_task_events_insert");
+ db.exec(`CREATE TRIGGER tf_task_changes_task_events_insert AFTER INSERT ON task_events
+  WHEN NEW."id" IS NOT OLD."id" OR NEW."task_id" IS NOT OLD."task_id" BEGIN SELECT 1; END;`);
+ const broken=checkReviewHistory();
+ expect(broken.ok).toBe(false);
+ expect(broken.reason).toContain("no such column: OLD.id");
+ repairReviewHistoryTriggers();
+ expect(checkReviewHistory()).toEqual({ok:true});
+});
+it("сторож отмечает восстановление в открытой карточке инцидента",()=>{
+ const id=crypto.randomUUID();
+ db.prepare("INSERT INTO tasks(id,title,status,incident_key) VALUES(?,?,'active','review-history-alert')").run(id,"История сдачи задач не сохраняется");
+ const stop=startReviewHistoryWatcher();
+ try{
+  const event=db.prepare("SELECT to_value FROM task_events WHERE task_id=? AND kind='review_history_recovered'").get(id) as any;
+  expect(event?.to_value).toContain("снова проходит");
+ }finally{ stop(); db.prepare("DELETE FROM task_events WHERE task_id=?").run(id); db.prepare("DELETE FROM tasks WHERE id=?").run(id); }
+});
 it("history endpoint authenticates owner and excludes nonowners",async()=>{
  const owner=await app.inject({method:"GET",url:"/api/stats/review-history",headers:{authorization:"Bearer "+app.jwt.sign({id:"u1"})}});
  expect(owner.statusCode,owner.body).toBe(200);expect(owner.json().entries.length).toBeGreaterThan(0);
