@@ -708,9 +708,15 @@ export class LiveTurn {
     );
     const texts = source
       .filter((it): it is Extract<LiveItem, { kind: "text" }> => it.kind === "text")
-      .map((it) => unwrapRoleEnvelope(stripQuickRepliesLine(it.text)).trim())
+      .map((it) => {
+        const raw = stripQuickRepliesLine(it.text).trim();
+        // Конверт роли (JSON v1) раскрывается по мере стриминга; пока он
+        // невалиден, unwrap отдаёт пусто. Тогда сохраняем сырой кусок —
+        // при аварийном восстановлении лучше некрасивый текст, чем ничего.
+        return unwrapRoleEnvelope(raw).trim() || raw;
+      })
       .filter(Boolean);
-    const answer = this.partialText();
+    const answer = this.partialText() || texts[texts.length - 1] || "";
     return {
       turnId: this.turnId,
       chatId: this.chatId,
