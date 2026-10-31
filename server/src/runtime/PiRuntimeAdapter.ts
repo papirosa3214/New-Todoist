@@ -1609,14 +1609,27 @@ async function startChatRunOnce(
 
     // Актуальное окно контекста живой сессии для панели чата
     // (карточка e11eae7a, пункт 4): замеряем по настоящей сессии Pi.
+    const liveSessionId: string | null =
+      session.sessionId ?? input.sessionId ?? sessionManager.getSessionId() ?? null;
     openChatSession({
       chatId: input.chatId,
       roleId: input.roleId,
       session,
-      sessionId: session.sessionId ?? input.sessionId ?? null,
+      sessionId: liveSessionId,
       provider: resolvedProvider,
       model: resolvedModel,
     });
+    // Сессию сохраняем СРАЗУ, а не только после успешного ответа (владелец
+    // 31.10.2026). Иначе первый же ход, прерванный владельцем, оставлял
+    // chat_sessions пустым, и следующий ход начинал разговор заново —
+    // ровно то, что владелец запретил: остановка не должна стирать память.
+    if (liveSessionId)
+      upsertChatSession(
+        input.chatId,
+        input.roleId,
+        liveSessionId,
+        currentChatGeneration(input.chatId, input.roleId),
+      );
 
     installSteeringBoundary(session);
     // Role policy also replaces the level restored from an older session.

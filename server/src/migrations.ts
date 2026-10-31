@@ -5428,6 +5428,33 @@ const migrations: Migration[] = [
     db.exec("CREATE INDEX IF NOT EXISTS idx_subagent_steers_room ON subagent_steers(room_chat_id, consumed_at)");
   } },
 
+  // Живой черновик хода роли (владелец 31.10.2026): текст и все размышления
+  // пишутся в базу по ходу, а не одним куском в конце. Остановка владельцем,
+  // падение или перезапуск сервера больше не стирают написанное: по строке
+  // running при старте восстанавливается частичный ответ. Без FK — черновик
+  // может появиться раньше чата и не должен ронять ход.
+  { id: "187_chat_live_drafts", description:
+      "chat_live_drafts — живой черновик хода роли: текст, все размышления " +
+      "(items_json) и статус; страховка от остановки и перезапуска сервера", up: () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS chat_live_drafts (
+      turn_id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      role_name TEXT,
+      trigger_message_id TEXT,
+      reply_message_id TEXT,
+      text TEXT NOT NULL DEFAULT '',
+      answer_text TEXT NOT NULL DEFAULT '',
+      items_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running','finished','saved','recovered')),
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_chat_live_drafts_chat ON chat_live_drafts(chat_id, status)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_chat_live_drafts_status ON chat_live_drafts(status, updated_at)");
+  } },
+
 ];
 /**
  * Опции прогона миграций.
