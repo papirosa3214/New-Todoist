@@ -290,3 +290,59 @@ export function renderAnswerText(payload: QuestionPayload, answer: AnswerPayload
   if (answer.note) строки.push(String(answer.note));
   return строки.join("\n");
 }
+
+/** Чат-псевдоним вопроса, заданного дежурным в контексте карточки. */
+const WAKE_PREFIX = "wake:";
+
+/** Есть ли у вопроса живой адресат (31.10.2026).
+ *
+ *  Вопрос висит в «Нужен ответ», пока на него можно ответить. Отвечать
+ *  некуда, если чат закрыт или убран, карточка удалена либо в архиве, а
+ *  проект в архиве. Раньше проверяли только статус и `deadline_at`, поэтому
+ *  вопрос из закрытого чата висел месяцами: сообщение с ним уже стёрто,
+ *  карточка удалена, а «Нужен ответ» всё равно показывает обращение. */
+export function questionAddressAlive(chatId: string): boolean {
+  if (chatId.startsWith(WAKE_PREFIX)) {
+    const task = db.prepare("SELECT archived_at FROM tasks WHERE id = ?").get(chatId.slice(WAKE_PREFIX.length)) as
+      | { archived_at: string | null }
+      | undefined;
+    return Boolean(task && !task.archived_at);
+  }
+  const chat = db
+    .prepare(
+      `SELECT c.task_id, c.closed_at, c.archived_at, p.archived_at AS project_archived_at
+         FROM chats c LEFT JOIN projects p ON p.id = c.project_id
+        WHERE c.id = ?`,
+    )
+    .get(chatId) as
+    | { task_id: string | null; closed_at: string | null; archived_at: string | null; project_archived_at: string | null }
+    | undefined;
+  if (!chat) return false;
+  if (chat.closed_at || chat.archived_at || chat.project_archived_at) return false;
+  if (chat.task_id) {
+    const task = db.prepare("SELECT archived_at FROM tasks WHERE id = ?").get(chat.task_id) as
+      | { archived_at: string | null }
+      | undefined;
+    if (!task || task.archived_at) return false;
+  }
+  return true;
+}
+
+/** Отменить открытые вопросы чата: адресата больше нет (закрыт, убран). */
+export function cancelQuestionsForChat(chatId: string): number {
+  return db
+    .prepare("UPDATE chat_questions SET status = 'cancelled' WHERE chat_id = ? AND status = 'open'")
+    .run(chatId).changes;
+}
+
+/** Отменить открытые вопросы всех чатов карточки, включая вопросы дежурного
+ *  (`wake:<taskId>`). Зовётся при архивации и удалении карточки. */
+export function cancelQuestionsOfTask(taskId: string): number {
+  return db
+    .prepare(
+      `UPDATE chat_questions SET status = 'cancelled'
+        WHERE status = 'open'
+          AND (chat_id = ? OR chat_id IN (SELECT id FROM chats WHERE task_id = ?))`,
+    )
+    .run(WAKE_PREFIX + taskId, taskId).changes;
+}

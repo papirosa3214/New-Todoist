@@ -24,6 +24,7 @@ import { logEvent, releaseSubtaskWork } from "../agentState.js";
 import { INCIDENT_NOTIFICATION_TYPE } from "./incidents.js";
 import { cancelPendingRoleRunJob } from "../runtime/roleRunQueue.js";
 import { purgeTasks } from "./taskPurge.js";
+import { cancelQuestionsOfTask } from "./chatQuestions.js";
 
 /** UUID для строк task_purge_log, чтобы шарить и принимать из тестов. */
 const purgeUid = () => `plg_${crypto.randomUUID()}`;
@@ -195,6 +196,10 @@ export function archiveTask(taskId: string, actorId: string): {
     // Аренды подзадач (in_progress/blocked) снимаются — это «работа
     // остановлена» на всём поддереве.
     for (const tid of subtree) releaseSubtaskWork(tid);
+
+    // Архивная карточка — не место для вопроса владельцу: её чаты и вопросы
+    // дежурного снимаем, иначе они висят в «Нужен ответ» (31.10.2026).
+    for (const tid of subtree) cancelQuestionsOfTask(tid);
 
     // Отложенные запуски — cancelled. Если у шага уже был running job,
     // он сам дойдёт до проверки archived и завершится (roleRunWorker
@@ -444,6 +449,11 @@ export function purgeArchivedTask(taskId: string, actorId: string): {
     attachments,
     events,
   );
+
+  // Карточка стирается физически — открытые вопросы её чатов снимаем до
+  // чистки: после каскада у чатов task_id станет NULL, и связь вопроса с
+  // карточкой уже не восстановить (31.10.2026).
+  for (const tid of subtreeTaskIds(taskId)) cancelQuestionsOfTask(tid);
 
   // Физическая чистка: lib/taskPurge.purgeTasks уже умеет разрывать кольцо
   // «подзадача ↔ план» и чистить журнальные таблицы без каскада.
