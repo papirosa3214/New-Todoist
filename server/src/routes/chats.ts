@@ -97,6 +97,7 @@ import {
 import { formatChatMessage, formatChatHistory, loadChatMessage } from "../lib/chatMessages.js";
 import {
   answerQuestionRow,
+  cancelQuestionsForChat,
   payloadOf,
   QuestionValidationError,
   questionById,
@@ -706,6 +707,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!closed && chat.archived_at)
         return reply.code(409).send({ error: "Убранный в архив чат вернуть нельзя" });
       db.prepare("UPDATE chats SET closed_at = CASE WHEN ? THEN COALESCE(closed_at, datetime('now')) ELSE NULL END WHERE id=?").run(closed ? 1 : 0, chat.id);
+      // Закрытый чат — не место для ответа: открытые вопросы снимаем сразу,
+      // иначе они висят в «Нужен ответ» без возможности ответить (31.10.2026).
+      if (closed) cancelQuestionsForChat(chat.id);
       // Закрытая комната — ходы ролей в ней обрываем (владелец 27.10.2026).
       if (closed) await stopRoomRuns(chat.id, "owner_close");
       // Ветка закрыта — её сводка уходит в комнату-родитель, к основной роли.

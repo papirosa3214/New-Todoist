@@ -1,7 +1,7 @@
 // Read-only projection of current requests, never a log of old notifications.
 import db from "../db.js";
 import { isOwner, getTaskForRead } from "../access.js";
-import { questionEnvelope, type QuestionRow } from "./chatQuestions.js";
+import { questionAddressAlive, questionEnvelope, type QuestionRow } from "./chatQuestions.js";
 export interface OwnerInboxTicket {
     id: string;
     kind: "question" | "approval" | "decision";
@@ -61,6 +61,11 @@ export function ownerInbox(userId: string): OwnerInboxTicket[] {
     for (const q of questions) {
         const t = q.task_id ? byId.get(q.task_id) : null;
         if (q.task_id && !t)
+            continue;
+        // Адресат вопроса должен быть жив: закрытый или убранный чат,
+        // удалённая либо архивная карточка означают, что ответить некуда и
+        // вопрос не должен висеть в «Нужен ответ» (31.10.2026).
+        if (!questionAddressAlive(q.chat_id))
             continue;
         try {
             const question = questionEnvelope(q);

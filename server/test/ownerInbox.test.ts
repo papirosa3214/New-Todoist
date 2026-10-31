@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { archiveTask } from "../src/lib/taskArchive.js";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { seedRoleAccounts } from "./helpers/seedOwner.js";
@@ -44,4 +45,62 @@ it("keeps independent step questions alongside a task clarification", async () =
     expect(ids).toContain("clarification:many");
     expect(ids).toContain("step:step-one");
     expect(ids).toContain("step:step-two");
+});
+// Вопрос владельцу живёт, пока есть куда ответить (31.10.2026). Прецедент:
+// вопрос Помощника владельца от 26.10 висел в «Нужен ответ» после закрытия
+// чата и удаления карточки «Промтрочка» — сообщение стёрто, отвечать некуда.
+const вопросВ = (id: string, chatId: string) =>
+    db.prepare("INSERT INTO chat_questions(id,chat_id,role_id,payload_json,status) VALUES (?,?,'role_qa',?,'open')")
+        .run(id, chatId, JSON.stringify({ questions: [{ question: "Продолжать?", options: [{ label: "Да" }, { label: "Нет" }] }] }));
+const комната = (id: string, taskId: string | null, closed = false) => {
+    db.prepare("INSERT INTO chats(id,title,kind,created_by,task_id,closed_at) VALUES (?,?,'direct','u1',?,?)")
+        .run(id, id, taskId, closed ? "2026-10-26 20:19:30" : null);
+    db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES (?,'u1')").run(id);
+};
+
+it("hides questions when the chat is closed or archived", async () => {
+    комната("closed-chat", null, true);
+    вопросВ("q-closed", "closed-chat");
+    комната("archived-chat", null);
+    db.prepare("UPDATE chats SET archived_at='2026-10-26 20:19:30' WHERE id='archived-chat'").run();
+    вопросВ("q-archived", "archived-chat");
+    комната("live-chat", null);
+    вопросВ("q-live", "live-chat");
+    const ids = (await read()).tickets.map((t: any) => t.id);
+    expect(ids).not.toContain("question:q-closed");
+    expect(ids).not.toContain("question:q-archived");
+    expect(ids).toContain("question:q-live");
+});
+
+it("hides questions of deleted and archived cards", async () => {
+    db.prepare("INSERT INTO tasks(id,title,status,creator_id,archived_at) VALUES ('card-archived','Архивная','active','u1','2026-10-26 20:19:30')").run();
+    комната("archived-card-chat", "card-archived");
+    вопросВ("q-card-archived", "archived-card-chat");
+    // Удалённая карточка: каскад обнуляет chats.task_id, чат остаётся живым.
+    комната("deleted-card-chat", null);
+    вопросВ("q-card-deleted", "deleted-card-chat");
+    db.prepare("UPDATE chats SET task_id=NULL WHERE id='deleted-card-chat'").run();
+    const ids = (await read()).tickets.map((t: any) => t.id);
+    expect(ids).not.toContain("question:q-card-archived");
+    expect(ids).toContain("question:q-card-deleted"); // чат живой — вопрос законный
+});
+
+it("cancels open questions when the chat closes or the card goes to archive", async () => {
+    комната("closing-chat", null);
+    вопросВ("q-closing", "closing-chat");
+    const res = await app.inject({
+        method: "POST", url: "/api/chats/closing-chat/close",
+        headers: { authorization: "Bearer " + app.jwt.sign({ id: "u1" }) }, payload: { closed: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((db.prepare("SELECT status FROM chat_questions WHERE id='q-closing'").get() as any).status).toBe("cancelled");
+
+    db.prepare("INSERT INTO tasks(id,title,status,creator_id) VALUES ('card-to-archive','В архив','active','u1')").run();
+    комната("card-chat", "card-to-archive");
+    вопросВ("q-card-chat", "card-chat");
+    db.prepare("INSERT INTO chat_questions(id,chat_id,role_id,payload_json,status) VALUES ('q-wake','wake:card-to-archive','role_qa',?,'open')")
+        .run(JSON.stringify({ questions: [{ question: "Дежурный?", options: [{ label: "Да" }, { label: "Нет" }] }] }));
+    archiveTask("card-to-archive", "u1");
+    const остались = db.prepare("SELECT id,status FROM chat_questions WHERE id IN ('q-card-chat','q-wake')").all() as Array<{ id: string; status: string }>;
+    expect(остались.map((r) => r.status)).toEqual(["cancelled", "cancelled"]);
 });

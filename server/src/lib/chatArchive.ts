@@ -1,4 +1,5 @@
 import db from "../db.js";
+import { cancelQuestionsForChat } from "./chatQuestions.js";
 
 /**
  * Уборка лишних чатов (карточка 0b7a8b81…, 21.10.2026).
@@ -80,6 +81,9 @@ export function archiveChat(chatId: string): void {
             archived_at = COALESCE(archived_at, datetime('now'))
       WHERE id = ?`,
   ).run(chatId);
+  // Убранный чат ответить уже не даст: его открытые вопросы снимаем, иначе
+  // они навсегда висят в «Нужен ответ» (31.10.2026).
+  cancelQuestionsForChat(chatId);
 }
 
 /** Убран ли чат человеком (в отличие от темы, закрытой вместе с задачей). */
