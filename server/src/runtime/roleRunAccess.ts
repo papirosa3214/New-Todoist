@@ -78,7 +78,7 @@ export function prepareRoleRunAccess(runId: string, role: string, mode: ChatWork
   const file = path.join(RUNS_DIR, `${runId}.json`);
   instructionResources();
   const snapshot = file + ".instructions.json";
-  fs.writeFileSync(snapshot, JSON.stringify({role,manifest:instructionManifest(role,"chat"),texts:Object.fromEntries(LAYER_CATALOG.filter(s=>s.key.startsWith("tool.mcp.")||s.key==="mcp.initialize").map(s=>[s.key,composeLayer(role,s.key)!.effective]))}),{mode:0o600});
+  fs.writeFileSync(snapshot, JSON.stringify({role,manifest:instructionManifest(role,"chat"),texts:Object.fromEntries(LAYER_CATALOG.filter(s=>s.key.startsWith("tool.mcp.")||s.key==="mcp.initialize").map(s=>[s.key,composeLayer(role,s.key)?.effective ?? ""]))}),{mode:0o600});
   const policy = roleComposioPolicy(role);
   const config = {
     mcpServers: {

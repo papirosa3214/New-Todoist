@@ -235,8 +235,19 @@ for (const spec of LAYER_CATALOG) {
  spec.placeholders ??= [];
 }
 export function registerInstructionBlock(spec: LayerSpec, original: string): void {
- if (!getLayerSpec(spec.key)) LAYER_CATALOG.push(spec);
- else if(spec.key==="role.system")Object.assign(getLayerSpec(spec.key)!,spec);
+ const existing=getLayerSpec(spec.key);
+ if (!existing) LAYER_CATALOG.push(spec);
+ else if(spec.key==="role.system")Object.assign(existing,spec);
+ else if(existing.roles && spec.roles) {
+  // Один и тот же файл регистрируют две роли: навыки Исследователя
+  // подключены Помощнице владельца (карточка e11eae7a). Ключ слоя — хеш
+  // пути файла, поэтому он общий, а фильтр ролей — нет. Раньше побеждала
+  // первая регистрация, и вторая роль получала composeLayer = null, а
+  // код брал .effective без проверки — ход в чате падал с «Cannot read
+  // properties of null (reading 'effective')» (31.10.2026, researcher и
+  // secretary). Теперь список ролей — объединение.
+  for(const role of spec.roles) if(!existing.roles.includes(role)) existing.roles.push(role);
+ }
  INSTRUCTION_DEFAULTS[spec.key] = original;
 }
 
@@ -494,7 +505,9 @@ export function applyOverride(args: {scope:"role"|"command";roleKey:string;layer
   db.prepare("INSERT INTO role_context_overrides(scope,role_key,layer,version,text,source_kind,source_ref,created_by,is_active) VALUES (?,?,?,?,?,?,?,?,?)").run(args.scope,roleKey,args.layer,next,args.text,args.sourceKind,args.sourceRef,args.createdBy,args.action === "reset" ? 0 : 1);
   db.prepare("INSERT INTO role_context_overrides_history(id,scope,role_key,layer,version,prev_version,text,source_kind,source_ref,action,by_user_id,reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(crypto.randomUUID(),args.scope,roleKey,args.layer,next,previous,args.text,args.sourceKind,args.sourceRef,args.action,args.createdBy,args.reason ?? null);
  })();
- return composeLayer(args.roleKey,args.layer,args.createdBy)!;
+ const composed=composeLayer(args.roleKey,args.layer,args.createdBy);
+ if(!composed) throw new Error("слой не принадлежит роли: "+args.layer+" ("+args.roleKey+")");
+ return composed;
 }
 export function renderInstruction(role: string, block: string, values: Record<string,string>): string {
  const layer=composeLayer(role,block); if (!layer) throw new Error("нет инструкции: " + block);
@@ -505,7 +518,7 @@ export function renderInstruction(role: string, block: string, values: Record<st
  });
 }
 export function effectiveRules(role: string): string[] {
- return composeLayer(role,"rules")!.effective.split("\n").filter(Boolean).map(x => x.replace(/^- /,""));
+ return (composeLayer(role,"rules")?.effective ?? "").split("\n").filter(Boolean).map(x => x.replace(/^- /,""));
 }
 export function instructionManifest(role: string, mode: RunMode) {
  // compose() уже отбросил пустой `rules.pending_acknowledgement` через

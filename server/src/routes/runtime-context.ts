@@ -88,6 +88,6 @@ export function registerRuntimeContextRoutes(app:FastifyInstance) {
  app.get<{Params:{role:string}}>('/api/agent/instructions/:role',{preHandler:authOrApiToken},async(req:any,reply)=>{
   const role=req.params.role;if(!known(role))return reply.code(404).send({error:'роль не найдена'});
   if(req.userId!==roleUserId(role)&&!isOwner(req.userId))return reply.code(403).send({error:'чужая роль'});
-  await init(role);return {role,rules:composeLayer(role,'rules')!.effective,blocks:compose(role,'chat').filter(l=>l.layer.startsWith('tool.')||l.layer==='mcp.initialize').map(l=>({id:l.layer,text:l.effective}))};
+  await init(role);return {role,rules:composeLayer(role,'rules')?.effective ?? "",blocks:compose(role,'chat').filter(l=>l.layer.startsWith('tool.')||l.layer==='mcp.initialize').map(l=>({id:l.layer,text:l.effective}))};
  });
 }
