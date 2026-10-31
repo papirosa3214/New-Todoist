@@ -329,20 +329,16 @@ export function questionAddressAlive(chatId: string): boolean {
 }
 
 /** Отменить открытые вопросы чата: адресата больше нет (закрыт, убран). */
-export function cancelQuestionsForChat(chatId: string): number {
-  return db
-    .prepare("UPDATE chat_questions SET status = 'cancelled' WHERE chat_id = ? AND status = 'open'")
-    .run(chatId).changes;
+export function cancelQuestionsForChat(chatId: string): void {
+  db.prepare("UPDATE chat_questions SET status = 'cancelled' WHERE chat_id = ? AND status = 'open'").run(chatId);
 }
 
 /** Отменить открытые вопросы всех чатов карточки, включая вопросы дежурного
  *  (`wake:<taskId>`). Зовётся при архивации и удалении карточки. */
-export function cancelQuestionsOfTask(taskId: string): number {
-  return db
-    .prepare(
-      `UPDATE chat_questions SET status = 'cancelled'
-        WHERE status = 'open'
-          AND (chat_id = ? OR chat_id IN (SELECT id FROM chats WHERE task_id = ?))`,
-    )
-    .run(WAKE_PREFIX + taskId, taskId).changes;
+export function cancelQuestionsOfTask(taskId: string): void {
+  db.prepare(
+    `UPDATE chat_questions SET status = 'cancelled'
+      WHERE status = 'open'
+        AND (chat_id = ? OR chat_id IN (SELECT id FROM chats WHERE task_id = ?))`,
+  ).run(WAKE_PREFIX + taskId, taskId);
 }
