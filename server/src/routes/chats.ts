@@ -855,7 +855,52 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     async (req: any, reply) => {
       if (!isMember(req.params.id, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
-      const messages = db
+      // ═══ Страницы и дельты (31.10.2026, владелец) ═══
+      //
+      // «Два последних сообщения» было гиперболой: чат должен открываться
+      // целиком. Правильная схема — как у мессенджера: телефон держит
+      // историю у себя (локальная база), а сервер досылает только
+      // недостающее, и одна и та же переписка не гуляет по сети заново.
+      //
+      //   • без параметров     — последние `limit` сообщений (по умолчанию 50);
+      //   • ?after=<sequence>  — только новее курсора (догон после разрыва
+      //                          связи, перезапуска, возврата в приложение);
+      //   • ?before=<sequence> — предыдущая страница при прокрутке вверх;
+      //   • ?limit=<1..200>    — размер страницы;
+      //   • ?full=1            — вся история разом (отладка, скрипты, роли).
+      //
+      // `sequence` — rowid сообщения: монотонный и неизменный, годится в
+      // курсор. Ответ несёт `cursor` (до куда дочитали) и `has_more`.
+      const q = req.query as any;
+      const after = Number(q.after);
+      const before = Number(q.before);
+      const hasAfter = Number.isFinite(after) && after > 0;
+      const hasBefore = Number.isFinite(before) && before > 0;
+      const limitRaw = Number(q.limit);
+      const limit =
+        // Роли читают историю этим же маршрутом (agentMessaging) — им нужен
+        // полный контекст, страницы только для человека с телефоном.
+        !isOwner(req.userId) || q.full === "1"
+          ? -1
+          : Number.isFinite(limitRaw) && limitRaw > 0
+            ? Math.min(200, Math.floor(limitRaw))
+            : 50;
+      const params: unknown[] = [req.params.id];
+      let whereSql = "WHERE m.chat_id = ?";
+      if (hasAfter) {
+        whereSql += " AND m.rowid > ?";
+        params.push(after);
+      }
+      if (hasBefore) {
+        whereSql += " AND m.rowid < ?";
+        params.push(before);
+      }
+      const limitSql = limit > 0 ? " LIMIT ?" : "";
+      if (limit > 0) params.push(limit);
+      // Догон (?after) читаем снизу вверх, всё остальное — сверху вниз,
+      // чтобы в память попадали именно свежие сообщения.
+      const order = hasAfter ? "ASC" : "DESC";
+      const rows = db
         .prepare(
           `SELECT m.*, m.rowid AS sequence, f.name as from_user_name, f.avatar_color as from_user_color,
                   f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
@@ -863,9 +908,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
              FROM chat_messages m
              LEFT JOIN users f ON f.id = m.from_user_id
              LEFT JOIN tasks t ON t.id = m.task_id
-            WHERE m.chat_id = ? ORDER BY m.created_at ASC, m.rowid ASC`,
+            ${whereSql} ORDER BY m.rowid ${order}${limitSql}`,
         )
-        .all(req.params.id);
+        .all(...params) as any[];
+      const ordered = hasAfter ? rows : rows.reverse();
       // Лёгкая проекция (29.10.2026): без вывода инструмента и аргументов
       // вызова в шагах — они весили 3,2 МБ на 20 чатов и рисуются только в
       // раскрытой шторке шага. Полные тела — по шагу, адресом ниже.
@@ -880,16 +926,17 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // там шаги остаются). Под прежним именем `steps` — та же форма с
       // пустым `items` и счётчиком `steps_total`, чтобы типизированный
       // клиент не получил другой тип.
-      return { messages: (() => {
-        // 31.10.2026 (владелец): «историю сообщений мне на телефон не надо,
-        // максимум два предыдущих сообщения». Ограничение — только для
-        // владельца: роли читают историю тем же маршрутом от своего
-        // пользователя (agentMessaging), им нужен полный контекст.
-        // `?full=1` возвращает всё (отладка и скрипты).
-        const formatted = formatChatHistory(messages, "list");
-        const limitHistory = isOwner(req.userId) && req.query.full !== "1";
-        return limitHistory ? formatted.slice(-2) : formatted;
-      })() };
+      const formatted = formatChatHistory(ordered, "list");
+      const lastSeq = ordered.length
+        ? Number(ordered[ordered.length - 1].sequence) || 0
+        : hasAfter
+          ? after
+          : 0;
+      return {
+        messages: formatted,
+        cursor: lastSeq,
+        has_more: limit > 0 && rows.length === limit,
+      };
     },
   );
 
