@@ -23,6 +23,7 @@ import { jevPlanProfileConfig } from "../lib/jev.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
+import { etagFor, etagMatches } from "../lib/etag.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import {
   getTaskForRead,
@@ -446,33 +447,13 @@ function agentStartedAt(task: any): string | null {
 
 // ═══════ TASKS CRUD ═══════
 
-/**
- * ETag полного списка задач: «изменилось ли что-то для этого набора».
- *
- * Считается по САМОМУ ответу, а не по строкам tasks: список показывает
- * счётчики детей, метки, подзадачи и «кто ведёт карточку», и всё это меняется
- * без правки строки tasks. Отпечаток ответа честен по определению — тот же
- * ответ даёт тот же ETag, другой ответ — другой.
- *
- * Отпечаток входа в журнал (`ledgerSeq`) в ETag НЕ входит намеренно: он
- * общий для всего трекера, и на живой системе (агенты пишут карточки
- * постоянно) он менялся бы каждые секунды — 304 не наступал бы никогда.
- * Дельты для «изменилось вот это» ведёт отдельный журнал.
- */
-function tasksListETag(body: string, session: string | null): string {
-  const hash = crypto.createHash("sha1").update(body).digest("hex").slice(0, 16);
-  return `W/"${hash}-${session ?? ""}"`;
-}
-
-/** Сравнение ETag по правилам HTTP: список значений и слабая форма W/"". */
-function etagMatches(header: string, etag: string): boolean {
-  const strip = (v: string) => v.trim().replace(/^W\//, "");
-  const target = strip(etag);
-  return header
-    .split(",")
-    .map((v) => v.trim())
-    .some((v) => v === "*" || strip(v) === target);
-}
+// ETag полного списка задач и сравнение отпечатков — общие на весь сервер
+// (`lib/etag.ts`): список задач и список чатов считают отпечаток одинаково.
+//
+// Отпечаток входа в журнал (`ledgerSeq`) в ETag НЕ входит намеренно: он
+// общий для всего трекера, и на живой системе (агенты пишут карточки
+// постоянно) он менялся бы каждые секунды — 304 не наступал бы никогда.
+// Дельты для «изменилось вот это» ведёт отдельный журнал.
 
 export function registerTaskRoutes(app: FastifyInstance) {
   registerIntegrationResponsibilityRoutes(app);
@@ -827,7 +808,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     // постоянно) менялся бы каждые секунды — 304 не наступал бы никогда.
     // «Что изменилось» ведёт отдельный журнал дельт.
     const body = JSON.stringify(items);
-    const listEtag = tasksListETag(body, session);
+    const listEtag = etagFor(body, session);
     reply.header("ETag", listEtag);
     const ifNoneMatch = req.headers["if-none-match"];
     if (typeof ifNoneMatch === "string" && etagMatches(ifNoneMatch, listEtag)) {
