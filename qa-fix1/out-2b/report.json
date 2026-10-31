@@ -1,0 +1,122 @@
+{
+ "base": "http://127.0.0.1:4101",
+ "viewport": "420x912@2",
+ "engine": "chromium",
+ "failed_steps": 2,
+ "problems": {
+  "console": [],
+  "pageerror": [],
+  "network": []
+ },
+ "steps": [
+  {
+   "n": 1,
+   "step": "goto",
+   "arg": "/login",
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 2,
+   "step": "wait",
+   "arg": 800,
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 3,
+   "step": "fill",
+   "arg": [
+    "[data-testid=login-name-input]",
+    "Максим"
+   ],
+   "note": "",
+   "ok": false,
+   "error": "page.fill: Timeout 8000ms exceeded.",
+   "file": "01-ошибка-шаг-3.png",
+   "aria": "- text: TaskFlow\n- heading \"Добро пожаловать!\" [level=2]\n- paragraph: Войдите в свой аккаунт\n- textbox \"Email\"\n- textbox \"Пароль\"\n- button \"Показать пароль\"\n- button \"Войти\"",
+   "text": "TaskFlow\nДобро пожаловать!\n\nВойдите в свой аккаунт\n\nВойти",
+   "layout": {
+    "hscroll": false,
+    "offscreen": [],
+    "small": [
+     "input.tf-input.flex-1 «» 318×24",
+     "input.tf-input.flex-1 «» 254×24"
+    ],
+    "clipped": []
+   }
+  },
+  {
+   "n": 4,
+   "step": "click",
+   "arg": "[data-testid=login-submit]",
+   "note": "",
+   "ok": false,
+   "error": "page.click: Timeout 8000ms exceeded.",
+   "file": "02-ошибка-шаг-4.png",
+   "aria": "- text: TaskFlow\n- heading \"Добро пожаловать!\" [level=2]\n- paragraph: Войдите в свой аккаунт\n- textbox \"Email\"\n- textbox \"Пароль\"\n- button \"Показать пароль\"\n- button \"Войти\"",
+   "text": "TaskFlow\nДобро пожаловать!\n\nВойдите в свой аккаунт\n\nВойти",
+   "layout": {
+    "hscroll": false,
+    "offscreen": [],
+    "small": [
+     "input.tf-input.flex-1 «» 318×24",
+     "input.tf-input.flex-1 «» 254×24"
+    ],
+    "clipped": []
+   }
+  },
+  {
+   "n": 5,
+   "step": "wait",
+   "arg": 1500,
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 6,
+   "step": "goto",
+   "arg": "/today",
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 7,
+   "step": "wait",
+   "arg": 1500,
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 8,
+   "step": "snap",
+   "arg": "02a-today",
+   "note": "",
+   "ok": true,
+   "file": "03-02a-today.png",
+   "aria": "- heading \"Среда, 7 окт.\" [level=1]\n- button \"Фильтры\"\n- button \"Ещё\"\n- text: Под выбранные фильтры ничего не подошло\n- button \"Сбросить фильтры\"\n- navigation:\n  - list:\n    - button \"Сегодня\"\n    - button \"Обзор\"\n    - button \"Создать\"\n    - button \"Планирование\"\n    - button \"Чат\"",
+   "text": "Среда, 7 окт.\nПод выбранные фильтры ничего не подошло\nСбросить фильтры\nЗадача\nСо сроком и шагами\nЗаметка\nЗапись в дневнике\nПроект\nЗадачи и документация\n7",
+   "layout": {
+    "hscroll": false,
+    "offscreen": [],
+    "small": [
+     "button.text-red.font-medium «Сбросить фильтры» 117×20"
+    ],
+    "clipped": []
+   }
+  }
+ ],
+ "final": {
+  "file": "04-финал.png",
+  "aria": "- heading \"Среда, 7 окт.\" [level=1]\n- button \"Фильтры\"\n- button \"Ещё\"\n- text: Под выбранные фильтры ничего не подошло\n- button \"Сбросить фильтры\"\n- navigation:\n  - list:\n    - button \"Сегодня\"\n    - button \"Обзор\"\n    - button \"Создать\"\n    - button \"Планирование\"\n    - button \"Чат\"",
+  "text": "Среда, 7 окт.\nПод выбранные фильтры ничего не подошло\nСбросить фильтры\nЗадача\nСо сроком и шагами\nЗаметка\nЗапись в дневнике\nПроект\nЗадачи и документация\n7",
+  "layout": {
+   "hscroll": false,
+   "offscreen": [],
+   "small": [
+    "button.text-red.font-medium «Сбросить фильтры» 117×20"
+   ],
+   "clipped": []
+  }
+ }
+}

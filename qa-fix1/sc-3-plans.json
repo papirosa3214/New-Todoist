@@ -1,0 +1,13 @@
+[
+  { "goto": "/login" },
+  { "wait": 800 },
+  { "fill": ["[data-testid=login-name-input]", "Максим"] },
+  { "click": "[data-testid=login-submit]" },
+  { "wait": 1500 },
+  { "goto": "/task/1fe2d05c-540a-4032-8f9c-7ecebe78c5b1" },
+  { "wait": 2500 },
+  { "snap": "03-parent-pulse-after-d1-fix-detail" },
+  { "expect_visible": "[data-testid=parent-plan-pulse]" },
+  { "expect_text": "Пульс плана" },
+  { "expect_text": "Доставка" }
+]

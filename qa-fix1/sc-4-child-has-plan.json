@@ -1,0 +1,11 @@
+[
+  { "goto": "/login" },
+  { "wait": 800 },
+  { "fill": ["[data-testid=login-name-input]", "Максим"] },
+  { "click": "[data-testid=login-submit]" },
+  { "wait": 1500 },
+  { "goto": "/task/451bb597-0f3d-407a-baa8-b226ce404fff" },
+  { "wait": 2500 },
+  { "snap": "04-child-451bb597" },
+  { "expect_text": "Разработка" }
+]

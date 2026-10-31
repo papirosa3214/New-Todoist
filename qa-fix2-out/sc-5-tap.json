@@ -1,0 +1,8 @@
+[
+  { "goto": "/task/1fe2d05c-540a-4032-8f9c-7ecebe78c5b1", "note": "родительская" },
+  { "wait": 1500 },
+  { "scrollto": "[data-testid=pulse-child-451bb597-0f3d-407a-baa8-b226ce404fff]" },
+  { "click": "[data-testid=pulse-child-451bb597-0f3d-407a-baa8-b226ce404fff]", "note": "тап по строке дочерней" },
+  { "wait": 1500 },
+  { "snap": "05-after-tap" }
+]

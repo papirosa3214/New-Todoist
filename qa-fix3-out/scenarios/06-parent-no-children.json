@@ -1,0 +1,7 @@
+[
+  {"goto": "/task/54a7ded7-3857-4557-8d9d-cc91c14df1b1", "note": "Карточка без дочерних, но с approved планом"},
+  {"wait": 2500, "note": "Дождаться"},
+  {"expect_no_text": "Пульс плана", "note": "КП №8 — пульс не должен быть"},
+  {"expect_visible": "[data-testid=collaboration-plan-panel]", "note": "Должна быть CollaborationPlanPanel"},
+  {"snap": "no-children-with-plan"}
+]
