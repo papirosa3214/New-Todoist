@@ -94,8 +94,12 @@ describe("слой инструкции: роли и null-safe доступ", ()
       const skillsDir = path.join(dir, "researcher.json.skills");
       const snapshots = fs.existsSync(skillsDir) ? fs.readdirSync(skillsDir) : [];
       expect(snapshots.length).toBeGreaterThan(0);
-      const snapshot = fs.readFileSync(path.join(skillsDir, snapshots[0]), "utf8");
-      expect(snapshot).toContain("Текст навыка.");
+      // Ищем именно навык роли, а не первый снимок: в чате подключаются ещё
+      // и общие навыки (scripts/shared-skills), порядок снимков не задан.
+      const skillSnapshot = snapshots
+        .map((name) => fs.readFileSync(path.join(skillsDir, name), "utf8"))
+        .find((text) => text.includes("Текст навыка."));
+      expect(skillSnapshot).toBeTruthy();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -11,6 +11,14 @@ const work = fs.mkdtempSync(path.join(os.homedir(), ".local", "state", "taskflow
 const roleReady = (() => {
   try { execFileSync("sudo", ["-n", "-u", ROLE_USER, "/bin/bash", "-c", "true"]); return true; } catch { return false; }
 })();
+// Рабочая копия роли недоступна пользователю tfrole (каталог в ~/ скрыт
+// правами 700) — тогда bash от роли не может в неё войти, и проверять
+// изоляцию не на чем. Пропускаем, а не роняем прогон.
+const roleCanWork = (() => {
+  if (!roleReady) return false;
+  try { execFileSync("sudo", ["-n", "-u", ROLE_USER, "/bin/bash", "-c", `cd ${work} && pwd`]); return true; }
+  catch { return false; }
+})();
 
 async function run(cmd: string): Promise<{ code: number | null; out: string }> {
   const ops = isolatedLocalOperations(work);
@@ -35,7 +43,7 @@ describe("файловые инструменты роли", () => {
   });
 });
 
-describe.skipIf(!roleReady)("bash роли", () => {
+describe.skipIf(!roleCanWork)("bash роли", () => {
   it("исполняется от tfrole в рабочей копии", async () => {
     const r = await run("whoami; pwd");
     expect(r.out).toContain(ROLE_USER);
