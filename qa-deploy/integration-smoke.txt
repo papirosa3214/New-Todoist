@@ -1,0 +1,20 @@
+Смоук боевой панели :3007 — 29.10.2026 19:04 MSK
+
+--- маршруты ---
+GET /api/agent/chat/send -> 405
+GET /api/agent/state -> 200
+GET /api/agent/providers -> 200
+
+--- фронт ---
+-rw-r--r-- 1 maksim maksim 417092 29.10 18:48 /home/maksim/Проекты/infra-panel/frontend/dist/assets/index-CGJeEbnf.js
+2
+
+--- процессы ---
+3053614 Чт окт 29 18:50:32 2026 /home/maksim/Проекты/infra-panel/backend/.venv/bin/python -m uvicorn api:app --host 0.0.0.0 --port 3007
+3057375 Чт окт 29 18:51:09 2026 /home/maksim/Проекты/infra-panel/backend/.venv/bin/python -m infra_panel.agent.worker
+
+--- main и ветка роли ---
+9343082c82867825d67230f2b64ca1bf68757c3e
+0	0
+--- Gitea origin/main vs main ---
+0	22

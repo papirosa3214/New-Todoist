@@ -1,0 +1,155 @@
+{
+ "base": "http://127.0.0.1:3007",
+ "viewport": "420x912@2",
+ "engine": "chromium",
+ "failed_steps": 0,
+ "problems": {
+  "console": [
+   "Failed to load resource: the server responded with a status of 400 (Bad Request)"
+  ],
+  "pageerror": [],
+  "network": [
+   "400 GET /x/kb/query"
+  ]
+ },
+ "steps": [
+  {
+   "n": 1,
+   "step": "goto",
+   "arg": "/",
+   "note": "Открываем боевую панель :3007",
+   "ok": true
+  },
+  {
+   "n": 2,
+   "step": "wait",
+   "arg": 3000,
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 3,
+   "step": "click",
+   "arg": "button[aria-label=\"Чат\"]",
+   "note": "Вкладка «Чат» в навигации",
+   "ok": true
+  },
+  {
+   "n": 4,
+   "step": "wait",
+   "arg": 3000,
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 5,
+   "step": "snap",
+   "arg": "01-chat-open",
+   "note": "Чат открыт: в шапке должен быть провайдер по умолчанию из базы агента",
+   "ok": true,
+   "file": "01-01-chat-open.png",
+   "aria": "- main:\n  - text: дежурю тик 29.10, 18:49 инцидентов 3\n  - button \"Отчёты\"\n  - button \"стоп-кран\"\n  - button \"MiniMax-M3.1-Flash minimax\"\n  - button \"Инструкции и инструменты ИИ\"\n  - button \"Об агенте\"\n  - switch \"Приватный режим\"\n  - switch \"Инфра-режим\" [checked]\n  - paragraph: Задайте вопрос по серверу .110 или выберите вариант ниже\n  - button \"Что требует внимания\"\n  - button \"Кто грузит машину\"\n  - button \"Память и своп\"\n  - button \"Видеокарта\"\n  - button \"Сколько ест ватт\"\n  - button \"Место на дисках\"\n  - button \"Что тут крутится\"\n  - button \"Что рискует сломаться\"\n  - button \"Панель тормозит\"\n  - button \"Как чинили раньше\"\n  - button \"Итоги за сутки\"\n  - button \"Нужен ли перезапуск\"\n  - textbox \"спросить про .110\"\n  - button \"Отправить\" [disabled]\n- navigation:\n  - button \"Обзор\"\n  - button \"Хозяйство\"\n  - button \"Железо\"\n  - button \"Чат\"\n  - button \"Инструменты\"",
+   "text": "дежурю\nтик 29.10, 18:49\nинцидентов 3\nОтчёты\nстоп-кран\nMiniMax-M3.1-Flash\nminimax\n\nЗадайте вопрос по серверу .110 или выберите вариант ниже\n\nЧто требует внимания\nКто грузит машину\nПамять и своп\nВидеокарта\nСколько ест ватт\nМесто на дисках\nЧто тут крутится\nЧто рискует сломаться\nПанель тормозит\nКак чинили раньше\nИтоги за сутки\nНужен ли перезапуск\nОбзор\nХозяйство\nЖелезо\nЧат\nИнструменты",
+   "layout": {
+    "hscroll": false,
+    "offscreen": [],
+    "small": [
+     "button.ml-auto.flex «Отчёты» 82×27",
+     "button.rounded-full.border «стоп-кран» 79×27",
+     "button.flex.min-w-0 «MiniMax-M3.1-Flash\nminimax» 204×36",
+     "button.grid.size-[38px] «» 38×38",
+     "button.grid.size-[38px] «Об агенте» 38×38",
+     "button.grid.size-[38px] «Приватный режим» 38×38",
+     "button.grid.size-[38px] «Инфра-режим» 38×38",
+     "button.flex.h-7 «Что требует внимания» 160×28"
+    ],
+    "clipped": [
+     "span.min-w-0.flex-1 «MiniMax-M3.1-Flash» (обрезан: 130>81)"
+    ]
+   }
+  },
+  {
+   "n": 6,
+   "step": "expect_text",
+   "arg": "MiniMax",
+   "note": "В шапке чата — MiniMax (провайдер по умолчанию)",
+   "ok": true
+  },
+  {
+   "n": 7,
+   "step": "click",
+   "arg": "button[aria-label=\"Об агенте\"]",
+   "note": "Кнопка «i» в шапке чата",
+   "ok": true
+  },
+  {
+   "n": 8,
+   "step": "wait",
+   "arg": 2500,
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 9,
+   "step": "snap",
+   "arg": "02-about-agent",
+   "note": "Экран «Об агенте»: живой провайдер, полномочия, лимиты с расходом",
+   "ok": true,
+   "file": "02-02-about-agent.png",
+   "aria": "- main:\n  - text: дежурю тик 29.10, 18:49 инцидентов 3\n  - button \"Отчёты\"\n  - button \"стоп-кран\"\n  - button \"MiniMax-M3.1-Flash minimax\"\n  - button \"Инструкции и инструменты ИИ\"\n  - button \"Об агенте\"\n  - switch \"Приватный режим\"\n  - switch \"Инфра-режим\" [checked]\n  - paragraph: Задайте вопрос по серверу .110 или выберите вариант ниже\n  - button \"Что требует внимания\"\n  - button \"Кто грузит машину\"\n  - button \"Память и своп\"\n  - button \"Видеокарта\"\n  - button \"Сколько ест ватт\"\n  - button \"Место на дисках\"\n  - button \"Что тут крутится\"\n  - button \"Что рискует сломаться\"\n  - button \"Панель тормозит\"\n  - button \"Как чинили раньше\"\n  - button \"Итоги за сутки\"\n  - button \"Нужен ли перезапуск\"\n  - textbox \"спросить про .110\"\n  - button \"Отправить\" [disabled]\n  - paragraph: Об агенте\n  - button \"закрыть\"\n  - paragraph: Мозг\n  - text: Провайдер minimax Вид openai-compatible Модель MiniMax-M3.1-Flash Режим чинит сам Полный авто выключен Стоп-кран выключен minimaxMiniMax-M3.1-Flash по умолчанию anthropicclaude-sonnet-4-6 anthropic codexgpt-5.6-sol openai-compatible local-qwenqwen3.6-27b-iq4-16k:latest ollama ollamaqwen3.6-27b-iq4-16k:latest ollama opencode cli opencode-go cli opencode-zenbeam-free openai-compatible\n  - paragraph: Полномочия\n  - text: Инструментов всего 33 Делает сам 21 С подтверждением 5 Только с твоего слова 7 Попыток на инцидент 3\n  - paragraph: Красный список — питание машины, удаление данных, секреты и деньги. Пока ты сам его не откроешь, агент туда не полезет.\n  - paragraph: Лимиты на сегодня\n  - text: Токены 5 338 из 2 000 000 в сутки Обращения к модели 3 из 300 в сутки\n  - paragraph: \"День: 2026-10-29\"\n  - paragraph: Что умеет\n  - 'button \"Инструментов: 26\"'\n  - paragraph: Дежурство\n  - text: Жив 4 с назад На ногах 137 ч 1 мин Проверка цикла 2026-10-29T18:49:17 В последнем круге находок 3 · создано 0 · решено 0 Датчиков 96 всего · сломано 1 Инцидентов в работе 3 · ждут человека 3 · сегодня 21 Отчётов 179\n  - paragraph: Действия\n  - button \"Остановить\"\n  - button \"Наблюдать\"\n  - button \"Прогон\"\n  - paragraph: Команды уходят дежурному в очередь — он выполняет их на своём круге, поэтому эффект виден через несколько секунд.\n  - paragraph: Опасные действия агент без тебя не делает.\n- navigation:\n  - button \"Обзор\"\n  - button \"Хозяйство\"\n  - button \"Железо\"\n  - button \"Чат\"\n  - button \"Инструменты\"",
+   "text": "дежурю\nтик 29.10, 18:49\nинцидентов 3\nОтчёты\nстоп-кран\nMiniMax-M3.1-Flash\nminimax\n\nЗадайте вопрос по серверу .110 или выберите вариант ниже\n\nЧто требует внимания\nКто грузит машину\nПамять и своп\nВидеокарта\nСколько ест ватт\nМесто на дисках\nЧто тут крутится\nЧто рискует сломаться\nПанель тормозит\nКак чинили раньше\nИтоги за сутки\nНужен ли перезапуск\n\nОб агенте\n\nзакрыть\n\nМОЗГ\n\nПровайдер\nminimax\nВид\nopenai-compatible\nМодель\nMiniMax-M3.1-Flash\nРежим\nчинит сам\nПолный авто\nвыключен\nСтоп-кран\nвыключен\nminimaxMiniMax-M3.1-Flash\nпо умолчанию\nanthropicclaude-sonnet-4-6\nanthropic\ncodexgpt-5.6-sol\nopenai-compatible\nlocal-qwenqwen3.6-27b-iq4-16k:latest\nollama\nollamaqwen3.6-27b-iq4-16k:latest\nollama\nopencode\ncli\nopencode-go\ncli\nopencode-zenbeam-free\nopenai-compatible\n\nПОЛНОМОЧИЯ\n\nИнструментов всего\n33\nДелает сам\n21\nС подтверждением\n5\nТолько с твоего слова\n7\nПопыток на инцидент\n3\n\nКрасный список — питание машины, удаление данных, секреты и деньги. Пока ты сам его не откроешь, агент туда не полезет.\n\nЛИМИТЫ НА СЕГОДНЯ\n\nТОКЕНЫ\n5 338\nиз 2 000 000 в сутки\nОБРАЩЕНИЯ К МОДЕЛИ\n3\nиз 300 в сутки\n\nДень: 2026-10-29\n\nЧТО УМЕЕТ\n\nИнструментов: 26\n\nДЕЖУРСТВО\n\nЖив\n4 с назад\nНа ногах\n137 ч 1 мин\nПроверка цикла\n2026-10-29T18:49:17\nВ последнем круге\nнаходок 3 · создано 0 · решено 0\nДатчиков\n96 всего · сломано 1\nИнцидентов\nв работе 3 · ждут человека 3 · сегодня 21\nОтчётов\n179\n\nДЕЙСТВИЯ\n\nОстановить\nНаблюдать\nПрогон\n\nКоманды уходят дежурному в очередь — он выполняет их на своём круге, поэтому эффект виден через несколько секунд.\n\nОпасные действия агент без тебя не делает.\n\nОбзор\nХозяйство\nЖелезо\nЧат\nИнструменты",
+   "layout": {
+    "hscroll": false,
+    "offscreen": [],
+    "small": [
+     "button.ml-auto.flex «Отчёты» 82×27",
+     "button.rounded-full.border «стоп-кран» 79×27",
+     "button.flex.min-w-0 «MiniMax-M3.1-Flash\nminimax» 204×36",
+     "button.grid.size-[38px] «» 38×38",
+     "button.grid.size-[38px] «Об агенте» 38×38",
+     "button.grid.size-[38px] «Приватный режим» 38×38",
+     "button.grid.size-[38px] «Инфра-режим» 38×38",
+     "button.flex.h-7 «Что требует внимания» 160×28"
+    ],
+    "clipped": [
+     "span.min-w-0.flex-1 «MiniMax-M3.1-Flash» (обрезан: 130>81)",
+     "span.min-w-0.truncate «ОБРАЩЕНИЯ К МОДЕЛИ» (обрезан: 149>139)",
+     "span.ml-auto.min-w-0 «находок 3 · создано 0 · решено» (обрезан: 231>203)",
+     "span.ml-auto.min-w-0 «в работе 3 · ждут человека 3 ·» (обрезан: 296>242)"
+    ]
+   }
+  },
+  {
+   "n": 10,
+   "step": "expect_text",
+   "arg": "ЛИМИТЫ НА СЕГОДНЯ",
+   "note": "Блок лимитов с расходом",
+   "ok": true
+  }
+ ],
+ "final": {
+  "file": "03-финал.png",
+  "aria": "- main:\n  - text: дежурю тик 29.10, 18:49 инцидентов 3\n  - button \"Отчёты\"\n  - button \"стоп-кран\"\n  - button \"MiniMax-M3.1-Flash minimax\"\n  - button \"Инструкции и инструменты ИИ\"\n  - button \"Об агенте\"\n  - switch \"Приватный режим\"\n  - switch \"Инфра-режим\" [checked]\n  - paragraph: Задайте вопрос по серверу .110 или выберите вариант ниже\n  - button \"Что требует внимания\"\n  - button \"Кто грузит машину\"\n  - button \"Память и своп\"\n  - button \"Видеокарта\"\n  - button \"Сколько ест ватт\"\n  - button \"Место на дисках\"\n  - button \"Что тут крутится\"\n  - button \"Что рискует сломаться\"\n  - button \"Панель тормозит\"\n  - button \"Как чинили раньше\"\n  - button \"Итоги за сутки\"\n  - button \"Нужен ли перезапуск\"\n  - textbox \"спросить про .110\"\n  - button \"Отправить\" [disabled]\n  - paragraph: Об агенте\n  - button \"закрыть\"\n  - paragraph: Мозг\n  - text: Провайдер minimax Вид openai-compatible Модель MiniMax-M3.1-Flash Режим чинит сам Полный авто выключен Стоп-кран выключен minimaxMiniMax-M3.1-Flash по умолчанию anthropicclaude-sonnet-4-6 anthropic codexgpt-5.6-sol openai-compatible local-qwenqwen3.6-27b-iq4-16k:latest ollama ollamaqwen3.6-27b-iq4-16k:latest ollama opencode cli opencode-go cli opencode-zenbeam-free openai-compatible\n  - paragraph: Полномочия\n  - text: Инструментов всего 33 Делает сам 21 С подтверждением 5 Только с твоего слова 7 Попыток на инцидент 3\n  - paragraph: Красный список — питание машины, удаление данных, секреты и деньги. Пока ты сам его не откроешь, агент туда не полезет.\n  - paragraph: Лимиты на сегодня\n  - text: Токены 5 338 из 2 000 000 в сутки Обращения к модели 3 из 300 в сутки\n  - paragraph: \"День: 2026-10-29\"\n  - paragraph: Что умеет\n  - 'button \"Инструментов: 26\"'\n  - paragraph: Дежурство\n  - text: Жив 7 с назад На ногах 137 ч 1 мин Проверка цикла 2026-10-29T18:49:17 В последнем круге находок 3 · создано 0 · решено 0 Датчиков 96 всего · сломано 1 Инцидентов в работе 3 · ждут человека 3 · сегодня 21 Отчётов 179\n  - paragraph: Действия\n  - button \"Остановить\"\n  - button \"Наблюдать\"\n  - button \"Прогон\"\n  - paragraph: Команды уходят дежурному в очередь — он выполняет их на своём круге, поэтому эффект виден через несколько секунд.\n  - paragraph: Опасные действия агент без тебя не делает.\n- navigation:\n  - button \"Обзор\"\n  - button \"Хозяйство\"\n  - button \"Железо\"\n  - button \"Чат\"\n  - button \"Инструменты\"",
+  "text": "дежурю\nтик 29.10, 18:49\nинцидентов 3\nОтчёты\nстоп-кран\nMiniMax-M3.1-Flash\nminimax\n\nЗадайте вопрос по серверу .110 или выберите вариант ниже\n\nЧто требует внимания\nКто грузит машину\nПамять и своп\nВидеокарта\nСколько ест ватт\nМесто на дисках\nЧто тут крутится\nЧто рискует сломаться\nПанель тормозит\nКак чинили раньше\nИтоги за сутки\nНужен ли перезапуск\n\nОб агенте\n\nзакрыть\n\nМОЗГ\n\nПровайдер\nminimax\nВид\nopenai-compatible\nМодель\nMiniMax-M3.1-Flash\nРежим\nчинит сам\nПолный авто\nвыключен\nСтоп-кран\nвыключен\nminimaxMiniMax-M3.1-Flash\nпо умолчанию\nanthropicclaude-sonnet-4-6\nanthropic\ncodexgpt-5.6-sol\nopenai-compatible\nlocal-qwenqwen3.6-27b-iq4-16k:latest\nollama\nollamaqwen3.6-27b-iq4-16k:latest\nollama\nopencode\ncli\nopencode-go\ncli\nopencode-zenbeam-free\nopenai-compatible\n\nПОЛНОМОЧИЯ\n\nИнструментов всего\n33\nДелает сам\n21\nС подтверждением\n5\nТолько с твоего слова\n7\nПопыток на инцидент\n3\n\nКрасный список — питание машины, удаление данных, секреты и деньги. Пока ты сам его не откроешь, агент туда не полезет.\n\nЛИМИТЫ НА СЕГОДНЯ\n\nТОКЕНЫ\n5 338\nиз 2 000 000 в сутки\nОБРАЩЕНИЯ К МОДЕЛИ\n3\nиз 300 в сутки\n\nДень: 2026-10-29\n\nЧТО УМЕЕТ\n\nИнструментов: 26\n\nДЕЖУРСТВО\n\nЖив\n7 с назад\nНа ногах\n137 ч 1 мин\nПроверка цикла\n2026-10-29T18:49:17\nВ последнем круге\nнаходок 3 · создано 0 · решено 0\nДатчиков\n96 всего · сломано 1\nИнцидентов\nв работе 3 · ждут человека 3 · сегодня 21\nОтчётов\n179\n\nДЕЙСТВИЯ\n\nОстановить\nНаблюдать\nПрогон\n\nКоманды уходят дежурному в очередь — он выполняет их на своём круге, поэтому эффект виден через несколько секунд.\n\nОпасные действия агент без тебя не делает.\n\nОбзор\nХозяйство\nЖелезо\nЧат\nИнструменты",
+  "layout": {
+   "hscroll": false,
+   "offscreen": [],
+   "small": [
+    "button.ml-auto.flex «Отчёты» 82×27",
+    "button.rounded-full.border «стоп-кран» 79×27",
+    "button.flex.min-w-0 «MiniMax-M3.1-Flash\nminimax» 204×36",
+    "button.grid.size-[38px] «» 38×38",
+    "button.grid.size-[38px] «Об агенте» 38×38",
+    "button.grid.size-[38px] «Приватный режим» 38×38",
+    "button.grid.size-[38px] «Инфра-режим» 38×38",
+    "button.flex.h-7 «Что требует внимания» 160×28"
+   ],
+   "clipped": [
+    "span.min-w-0.flex-1 «MiniMax-M3.1-Flash» (обрезан: 130>81)",
+    "span.min-w-0.truncate «ОБРАЩЕНИЯ К МОДЕЛИ» (обрезан: 149>139)",
+    "span.ml-auto.min-w-0 «находок 3 · создано 0 · решено» (обрезан: 231>203)",
+    "span.ml-auto.min-w-0 «в работе 3 · ждут человека 3 ·» (обрезан: 296>242)"
+   ]
+  }
+ }
+}

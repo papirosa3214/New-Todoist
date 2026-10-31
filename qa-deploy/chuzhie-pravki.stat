@@ -1,0 +1,8 @@
+ backend/api.py                        |   2 +-
+ backend/infra-registry.json           | 174 ++++------------------------------
+ backend/infra_panel/agent/sections.py |  33 +------
+ backend/services-docs.json            | 129 -------------------------
+ backend/things.json                   |  58 +-----------
+ frontend/src/views/dashboard.tsx      |  47 ++++++++-
+ frontend/src/views/detail.tsx         |  10 ++
+ 7 files changed, 82 insertions(+), 371 deletions(-)
