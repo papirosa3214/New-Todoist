@@ -603,7 +603,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
         projectId: typeof req.query.project_id === "string" ? req.query.project_id : null,
         assigneeId:
           typeof req.query.assignee_id === "string" ? req.query.assignee_id : null,
-        limit: 200,
+        // 31.10.2026 (владелец): «в архиве мне достаточно последних 20
+        // карточек, чтобы при необходимости восстановить». Больше не возим.
+        limit: 20,
       });
       const items = rows.map((r) => {
         const row = getTaskRow(r.id) as any;
@@ -691,6 +693,16 @@ export function registerTaskRoutes(app: FastifyInstance) {
       ? "(p.id IS NULL OR p.archived_at IS NULL)"
       : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
 
+    // 31.10.2026 (владелец): «всё, что завершено, — мне на телефон не слать,
+    // ноль байт». Завершённые карточки в обычный список больше не попадают:
+    // на телефоне они не открываются, а полная карточка по-прежнему
+    // доступна из GET /api/tasks/:id. Вернуть их в ответ можно явно —
+    // ?include_closed=true (сторожа, отладка, скрипты).
+    const closedClause =
+      req.query.include_closed === "true"
+        ? "1 = 1"
+        : "(t.status <> 'completed' AND t.completed_at IS NULL)";
+
     const tasks = (
       seesEveryTask(userId)
         ? db
@@ -698,6 +710,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
               `SELECT ${columns} ${joins}
       WHERE ${baseParent}
         AND t.archived_at IS NULL
+        AND ${closedClause}
         AND ${privacy}
         ${extraWhere}
       ORDER BY t.created_at DESC`,
@@ -708,6 +721,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
               `SELECT ${columns} ${joins}
       WHERE ${baseParent}
         AND t.archived_at IS NULL
+        AND ${closedClause}
         AND (t.creator_id = ? OR t.assignee_id = ?
            OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))
         AND ${privacy}

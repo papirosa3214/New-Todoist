@@ -880,7 +880,16 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // там шаги остаются). Под прежним именем `steps` — та же форма с
       // пустым `items` и счётчиком `steps_total`, чтобы типизированный
       // клиент не получил другой тип.
-      return { messages: formatChatHistory(messages, "list") };
+      return { messages: (() => {
+        // 31.10.2026 (владелец): «историю сообщений мне на телефон не надо,
+        // максимум два предыдущих сообщения». Ограничение — только для
+        // владельца: роли читают историю тем же маршрутом от своего
+        // пользователя (agentMessaging), им нужен полный контекст.
+        // `?full=1` возвращает всё (отладка и скрипты).
+        const formatted = formatChatHistory(messages, "list");
+        const limitHistory = isOwner(req.userId) && req.query.full !== "1";
+        return limitHistory ? formatted.slice(-2) : formatted;
+      })() };
     },
   );
 
