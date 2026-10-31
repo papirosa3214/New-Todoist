@@ -143,3 +143,26 @@ it("one adapter appears through the same catalog in every entry point",async()=>
  }
  expect(execute).toHaveBeenCalledTimes(3);
 });
+// D1 карточки e73e7314: текст «not found» в ответе операции — не признак
+// неподключённой операции. «task not found» — настоящая ошибка аргументов,
+// и по ней ход обязан остановиться, как у любого третьего неверного вызова.
+it("настоящая ошибка аргументов со словами «not found» считается неверным вызовом и останавливает ход",()=>{
+ const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"real-not-found",taskId:"task-rnf",subtaskId:"slot-rnf"});
+ const target="taskflow_task";
+ const refuse=(callId:string)=>catalog.onToolExecutionEnd({type:"tool_execution_end",toolCallId:callId,toolName:target,isError:true,result:{content:[{type:"text",text:"404: task not found"}]}});
+ expect(refuse("rnf-1")).toBe(false);
+ const row=db.prepare("SELECT error_code FROM role_tool_audit WHERE run_id='real-not-found' ORDER BY rowid DESC LIMIT 1").get() as {error_code:string};
+ expect(row.error_code).toBe("INVALID_ARGUMENTS");
+ expect(refuse("rnf-2")).toBe(false);
+ // Третий такой же отказ одной операции — стоп хода (правило владельца).
+ expect(refuse("rnf-3")).toBe(true);
+});
+// Та же граница в нативном исполнении: служебный отказ (закрытый чек-лист)
+// ход не роняет, сколько бы раз он ни пришёл.
+it("три служебных отказа подряд не останавливают ход",()=>{
+ const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"service-3",taskId:"task-s3",subtaskId:"slot-s3"});
+ const refuse=(callId:string)=>catalog.onToolExecutionEnd({type:"tool_execution_end",toolCallId:callId,toolName:"taskflow_task",isError:true,result:{content:[{type:"text",text:"Чек-лист прошлого поручения закрыт — действие отклонено"}]}});
+ for(let i=0;i<5;i++)expect(refuse("s3-"+i)).toBe(false);
+ const codes=db.prepare("SELECT DISTINCT error_code FROM role_tool_audit WHERE run_id='service-3'").all() as Array<{error_code:string}>;
+ expect(codes.map(r=>r.error_code)).toContain("CHAT_PLAN_CLOSED");
+});

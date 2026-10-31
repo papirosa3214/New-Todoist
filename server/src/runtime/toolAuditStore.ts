@@ -143,6 +143,52 @@ function isoToSqlite(value: string): string | null {
   return parsed.toISOString().replace("T", " ").slice(0, 19);
 }
 
+/** Окно поиска повтора: одинаковый вызов в пределах этого времени считается
+ *  повтором того же действия (P1 — дедупликация по аргументам). */
+const DUP_WINDOW_MINUTES = 10;
+
+/**
+ * Найти прежний такой же вызов — на него указывает `dup_of`.
+ *
+ * «Такой же» — та же роль, тот же элемент действия (шаг/карточка/чат), тот же
+ * инструмент и операция, тот же исход и тот же код отказа. Различаются только
+ * вызовы в разных элементах: повтор в другом шаге — не повтор этого действия.
+ *
+ * D2 карточки e73e7314: колонка `dup_of` была заведена, но не заполнялась ни
+ * нативным каталогом, ни шлюзом — событие действия по A1 приходило неполным.
+ * Заполняем в единой точке записи, чтобы это работало на всех путях.
+ */
+function findDuplicateCall(event: ToolAuditEvent, itemId: string | null): string | null {
+  try {
+    const row = db
+      .prepare(
+        `SELECT id FROM role_tool_audit
+          WHERE role = ?
+            AND COALESCE(item_id,'') = COALESCE(?,'')
+            AND COALESCE(tool,'') = COALESCE(?,'')
+            AND COALESCE(operation,'') = COALESCE(?,'')
+            AND outcome = ?
+            AND COALESCE(error_code,'') = COALESCE(?,'')
+            AND created_at >= datetime('now', ?)
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT 1`,
+      )
+      .get(
+        event.role,
+        itemId,
+        event.tool ?? "taskflow",
+        event.operation ?? "",
+        event.outcome,
+        event.errorCode ?? null,
+        `-${DUP_WINDOW_MINUTES} minutes`,
+      ) as { id: string } | undefined;
+    return row?.id ?? null;
+  } catch (error) {
+    console.warn("[tool-audit] повтор не найден:", error);
+    return null;
+  }
+}
+
 /**
  * Записать действие роли: строка в `role_tool_audit` на любой исход
  * (успех, отказ, починенная форма вызова) и счётчик в
@@ -173,6 +219,11 @@ export function recordToolAudit(event: ToolAuditEvent): void {
     const scope = event.scope ?? (event.taskId ? "task" : "chat");
     const itemId = event.itemId ?? event.subtaskId ?? event.taskId ?? event.chatId ?? null;
     const isError = event.outcome === "error";
+    // `dup_of` — на прежний такой же вызов; явно переданное значение главнее.
+    const dupOf =
+      event.dupOf !== undefined && event.dupOf !== null
+        ? event.dupOf
+        : findDuplicateCall(event, itemId);
     // Две записи — ДВЕ отдельные транзакции (D3 карточки 64af4c85): сломанная
     // запись строки учёта не должна откатывать счётчики. Сторож учёта ищет
     // ровно эту разницу — «отказы не пишутся, а счётчики целы» — и обязан
@@ -220,7 +271,7 @@ export function recordToolAudit(event: ToolAuditEvent): void {
         event.errorMessage ?? null,
         event.errorField ?? null,
         event.errorExpected ?? null,
-        event.dupOf ?? null,
+        dupOf,
         typeof event.durationMs === "number" ? Math.round(event.durationMs) : null,
         event.requestId ?? null,
       );
