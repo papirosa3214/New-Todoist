@@ -54,8 +54,8 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  instructionResources(cwd);
  const dir=path.dirname(configPath);const prefix=path.basename(configPath);
  const discovered=await discoverChatResources(role,true);
- const append=discovered.agentsFiles.map(x=>'# '+x.path+'\n'+composeLayer(role,keyFor(x.path))!.effective);
- for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
+ const append=discovered.agentsFiles.map(x=>'# '+x.path+'\n'+(composeLayer(role,keyFor(x.path))?.effective ?? fs.readFileSync(x.path,'utf8')));
+ for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))?.effective ?? fs.readFileSync(source.path,'utf8'));
  // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).
  append.push(behaviorInstruction(role));
  append.push(chatModeInstruction(mode));
@@ -72,11 +72,11 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
   const skillDir=configPath+'.skills';fs.mkdirSync(skillDir,{recursive:true,mode:0o700});
   for(const skill of discovered.skills) {
    const snapshot=path.join(skillDir,path.basename(skill.filePath)+'-'+crypto.createHash('sha256').update(skill.filePath).digest('hex').slice(0,12)+'.md');
-   fs.writeFileSync(snapshot,composeLayer(role,keyFor(skill.filePath))!.effective+'\n\nReference files resolve relative to original directory: '+skill.baseDir,{mode:0o600});
+   fs.writeFileSync(snapshot,(composeLayer(role,keyFor(skill.filePath))?.effective ?? fs.readFileSync(skill.filePath,'utf8'))+'\n\nReference files resolve relative to original directory: '+skill.baseDir,{mode:0o600});
    args.push('--skill',snapshot);
   }
  }
- const descriptionMap=Object.fromEntries(builtinTools(cwd).map(t=>[t.name,composeLayer(role,'tool.builtin.'+t.name)!.effective]));
+ const descriptionMap=Object.fromEntries(builtinTools(cwd).map(t=>[t.name,composeLayer(role,'tool.builtin.'+t.name)?.effective ?? t.description]));
  const extension=configPath+'.tools.mjs';
  fs.writeFileSync(extension,`import * as sdk from ${JSON.stringify(import.meta.resolve('@earendil-works/pi-coding-agent'))};
  export default function(api) { const mode=${JSON.stringify(mode)}; const allowed=${JSON.stringify(PLANNING_TOOLS)};
@@ -134,7 +134,7 @@ export async function discoverChatResources(role:string, sharedChatSkills=false)
  // Каталог динамический: удалённый файл больше не должен выглядеть действующим.
  for(let i=LAYER_CATALOG.length-1;i>=0;i--) {
   const spec=LAYER_CATALOG[i];
-  if(spec.key.startsWith('resource.')&&spec.roles?.includes(role)&&!currentKeys.has(spec.key)) LAYER_CATALOG.splice(i,1);
+  if(spec.key.startsWith('resource.')&&spec.roles?.includes(role)&&!currentKeys.has(spec.key)&&!(spec.sourceKind==='file'&&fs.existsSync(spec.originRef))) LAYER_CATALOG.splice(i,1);
  }
  registerInstructionBlock({key:'runtime.role_home.'+role,title:'Папка и инструментарий роли',group:'Контекст',scope:'role',roles:[role],modes:ROLE_RESOURCE_MODES,sourceKind:'code',originRef:home.dir,readOnly:true},roleHomeInstruction(role));
  return {skills,diagnostics:loader.getSkills().diagnostics,agentsFiles:loader.getAgentsFiles().agentsFiles,systemPromptSource:loader.getSystemPromptSource(),appendSources:loader.getAppendSystemPromptSources(),prompts};
@@ -182,7 +182,7 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  const discovered=await discoverChatResources(role,sharedChatSkills);
  let snapshotDir:string|undefined;
  const skills=discovered.skills.map(skill=>{
-  const effective=composeLayer(role,keyFor(skill.filePath))!.effective;
+  const effective=composeLayer(role,keyFor(skill.filePath))?.effective ?? fs.readFileSync(skill.filePath,'utf8');
   if(effective===fs.readFileSync(skill.filePath,'utf8')) return skill;
   snapshotDir ??= fs.mkdtempSync(path.join(home.dir,'.task-instructions-'));
   const filePath=path.join(snapshotDir,skill.name+'.md');
@@ -210,7 +210,7 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
   systemPrompt:systemPrompt+'\n\n'+roleHomeInstruction(role)+stagePrompt+missingPrompt,
   appendSystemPrompt:[],
   skillsOverride:()=>({skills:usedSkills,diagnostics:discovered.diagnostics}),
-  agentsFilesOverride:()=>({agentsFiles:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))!.effective})).filter(f=>!systemPrompt.includes(f.content))}),
+  agentsFilesOverride:()=>({agentsFiles:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))?.effective ?? fs.readFileSync(f.path,'utf8')})).filter(f=>!systemPrompt.includes(f.content))}),
  });
  await loader.reload();
  return Object.assign(loader,{disposeResources:()=>{if(snapshotDir)fs.rmSync(snapshotDir,{recursive:true,force:true});}});
@@ -240,8 +240,8 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  // AGENTS.md роли и её папка: при переезде чата внутрь процесса (8986da3) эти
  // два слоя выпали из базовой инструкции — роль не знала ни про свою папку, ни
  // про свои навыки. Возвращены оба, файлом и текстом соответственно.
- for(const file of discovered.agentsFiles)append.push('# '+file.path+'\n'+composeLayer(role,keyFor(file.path))!.effective);
- for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
+ for(const file of discovered.agentsFiles)append.push('# '+file.path+'\n'+(composeLayer(role,keyFor(file.path))?.effective ?? fs.readFileSync(file.path,'utf8')));
+ for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))?.effective ?? fs.readFileSync(source.path,'utf8'));
  // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).
  append.push(roleHomeInstruction(role));
  append.push(behaviorInstruction(role));

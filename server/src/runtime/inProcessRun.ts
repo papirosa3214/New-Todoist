@@ -400,7 +400,9 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     return defineTool({
       name,
       label: name,
-      description: composeLayer(role,key)!.effective,
+      // Слоя может не быть (слой отфильтрован по роли или не зарегистрирован) —
+      // тогда берём описание инструмента из кода, а не падаем.
+      description: composeLayer(role,key)?.effective ?? description,
       parameters,
       execute: async (_id: string, params: any) => {
         try {
