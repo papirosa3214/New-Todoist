@@ -1,7 +1,7 @@
 import {chatExecutionMode,type ChatExecutionMode} from "./chatExecutionMode.js";
 import {roleHostAccessTools} from "./roleHostAccess.js";
 import {createHostRoleTools} from "./hostRoleTools.js";
-import {serviceRefusalCodeOf,TOOL_NOT_CONNECTED} from "./toolRefusalCodes.js";
+import {isToolNotInCatalogText,serviceRefusalCodeOf,TOOL_NOT_CONNECTED} from "./toolRefusalCodes.js";
 import {Check,Errors} from "typebox/value";
 import {createHash} from "node:crypto";
 import {taskflowTools} from "./inProcessRun.js";
@@ -157,7 +157,10 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
   // Операция не подключена к сессии: это не неверные аргументы. Подключаем её
   // сами (только из реестра роли — права не расширяются) и НЕ считаем это
   // неверным вызовом: три таких отказа роняли ход роли.
-  if(/not found/i.test(text)){
+  // Только сообщение «инструмент не в каталоге»: иначе настоящая ошибка
+  // аргументов с текстом «task not found» попадала сюда, вычиталась из
+  // счётчика ошибок и ход не останавливался (D1 карточки e73e7314).
+  if(isToolNotInCatalogText(text)){
    recordToolAudit({...context,...refusalEvent,action:"invoke",tool:event.toolName,operation:event.toolName,outcome:"error",errorCode:TOOL_NOT_CONNECTED,errorMessage:"Операция не подключена к сессии — подключается автоматически"});
    if(tool){rememberOnDemandTool(scope,event.toolName);loader.activate([event.toolName]);}
    return false;

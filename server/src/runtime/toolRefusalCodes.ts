@@ -29,6 +29,39 @@ export const SERVICE_REFUSAL_CODES = [
 
 const SERVICE_SET = new Set<string>(SERVICE_REFUSAL_CODES);
 
+/**
+ * Текст «инструмента нет в каталоге сессии» — единственный отказ, который
+ * означает неподключённую операцию.
+ *
+ * Раньше служебным объявлялся ЛЮБОЙ текст с «not found»: под это попадали
+ * настоящие ошибки аргументов («404: task not found», «subscription not
+ * found»). Такие строки вычитались из `errors` в `toolOutcomeStats`, и сторож
+ * переставал видеть цикл: роль крутила один и тот же промах без остановки
+ * (D1 карточки e73e7314).
+ *
+ * Формы, которые действительно приходят от рантайма Pi:
+ *   • `Tool taskflow_remember not found`
+ *   • `Tool "taskflow_remember" not found`
+ *   • `инструмент … не найден в каталоге`
+ */
+const TOOL_NOT_IN_CATALOG_PATTERNS: RegExp[] = [
+  // Pi: «Tool taskflow_remember not found», «Tool "…" not found». Слово Tool —
+  // с заглавной: иначе под шаблон попадает «… tool id not found» (внутренняя
+  // ошибка SDK), а это не неподключённая операция.
+  /(?:^|[\s.])Tool\s+["'`«]?[\w.:\-/]+["'`»]?\s+not\s+found/,
+  // Со строчной буквы — только имена инструментов роли: без этого «subscription
+  // not found» и «plan not found» снова стали бы служебными отказами.
+  /(?:^|[\s.])tool\s+(?:taskflow_|mcp__|graft_|web_)[\w.:\-]+\s+not\s+found/i,
+  /(?:^|[\s.])tool\s+["'`«](?:taskflow_|mcp__|graft_|web_)[\w.:\-]+["'`»]\s+not\s+found/i,
+  /инструмент[а-яё]*[^\n]{0,60}не\s+найден[а-яё]*\s+в\s+каталог/i,
+];
+
+/** Отказ «операции нет в каталоге сессии», а не ошибка роли в аргументах. */
+export function isToolNotInCatalogText(text: string | null | undefined): boolean {
+  if (typeof text !== "string" || !text) return false;
+  return TOOL_NOT_IN_CATALOG_PATTERNS.some((re) => re.test(text));
+}
+
 export function isServiceRefusalCode(code: string | null | undefined): boolean {
   return typeof code === "string" && SERVICE_SET.has(code);
 }
@@ -59,6 +92,8 @@ export function serviceRefusalCodeOf(input: {
   // закрытых поручений, а не из аргументов вызова.
   if (text.includes("Чек-лист прошлого поручения закрыт")) return CHAT_PLAN_CLOSED;
   if (text.includes("Действие устаревшего хода отклонено")) return CHAT_RUN_STALE;
-  if (/not found/i.test(text)) return TOOL_NOT_CONNECTED;
+  // Только «инструмента нет в каталоге»: слово «not found» в ответе операции
+  // (task/plan/subscription) — настоящая ошибка аргументов, её видно сторожу.
+  if (isToolNotInCatalogText(text)) return TOOL_NOT_CONNECTED;
   return null;
 }
