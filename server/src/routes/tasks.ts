@@ -2679,7 +2679,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
         return reply.code(404).send({ error: "Not found" });
       }
 
-      if (task.archived_at) {
+      // Закрытая (выполненная) карточка — архивная по сути: «удалить
+      // навсегда» должно работать и для неё (владелец, 01.11.2026).
+      if (task.archived_at || task.status === "completed") {
         // Архивная — только владелец может удалить навсегда. Для
         // создателя (он же НЕ владелец) — идемпотентный «архивировано
         // уже» через archiveTask.
