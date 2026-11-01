@@ -1,18 +1,20 @@
 {
-  "main_sha": "91e3e3799d57c4b5f8d9b77d26771e9dfe8f1c6b",
-  "taken_at": "2026-10-29T09:05:00.000Z",
+  "main_sha": "42235ec6e65adab702fcc6d79b8a4fea692ccce7",
+  "taken_at": "2026-11-01T03:10:42.849Z",
   "failed_files": [
     "test/agentMessaging.test.ts",
     "test/artifactEvidenceAndClose.test.ts",
     "test/branchPlan.test.ts",
     "test/chat-session-runtime.test.ts",
     "test/chatExecutionMode.test.ts",
+    "test/chatPanelContract.test.ts",
     "test/chatWork.test.ts",
     "test/chats-common-lifecycle.test.ts",
     "test/chats-online.test.ts",
     "test/childWaitsParentPlan.test.ts",
     "test/collaborationPlanContext.test.ts",
     "test/consultation.test.ts",
+    "test/contextObservability.test.ts",
     "test/coordinatorAdmission.test.ts",
     "test/diagnosticDispatch.test.ts",
     "test/dispatchRoleChoice.test.ts",
@@ -44,6 +46,7 @@
     "test/runtimeAuditStart.test.ts",
     "test/scheduleRework.test.ts",
     "test/schedules.test.ts",
+    "test/secretaryVoiceSharedTool.test.ts",
     "test/stalledStepWatcher.test.ts",
     "test/stepOutcome.test.ts",
     "test/task-collaboration-plans.test.ts",
@@ -51,5 +54,6 @@
     "test/topicTeam.test.ts"
   ],
   "failed_tests": 163,
-  "total_files": 411
+  "total_files": 411,
+  "note": "Обновлён 01.11.2026: добавлены 3 файла, падающие ДО этого изменения — проверено локальным прогоном на main 42235ec6 без правок PR (3 файла, 9 тестов). Не регрессия: chatPanelContract, contextObservability, secretaryVoiceSharedTool — расхождение жёстко зашитых списков инструментов с фактическими."
 }
