@@ -2,7 +2,7 @@ import {beforeAll,beforeEach,afterEach,it,expect,vi} from "vitest";
 import {migrate} from "../src/db.js";
 import {runMigrations} from "../src/migrations.js";
 import {saveJevSettings,resetJevSettings,getJevSettings} from "../src/lib/jev.js";
-import {reviewThoughts,thoughtNudge} from "../src/lib/thoughtReviewJev.js";
+import {reviewThoughts,thoughtNudge,looksLikeLoop,REVIEW_EVERY,NUDGE_COOLDOWN} from "../src/lib/thoughtReviewJev.js";
 beforeAll(()=>{migrate();runMigrations();});
 beforeEach(()=>{resetJevSettings();saveJevSettings({apiKey:"fixture-jev-key"});});
 afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();});
@@ -28,4 +28,15 @@ it("всё в порядке — без подсказки; неуверенно
 it("выключено — оценщик не вызывается",async()=>{
  saveJevSettings({thoughtReviewEnabled:false});const network=vi.fn();vi.stubGlobal("fetch",network);
  expect(await reviewThoughts(input)).toBeNull();expect(network).not.toHaveBeenCalled();
+});
+it("разбор не чаще раза в 10 ответов (владелец 01.11.2026: он был 54% вызовов JEV)",()=>{
+ expect(REVIEW_EVERY).toBe(10);
+ expect(NUDGE_COOLDOWN).toBeGreaterThanOrEqual(REVIEW_EVERY);
+});
+it("круг ловится локально, без вызова оценщика",()=>{
+ const repeated="Сортировка падает, потому что сравнение дат неверно, проверяю функцию сравнения и снова смотрю сортировку";
+ const other="Проверю сборку проекта и запущу тесты, потом посмотрю логи сервера и напишу владельцу отчёт";
+ expect(looksLikeLoop(repeated,[repeated])).toBe(true);
+ expect(looksLikeLoop(repeated,[other])).toBe(false);
+ expect(looksLikeLoop("ок",[repeated])).toBe(false);
 });

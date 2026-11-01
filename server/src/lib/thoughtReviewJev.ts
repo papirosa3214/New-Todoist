@@ -13,9 +13,35 @@ const STATES = {
 } as const;
 export type ThoughtState = keyof typeof STATES;
 
-/** Сколько ответов роли между разборами и сколько тишины после подсказки. */
-export const REVIEW_EVERY = 3;
-export const NUDGE_COOLDOWN = 6;
+/** Сколько ответов роли между разборами и сколько тишины после подсказки.
+ *  Владелец 01.11.2026: было 3 — разбор съедал больше половины всех вызовов
+ *  JEV (1095 из 2028 за неделю) при advisory-результате: роль, которая
+ *  уверенно шла к цели, всё равно оплачивала разбор. Теперь раз в 10 ответов,
+ *  а очевидный круг ловится сразу локальной проверкой (looksLikeLoop) — без
+ *  вызова JEV. Переопределяется окружением, чтобы крутить без пересборки. */
+export const REVIEW_EVERY = intEnv("TASKFLOW_JEV_THOUGHT_REVIEW_EVERY", 10);
+export const NUDGE_COOLDOWN = intEnv("TASKFLOW_JEV_THOUGHT_NUDGE_COOLDOWN", 12);
+
+function intEnv(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isInteger(raw) && raw > 0 ? raw : fallback;
+}
+
+/** Круг на глаз: роль повторяет собственные рассуждения. Проверка локальная,
+ *  без JEV: повтор виден раньше, чем набегут 10 ответов, и стоит ноль
+ *  вызовов. Слова короче 4 символов и служебные — мимо. */
+export function looksLikeLoop(text: string, previous: string[]): boolean {
+  const words = (s: string) => new Set(s.toLowerCase().replace(/[^a-zа-яё0-9]+/gi, " ").split(" ").filter((w) => w.length > 3));
+  const now = words(text);
+  if (now.size < 8) return false;
+  return previous.some((p) => {
+    const then = words(p);
+    if (then.size < 8) return false;
+    let shared = 0;
+    for (const w of now) if (then.has(w)) shared++;
+    return shared / Math.min(now.size, then.size) >= 0.7;
+  });
+}
 
 export async function reviewThoughts(input:{taskId:string;task:string;step:string;thoughts:string[]}):Promise<ThoughtState|null>{
  const cfg=jevScenario("thoughtReview");

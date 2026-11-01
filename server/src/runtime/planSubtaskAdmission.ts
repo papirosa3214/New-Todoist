@@ -8,6 +8,7 @@ import {
 } from "./planArtifactGate.js";
 export { artifactHasEvidence } from "./planArtifactGate.js";
 import { branchMembership } from "./branchPlan.js";
+import { voidReviewRunAfterRestart } from "./reviewRunBudget.js";
 import { nodePhase, parentPrepPending } from "./branchPhase.js";
 import { withObservationContext } from "../lib/contextObservability.js";
 import { unmetDependencyIds } from "../enricher.js";
@@ -781,6 +782,10 @@ export async function recoverInterruptedPlanSubtasks(
           "UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = ? WHERE id = ? AND ended_at IS NULL",
         ).run(reason, row.current_attempt_id);
       }
+      // Перезапуск сервера сорвал заход проверки — он не виноват и не должен
+      // съедать её бюджет (31.10.2026: после деплоя шаг критика умирал с
+      // «нужно решение владельца», хотя роль и не успевала начать).
+      if (byServerRestart) voidReviewRunAfterRestart(row.task_id, row.id);
       // Техснимок обрыва (владелец 04.10.2026). Модель сюда не успевает ответить
       // — её ход умер вместе с процессом, — поэтому пишем то, что сервер знает
       // точно: последнее действие по слоту, состояние и ссылки на артефакты.
@@ -874,6 +879,7 @@ export async function recoverInterruptedPlanSubtasks(
       db.prepare(
         "UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = ? WHERE id = ? AND ended_at IS NULL",
       ).run(reason, row.current_attempt_id);
+      if (byServerRestart) voidReviewRunAfterRestart(row.task_id, row.id);
     }
     db.prepare(
       "UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?",

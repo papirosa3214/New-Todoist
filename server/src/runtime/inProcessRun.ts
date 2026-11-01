@@ -1,7 +1,7 @@
 import {registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import {reportReviewBlockForTask} from "../lib/jevAssist.js";
 import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
-import { reviewThoughts, thoughtNudge, REVIEW_EVERY, NUDGE_COOLDOWN } from "../lib/thoughtReviewJev.js";
+import { reviewThoughts, thoughtNudge, looksLikeLoop, REVIEW_EVERY, NUDGE_COOLDOWN } from "../lib/thoughtReviewJev.js";
 import { COMPACTION_SETTINGS, compactSessionSafely } from "./compactionFallback.js";
 import {oneShotReviewInstruction} from "../lib/integrationResponsibility.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
@@ -1713,13 +1713,16 @@ try {
   // последние рассуждения уходят оценщику; непонимание, круг или уход в
   // сторону получают конкретную подсказку прямо в ход. Не чаще раза за
   // NUDGE_COOLDOWN ответов и без параллельных разборов.
+  // Владелец 01.11.2026: REVIEW_EVERY поднят до 10 — разбор был 54% всех
+  // вызовов JEV. Круг при этом ловится сразу, локальной проверкой текста.
   const recentThoughts: string[] = [];
   let thoughtCount = 0, lastNudgeAt = -NUDGE_COOLDOWN, reviewing = false;
   const reviewRoleThoughts = (text: string) => {
     recentThoughts.push(text);
     if (recentThoughts.length > 4) recentThoughts.shift();
     thoughtCount++;
-    if (reviewing || thoughtCount % REVIEW_EVERY || thoughtCount - lastNudgeAt < NUDGE_COOLDOWN) return;
+    const looped = looksLikeLoop(text, recentThoughts.slice(0, -1));
+    if (reviewing || (thoughtCount % REVIEW_EVERY && !looped) || thoughtCount - lastNudgeAt < NUDGE_COOLDOWN) return;
     reviewing = true;
     const about = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title?: string; description?: string | null } | undefined;
     const step = input.subtaskId ? ((db.prepare("SELECT title FROM subtasks WHERE id = ?").get(input.subtaskId) as { title?: string } | undefined)?.title ?? "") : "";

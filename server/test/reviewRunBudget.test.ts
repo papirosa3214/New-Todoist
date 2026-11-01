@@ -4,7 +4,7 @@ import db, {migrate} from "../src/db.js";
 import {createResultVersion} from "../src/resultVersions.js";
 import {runMigrations} from "../src/migrations.js";
 migrate();runMigrations();
-import {reserveReviewRun,assertReviewRunAllowed,finishReviewRun,reviewBudgetExhausted} from "../src/runtime/reviewRunBudget.js";
+import {reserveReviewRun,assertReviewRunAllowed,finishReviewRun,reviewBudgetExhausted,voidReviewRunAfterRestart} from "../src/runtime/reviewRunBudget.js";
 
 function task() {
  db.prepare("INSERT OR IGNORE INTO users(id,name,email,password_hash,role,type) VALUES('role_critic_verifier','Critic','critic-progress@test','!','agent','ai')").run();
@@ -15,6 +15,14 @@ function task() {
 function progress(id:string,text:string) {
  db.prepare("INSERT OR IGNORE INTO subtasks(id,task_id,title,agent_id,result) VALUES(?,?,'Partial review','role_critic_verifier',?)").run(id+"-output",id,text);
  db.prepare("UPDATE subtasks SET result=? WHERE id=?").run(text,id+"-output");
+}
+/** Шаг финальной ревизии критика — слот, заход которого может сорвать перезапуск. */
+function reviewStep(taskId:string):string {
+ const plan="p_"+crypto.randomUUID(), step="s_"+crypto.randomUUID();
+ db.prepare("INSERT INTO task_collaboration_plans(id,task_id,profile,status,rationale,revision,created_by) VALUES(?,?,'single_executor','approved','test',1,'role_critic_verifier')").run(plan,taskId);
+ db.prepare("INSERT INTO task_collaboration_plan_nodes(id,plan_id,slot_key,role_key,expected_result,instructions) VALUES(?,?,'final_review_x','critic_verifier','Итоговая проверка результата','[taskflow:final-review]')").run("n_"+crypto.randomUUID(),plan);
+ db.prepare("INSERT INTO subtasks(id,task_id,title,position,collaboration_plan_id,plan_node_key,done,agent_id) VALUES(?,?,'Итоговая проверка результата',1,?,'final_review_x',0,'role_critic_verifier')").run(step,taskId,plan);
+ return step;
 }
 describe("durable review budget",()=>{
  it("no output blocks after first run, without spending two more retries",()=>{
@@ -84,5 +92,26 @@ describe("durable review budget",()=>{
   expect(()=>finishReviewRun(ticket)).not.toThrow();
   createResultVersion({taskId:id,createdBy:user,result:"New result"});
   expect(reserveReviewRun(id).number).toBe(1);
+ });
+ it("перезапуск сервера, сорвавший заход проверки, не съедает её бюджет (31.10.2026)",()=>{
+  const id=task(), step=reviewStep(id);
+  const ticket=reserveReviewRun(id);assertReviewRunAllowed(ticket);
+  // Заход сорван перезапуском: вердикта нет, нового вывода нет — бюджет исчерпан.
+  expect(reviewBudgetExhausted(id)).toBe(true);
+  expect(voidReviewRunAfterRestart(id,step)).toBe(true);
+  expect(reviewBudgetExhausted(id)).toBe(false);
+  const next=reserveReviewRun(id);
+  expect(next.denied).toBeUndefined();
+  expect(next.number).toBe(1);
+  expect(()=>assertReviewRunAllowed(next)).not.toThrow();
+ });
+ it("освобождение захода не трогает чужие шаги и повторный вызов",()=>{
+  const id=task(), step=reviewStep(id);
+  assertReviewRunAllowed(reserveReviewRun(id));
+  expect(voidReviewRunAfterRestart(id,"чужой-шаг")).toBe(false);
+  expect(reviewBudgetExhausted(id)).toBe(true);
+  expect(voidReviewRunAfterRestart(id,step)).toBe(true);
+  expect(voidReviewRunAfterRestart(id,step)).toBe(false);
+  expect(reviewBudgetExhausted(id)).toBe(false);
  });
 });

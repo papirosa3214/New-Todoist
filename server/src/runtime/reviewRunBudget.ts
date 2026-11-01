@@ -15,7 +15,7 @@ export function reviewCycleFor(taskId: string) {
     ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key
     WHERE s.task_id=? AND s.done=0 AND n.instructions LIKE '[taskflow:final-review]%'
     ORDER BY s.position DESC LIMIT 1`).get(taskId) as {id:string}|undefined;
-  return {versionId:version?.id ?? null, cycle:JSON.stringify([version?.id ?? null,step?.id ?? null])};
+  return {versionId:version?.id ?? null, stepId:step?.id ?? null, cycle:JSON.stringify([version?.id ?? null,step?.id ?? null])};
 }
 
 /** Saved output contents, not heartbeats, comments or read-only tools.
@@ -42,15 +42,37 @@ function hasNewOutput(before:string[],after:string[]):boolean {
 }
 function budgetState(taskId:string) {
   const {cycle,versionId}=reviewCycleFor(taskId);
-  const rows=db.prepare("SELECT to_value FROM task_events WHERE task_id=? AND kind='review_run_started' AND field=? ORDER BY rowid").all(taskId,cycle) as {to_value:string}[];
+  const rows=db.prepare("SELECT rowid,to_value FROM task_events WHERE task_id=? AND kind='review_run_started' AND field=? ORDER BY rowid").all(taskId,cycle) as {rowid:number;to_value:string}[];
+  // Заходы, сорванные перезапуском сервера, в бюджет не идут: перезапуск —
+  // не вина роли (см. voidReviewRunAfterRestart).
+  const voided=new Set((db.prepare("SELECT to_value FROM task_events WHERE task_id=? AND kind='review_run_voided' AND field=?").all(taskId,cycle) as {to_value:string}[]).map(r=>r.to_value));
   let previous:string[]|null=null;
-  if(rows.length) {
+  let count=0;
+  for(const row of rows){
+    if(voided.has(String(row.rowid)))continue;
+    count++;
     try {
-      const value=JSON.parse(rows[rows.length-1].to_value);
+      const value=JSON.parse(row.to_value);
       if(Array.isArray(value?.outputs))previous=value.outputs;
     }catch {/* old starts have no evidence snapshot */}
   }
-  return {cycle,versionId,count:rows.length,previous};
+  return {cycle,versionId,count,previous};
+}
+/** Освободить номер захода проверки, сорванного перезапуском сервера.
+ *  31.10.2026: деплой рвал ход критика посреди проверки. Вердикта заход не
+ *  оставил, но бюджет проверки его засчитывал, и следующий заход упирался в
+ *  «Повтор проверки запрещён… нужно решение владельца» — шаг умирал, владельцу
+ *  приходилось решать за роли. Освобождаем только этот заход; остальные в
+ *  бюджете остаются, и три захода без вердикта по-прежнему блокируют. */
+export function voidReviewRunAfterRestart(taskId:string, subtaskId:string):boolean {
+  const {cycle,stepId}=reviewCycleFor(taskId);
+  if(!stepId||stepId!==subtaskId)return false;
+  const last=db.prepare("SELECT rowid FROM task_events WHERE task_id=? AND kind='review_run_started' AND field=? ORDER BY rowid DESC LIMIT 1").get(taskId,cycle) as {rowid:number}|undefined;
+  if(!last)return false;
+  const already=db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='review_run_voided' AND field=? AND to_value=?").get(taskId,cycle,String(last.rowid));
+  if(already)return false;
+  logEvent({taskId,actorId:null,kind:"review_run_voided",field:cycle,toValue:String(last.rowid)});
+  return true;
 }
 export function reviewRepeatBlockReason(taskId:string):string|null {
   const state=budgetState(taskId);
