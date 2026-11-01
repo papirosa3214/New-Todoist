@@ -12,6 +12,7 @@ import { voidReviewRunAfterRestart } from "./reviewRunBudget.js";
 import { nodePhase, parentPrepPending } from "./branchPhase.js";
 import { withObservationContext } from "../lib/contextObservability.js";
 import { unmetDependencyIds } from "../enricher.js";
+import { missionBlocksCompletion } from "../lib/missionContract.js";
 import {
   recoverSubmittedIncidentReviews,
   ensureBranchAssembler,
@@ -1247,7 +1248,19 @@ export function finishPlanIfComplete(
           .get() as { reviewer_first_default: number } | undefined
       )?.reviewer_first_default ?? 1;
     const member = branchMembership(taskId);
-    if (
+    // ГЕЙТ ЗАКРЫТИЯ МИССИИ (владелец 01.11.2026): пока в контракте ассерций
+    // есть непройденная, карточка не закрывается — «готово» без выполненного
+    // контракта не бывает. Карточка без контракта живёт по-старому.
+    const missionGate = missionBlocksCompletion(taskId);
+    if (missionGate.blocked) {
+      logEvent({
+        taskId,
+        actorId: null,
+        kind: "mission_completion_blocked",
+        field: "mission_contract",
+        toValue: missionGate.outstanding.join(", "),
+      });
+    } else if (
       member &&
       member.root_task_id !== taskId &&
       (!reviewEnabled || ownerReviewDefault !== 1)
@@ -1415,6 +1428,22 @@ export function closeOpenCriticPlanNode(
       }
     | undefined;
   if (!row) return false;
+  return closeNodeWithVerdict(taskId, plan.id, row, verdict, findings, requestedTargets);
+}
+
+/**
+ * Закрыть узел плана вердиктом и открыть rework. Общая часть для проверяющего
+ * (`closeOpenCriticPlanNode`) и для гейта контракта ассерций
+ * (`closePlanNodeByVerdict`, 01.11.2026) — различаются только поиском узла.
+ */
+function closeNodeWithVerdict(
+  taskId: string,
+  planId: string,
+  row: { id: string; title: string; done: number; agent_state: string | null; position: number; plan_node_key?: string | null },
+  verdict: "approved" | "changes_requested" | "blocked",
+  findings: string,
+  requestedTargets: string[] | null,
+): boolean {
   // Если узел уже не в работе (todo/blocked) — всё равно закрываем:
   // вердикт вынесен, шаг плана должен быть закрыт, иначе доработка не
   // откроется.
@@ -1453,11 +1482,11 @@ export function closeOpenCriticPlanNode(
     // startPlanSubtaskRun.
     db.prepare(
       `UPDATE subtasks SET admission_cycle = COALESCE(admission_cycle, 0) + 1, admission_fingerprint = NULL WHERE collaboration_plan_id = ? AND done = 0`,
-    ).run(plan.id);
+    ).run(planId);
     try {
       openReworkFromCritic(
         taskId,
-        plan.id,
+        planId,
         row,
         findings,
         requestedTargets ?? [],
@@ -1475,6 +1504,44 @@ export function closeOpenCriticPlanNode(
     }
   }
   return true;
+}
+
+/**
+ * Закрыть произвольный узел плана вердиктом и открыть rework от него
+ * (01.11.2026). Нужен гейту контракта ассерций: шаг `qa`, закрывающий
+ * ассерции, находит дефект → узел закрывается вердиктом `changes_requested`,
+ * а доработка открывается для владельца упавшей ассерции.
+ *
+ * Якорь — сам проверяющий узел: «сегмент» (предшественники) считается от
+ * него, поэтому rework открывается ровно тем работам, которые стоят перед
+ * проверкой, — как и у проверяющего.
+ */
+export function closePlanNodeByVerdict(
+  taskId: string,
+  planId: string,
+  slotKey: string,
+  verdict: "approved" | "changes_requested" | "blocked",
+  findings: string,
+  requestedTargets: string[] | null,
+): boolean {
+  const row = db
+    .prepare(
+      `SELECT s.id, s.title, s.done, s.agent_state, s.position, s.plan_node_key
+       FROM subtasks s
+       JOIN task_collaboration_plan_nodes n
+         ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+      WHERE s.task_id = ?
+        AND s.collaboration_plan_id = ?
+        AND n.slot_key = ?
+        AND s.done = 0
+      ORDER BY s.position DESC
+      LIMIT 1`,
+    )
+    .get(taskId, planId, slotKey) as
+    | { id: string; title: string; done: number; agent_state: string | null; position: number; plan_node_key?: string | null }
+    | undefined;
+  if (!row) return false;
+  return closeNodeWithVerdict(taskId, planId, row, verdict, findings, requestedTargets);
 }
 
 /** Открыть rework-узлы от critic-узла, по аналогии с `completePlanFinalReview`,

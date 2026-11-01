@@ -8,6 +8,8 @@ import { isOwner, isOrchestrator } from "../access.js";
 import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent } from "../ws.js";
 import { startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { closePlanNodeByVerdict } from "../runtime/planSubtaskAdmission.js";
+import { parseAssertionResults, recordAssertionResults, appendMissionEvent, parseFulfills } from "../lib/missionContract.js";
 import { saveSlotSnapshot } from "../runtime/slotWorkSnapshot.js";
 import { getFullTask, getSubtaskWithTaskForUser } from "./subtasks.js";
 
@@ -41,6 +43,25 @@ function contractFor(subtaskRow: { collaboration_plan_id: string | null; plan_no
 
 function latestArtifact(subtaskId: string): ArtifactVersion | undefined {
   return db.prepare("SELECT * FROM subtask_artifact_versions WHERE subtask_id = ? ORDER BY version_no DESC LIMIT 1").get(subtaskId) as ArtifactVersion | undefined;
+}
+
+/** Ассерции контракта, которые закрывает этот узел плана. */
+function fulfillsOf(subtaskRow: { collaboration_plan_id: string | null; plan_node_key: string | null }): string[] {
+  if (!subtaskRow.collaboration_plan_id || !subtaskRow.plan_node_key) return [];
+  const row = db.prepare("SELECT fulfills_json FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
+    .get(subtaskRow.collaboration_plan_id, subtaskRow.plan_node_key) as { fulfills_json: string | null } | undefined;
+  return parseFulfills(row?.fulfills_json ?? null);
+}
+
+/**
+ * Шаги плана, стоящие непосредственно перед проверяющим: их работа и
+ * проверялась. Именно им открывается доработка, когда проверка не прошла.
+ */
+function predecessorSlots(planId: string, slotKey: string): string[] {
+  const rows = db.prepare("SELECT from_slot_key FROM task_collaboration_plan_edges WHERE plan_id = ? AND to_slot_key = ?").all(planId, slotKey) as Array<{ from_slot_key: string }>;
+  const out: string[] = [];
+  for (const row of rows) if (!out.includes(row.from_slot_key)) out.push(row.from_slot_key);
+  return out;
 }
 
 /**
@@ -92,6 +113,21 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     const missingFields = contract.required_fields.filter((key) => { const value = (payload as Record<string, unknown>)[key]; return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0); });
     if (missingFields.length) return validationFailure("в payload нет обязательных полей (пропущены или пустые): " + missingFields.join(", ") + ". Контракт «" + contract.key + "» требует: " + contract.required_fields.join(", "));
 
+    // ГЕЙТ КОНТРАКТА АССЕРЦИЙ (владелец 01.11.2026). Шаг, который заявляет
+    // ассерции (`fulfills`), обязан приложить результат проверки по каждой.
+    // Непройденная ассерция → доработка владельца, а не тихий «готово»
+    // (3e27dafe: «секретарь не может выдать новый виджет», а проверка была
+    // «approved» — сценарий никто не прогнал).
+    const nodeFulfills = fulfillsOf(current);
+    let assertionResults: ReturnType<typeof parseAssertionResults> = [];
+    if (nodeFulfills.length) {
+      try {
+        assertionResults = parseAssertionResults((payload as Record<string, unknown>).assertions, nodeFulfills);
+      } catch (error) {
+        return validationFailure(error instanceof Error ? error.message : String(error));
+      }
+    }
+
     let reportMarkdown: string;
     try { reportMarkdown = validateRoleReport(req.body?.report_markdown); }
     catch (error) { return validationFailure(error instanceof Error ? error.message : String(error)); }
@@ -118,12 +154,31 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
       artifacts: [{ kind: contract.key, title: `${contract.key} v${versionNo}`, ref: `note:${noteId}` }],
       authorId: req.userId,
     });
-    db.prepare("UPDATE subtasks SET result = ?, done = 1, agent_state = NULL, agent_heartbeat_at = NULL WHERE id = ?").run(summary, current.id);
-    if (current.current_attempt_id) {
-      db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'submitted', reason = ? WHERE id = ? AND ended_at IS NULL").run(summary, current.current_attempt_id);
-      db.prepare("UPDATE subtasks SET current_attempt_id = NULL WHERE id = ?").run(current.id);
-    }
-    logEvent({ taskId: current.task_id, actorId: req.userId, kind: "plan_subtask_artifact_submitted", field: current.plan_node_key, toValue: contract.key + " v" + versionNo });
+    const gateOutcome = assertionResults.length
+      ? recordAssertionResults(current.task_id, current.plan_node_key ?? "", assertionResults, req.userId)
+      : { failed: [] as string[], blocked: [] as string[], passed: [] as string[] };
+    if (gateOutcome.failed.length) {
+      // Гейт сработал: результат проверки провален. Узел закрывается
+      // вердиктом `changes_requested`, доработка открывается владельцу
+      // упавшей ассерции — не тихий «готово».
+      const owners = predecessorSlots(current.collaboration_plan_id ?? "", current.plan_node_key ?? "");
+      const findings = `Непройденные ассерции контракта: ${gateOutcome.failed.join(", ")}`;
+      appendMissionEvent(current.task_id, {
+        kind: "assertion_failed",
+        actor_id: req.userId,
+        slot_key: current.plan_node_key ?? null,
+        payload: { failed: gateOutcome.failed, owners },
+      });
+      if (current.collaboration_plan_id && current.plan_node_key) {
+        closePlanNodeByVerdict(current.task_id, current.collaboration_plan_id, current.plan_node_key, "changes_requested", findings, owners);
+      }
+    } else {
+      db.prepare("UPDATE subtasks SET result = ?, done = 1, agent_state = NULL, agent_heartbeat_at = NULL WHERE id = ?").run(summary, current.id);
+      if (current.current_attempt_id) {
+        db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'submitted', reason = ? WHERE id = ? AND ended_at IS NULL").run(summary, current.current_attempt_id);
+        db.prepare("UPDATE subtasks SET current_attempt_id = NULL WHERE id = ?").run(current.id);
+      }
+    }    logEvent({ taskId: current.task_id, actorId: req.userId, kind: "plan_subtask_artifact_submitted", field: current.plan_node_key, toValue: contract.key + " v" + versionNo });
     })();
     await unlockReadyPlanSubtasks(current.collaboration_plan_id, current.task_id, req.userId);
     const fullTask = getFullTask(current.task_id);

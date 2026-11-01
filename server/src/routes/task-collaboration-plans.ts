@@ -5,7 +5,7 @@ import { submissionReceipt } from "../lib/submissionReceipt.js";
 import { roleResultDocument } from "../lib/roleResultReport.js";
 import { normalizePlanStartCondition } from "../runtime/planArtifactGate.js";
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
-import { parseFulfills, parseFulfillsInput, missionAssertions, replaceMissionAssertions, assertionCoverage, validateAssertionCoverage } from "../lib/missionContract.js";
+import { parseFulfills, parseFulfillsInput, missionAssertions, replaceMissionAssertions, assertionCoverage, validateAssertionCoverage, withAssertionInstruction, missionOutcome, missionEvents, appendMissionEvent } from "../lib/missionContract.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
 import { ensureCardResponsible } from "../runtime/branchPlan.js";
@@ -505,7 +505,7 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
     const card = db.prepare("SELECT title,description FROM tasks WHERE id=?").get(taskId) as {title:string;description:string|null};
     const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions, fulfills_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id ?? null,
-      node.instructions ?? templateInstructions(profile,node,card.title+"\n"+(card.description??"")), node.fulfills?.length ? JSON.stringify(node.fulfills) : null);
+      withAssertionInstruction(node.instructions ?? templateInstructions(profile,node,card.title+"\n"+(card.description??"")), node.fulfills ?? []), node.fulfills?.length ? JSON.stringify(node.fulfills) : null);
     markBranchPrep(id);
     const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
     for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
@@ -1160,11 +1160,14 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
         db.prepare("DELETE FROM task_collaboration_plan_edges WHERE plan_id = ?").run(plan.id);
         db.prepare("DELETE FROM task_collaboration_plan_nodes WHERE plan_id = ?").run(plan.id);
         const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions, fulfills_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id,
-          node.instructions === undefined ? prior.find(n=>n.slot_key===node.slot_key && n.role_key===node.role_key)?.instructions ?? null : node.instructions,
-          // fulfills сохраняем при правке графа: узел пересоздаётся, но заявленные
-          // им ассерции контракта не должны молча пропасть (01.11.2026).
-          node.fulfills === undefined ? prior.find(n=>n.slot_key===node.slot_key)?.fulfills_json ?? null : node.fulfills.length ? JSON.stringify(node.fulfills) : null);
+        for (const node of graph.nodes) {
+          const priorNode = prior.find(n=>n.slot_key===node.slot_key);
+          const fulfills = node.fulfills === undefined ? parseFulfills(priorNode?.fulfills_json ?? null) : node.fulfills;
+          const baseInstructions = node.instructions === undefined ? prior.find(n=>n.slot_key===node.slot_key && n.role_key===node.role_key)?.instructions ?? null : node.instructions;
+          insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id,
+            withAssertionInstruction(baseInstructions, fulfills),
+            fulfills.length ? JSON.stringify(fulfills) : null);
+        }
         const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
         for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
       }
@@ -1347,7 +1350,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
   app.get<{ Params: { id: string } }>("/api/tasks/:id/mission-assertions", { preHandler: authOrApiToken }, async (req: any, reply) => {
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
-    return { assertions: missionAssertions(task.id) };
+    return { assertions: missionAssertions(task.id), outcome: missionOutcome(task.id) };
   });
 
   app.post<{ Params: { id: string }; Body: { assertions?: unknown } }>("/api/tasks/:id/mission-assertions", { preHandler: authOrApiToken }, async (req: any, reply) => {
@@ -1360,8 +1363,20 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }
+    appendMissionEvent(task.id, { kind: "contract_replaced", actor_id: req.userId, payload: { count: written.length } });
     logEvent({ taskId: task.id, actorId: req.userId, kind: "mission_assertions_replaced", field: String(written.length) });
-    return { assertions: written };
+    return { assertions: written, outcome: missionOutcome(task.id) };
+  });
+
+  /**
+   * Журнал миссии: кто какие ассерции проверял, что упало, какая доработка
+   * открылась. Append-only, читается как есть.
+   */
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/api/tasks/:id/mission-events", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const limit = Number(req.query?.limit ?? 200) || 200;
+    return { events: missionEvents(task.id, limit) };
   });
 
   /**

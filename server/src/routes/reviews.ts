@@ -5,6 +5,7 @@ import { sandboxSubmissionError, submissionReceipt } from "../lib/submissionRece
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { completePlanFinalReview } from "../runtime/planReviewLifecycle.js";
 import { closeOpenCriticPlanNode, openMidPlanCritic, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { missionBlocksCompletion } from "../lib/missionContract.js";
 import crypto from "crypto";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -234,7 +235,11 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     // Поломка, одобренная Критиком, закрывается сама (владелец 14.10.2026):
     // принимать починки владелец не хочет. Возврат на доработку идёт как обычно.
     const incidentKey = (db.prepare("SELECT incident_key FROM tasks WHERE id = ?").get(taskId) as { incident_key: string | null } | undefined)?.incident_key;
-    if (incidentKey && verdict === "approved") {
+    // ГЕЙТ ЗАКРЫТИЯ МИССИИ (владелец 01.11.2026): непройденная ассерция
+    // контракта не даёт закрыть карточку — «готово» без выполненного
+    // контракта не бывает.
+    const missionGate = missionBlocksCompletion(taskId);
+    if (incidentKey && verdict === "approved" && !missionGate.blocked) {
       const closed = db.prepare("UPDATE tasks SET status = 'completed', agent_state = NULL, completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND status = 'active'").run(taskId);
       if (closed.changes) logEvent({ taskId, actorId: req.userId, kind: "status_changed", field: "status", fromValue: "active", toValue: "completed" });
     }
