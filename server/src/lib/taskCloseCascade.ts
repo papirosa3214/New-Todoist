@@ -14,6 +14,7 @@ import db from "../db.js";
 import { logEvent, releaseSubtaskWork } from "../agentState.js";
 import { setTaskTopicClosed } from "./projectTopics.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
+import { releaseMissionSkills } from "./missionSkills.js";
 
 export function closeTaskTree(taskId: string, actorId: string | null): { children: string[]; steps: number } {
   const children = (
@@ -49,6 +50,18 @@ export function closeTaskTree(taskId: string, actorId: string | null): { childre
     } catch (e) {
       console.warn(`[close-cascade] ${id}:`, e);
     }
+  }
+  // Навыки миссии (владелец 01.11.2026): карточка закрыта — контракт
+  // выполнен, навыки миссии больше не нужны. Уходят в архив ВНЕ папки skills/,
+  // чтобы Pi их не подхватил и они не влияли на будущие задачи той же роли.
+  // Файл восстановим — архив рядом.
+  try {
+    const released = releaseMissionSkills(taskId);
+    if (released.length) {
+      logEvent({ taskId, actorId, kind: "mission_skills_released", field: String(released.length), toValue: released.join(", ") });
+    }
+  } catch (error) {
+    logEvent({ taskId, actorId, kind: "mission_skills_release_failed", field: "mission_skills", toValue: error instanceof Error ? error.message : String(error) });
   }
   return { children, steps };
 }

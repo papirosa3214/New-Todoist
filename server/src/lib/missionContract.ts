@@ -327,7 +327,10 @@ export type MissionEventKind =
   | "assertion_failed"
   | "assertion_blocked"
   | "gate_rework"
-  | "mission_closed";
+  | "mission_closed"
+  | "mission_skill_registered"
+  | "mission_skill_released"
+  | "mission_skill_release_failed";
 
 export function appendMissionEvent(
   taskId: string,
