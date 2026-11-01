@@ -5,6 +5,7 @@ import { submissionReceipt } from "../lib/submissionReceipt.js";
 import { roleResultDocument } from "../lib/roleResultReport.js";
 import { normalizePlanStartCondition } from "../runtime/planArtifactGate.js";
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
+import { parseFulfills, parseFulfillsInput, missionAssertions, replaceMissionAssertions, assertionCoverage, validateAssertionCoverage } from "../lib/missionContract.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
 import { ensureCardResponsible } from "../runtime/branchPlan.js";
@@ -17,7 +18,7 @@ import { taskExecutionState } from "../runtime/taskExecutionState.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import { authOrApiToken } from "../auth.js";
-import { getTaskForRead, isOrchestrator, isOwner } from "../access.js";
+import { getTaskForRead, getTaskForWrite, isOrchestrator, isOwner } from "../access.js";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
@@ -56,9 +57,9 @@ type Plan = {
 };
 
 type ArtifactContract = { key: string; type: string; format: "json"; required_fields: string[] };
-type NodeInput = { instructions?: unknown; slot_key?: unknown; role_key?: unknown; required?: unknown; expected_result?: unknown; output_artifact?: unknown; source_subtask_id?: unknown };
+type NodeInput = { instructions?: unknown; slot_key?: unknown; role_key?: unknown; required?: unknown; expected_result?: unknown; output_artifact?: unknown; source_subtask_id?: unknown; fulfills?: unknown };
 type EdgeInput = { from_slot_key?: unknown; to_slot_key?: unknown; start_condition?: unknown; artifact_key?: unknown };
-type Node = { instructions?: string | null; slot_key: string; role_key: string; required: boolean; expected_result: string; output_artifact: ArtifactContract | null; source_subtask_id: string | null };
+type Node = { instructions?: string | null; slot_key: string; role_key: string; required: boolean; expected_result: string; output_artifact: ArtifactContract | null; source_subtask_id: string | null; fulfills?: string[] };
 type Edge = { from_slot_key: string; to_slot_key: string; start_condition: string; artifact_key: string | null };
 
 function mayManage(userId: string): boolean {
@@ -78,9 +79,9 @@ type NodeExtra = {
 
 function presentSingle(plan: Plan) {
   const nodes = db.prepare(`SELECT slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id,
-                                   instructions, origin, added_by, added_reason, iteration, rework_of_key, skipped_at, skip_reason
+                                   instructions, origin, added_by, added_reason, iteration, rework_of_key, skipped_at, skip_reason, fulfills_json
                               FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY rowid`)
-    .all(plan.id) as Array<Omit<Node, "required" | "output_artifact"> & NodeExtra & { required: number; output_artifact_json: string | null }>;
+    .all(plan.id) as Array<Omit<Node, "required" | "output_artifact"> & NodeExtra & { required: number; output_artifact_json: string | null; fulfills_json: string | null }>;
   const edges = db.prepare("SELECT from_slot_key, to_slot_key, start_condition, artifact_key FROM task_collaboration_plan_edges WHERE plan_id = ? ORDER BY from_slot_key, to_slot_key")
     .all(plan.id) as Edge[];
   return {
@@ -119,6 +120,8 @@ function presentSingle(plan: Plan) {
       rework_of_key: node.rework_of_key ?? null,
       skipped_at: node.skipped_at ?? null,
       skip_reason: node.skip_reason ?? null,
+      // Контракт ассерций (01.11.2026): какие ассерции закрывает этот шаг.
+      fulfills: parseFulfills(node.fulfills_json),
     })),
     edges,
     version: plan.version ?? 1,
@@ -258,6 +261,10 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }, taskId?: string)
     expected_result: String(raw.expected_result ?? "").trim(),
     output_artifact: parseArtifactContract(raw.output_artifact),
     source_subtask_id: raw.source_subtask_id === undefined || raw.source_subtask_id === null ? null : String(raw.source_subtask_id).trim(),
+    // Контракт ассерций (01.11.2026): список id ассерций, которые закрывает
+    // этот шаг. Разбираем строго — молча выкинутое значение превратилось бы в
+    // дыру в покрытии, которую никто не увидел бы.
+    fulfills: parseFulfillsInput(raw.fulfills),
   }));
   const keys = new Set<string>();
   const artifactKeys = new Set<string>();
@@ -496,9 +503,9 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
     db.prepare(`INSERT INTO task_collaboration_plans (id, task_id, revision, profile, rationale, context_version, created_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, taskId, revision, profile, rationale, contextVersion, createdBy);
     const card = db.prepare("SELECT title,description FROM tasks WHERE id=?").get(taskId) as {title:string;description:string|null};
-    const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions, fulfills_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id ?? null,
-      node.instructions ?? templateInstructions(profile,node,card.title+"\n"+(card.description??"")));
+      node.instructions ?? templateInstructions(profile,node,card.title+"\n"+(card.description??"")), node.fulfills?.length ? JSON.stringify(node.fulfills) : null);
     markBranchPrep(id);
     const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
     for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
@@ -1010,10 +1017,21 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (plan.status !== "draft") return reply.code(409).send({ error: "утвердить можно только draft plan" });
     if(req.body?.base_version!==undefined && req.body.base_version!==(plan.version??1))return reply.code(409).send({error:"План изменился — обновите карточку"});
     try {validateWorkChoices(plan.id);}catch(error){return reply.code(409).send({error:(error as Error).message});}
+    // Контракт ассерций (01.11.2026): «готово» определено заранее, и каждая
+    // ассерция должна быть заявлена РОВНО ОДНОЙ работой. Дыра в покрытии
+    // отменяет утверждение плана, а не проходит молча. Карточка без контракта
+    // проверку не проходит вовсе — живёт по-старому.
+    try {validateAssertionCoverage(plan.id);}catch(error){return reply.code(409).send({error:(error as Error).message});}
 
     if(branchRoot(task.id)!==task.id) return reply.code(409).send({error:"План этой карточки согласуется в общем плане родителя",branch_root_task_id:branchRoot(task.id)});
     if(branchCards(task.id).length>1){
       try{
+        // Ветка: контракт проверяем у каждой карточки — у каждой свой план,
+        // и ассерции контракта закрываются работами её плана (01.11.2026).
+        for(const card of branchCards(task.id)){
+          const cardPlan=db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved') ORDER BY CASE status WHEN 'draft' THEN 0 ELSE 1 END,revision DESC LIMIT 1").get(card.id) as {id:string}|undefined;
+          if(cardPlan)validateAssertionCoverage(cardPlan.id);
+        }
         const snapshot=typeof req.body?.branch_snapshot==='string' ? req.body.branch_snapshot : '';
         const plans=approveBranch(plan.id,req.userId,snapshot);
         logEvent({taskId:task.id,actorId:req.userId,kind:"branch_plan_approved",field:plan.id,toValue:String(plans.length)});
@@ -1138,12 +1156,15 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       if (sets.length) db.prepare(`UPDATE task_collaboration_plans SET ${sets.join(", ")} WHERE id = ?`).run(...values, plan.id);
       db.prepare("UPDATE task_collaboration_plan_nodes SET origin='owner' WHERE plan_id=? AND origin IN ('auto_template','linear_import','auto_preparation')").run(plan.id);
       if (graph) {
-        const prior = db.prepare("SELECT slot_key,role_key,instructions FROM task_collaboration_plan_nodes WHERE plan_id=?").all(plan.id) as Array<{slot_key:string;role_key:string;instructions:string|null}>;
+        const prior = db.prepare("SELECT slot_key,role_key,instructions,fulfills_json FROM task_collaboration_plan_nodes WHERE plan_id=?").all(plan.id) as Array<{slot_key:string;role_key:string;instructions:string|null;fulfills_json:string|null}>;
         db.prepare("DELETE FROM task_collaboration_plan_edges WHERE plan_id = ?").run(plan.id);
         db.prepare("DELETE FROM task_collaboration_plan_nodes WHERE plan_id = ?").run(plan.id);
-        const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions, fulfills_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id,
-          node.instructions === undefined ? prior.find(n=>n.slot_key===node.slot_key && n.role_key===node.role_key)?.instructions ?? null : node.instructions);
+          node.instructions === undefined ? prior.find(n=>n.slot_key===node.slot_key && n.role_key===node.role_key)?.instructions ?? null : node.instructions,
+          // fulfills сохраняем при правке графа: узел пересоздаётся, но заявленные
+          // им ассерции контракта не должны молча пропасть (01.11.2026).
+          node.fulfills === undefined ? prior.find(n=>n.slot_key===node.slot_key)?.fulfills_json ?? null : node.fulfills.length ? JSON.stringify(node.fulfills) : null);
         const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
         for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
       }
@@ -1311,5 +1332,48 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     });
     if (!outcome.ok) return reply.code(outcome.code).send({ error: outcome.error });
     return reply.code(201).send({ plan_id: outcome.planId, subtask_id: outcome.subtaskId, run_id: outcome.runId });
+  });
+
+  /**
+   * Контракт ассерций карточки (01.11.2026). «Готово» определено ДО работы:
+   * список проверяемых утверждений с указанием, чем проверять и какие
+   * доказательства обязательны. Работа (узел плана) закрывает ассерцию полем
+   * `fulfills`; инвариант — ровно одна работа на ассерцию, проверяется при
+   * утверждении плана.
+   *
+   * Запись контракта — владелец или оркестратор. Роль-исполнитель контракт не
+   * пишет: это утверждение о готовности, то есть слово владельца.
+   */
+  app.get<{ Params: { id: string } }>("/api/tasks/:id/mission-assertions", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    return { assertions: missionAssertions(task.id) };
+  });
+
+  app.post<{ Params: { id: string }; Body: { assertions?: unknown } }>("/api/tasks/:id/mission-assertions", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!isOwner(req.userId) && !isOrchestrator(req.userId)) return reply.code(403).send({ error: "контракт ассерций пишет владелец или оркестратор" });
+    const task = getTaskForWrite(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    let written;
+    try {
+      written = replaceMissionAssertions(task.id, req.body?.assertions);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    logEvent({ taskId: task.id, actorId: req.userId, kind: "mission_assertions_replaced", field: String(written.length) });
+    return { assertions: written };
+  });
+
+  /**
+   * Покрытие контракта планом — сухая проверка перед утверждением: что не
+   * покрыто и что заявлено лишнее. Тот же расчёт, что и гейт approve, но
+   * без отказа — чтобы владелец видел дыру до нажатия.
+   */
+  app.get<{ Params: { id: string; planId: string } }>("/api/tasks/:id/collaboration-plans/:planId/assertion-coverage", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const plan = planForTask(task.id, req.params.planId);
+    if (!plan) return reply.code(404).send({ error: "plan not found" });
+    return assertionCoverage(plan.id);
   });
 }

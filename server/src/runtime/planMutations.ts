@@ -44,8 +44,8 @@ const CHECKER_ROLES = new Set(["qa", "critic_verifier"]);
 
 export type PlanOp =
   | { op: "request_help"; from_slot: string; role_key: string; expected_result: string; instructions?: string; after?: string[] }
-  | { op: "add_step"; slot_key?: string; role_key: string; expected_result: string; instructions?: string; after?: string[]; before?: string[] }
-  | { op: "update_step"; slot_key: string; role_key?: string; expected_result?: string; instructions?: string; after?: string[] }
+  | { op: "add_step"; slot_key?: string; role_key: string; expected_result: string; instructions?: string; after?: string[]; before?: string[]; fulfills?: string[] }
+  | { op: "update_step"; slot_key: string; role_key?: string; expected_result?: string; instructions?: string; after?: string[]; fulfills?: string[] }
   | { op: "remove_step"; slot_key: string }
   | { op: "skip_step"; slot_key: string; reason: string }
   | { op: "rework"; from_slot: string; role_key?: string; defects: string };
@@ -113,6 +113,17 @@ export function normalizePlanOps(input: unknown): PlanOp[] {
       }
       return value as string[];
     };
+    // fulfills — список id ассерций контракта, которые закрывает шаг
+    // (владелец 01.11.2026). Проверяется при утверждении плана: ровно одна
+    // работа на ассерцию.
+    const ids = (field: string): string[] | undefined => {
+      const value = op[field];
+      if (value === undefined || value === null) return undefined;
+      if (!Array.isArray(value) || value.some((v) => typeof v !== "string" || !v.trim())) {
+        throw new PlanOpError(`${where}: поле «${field}» должно быть списком id ассерций`);
+      }
+      return (value as string[]).map((v) => v.trim());
+    };
     switch (name) {
       case "request_help":
         return {
@@ -132,6 +143,7 @@ export function normalizePlanOps(input: unknown): PlanOp[] {
           instructions: text("instructions"),
           after: slots("after"),
           before: slots("before"),
+          fulfills: ids("fulfills"),
         } as PlanOp;
       case "update_step":
         return {
@@ -141,6 +153,7 @@ export function normalizePlanOps(input: unknown): PlanOp[] {
           expected_result: text("expected_result"),
           instructions: text("instructions"),
           after: slots("after"),
+          fulfills: ids("fulfills"),
         } as PlanOp;
       case "remove_step":
         return { op: name, slot_key: text("slot_key", true) } as PlanOp;
@@ -165,6 +178,7 @@ type NodeRow = {
   output_artifact_json: string | null;
   source_subtask_id: string | null;
   instructions: string | null;
+  fulfills_json: string | null;
   origin: string;
   added_by: string | null;
   added_reason: string | null;
@@ -259,6 +273,7 @@ function newNode(fields: Partial<NodeRow> & { slot_key: string; role_key: string
     output_artifact_json: null,
     source_subtask_id: null,
     instructions: null,
+    fulfills_json: null,
     origin: "owner",
     added_by: null,
     added_reason: null,
@@ -312,6 +327,7 @@ function applyOne(op: PlanOp, w: Working, plan: PlanRow, steps: Map<string, Step
         role_key: role,
         expected_result: expected,
         instructions: op.instructions ? clip(op.instructions, 4000) : null,
+        fulfills_json: op.fulfills?.length ? JSON.stringify(op.fulfills) : null,
         origin: actor.kind === "role" ? "role" : "owner",
         added_by: actor.id,
         added_reason: reason,
@@ -335,6 +351,7 @@ function applyOne(op: PlanOp, w: Working, plan: PlanRow, steps: Map<string, Step
         node.expected_result = expected;
       }
       if (op.instructions !== undefined) node.instructions = op.instructions ? clip(op.instructions, 4000) : null;
+      if (op.fulfills !== undefined) node.fulfills_json = op.fulfills.length ? JSON.stringify(op.fulfills) : null;
       if (op.after !== undefined) {
         w.edges = w.edges.filter((e) => e.to_slot_key !== node.slot_key);
         for (const a of op.after) w.edges.push(edgeFrom(existing(a), node.slot_key));
@@ -474,13 +491,14 @@ function persist(plan: PlanRow, w: Working): void {
   const insertNode = db.prepare(
     `INSERT INTO task_collaboration_plan_nodes
        (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id,
-        instructions, origin, added_by, added_reason, iteration, rework_of_key, skipped_at, skip_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        instructions, origin, added_by, added_reason, iteration, rework_of_key, skipped_at, skip_reason, fulfills_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const n of w.nodes.values()) {
     insertNode.run(
       "tcpn_" + crypto.randomUUID(), plan.id, n.slot_key, n.role_key, n.required, n.expected_result, n.output_artifact_json,
       n.source_subtask_id, n.instructions, n.origin, n.added_by, n.added_reason, n.iteration, n.rework_of_key, n.skipped_at, n.skip_reason,
+      n.fulfills_json ?? null,
     );
   }
   const insertEdge = db.prepare(
@@ -648,7 +666,7 @@ export function applyPlanOps(
     const delivered = plan.status === "approved" && planDelivered(plan.task_id, plan.id);
     const nodes = db.prepare(
       `SELECT slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions, origin,
-              added_by, added_reason, iteration, rework_of_key, skipped_at, skip_reason
+              added_by, added_reason, iteration, rework_of_key, skipped_at, skip_reason, fulfills_json
          FROM task_collaboration_plan_nodes WHERE plan_id = ?`,
     ).all(plan.id) as NodeRow[];
     const edges = db.prepare("SELECT from_slot_key, to_slot_key, start_condition, artifact_key FROM task_collaboration_plan_edges WHERE plan_id = ?")
