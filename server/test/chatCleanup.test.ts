@@ -515,6 +515,54 @@ describe("Уборка лишних чатов: отбор кандидатов"
     expect(ids).not.toContain(topicId);
   });
 
+  it("карточка, взявшаяся в работу между предпросмотром и подтверждением, не убирается", async () => {
+    const { taskId, topicId } = await topic("Гонка уборки");
+    db.prepare("UPDATE chats SET updated_at = datetime('now','-3 hours') WHERE id = ?").run(topicId);
+
+    // Имитируем гонку: как только отбор кандидатов отработал (предпросмотр
+    // показал тему), карточка уходит в работу — а проверка в момент
+    // архивирования обязана это увидеть. Ставим состояние прямо после
+    // отбора кандидатов, до проверки перед архивированием.
+    const originalPrepare = db.prepare.bind(db);
+    let armed = true;
+    (db as any).prepare = (sql: string) => {
+      const stmt = originalPrepare(sql);
+      if (!armed || !sql.includes("COALESCE(c.archived_at")) return stmt;
+      return new Proxy(stmt, {
+        get(target, prop, receiver) {
+          const value = Reflect.get(target, prop, receiver);
+          if (prop === "all")
+            return (...args: unknown[]) => {
+              const rows = (value as any).apply(target, args);
+              armed = false;
+              originalPrepare("UPDATE tasks SET agent_state = 'in_progress' WHERE id = ?").run(
+                taskId,
+              );
+              return rows;
+            };
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    };
+
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/chats/cleanup",
+        headers: ownerAuth,
+        payload: { confirm: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().chats as string[]).not.toContain(topicId);
+    } finally {
+      (db as any).prepare = originalPrepare;
+    }
+
+    const row = db.prepare("SELECT closed_at, archived_at FROM chats WHERE id = ?").get(topicId) as any;
+    expect(row.archived_at).toBeNull();
+    expect(row.closed_at).toBeNull();
+  });
+
   it("тему карточки в работе не убирают и одиночной архивацией (409)", async () => {
     const { taskId, topicId } = await topic("Одиночная защита");
     db.prepare("UPDATE tasks SET agent_state = 'in_progress' WHERE id = ?").run(taskId);
