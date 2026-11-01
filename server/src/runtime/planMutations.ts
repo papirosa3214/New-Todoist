@@ -1,6 +1,7 @@
 import {isRoutineServiceComment} from "../lib/serviceNoise.js";
 import { wakeAndDeliver } from "./orchestratorWake.js";
 import { normalizePlanStartCondition } from "./planArtifactGate.js";
+import { withAssertionInstruction, parseFulfills } from "../lib/missionContract.js";
 // Живой план совместной работы (владелец 01.10.2026: «граф живой, может
 // достраиваться сам в процессе, а состав я настраиваю хотя бы до старта»;
 // предложение — docs/2026-09-30-live-collaboration-plan-spec.md).
@@ -326,7 +327,7 @@ function applyOne(op: PlanOp, w: Working, plan: PlanRow, steps: Map<string, Step
         slot_key: slot,
         role_key: role,
         expected_result: expected,
-        instructions: op.instructions ? clip(op.instructions, 4000) : null,
+        instructions: withAssertionInstruction(op.instructions ? clip(op.instructions, 4000) : null, op.fulfills ?? []),
         fulfills_json: op.fulfills?.length ? JSON.stringify(op.fulfills) : null,
         origin: actor.kind === "role" ? "role" : "owner",
         added_by: actor.id,
@@ -352,6 +353,13 @@ function applyOne(op: PlanOp, w: Working, plan: PlanRow, steps: Map<string, Step
       }
       if (op.instructions !== undefined) node.instructions = op.instructions ? clip(op.instructions, 4000) : null;
       if (op.fulfills !== undefined) node.fulfills_json = op.fulfills.length ? JSON.stringify(op.fulfills) : null;
+      // Инструкция по ассерциям следует за fulfills: контракт изменился —
+      // роль должна знать, что именно от неё ждут сейчас (01.11.2026).
+      if (op.instructions !== undefined || op.fulfills !== undefined) {
+        const effective = op.fulfills ?? parseFulfills(node.fulfills_json);
+        const base = op.instructions !== undefined ? node.instructions : node.instructions;
+        node.instructions = withAssertionInstruction(base, effective);
+      }
       if (op.after !== undefined) {
         w.edges = w.edges.filter((e) => e.to_slot_key !== node.slot_key);
         for (const a of op.after) w.edges.push(edgeFrom(existing(a), node.slot_key));

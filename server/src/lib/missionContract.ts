@@ -41,6 +41,14 @@ export type CoverageViolation = {
 
 export type Coverage = { ok: boolean; violations: CoverageViolation[]; total: number };
 
+/** Результат проверки одной ассерции — то, что роль кладёт в payload артефакта. */
+export type AssertionResult = {
+  id: string;
+  status: "passed" | "failed" | "blocked";
+  evidence?: unknown;
+  observed?: unknown;
+};
+
 const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
 
 /** Идентификатор ассерции: латиница, цифры, дефис/точка/подчёркивание. */
@@ -73,6 +81,36 @@ export function parseFulfillsInput(raw: unknown): string[] | undefined {
     if (!out.includes(id)) out.push(id);
   }
   return out;
+}
+
+const HINT_BEGIN = "<<<MISSION_ASSERTIONS>>>";
+const HINT_END = "<<<END_MISSION_ASSERTIONS>>>";
+
+/**
+ * Инструкция шагу, который закрывает ассерции. Без неё роль не знает, что
+ * от неё ждут: контракт записан, а формат результата — нет.
+ *
+ * Блок помечен маркерами, чтобы его можно было заменить, а не дописать
+ * второй раз: инструкции переживают правку графа.
+ */
+export function assertionInstruction(fulfills: string[]): string {
+  if (!fulfills.length) return "";
+  return [
+    HINT_BEGIN,
+    "Проверка по контракту ассерций. Ты закрываешь ассерции: " + fulfills.join(", ") + ".",
+    "В payload артефакта обязательно приложи массив assertions — по каждой ассерции ровно одну запись:",
+    '{"id":"<id ассерции>","status":"passed|failed|blocked","evidence":["путь/ссылка на доказательство"],"observed":"что увидел"}',
+    "status: passed — поведение подтверждено; failed — не подтверждено (работа идёт на доработку); blocked — проверить вживую нельзя, вопрос владельцу.",
+    "Без результата проверки сдача не пройдёт: «готово» без доказательства не засчитывается.",
+    HINT_END,
+  ].join("\n");
+}
+
+/** Ставит (или заменяет) блок инструкции по ассерциям в инструкции шага. */
+export function withAssertionInstruction(text: string | null | undefined, fulfills: string[]): string | null {
+  const stripped = (text ?? "").replace(new RegExp(`${HINT_BEGIN}[\\s\\S]*?${HINT_END}\\n?`, "g"), "").trimEnd();
+  if (!fulfills.length) return stripped || null;
+  return (stripped ? stripped + "\n" : "") + assertionInstruction(fulfills);
 }
 
 export function missionAssertions(taskId: string): MissionAssertion[] {
@@ -216,4 +254,143 @@ export function validateAssertionCoverage(planId: string): void {
   if (coverage.ok) return;
   const detail = coverage.violations.map((v) => v.message).join("; ");
   throw new Error(`Контракт ассерций не покрыт планом (${coverage.violations.length}): ${detail}`);
+}
+
+/* ── Результат проверки: что роль сдаёт в payload артефакта ─────────────── */
+
+/**
+ * Разбирает результаты проверки из payload артефакта. Строгий: шаг, который
+ * заявляет ассерции, обязан приложить результат по каждой — иначе «готово»
+ * оказывается голословным (3e27dafe: «секретарь не может выдать виджет»).
+ */
+export function parseAssertionResults(raw: unknown, expectedIds: string[]): AssertionResult[] {
+  if (raw === undefined || raw === null) {
+    throw new Error(`шаг закрывает ассерции (${expectedIds.join(", ")}), но в payload нет массива assertions с результатами проверки`);
+  }
+  if (!Array.isArray(raw)) throw new Error("payload.assertions должен быть списком результатов проверки");
+  const known = new Set(expectedIds);
+  const seen = new Set<string>();
+  const out: AssertionResult[] = [];
+  for (const item of raw) {
+    const o = (item ?? {}) as Record<string, unknown>;
+    const id = String(o.id ?? "").trim();
+    if (!id) throw new Error("payload.assertions: у результата нет id ассерции");
+    if (!known.has(id)) throw new Error(`payload.assertions: ассерция «${id}» не заявлена этим шагом`);
+    if (seen.has(id)) throw new Error(`payload.assertions: ассерция «${id}» повторяется`);
+    seen.add(id);
+    const status = String(o.status ?? "").trim();
+    if (status !== "passed" && status !== "failed" && status !== "blocked") {
+      throw new Error(`payload.assertions: у ассерции «${id}» неверный status «${status}» (passed | failed | blocked)`);
+    }
+    out.push({ id, status, evidence: o.evidence ?? null, observed: o.observed ?? null });
+  }
+  const missing = expectedIds.filter((id) => !seen.has(id));
+  if (missing.length) {
+    throw new Error(`payload.assertions: нет результата по ассерциям ${missing.join(", ")} — «готово» без проверки не засчитывается`);
+  }
+  return out;
+}
+
+/** Записывает результаты проверки в контракт и пишет событие в журнал миссии. */
+export function recordAssertionResults(
+  taskId: string,
+  slotKey: string,
+  results: AssertionResult[],
+  actorId: string | null,
+): { failed: string[]; blocked: string[]; passed: string[] } {
+  const failed: string[] = [];
+  const blocked: string[] = [];
+  const passed: string[] = [];
+  const update = db.prepare(
+    "UPDATE mission_assertions SET status = ?, claimed_by_slot = ?, updated_at = datetime('now') WHERE task_id = ? AND assertion_id = ?",
+  );
+  for (const r of results) {
+    update.run(r.status, slotKey, taskId, r.id);
+    if (r.status === "failed") failed.push(r.id);
+    else if (r.status === "blocked") blocked.push(r.id);
+    else passed.push(r.id);
+  }
+  appendMissionEvent(taskId, {
+    kind: "assertion_results",
+    actor_id: actorId,
+    slot_key: slotKey,
+    payload: { passed, failed, blocked },
+  });
+  return { failed, blocked, passed };
+}
+
+/* ── Журнал миссии ────────────────────────────────────────────────────────── */
+
+export type MissionEventKind =
+  | "contract_replaced"
+  | "assertion_results"
+  | "assertion_failed"
+  | "assertion_blocked"
+  | "gate_rework"
+  | "mission_closed";
+
+export function appendMissionEvent(
+  taskId: string,
+  event: { kind: MissionEventKind; actor_id?: string | null; slot_key?: string | null; payload?: unknown },
+): void {
+  db.prepare(
+    "INSERT INTO mission_events (id, task_id, ts, kind, actor_id, slot_key, payload_json) VALUES (?, ?, datetime('now'), ?, ?, ?, ?)",
+  ).run(
+    crypto.randomUUID(),
+    taskId,
+    event.kind,
+    event.actor_id ?? null,
+    event.slot_key ?? null,
+    event.payload === undefined ? null : JSON.stringify(event.payload),
+  );
+}
+
+export function missionEvents(taskId: string, limit = 200): Array<{
+  id: string; task_id: string; ts: string; kind: string; actor_id: string | null; slot_key: string | null; payload_json: string | null;
+}> {
+  return db
+    .prepare("SELECT * FROM mission_events WHERE task_id = ? ORDER BY ts DESC, rowid DESC LIMIT ?")
+    .all(taskId, Math.min(Math.max(limit, 1), 1000)) as Array<{
+    id: string; task_id: string; ts: string; kind: string; actor_id: string | null; slot_key: string | null; payload_json: string | null;
+  }>;
+}
+
+/**
+ * Гейт закрытия миссии: пока в контракте есть ассерция не в `passed`, задача
+ * не закрывается. Карточка без контракта живёт по-старому.
+ */
+export function missionBlocksCompletion(taskId: string): { blocked: boolean; outstanding: string[] } {
+  const outcome = missionOutcome(taskId);
+  return { blocked: outcome.has_contract && !outcome.closed, outstanding: outcome.outstanding };
+}
+
+/**
+ * Итог миссии по контракту. Миссия закрыта, когда ВСЕ ассерции `passed`.
+ * `blocked` — «не проверяется вживую»: она не запускает доработку, но и не
+ * даёт закрыть миссию — вопрос владельцу.
+ */
+export function missionOutcome(taskId: string): {
+  has_contract: boolean;
+  total: number;
+  passed: number;
+  failed: number;
+  blocked: number;
+  pending: number;
+  closed: boolean;
+  outstanding: string[];
+} {
+  const assertions = missionAssertions(taskId);
+  const counts = { passed: 0, failed: 0, blocked: 0, pending: 0 };
+  for (const a of assertions) counts[a.status] = (counts[a.status] ?? 0) + 1;
+  const outstanding = assertions.filter((a) => a.status !== "passed").map((a) => a.assertion_id);
+  return {
+    has_contract: assertions.length > 0,
+    total: assertions.length,
+    passed: counts.passed,
+    failed: counts.failed,
+    blocked: counts.blocked,
+    pending: counts.pending,
+    closed: assertions.length > 0 && outstanding.length === 0,
+    outstanding,
+  };
 }

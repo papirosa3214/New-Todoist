@@ -5505,6 +5505,24 @@ const migrations: Migration[] = [
     if (!cols.has("fulfills_json")) db.exec("ALTER TABLE task_collaboration_plan_nodes ADD COLUMN fulfills_json TEXT");
   } },
 
+  // Журнал миссии (владелец 01.11.2026): append-only лог того, что происходило
+  // с контрактом ассерций — кто какие ассерции проверял, что упало, какая
+  // доработка открылась. Отдельная от task_events: там события задачи, здесь —
+  // прохождение контракта.
+  { id: "190_mission_events", description:
+      "Журнал миссии: mission_events — кто, что и когда по контракту ассерций", up: () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS mission_events(
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      ts TEXT NOT NULL DEFAULT (datetime('now')),
+      kind TEXT NOT NULL,
+      actor_id TEXT,
+      slot_key TEXT,
+      payload_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_mission_events_task ON mission_events(task_id, ts);`);
+  } },
+
 ];
 /**
  * Опции прогона миграций.
