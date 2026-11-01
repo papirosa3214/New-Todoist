@@ -5477,6 +5477,34 @@ const migrations: Migration[] = [
     db.exec("CREATE INDEX IF NOT EXISTS role_tool_audit_item ON role_tool_audit(item_id, created_at)");
   } },
 
+  // Контракт ассерций миссии (владелец 01.11.2026): «готово» определено
+  // заранее. Ассерции живут на карточке, работа (узел плана) закрывает их
+  // полем fulfills. Инвариант — ровно одна работа на ассерцию; проверка
+  // выполняется до утверждения плана. Карточка без контракта живёт по-старому.
+  { id: "189_mission_assertions", description:
+      "Контракт ассерций миссии: mission_assertions + task_collaboration_plan_nodes.fulfills_json", up: () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS mission_assertions(
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      assertion_id TEXT NOT NULL,
+      area TEXT,
+      title TEXT NOT NULL,
+      behavior TEXT NOT NULL,
+      tool TEXT,
+      evidence_json TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','passed','failed','blocked')),
+      claimed_by_slot TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(task_id, assertion_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_mission_assertions_task ON mission_assertions(task_id, status);`);
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(task_collaboration_plan_nodes)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("fulfills_json")) db.exec("ALTER TABLE task_collaboration_plan_nodes ADD COLUMN fulfills_json TEXT");
+  } },
+
 ];
 /**
  * Опции прогона миграций.
