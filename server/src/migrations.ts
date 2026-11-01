@@ -5523,6 +5523,29 @@ const migrations: Migration[] = [
     CREATE INDEX IF NOT EXISTS idx_mission_events_task ON mission_events(task_id, ts);`);
   } },
 
+  // Навыки миссии (владелец 01.11.2026): реестр навыков, написанных под
+  // конкретную миссию. Механика «роль пишет навык» уже есть (roleHome.ts),
+  // не хватало только учёта: чей навык, зачем и когда его снять — иначе навык
+  // одной задачи навсегда остаётся в папке роли и влияет на все её будущие
+  // задачи.
+  { id: "191_mission_skills", description:
+      "Навыки миссии: mission_skills — реестр навыков, написанных под задачу, со сроком жизни", up: () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS mission_skills(
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      body TEXT,
+      source_slot TEXT,
+      skill_path TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      released_at TEXT,
+      UNIQUE(task_id, role, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_mission_skills_task ON mission_skills(task_id, released_at);`);
+  } },
+
 ];
 /**
  * Опции прогона миграций.

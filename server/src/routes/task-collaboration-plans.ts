@@ -6,6 +6,7 @@ import { roleResultDocument } from "../lib/roleResultReport.js";
 import { normalizePlanStartCondition } from "../runtime/planArtifactGate.js";
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
 import { parseFulfills, parseFulfillsInput, missionAssertions, replaceMissionAssertions, assertionCoverage, validateAssertionCoverage, withAssertionInstruction, missionOutcome, missionEvents, appendMissionEvent } from "../lib/missionContract.js";
+import { missionSkills, registerMissionSkill, releaseMissionSkill } from "../lib/missionSkills.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
 import { ensureCardResponsible } from "../runtime/branchPlan.js";
@@ -1366,6 +1367,49 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     appendMissionEvent(task.id, { kind: "contract_replaced", actor_id: req.userId, payload: { count: written.length } });
     logEvent({ taskId: task.id, actorId: req.userId, kind: "mission_assertions_replaced", field: String(written.length) });
     return { assertions: written, outcome: missionOutcome(task.id) };
+  });
+
+  /**
+   * Навыки миссии. Роль уже умеет писать навыки в свою папку — здесь они
+   * попадают в реестр миссии, чтобы у них был срок жизни: при закрытии
+   * карточки навыки уходят в архив и перестают влиять на будущие задачи
+   * той же роли.
+   */
+  app.get<{ Params: { id: string } }>("/api/tasks/:id/mission-skills", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    return { skills: missionSkills(task.id) };
+  });
+
+  app.post<{ Params: { id: string }; Body: { role?: unknown; name?: unknown; description?: unknown; body?: unknown; source_slot?: unknown } }>("/api/tasks/:id/mission-skills", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!isOwner(req.userId) && !isOrchestrator(req.userId)) return reply.code(403).send({ error: "навык миссии пишет владелец или оркестратор" });
+    const task = getTaskForWrite(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    let skill;
+    try {
+      skill = registerMissionSkill(task.id, {
+        role: String(req.body?.role ?? ""),
+        name: String(req.body?.name ?? ""),
+        description: String(req.body?.description ?? ""),
+        body: req.body?.body === undefined ? null : String(req.body.body),
+        sourceSlot: req.body?.source_slot === undefined || req.body?.source_slot === null ? null : String(req.body.source_slot),
+      });
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    return reply.code(201).send({ skill });
+  });
+
+  app.delete<{ Params: { id: string }; Body: { role?: unknown; name?: unknown } }>("/api/tasks/:id/mission-skills", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!isOwner(req.userId) && !isOrchestrator(req.userId)) return reply.code(403).send({ error: "навык миссии снимает владелец или оркестратор" });
+    const task = getTaskForWrite(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const role = String(req.body?.role ?? "").trim();
+    const name = String(req.body?.name ?? "").trim();
+    if (!role || !name) return reply.code(400).send({ error: "нужны role и name навыка" });
+    const released = releaseMissionSkill(task.id, role, name);
+    if (!released) return reply.code(404).send({ error: "навык не найден или уже снят" });
+    return { released: `${role}/${name}` };
   });
 
   /**
