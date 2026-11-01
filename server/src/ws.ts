@@ -70,10 +70,23 @@ export function resetAllOffline() {
 }
 
 let invalidationInstalled = false;
+
+/** Топики, которые адресуются по задаче (создатель/исполнитель/владелец).
+ *  Остальные — события сущностей (проект, метка, заметка, рутина, вложение):
+ *  у них получателя «создатель задачи» нет, их видит владелец. */
+const TASK_SCOPED_TOPICS = new Set(["task:changed", "roles:changed", "role-jobs:changed"]);
 export function addClient(userId: string, socket: Socket, deviceId?: string | null) {
   if (!invalidationInstalled) {
     installRealtimeInvalidation(db, (taskID, topic) => {
       if (topic === "task:changed" && !taskID) return;
+      // Сущности вне задач (проекты, метки, заметки, рутины, вложения):
+      // адресовать по создателю/исполнителю нечего — шлём всем владельцам.
+      // Клиент по такому событию перечитывает свой стор, а не одну карточку.
+      if (!TASK_SCOPED_TOPICS.has(topic)) {
+        if (!taskID) return;
+        broadcastToUsers(ownerIds(), { type: topic, id: taskID });
+        return;
+      }
       const task = taskID ? db.prepare("SELECT creator_id,assignee_id FROM tasks WHERE id=?").get(taskID) as {creator_id:string;assignee_id:string}|undefined : undefined;
       broadcastTaskEvent(task ? [task.creator_id,task.assignee_id] : [], {type:topic,task_id:taskID || undefined});
     });

@@ -57,3 +57,28 @@ it('publishes preparation completion and failure without a task edit',async()=>{
  db.prepare("UPDATE task_preparation_jobs SET status='failed',error='fixture' WHERE task_id='ws-energy-card'").run();
  await tick();expect(messages.some(m=>m.type==='task:changed'&&m.task_id==='ws-energy-card')).toBe(true);
 });
+
+// Сущности вне задач (проекты, метки, заметки, рутины) раньше не порождали
+// ни события, ни журнала: правка рутины или проекта на одном устройстве не
+// доезжала до другого до перезагрузки экрана (владелец 01.11.2026).
+it('publishes changes of entities outside tasks',async()=>{
+ await tick();messages.length=0;
+ db.prepare("INSERT INTO projects(id,name) VALUES('energy-project','Entity project')").run();
+ await tick();expect(messages.some(m=>m.type==='project:changed'&&m.id==='energy-project')).toBe(true);
+
+ messages.length=0;
+ db.prepare("INSERT INTO labels(id,name) VALUES('energy-label','Entity label')").run();
+ await tick();expect(messages.some(m=>m.type==='label:changed'&&m.id==='energy-label')).toBe(true);
+
+ messages.length=0;
+ db.prepare("INSERT INTO notes(id,content) VALUES('energy-note','Entity note')").run();
+ await tick();expect(messages.some(m=>m.type==='note:changed'&&m.id==='energy-note')).toBe(true);
+
+ messages.length=0;
+ db.prepare("INSERT INTO task_schedules(id,title,rule_kind,time_local,created_by) VALUES('energy-sched','Entity routine','daily','09:00','u1')").run();
+ await tick();expect(messages.some(m=>m.type==='schedule:changed'&&m.id==='energy-sched')).toBe(true);
+
+ messages.length=0;
+ db.prepare("UPDATE task_schedules SET title='Entity routine 2' WHERE id='energy-sched'").run();
+ await tick();expect(messages.some(m=>m.type==='schedule:changed'&&m.id==='energy-sched')).toBe(true);
+});

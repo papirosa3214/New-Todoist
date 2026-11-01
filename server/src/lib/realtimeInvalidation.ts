@@ -22,6 +22,14 @@ export function installRealtimeInvalidation(db: Database.Database, emit: (taskID
         db.prepare('DELETE FROM temp.tf_realtime_dirty').run();
         const events = new Map<string, {topic:string;taskID:string}>();
         for (const row of rows) {
+          // Сущности вне задач (проекты, метки, заметки, рутины, вложения)
+          // семьи по parent_id не имеют — шлём событие прямо по id записи.
+          // Иначе flush искал бы их в tasks и молчал (жалоба владельца
+          // 01.11.2026: правка рутины и проекта не доезжала до телефона).
+          if (row.topic !== 'task:changed') {
+            events.set(`${row.topic}:${row.task_id}`, {topic: row.topic, taskID: row.task_id});
+            continue;
+          }
           const ids = row.task_id ? db.prepare(`WITH RECURSIVE family(id,parent_id) AS (
             SELECT id,parent_id FROM tasks WHERE id=? UNION SELECT t.id,t.parent_id FROM tasks t JOIN family f ON t.id=f.parent_id
           ) SELECT id FROM family`).all(row.task_id) as Array<{id:string}> : [];
@@ -44,6 +52,16 @@ export function installRealtimeInvalidation(db: Database.Database, emit: (taskID
     ['task_collaboration_plan_edges','(SELECT task_id FROM task_collaboration_plans WHERE id=ROW.plan_id)','task:changed'],
     ['roles',"''",'roles:changed',['updated_at']],
     ['role_run_jobs','task_id','role-jobs:changed',['updated_at','lease_expires_at','lease_owner']],
+    // Ниже — сущности вне задач: у них нет ни журнала task_changes, ни
+    // адресации по создателю/исполнителю задачи. Событие уходит всем
+    // владельцам, а клиент по нему перечитывает свой стор (iOS:
+    // ProjectStore, LabelStore, экран заметок, экран рутин).
+    ['projects','id','project:changed'],
+    ['labels','id','label:changed'],
+    ['notes','id','note:changed'],
+    ['journal_entries','id','note:changed'],
+    ['task_schedules','id','schedule:changed'],
+    ['attachments','id','attachment:changed'],
   ];
   for (const [table,key,topic,excluded=[]] of watched) {
     const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{name:string}>;
