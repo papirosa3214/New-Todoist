@@ -141,6 +141,37 @@ function defaultLinksForCause(subtaskId: string, taskId: string, cause: string):
 }
 
 
+/**
+ * Заголовок подзадачи — это JSON-описание слота плана: сервер хранит в
+ * `subtasks.title` строку вида
+ * `{"key":"work_1","title":"Восстановить прокси","result":"…","role":"infra_engineer",…}`
+ * и сверяет по ней шаги в выборках плана. Хранить это в заголовке нужно,
+ * показывать владельцу — нет: на телефон уходил весь JSON (02.11.2026).
+ *
+ * Здесь слот разбирается обратно в человеческий текст. Обычный заголовок
+ * (не JSON) не трогаем.
+ */
+function slotText(raw: string | null | undefined): { title?: string; result?: string; role?: string } {
+  if (raw === null || raw === undefined) return {};
+  const trimmed = String(raw).trim();
+  if (!trimmed.startsWith("{")) return trimmed ? { title: trimmed } : {};
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    if (typeof parsed.key !== "string") return { title: trimmed };
+    const pick = (value: unknown): string | undefined =>
+      typeof value === "string" && value.trim() ? value.trim() : undefined;
+    return { title: pick(parsed.title) ?? trimmed, result: pick(parsed.result), role: pick(parsed.role) };
+  } catch {
+    return { title: trimmed };
+  }
+}
+
+/** Человеческий текст шага: сначала результат слота, потом название. */
+function humanNote(raw: string | null | undefined, fallback: string | null | undefined): string | null {
+  const slot = slotText(raw);
+  return slot.result ?? (fallback ? String(fallback).slice(0, 600) : null);
+}
+
 /** Owner-facing labels; diagnostic reads never start or mutate a step. */
 function readableResolution(r: Resolution, facts: ReturnType<typeof collectFacts>) {
   const task = db.prepare("SELECT title,status,archived_at FROM tasks WHERE id=?").get(r.task_id) as any;
@@ -153,11 +184,14 @@ function readableResolution(r: Resolution, facts: ReturnType<typeof collectFacts
   const terminal = done || skipped || !!task?.archived_at || task?.status === "completed";
   const waiting_for = (facts?.waitingPredecessors ?? []).map(w => {
     const predecessor = db.prepare("SELECT title FROM subtasks WHERE task_id=? AND plan_node_key=? ORDER BY rowid DESC LIMIT 1").get(r.task_id,w.fromSlotKey) as any;
-    return predecessor?.title ?? w.fromSlotKey;
+    return slotText(predecessor?.title).title ?? w.fromSlotKey;
   });
-  return {...r, title:sub?.title ?? task?.title ?? "Задача", done, skipped, assignee_name: assignee_name ?? null,
+  // Название шага — человеческое (JSON-слот разобран), результат — тоже
+  // человеческий и обрезанный: на телефон не уходит ни JSON, ни простыня.
+  const slot = slotText(sub?.title);
+  return {...r, title:slot.title ?? task?.title ?? "Задача", done, skipped, assignee_name: assignee_name ?? null,
     action:terminal ? "none" : r.action, links:terminal ? [] : r.links,
-    notes:skipped ? "Шаг пропущен" : done ? "Шаг завершён" : r.notes, waiting_for};
+    notes:skipped ? "Шаг пропущен" : done ? "Шаг завершён" : humanNote(r.notes, slot.result), waiting_for};
 }
 
 function logResolution(taskId: string, actorId: string | null, payload: Resolution): void {
