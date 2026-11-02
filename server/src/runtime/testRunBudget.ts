@@ -1,75 +1,69 @@
-// Бюджет полных прогонов серверного набора тестов (владелец 06.10.2026).
+// Тесты и UI-проверки ролям — запрещены (владелец 02.11.2026).
 //
-// Прецедент: Разработчик карточки 71651ad0 за один шаг 9 раз гонял весь набор
-// (8 минут из 40) и 89 раз точечные тесты, ни разу не позвав помощь. Полный
-// набор — работа QA, а не Разработчика. Поэтому сервер сам ограничивает:
-//   • на ЗАДАЧУ — не больше двух полных прогонов всеми ролями вместе;
-//   • Разработчику (и любой роли, кроме QA и Критика) — один полный прогон.
-// Точечные тесты (`vitest run test/файл.test.ts`) не ограничиваются.
+// Было: бюджет полных прогонов (2 на задачу, 1 не-проверяющей роли), точечные
+// тесты не ограничивались — и, главное, обёртка бюджета была написана, но НЕ
+// подключена: инструмент `bash` роли никогда не оборачивался, поэтому правило
+// не действовало вовсе. Стало: в обычной работе роль не гоняет НИКАКИЕ
+// тесты — ни полный набор, ни точечный файл, ни UI-прогон, ни съёмку кадра.
+// «Если нужно будет тесты делать — отдельную задачу и дам разрешение на
+// тестирование».
 //
-// Ограничение стоит в самом сервере: встроенный инструмент `bash` роли
-// оборачивается в `withTestRunBudget`, и «лишний» полный прогон не запускается,
-// а возвращается моделью как ошибка инструмента с пояснением, что делать.
+// Разрешение — на конкретную карточку: `tasks.tests_allowed` (миграция 193).
+// Даёт владелец: POST /api/tasks/:id/allow-tests.
+//
+// Запрет стоит в самом сервере: встроенный инструмент `bash` роли
+// оборачивается в `withTestCommandGuard`, и запрещённый запуск не
+// выполняется, а возвращается моделью как ошибка инструмента с пояснением.
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 
-/** Сколько полных прогонов разрешено на одну задачу всем ролям вместе. */
-export const FULL_RUNS_PER_TASK = 2;
-/** Сколько из них доступно роли, которая не проверяет (Разработчик и др.). */
-export const FULL_RUNS_PER_NON_CHECKING_ROLE = 1;
-/** Роли, чья работа — проверка: им остаётся остаток общего бюджета. */
-const CHECKING_ROLES = new Set(["qa", "critic_verifier"]);
+/** Раннер тестов: бинарник или пакет, которым запускают тесты. */
+const RUNNER = /(^|\/)(vitest|jest|mocha|ava|karma|jasmine|playwright|cypress|detox|maestro|appium)$/i;
 
-// Флаги тест-раннера, у которых значение идёт отдельным словом: его нельзя
-// принять за фильтр по файлу.
-const FLAGS_WITH_VALUE = new Set([
-  "--reporter", "--config", "-c", "--root", "-r", "--dir", "--project", "--pool",
-  "--outputfile", "--testtimeout", "--environment", "--shard", "--mode", "--coverage.reporter",
+/** Менеджер пакетов: тесты гоняются через него. */
+const PKG = /^(npm|pnpm|yarn|bun)$/i;
+
+/** Обёртки команды: после них идёт команда (`npx vitest`, `timeout 300 vitest`). */
+const PREFIXES = new Set([
+  "npx", "bunx", "pnpx", "timeout", "env", "sudo", "nohup", "nice", "stdbuf",
+  "time", "xargs", "watch", "command", "exec", "dlx",
 ]);
 
 function tokens(segment: string): string[] {
   return segment.trim().split(/\s+/).filter(Boolean);
 }
 
-/** Есть ли среди слов после раннера указание, ЧТО именно гонять (файл, папка, фильтр). */
-function hasTarget(args: string[]): boolean {
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === "--") continue;
-    if (a === "-t" || a.startsWith("--testNamePattern") || a === "--related" || a === "related" || a === "--changed" || a === "--findRelatedTests") return true;
-    if (a.startsWith("-")) {
-      if (!a.includes("=") && FLAGS_WITH_VALUE.has(a.toLowerCase())) i++;
-      continue;
-    }
-    if (a === "run" || a === "watch" || a === "dev" || a === "test") continue;
-    return true; // любое оставшееся слово — путь или фильтр
-  }
-  return false;
-}
-
 /**
- * Команда запускает ВЕСЬ набор тестов? Разбираем каждую простую команду в
- * цепочке (`&&`, `;`, `|`, перевод строки). Прогон по файлу/папке/фильтру —
- * точечный и под ограничение не попадает.
+ * Тестовый запуск в любом виде: полный набор, точечный файл, UI-прогон,
+ * съёмка кадра экрана.
+ *
+ * Разбираем каждую простую команду в цепочке (`&&`, `;`, `|`, перевод
+ * строки). Слово «vitest» в grep или в имени файла — не запуск: ловим
+ * только раннер в позиции команды.
  */
-export function isFullSuiteCommand(command: string): boolean {
+export function isTestCommand(command: string): boolean {
   for (const segment of String(command ?? "").split(/&&|\|\||;|\||\n/)) {
     const t = tokens(segment);
-    const idx = t.findIndex(w => /(^|\/)(vitest|jest)$/.test(w));
-    if (idx >= 0) {
-      if (!hasTarget(t.slice(idx + 1))) return true;
-      continue;
-    }
-    const pm = t.findIndex(w => /^(npm|pnpm|yarn|bun)$/.test(w));
-    if (pm >= 0) {
-      const rest = t.slice(pm + 1);
-      const testIdx = rest.findIndex(w => w === "test");
-      if (testIdx >= 0 && (testIdx === 0 || rest[0] === "run" || rest[0] === "run-script")) {
-        const afterTest = rest.slice(testIdx + 1);
-        const dashdash = afterTest.indexOf("--");
-        const tail = dashdash >= 0 ? afterTest.slice(dashdash + 1) : afterTest;
-        if (!hasTarget(tail)) return true;
+    let expectingCommand = true;
+    for (let i = 0; i < t.length; i++) {
+      const word = t[i];
+      if (!expectingCommand) continue;
+      // Присваивание переменной окружения — не команда.
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+      const bare = word.replace(/^.*\//, "").toLowerCase();
+      // Обёртки команды: следующее слово — тоже команда.
+      if (PREFIXES.has(bare)) continue;
+      expectingCommand = false;
+      const rest = t.slice(i + 1);
+      if (RUNNER.test(word)) return true;
+      if (PKG.test(bare)) {
+        if (rest[0] === "test") return true;
+        if (rest[0] === "run" && (rest[1] === "test" || String(rest[1] ?? "").startsWith("test:"))) return true;
+        continue;
       }
+      if (bare === "swift" && rest[0] === "test") return true;
+      if (bare === "xcodebuild" && rest.some((w) => w === "test" || w === "test-without-building")) return true;
+      if (bare === "xcrun" && rest.includes("simctl") && rest.includes("screenshot")) return true;
     }
   }
   return false;
@@ -77,38 +71,28 @@ export function isFullSuiteCommand(command: string): boolean {
 
 export type BudgetDecision = { allowed: true } | { allowed: false; reason: string };
 
-/** Проверяет бюджет и, если полный прогон разрешён, сразу списывает его. */
-export function checkAndConsumeFullRun(taskId: string, role: string): BudgetDecision {
-  const rows = db
-    .prepare("SELECT role, full_runs FROM test_run_budget WHERE task_id = ?")
-    .all(taskId) as Array<{ role: string; full_runs: number }>;
-  const total = rows.reduce((n, r) => n + r.full_runs, 0);
-  const mine = rows.find(r => r.role === role)?.full_runs ?? 0;
-  const checking = CHECKING_ROLES.has(role);
+/** Разрешены ли ролям тесты на этой карточке. */
+export function testsAllowedForTask(taskId: string): boolean {
+  try {
+    const row = db.prepare("SELECT tests_allowed FROM tasks WHERE id = ?").get(taskId) as
+      { tests_allowed?: number } | undefined;
+    return !!row?.tests_allowed;
+  } catch {
+    return false;
+  }
+}
 
-  if (!checking && mine >= FULL_RUNS_PER_NON_CHECKING_ROLE) {
-    return {
-      allowed: false,
-      reason:
-        `Полный прогон серверного набора тебе уже недоступен: роли «${role}» разрешён ${FULL_RUNS_PER_NON_CHECKING_ROLE} полный прогон на задачу, он использован. ` +
-        "Дальше гоняй только затронутые тесты: `vitest run test/<файл>.test.ts`. Весь набор запускает QA. " +
-        "Если застрял на одном и том же тесте — не повторяй запуск, а позови вышестоящую модель (`taskflow_consult`).",
-    };
-  }
-  if (total >= FULL_RUNS_PER_TASK) {
-    return {
-      allowed: false,
-      reason:
-        `Полные прогоны серверного набора на эту задачу исчерпаны: разрешено ${FULL_RUNS_PER_TASK} на всех ролей, они использованы. ` +
-        "Запускай только затронутые тесты (`vitest run test/<файл>.test.ts`) и опирайся на результаты прежних полных прогонов в ленте задачи. " +
-        "Нужен ещё один полный прогон — напиши оркестратору (`taskflow_consult`).",
-    };
-  }
-  db.prepare(
-    `INSERT INTO test_run_budget(task_id, role, full_runs) VALUES (?, ?, 1)
-     ON CONFLICT(task_id, role) DO UPDATE SET full_runs = full_runs + 1, updated_at = datetime('now')`,
-  ).run(taskId, role);
-  return { allowed: true };
+/** Проверяет разрешение на тесты для роли. */
+export function checkTestPermission(taskId: string, role: string): BudgetDecision {
+  if (testsAllowedForTask(taskId)) return { allowed: true };
+  return {
+    allowed: false,
+    reason:
+      `Тесты на этой карточке запрещены (правило владельца от 02.11.2026): роль «${role}» в обычной работе ` +
+      "не гоняет ни полный набор, ни точечные тесты, ни UI-прогоны, ни съёмку кадров. " +
+      "Нужны тесты — попроси владельца: он поставит отдельную задачу и даст разрешение на тестирование этой карточки. " +
+      "Пока разрешения нет — проверяй иначе: читай код, смотри живое поведение, опирайся на проверки других ролей в ленте карточки.",
+  };
 }
 
 type ToolLike = { name: string; execute: (...args: any[]) => Promise<any> };
@@ -116,23 +100,23 @@ type ToolLike = { name: string; execute: (...args: any[]) => Promise<any> };
 /**
  * Оборачивает встроенный `bash` роли. Остальные инструменты возвращаются как
  * есть. Заблокированный запуск не выполняется: инструмент бросает ошибку с
- * пояснением, а в ленте задачи остаётся событие `test_budget_blocked`.
+ * пояснением, а в ленте задачи остаётся событие `test_command_blocked`.
  */
-export function withTestRunBudget<T extends ToolLike>(tool: T, ctx: { role: string; taskId: string }): T {
+export function withTestCommandGuard<T extends ToolLike>(tool: T, ctx: { role: string; taskId: string }): T {
   if (tool.name !== "bash") return tool;
   const original = tool.execute.bind(tool);
   return {
     ...tool,
     execute: async (toolCallId: string, params: any, ...rest: any[]) => {
       const command = String(params?.command ?? "");
-      if (isFullSuiteCommand(command)) {
-        const decision = checkAndConsumeFullRun(ctx.taskId, ctx.role);
+      if (isTestCommand(command)) {
+        const decision = checkTestPermission(ctx.taskId, ctx.role);
         if (!decision.allowed) {
           try {
             logEvent({
               taskId: ctx.taskId,
               actorId: null,
-              kind: "test_budget_blocked",
+              kind: "test_command_blocked",
               field: ctx.role,
               toValue: command.slice(0, 160),
             });

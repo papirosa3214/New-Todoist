@@ -14,6 +14,7 @@ export const FAILURE_REASON_CODES = [
   "provider_quota_limit",
   "provider_rate_limit",
   "provider_server_error",
+  "provider_network",
   "provider_auth_or_access",
   "context_overflow",
   "missing_config",
@@ -33,6 +34,7 @@ export const FAILURE_REASON_LABELS: Record<FailureReasonCode, string> = {
   provider_quota_limit: "исчерпана квота провайдера",
   provider_rate_limit: "лимит частоты провайдера",
   provider_server_error: "ошибка на стороне провайдера",
+  provider_network: "обрыв сети до провайдера",
   provider_auth_or_access: "нет доступа к провайдеру (ключ/права)",
   context_overflow: "переполнение контекста",
   missing_config: "не настроено (конфиг провайдера/маршрутизации)",
@@ -81,6 +83,12 @@ const RULES: Rule[] = [
   { code: "cancelled", re: /cancel|aborted|\babort\b|прерван|отменен|отменён|остановлен владельц/i },
   // Ход шага кончился без сдачи: застой, тишина, лимит продолжений.
   { code: "step_stalled", re: /stalled|ход закончился без сдачи|тишина \d+ мин|без движения|лимит продолжений|шаг заблокирован|заблокирован владельц/i },
+  // Обрыв сети ДО провайдера: соединение не установилось, ответа не
+  // было, запрос ничего не стоил. Владелец 02.11.2026: «сетевые обрывы не
+  // засчитывать, пусть долбится» — это не сбой роли, а сбой среды.
+  // Проверка идёт ДО рантайма: иначе «socket hang up» съел бы сетевой
+  // обрыв, а «Request timed out» ушёл бы в unknown (и карточку блокировало).
+  { code: "provider_network", re: /request timed out|fetch failed|connect ?timeout|connecttimedout|econnreset|econnrefused|etimedout|enotfound|eai_again|socket hang up|connection reset|connection refused|network error|premature close|getaddrinfo|socket closed|read econnreset|\bfetch failed\b/i },
   // Рантайм умер, связь оборвалась, процесс перезапустился.
   { code: "runtime_died", re: /runtime[_ ]?(died|unavailable|is unavailable)|econnreset|socket hang up|econnrefused|connection refused|process exited|out of memory|\boom\b|killed|перезапуск[а-я]* сервер|сервер[^\n]*перезапуст|перезапустил|ход оборвался|рантайм[^\n]*(умер|недоступ)/i },
   // Провайдер вернул content без текста и usage 0/0 без ошибки (21.10.2026):

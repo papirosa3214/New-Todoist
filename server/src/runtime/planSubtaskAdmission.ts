@@ -663,7 +663,7 @@ export async function unlockReadyPlanSubtasks(
 /** Сообщение роли в ленту карточки. Напрямую, а не маршрутом комментариев:
  *  писать туда роль может только в своей карточке, а узел плана бывает и
  *  в чужой. */
-function roleNote(taskId: string, role: string, text: string): void {
+export function roleNote(taskId: string, role: string, text: string): void {
   if (isRoutineServiceComment({user_id:"role_system", text})) return;
   db.prepare(
     "INSERT INTO comments (id, task_id, user_id, text) VALUES (?, ?, ?, ?)",
@@ -1035,6 +1035,32 @@ export async function settleStalledPlanNode(
     return "continued";
   };
 
+  /**
+   * Сеть не отвечает, повторы исчерпаны: шаг НЕ блокируем (владелец
+   * 02.11.2026 — «сетевые обрывы не засчитывать, пусть долбится»). Шаг
+   * остаётся в работе, его подхватит следующий заход; в ленту карточки —
+   * что происходит.
+   */
+  const waitForNetwork = (code: FailureReasonCode, reason: string): "continued" => {
+    closeAttempt("transient_retry", `${code}: ${reason.slice(0, 180)}`);
+    db.prepare(
+      "UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?",
+    ).run(row.id);
+    logEvent({
+      taskId: row.task_id,
+      actorId: null,
+      kind: "plan_subtask_network_wait",
+      field: row.plan_node_key,
+      toValue: `${code}: ${reason.slice(0, 180)}`,
+    });
+    roleNote(
+      row.task_id,
+      node.role_key,
+      `«${row.title}»: сеть не отвечает (${reason.slice(0, 120)}). Шаг ждёт сеть — сделанное до обрыва сохранено.`,
+    );
+    return "continued";
+  };
+
   if (params.failure) {
     const code = params.failureCode ?? classifyFailureReason(params.failure);
     let decision = decideFailureAction(code, transientRetryCount(row.id, code));
@@ -1043,6 +1069,13 @@ export async function settleStalledPlanNode(
       transientRetryCount(row.id, code) >= MAX_COMPRESS_CONTINUES
     ) {
       decision = "block";
+    }
+    // Обрыв сети: не сбой роли. Повторяем (шаг перезапускается), а когда
+    // потолок исчерпан — ждём сеть, НЕ блокируем карточку.
+    if (decision === "network_retry") {
+      if (transientRetryCount(row.id, code) < failurePolicy(code).maxRetries)
+        return retryAfterFailure(code, params.failure, false);
+      return waitForNetwork(code, params.failure);
     }
     if (decision === "retry")
       return retryAfterFailure(code, params.failure, false);
