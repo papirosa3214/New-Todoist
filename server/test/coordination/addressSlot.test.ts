@@ -144,8 +144,35 @@ describe("координация: сообщение исполнителю по
     expect(queued.map((row) => row.role_id)).toContain(qaAccountId);
   });
 
-  it("шаг чужой роли адресатом не считается — роль не поднимается", async () => {
-    const foreignSlot = `sub_${uid()}`;
+  it("адресат-слот поднимает роль и без упоминания в тексте", async () => {
+    // Так пишет клиент из окна координации: текст владельца без «@Роль»,
+    // адресат — сам слот (владелец 02.11.2026).
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${topicChatId}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        text: "проверь, почему прокси не поднялся",
+        recipient_subtask_id: qaSlot,
+        execution_mode: "card",
+        work_mode: "work",
+      },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const message = (res.json() as { message: { id: string } }).message;
+    const stored = db
+      .prepare("SELECT recipient_subtask_id, text FROM chat_messages WHERE id = ?")
+      .get(message.id) as { recipient_subtask_id: string | null; text: string };
+    expect(stored.recipient_subtask_id).toBe(qaSlot);
+    // Текст остаётся владельческим — без подстановки «@Роль».
+    expect(stored.text).toBe("проверь, почему прокси не поднялся");
+    const queued = db
+      .prepare("SELECT role_id FROM chat_message_queue WHERE message_id = ?")
+      .all(message.id) as Array<{ role_id: string }>;
+    expect(queued.map((row) => row.role_id)).toContain(qaAccountId);
+  });
+
+  it("шаг чужой роли адресатом не считается — роль не поднимается", async () => {    const foreignSlot = `sub_${uid()}`;
     db.prepare(
       `INSERT INTO subtasks (id, task_id, title, position, done, agent_id)
        VALUES (?, ?, 'Чужой шаг', 1, 0, ?)`,

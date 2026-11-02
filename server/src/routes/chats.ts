@@ -2999,6 +2999,17 @@ async function dispatchRoleReplies(args: {
   const original=message?.reply_to_message_id ? db.prepare("SELECT from_user_id,reply_to_message_id FROM chat_messages WHERE id=? AND chat_id=?").get(message.reply_to_message_id,chatId) as {from_user_id:string;reply_to_message_id:string|null}|undefined : undefined;
   const authorRole=original ? roleFromUserId(original.from_user_id) : null;
   const mentioned = parseRoleMentions(text).filter((r) => candidates.includes(r));
+  // Адресат-слот — сам по себе адресат: роль, которая его держит, и есть
+  // адресат. Владелец 02.11.2026: «написать исполнителю» из окна
+  // координации — сообщение без «@Роль» в тексте. Слотовый адресат важнее
+  // упоминания: он указывает на конкретный шаг, а не на роль вообще.
+  let slotRole: RoleName | null = null;
+  if (!senderRole && message?.recipient_subtask_id) {
+    const slot = db
+      .prepare("SELECT agent_id FROM subtasks WHERE id=?")
+      .get(message.recipient_subtask_id) as { agent_id: string } | undefined;
+    slotRole = slot ? roleFromUserId(slot.agent_id) : null;
+  }
   let targets: RoleName[];
   if (args.mode === "plan" && senderRole) return;
   if (args.mode === "deep_research") {
@@ -3025,6 +3036,8 @@ async function dispatchRoleReplies(args: {
     targets = mentioned.length ? mentioned.slice(0,2)
       : authorRole && !original?.reply_to_message_id && candidates.includes(authorRole) ? [authorRole]
       : isDirectRoleChat(chatId) && candidates.length===1 && !message?.reply_to_message_id ? candidates : [];
+  } else if (slotRole && candidates.includes(slotRole)) {
+    targets = [slotRole];
   } else if (mentioned.length) {
     targets = mentioned;
   } else if (parseRoleMention(text)) {
