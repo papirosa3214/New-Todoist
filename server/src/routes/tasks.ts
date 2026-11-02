@@ -638,6 +638,37 @@ export function registerTaskRoutes(app: FastifyInstance) {
     },
   );
 
+  // Разрешить ролям тесты на этой карточке (владелец 02.11.2026: «если
+  // нужно будет тесты делать — отдельную задачу и дам разрешение на
+  // тестирование»). По умолчанию роль в обычной работе тесты не гоняет.
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/allow-tests",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply
+          .code(403)
+          .send({ error: "разрешение на тесты даёт владелец" });
+      }
+      const task = db
+        .prepare("SELECT id FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id: string } | undefined;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      const allowed = req.body?.allowed !== false;
+      db.prepare(
+        "UPDATE tasks SET tests_allowed = ?, updated_at = datetime('now') WHERE id = ?",
+      ).run(allowed ? 1 : 0, task.id);
+      logEvent({
+        taskId: task.id,
+        actorId: null,
+        kind: "task_tests_allowed",
+        field: allowed ? "allowed" : "denied",
+        toValue: "разрешение ролям гонять тесты на этой карточке",
+      });
+      return { id: task.id, tests_allowed: allowed };
+    },
+  );
+
   // Продлить серию на следующий год: «до 31 декабря следующего» и снова
   // разрешаем воркеру создавать следующее вхождение (владелец).
   app.post<{ Params: { id: string } }>(

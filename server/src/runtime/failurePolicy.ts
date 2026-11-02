@@ -28,7 +28,10 @@ export type FailureActionKind =
   | "retry_then_switch"
   | "switch_model"
   | "compress_continue"
-  | "block";
+  | "block"
+  /** Сеть: не провал роли. Повторяем, карточку не блокируем (владелец
+   *  02.11.2026: «сетевые обрывы не засчитывать, пусть долбится»). */
+  | "network_retry";
 
 export type FailurePolicy = {
   kind: FailureActionKind;
@@ -48,6 +51,9 @@ export const FAILURE_POLICIES: Record<FailureReasonCode, FailurePolicy> = {
   provider_rate_limit: { kind: "retry_then_switch", maxRetries: 2, label: "повтор, затем запасная модель" },
   // Временная ошибка апстрима — повтор в той же сессии.
   provider_server_error: { kind: "retry", maxRetries: 2, label: "повтор" },
+  // Обрыв сети: запрос не дошёл до провайдера и ничего не стоил. Роль не
+  // виновата — повторяем щедро, карточку не блокируем (владелец 02.11.2026).
+  provider_network: { kind: "network_retry", maxRetries: 12, label: "повтор (сеть)" },
   // Сборка TaskContext не уложилась в лимит — повтор.
   taskcontext_timeout: { kind: "retry", maxRetries: 1, label: "повтор" },
   // Рантайм умер / связь оборвалась — повтор.
@@ -82,7 +88,12 @@ export function isImmediateBlock(code: FailureReasonCode): boolean {
 /** Код может повторяться в той же сессии (пока не кончится потолок). */
 export function isRetryable(code: FailureReasonCode): boolean {
   const kind = failurePolicy(code).kind;
-  return kind === "retry" || kind === "retry_then_switch";
+  return kind === "retry" || kind === "retry_then_switch" || kind === "network_retry";
+}
+
+/** Обрыв сети: это не сбой роли — карточку блокировать нельзя. */
+export function isNetworkFailure(code: FailureReasonCode): boolean {
+  return failurePolicy(code).kind === "network_retry";
 }
 
 /** Код ведёт на следующую модель цепочки. */
@@ -91,7 +102,12 @@ export function isModelSwitch(code: FailureReasonCode): boolean {
   return kind === "switch_model" || kind === "retry_then_switch";
 }
 
-export type FailureDecision = "retry" | "switch_model" | "compress_continue" | "block";
+export type FailureDecision =
+  | "retry"
+  | "switch_model"
+  | "compress_continue"
+  | "block"
+  | "network_retry";
 
 /**
  * Что делать сейчас, с учётом уже сделанных повторов. Для `retry` и
@@ -103,6 +119,10 @@ export function decideFailureAction(code: FailureReasonCode, retriesDone = 0): F
   switch (policy.kind) {
     case "retry":
       return retriesDone < policy.maxRetries ? "retry" : "block";
+    case "network_retry":
+      // Сеть: повторяем, пока не кончится потолок; дальше — не блок, а
+      // «ждём сеть» (решает вызывающий: settleStalledPlanNode).
+      return retriesDone < policy.maxRetries ? "network_retry" : "network_retry";
     case "retry_then_switch":
       return retriesDone < policy.maxRetries ? "retry" : "switch_model";
     case "switch_model":

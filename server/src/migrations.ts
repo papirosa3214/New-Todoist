@@ -5564,6 +5564,17 @@ const migrations: Migration[] = [
     CREATE INDEX IF NOT EXISTS idx_mission_skills_task ON mission_skills(task_id, released_at);`);
   } },
 
+  { id: "193_task_tests_allowed", description:
+      "Разрешение ролям гонять тесты на карточке: tasks.tests_allowed " +
+      "(владелец 02.11.2026 — тесты запрещены, разрешение даёт владелец на конкретную карточку)", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("tests_allowed")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN tests_allowed INTEGER NOT NULL DEFAULT 0");
+    }
+  } },
+
 ];
 /**
  * Опции прогона миграций.

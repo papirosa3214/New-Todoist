@@ -1,6 +1,7 @@
 import {randomUUID} from "node:crypto";
 import {AsyncLocalStorage} from "node:async_hooks";
 import {channel} from "node:diagnostics_channel";
+import { compressContextThoughts } from "./thinkingCompression.js";
 
 type NativeScope = {enabled:boolean; begin:(request:any)=>void; error:(request:any,error:unknown)=>void; headers:(request:any,status:number,headers?:any)=>void};
 const nativeScope = new AsyncLocalStorage<NativeScope>();
@@ -236,7 +237,9 @@ export function installProviderDiagnostics(runtime: Runtime, dependencies: Optio
         },
       };
       try {
-        const stream=nativeScope.run(native,()=>original(model,context,wrappedOptions));
+        // Рассуждения в запросе к модели — сжатые (владелец 02.11.2026): в модель
+      // уходит два-три предложения вместо полного текста рассуждений.
+      const stream=nativeScope.run(native,()=>original(model,compressContextThoughts(context),wrappedOptions));
         // result() is a shared promise in Pi; observing it does not drain events.
         void Promise.resolve(stream.result()).then((message:any) => {
           for (const diagnostic of (message?.diagnostics ?? []).slice(0,16)) {

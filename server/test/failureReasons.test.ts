@@ -76,7 +76,10 @@ describe("классификатор причин сбоя", () => {
     expect(classifyFailureReason("ход закончился без сдачи шага")).toBe("step_stalled");
     expect(classifyFailureReason("запуск cancellation requested")).toBe("cancelled");
     expect(classifyFailureReason("ход оборвался перезапуском сервера")).toBe("runtime_died");
-    expect(classifyFailureReason("socket hang up ECONNRESET")).toBe("runtime_died");
+    // Обрыв связи — это сеть, а не смерть рантайма (владелец 02.11.2026:
+    // «сетевые обрывы не засчитывать»): свой код, по нему — повтор, а не блок.
+    expect(classifyFailureReason("socket hang up ECONNRESET")).toBe("provider_network");
+    expect(classifyFailureReason("Request timed out.")).toBe("provider_network");
     // «сервер перезапустился» — без слова «перезапуск» рядом (доработка 1).
     expect(classifyFailureReason("сервер перезапустился")).toBe("runtime_died");
   });

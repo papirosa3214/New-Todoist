@@ -89,7 +89,11 @@ import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
 import { isProviderLimitText, lastAssistantEmptyAnswer, lastAssistantLimitError, lastAssistantError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 import { logStepOutcome } from "./stepOutcome.js";
-import { withTestRunBudget } from "./testRunBudget.js";
+import { classifyFailureReason } from "./failureReasons.js";
+import { isNetworkFailure } from "./failurePolicy.js";
+import { roleNote } from "./planSubtaskAdmission.js";
+import { withTestCommandGuard } from "./testRunBudget.js";
+import { ThinkingGuard } from "./thinkingGuard.js";
 import { createExternalAgentSession } from "./externalAgentSession.js";
 import { externalAgentBoost } from "./externalAgentActions.js";
 import { agentBinary } from "../lib/externalAgents.js";
@@ -1591,9 +1595,12 @@ try {
   const операции = host
     ? поИнструментам(hostOperations(host, cwd))
     : roleIsolationEnabled() ? поИнструментам(isolatedLocalOperations(cwd, processLease)) : undefined;
+  // Тесты ролям запрещены (владелец 02.11.2026) — обёртка ВОТ ТЕПЕРЬ
+  // подключена: раньше `withTestRunBudget` только импортировался и никогда не
+  // вызывался, поэтому правило не действовало.
   const builtinTools = withHostToolExecution(host, cwd,
     [...createCodingTools(cwd, операции), ...createReadOnlyTools(cwd, операции)]
-  );
+  ).map((tool) => withTestCommandGuard(tool, { role, taskId }));
   // На удалённой машине встроенные инструменты CLI исполнялись бы на .110, а не там:
   // запуск внешнего агента через хост — отдельный этап (операция agent_spawn в host/).
   if (external && host) throw new Error("внешний агент пока запускается только на .110, не через хост");
@@ -1686,6 +1693,9 @@ try {
   });
   const before = progressMark(taskId);
   const thrash = new ThrashGuard();
+  // Повторяющиеся рассуждения: подсказка «план есть — действуй»
+  // (владелец 02.11.2026).
+  const thinkingGuard = new ThinkingGuard();
   const memoryConsultation = new MemoryConsultationGuard();
   const runControl: ActiveInProcessRun = { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now(), activityCount: 0, messengerMessages:new Set(),unacknowledgedMessengerMessages:new Set() };
   activeRuns.set(runId, runControl);
@@ -1737,6 +1747,39 @@ try {
       .catch(() => {})
       .finally(() => { reviewing = false; });
   };
+  /**
+ * Спасти сделанное: последний текст роли (её вывод или сводка) уходит в
+ * ленту карточки, даже если финальный запрос не дошёл.
+ *
+ * Владелец 02.11.2026: «нужно всегда сохранять всю работу… каждое действие,
+ * которое что-то сделалось, сразу же её записывать». Текст роли лежит в
+ * живом ходе (`liveTurn.snapshot().items`), поэтому он доступен даже тогда,
+ * когда запрос к модели оборвался.
+ */
+  const salvageRunText = (reason: string): void => {
+    try {
+      const items = (liveTurn as any)?.snapshot?.()?.items ?? [];
+      let text = "";
+      for (let i = items.length - 1; i >= 0; i--) {
+        const item = items[i];
+        if (item?.kind === "text" && typeof item.text === "string" && item.text.trim()) {
+          text = item.text.trim();
+          break;
+        }
+      }
+      if (!text) return;
+      const steps = items.filter((i: any) => i?.kind === "step").length;
+      roleNote(
+        taskId,
+        role,
+        `Ход оборвался (${reason.slice(0, 120)}), но сделанное сохранено. Итог роли:\n\n${text.slice(0, 4000)}` +
+          (steps ? `\n\nШагов в ходе: ${steps}.` : ""),
+      );
+    } catch {
+      /* спасение не должно ронять ход */
+    }
+  };
+
   const unsubscribeLive = session.subscribe((event: any) => {
     liveTurn.onEvent(event);
     if(event?.type==="message_start" && event.message?.role==="user"){
@@ -1753,6 +1796,8 @@ try {
       if (text) {
         lastAssistantThought = text;
         reviewRoleThoughts(text);
+        const thinkingNudge = thinkingGuard.observe(text);
+        if (thinkingNudge) void runControl.steer(thinkingNudge).catch(() => {});
       }
     }
     if(event?.type==="message_end" && runControl.unacknowledgedMessengerMessages.size){
@@ -1906,7 +1951,12 @@ try {
       console.warn(`[run] ход шага сорвался task=${taskId} role=${role}: ${reason.slice(0, 200)}`, JSON.stringify(liveTurn.diagnostics()));
       if (isProviderLimitText(reason)) limitHit = reason;
       else runFailure = error instanceof Error ? error : new Error(reason);
-      if (mode !== "review" && !limitHit && !runControl.replacementRequested) try {
+      // Обрыв сети — не провал роли (владелец 02.11.2026): карточку не
+      // блокируем, шаг уйдёт в повтор через settleStalledPlanNode.
+      const network = isNetworkFailure(classifyFailureReason(reason));
+      // Сделанное не теряем: итог хода — в ленту карточки.
+      if (network || runFailure) salvageRunText(reason);
+      if (mode !== "review" && !limitHit && !runControl.replacementRequested && !network) try {
         await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
           state: "blocked",
           block_type: "transient",
