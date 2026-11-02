@@ -5528,6 +5528,24 @@ const migrations: Migration[] = [
   // не хватало только учёта: чей навык, зачем и когда его снять — иначе навык
   // одной задачи навсегда остаётся в папке роли и влияет на все её будущие
   // задачи.
+  { id: "192_task_live_turn_snapshots", description:
+      "Живой ход роли по задаче переживает конец прогона: task_live_turn_snapshots — " +
+      "снимок хода (шаги, размышления, команды) по (задача, шаг)", up: () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS task_live_turn_snapshots(
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      subtask_id TEXT,
+      run_id TEXT NOT NULL,
+      user_id TEXT,
+      name TEXT,
+      complete INTEGER NOT NULL DEFAULT 0,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_live_turn_task ON task_live_turn_snapshots(task_id, subtask_id);`);
+  } },
+
   { id: "191_mission_skills", description:
       "Навыки миссии: mission_skills — реестр навыков, написанных под задачу, со сроком жизни", up: () => {
     db.exec(`CREATE TABLE IF NOT EXISTS mission_skills(

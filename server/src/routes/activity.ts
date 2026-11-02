@@ -312,10 +312,23 @@ export function roleActionStats(taskId: string, subtaskId?: string | null) {
       message: (r.error_message || r.error_code || "").slice(0, 300),
       at: r.created_at,
     }));
+  // На какой модели реально работала роль — владелец спрашивает об этом
+  // прямо: «на какой модели работает та или иная роль в конкретном слоте».
+  // Берём из журнала: модель фактическая, а не заявленная (фолбэк мог
+  // переключиться на другую).
+  const modelRow = db.prepare(
+    `SELECT model, provider FROM role_tool_audit
+      WHERE task_id = ?${subtaskId ? " AND subtask_id = ?" : ""}
+        AND model IS NOT NULL AND model != ''
+      ORDER BY created_at DESC LIMIT 1`,
+  ).get(...(subtaskId ? [taskId, subtaskId] : [taskId])) as
+    { model: string | null; provider: string | null } | undefined;
   return {
     total: rows.length,
     ok,
     failed,
+    model: modelRow?.model ?? null,
+    provider: modelRow?.provider ?? null,
     by_operation: [...byOperation.values()].sort((a, b) => b.failed - a.failed || b.total - a.total),
     errors,
   };
