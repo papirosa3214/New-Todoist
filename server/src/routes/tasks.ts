@@ -455,6 +455,136 @@ function agentStartedAt(task: any): string | null {
 // постоянно) он менялся бы каждые секунды — 304 не наступал бы никогда.
 // Дельты для «изменилось вот это» ведёт отдельный журнал.
 
+/**
+ * Собрать элементы списка задач — ОДНА форма ответа для полного списка
+ * (`GET /api/tasks`) и для батча (`POST /api/tasks/batch`).
+ *
+ * Зачем общий сборщик: дельта отдаёт id изменённых карточек, и клиент
+ * забирает их одним запросом. Брать их «как есть» (полная карточка) нельзя:
+ * у списка и у одиночной карточки РАЗНЫЕ формы — список отдаёт счётчики
+ * детей и одну строку описания, одиночная карточка — массив детей. Клиент
+ * кладёт в локальную базу ответ сервера как есть и рисует его без разбора
+ * форм, поэтому две формы одной сущности в одной базе — это рассинхрон
+ * полей (заметка «Кэш и синхронизация в мобильных клиентах», п.3 плана).
+ *
+ * `listProjection` — обрезать ли описание в одну строку и не отдавать
+ * подзадачи массивом (лёгкая форма списка).
+ */
+export function buildTaskListItems(
+  tasks: any[],
+  session: string | null,
+  listProjection: boolean,
+): any[] {
+  const taskIds = tasks.map((t: any) => t.id) as string[];
+  const ph = taskIds.map(() => "?").join(",");
+  const subtaskMap = new Map<string, any[]>();
+  const childMap = new Map<string, { id: string; status: string }[]>();
+  const labelMap = new Map<string, any[]>();
+  const startedMap = new Map<string, string>();
+  if (taskIds.length) {
+    for (const s of db.prepare(`SELECT * FROM subtasks WHERE task_id IN (${ph}) ORDER BY task_id, position`).all(...taskIds) as any[]) {
+      const arr = subtaskMap.get(s.task_id) ?? [];
+      arr.push(s);
+      subtaskMap.set(s.task_id, arr);
+    }
+    for (const c of db.prepare(`SELECT id, status, parent_id FROM tasks WHERE parent_id IN (${ph})`).all(...taskIds) as Array<{ id: string; status: string; parent_id: string }>) {
+      const arr = childMap.get(c.parent_id) ?? [];
+      arr.push({ id: c.id, status: c.status });
+      childMap.set(c.parent_id, arr);
+    }
+    for (const l of db.prepare(`SELECT tl.task_id AS task_id, l.id, l.name, l.color FROM labels l JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id IN (${ph})`).all(...taskIds) as any[]) {
+      const arr = labelMap.get(l.task_id) ?? [];
+      arr.push({ id: l.id, name: l.name, color: l.color });
+      labelMap.set(l.task_id, arr);
+    }
+    for (const r of db.prepare(`SELECT task_id, MAX(created_at) AS created_at FROM task_events WHERE task_id IN (${ph}) AND kind = 'claimed' GROUP BY task_id`).all(...taskIds) as Array<{ task_id: string; created_at: string }>) {
+      startedMap.set(r.task_id, r.created_at);
+    }
+  }
+
+  // Метка сессии вызывающего: кто именно спрашивает. По ней каждая
+  // задача помечается `mine` — ведёт ли её ЭТА сессия. Учётка агента
+  // одна на все сессии и на всех агентов, поэтому без такой пометки
+  // чужая незавершённая работа неотличима от своей, и любой скрипт
+  // реагирует на неё как на собственную (Максим 20.08.2026: «другие
+  // сессии к этой задаче отношения не имеют»). Пометка справочная:
+  // ничего не фильтрует и не прячет — владелец по-прежнему видит всё.
+  return tasks.map((t: any) => {
+
+    const subtasks = (subtaskMap.get(t.id) ?? []).map(withSubtaskState);
+    const children = childMap.get(t.id) ?? [];
+    // Закрытая карточка: завершена или в архиве. Для неё список не возит
+    // подзадачи (см. ниже) — только числа.
+    const closed =
+      Boolean(t.archived_at) || t.status === "completed" || Boolean(t.completed_at);
+    const bySubtask = subtasks.some(
+      (s: any) => s.agent_session_id && s.agent_session_id === session,
+    );
+    return {
+      ...withAgentStale(t, subtasks, children),
+      // Описание в списке рисуется одной строкой (`lineLimit(1)` в
+      // TFTaskRowContent), а присылалось целиком: 210 КБ на 126 задач, из
+      // которых видно было первые сорок символов. В лёгкой проекции —
+      // одна строка (29.10.2026, «телефон — чисто окошко»).
+      //
+      // 31.10.2026 (владелец): «по выполненным карточкам вы тоже можете
+      // слать кучу информации, которая мне нахуй не нужна». У закрытой
+      // карточки (completed/archived) строка списка тем более не
+      // раскрывается — там название, проект и дата. Поэтому её описание
+      // уходит одной строкой в любом случае: 341 КБ из 616 КБ ответа
+      // приходили на 125 завершённых карточек, которые никто не откроет.
+      ...(listProjection || closed ? { description: listDescription(t.description) } : {}),
+      // Снимок промпта списку не нужен: 2 МБ из 5 МБ ответа (20.10.2026),
+      // телефон перекачивал его на каждом обновлении. В базе остаётся.
+      composed_prompt_snapshot: undefined,
+      mine: session ? t.agent_session_id === session || bySubtask : null,
+      labels: labelMap.get(t.id) ?? [],
+      // Подзадачи в списке — ДВУМЯ ЧИСЛАМИ, а не массивом (29.10.2026).
+      //
+      // Подзадачи были 1,85 МБ из 2,9 МБ ответа: 716 штук по 22 поля.
+      // Телефон разбирал их в объекты, чтобы нарисовать чип «2/5 шагов»,
+      // а подробности шагов показываются в карточке — она берёт задачу
+      // целиком (`GET /api/tasks/:id`).
+      //
+      // Как и с `children` (10.09.2026): под прежним именем в списке нельзя
+      // класть обрезанную версию — у типизированного клиента это не
+      // «меньше данных», а невалидный ответ. Поэтому в списке их нет, а
+      // числа приходят новыми полями.
+      //
+      // 31.10.2026 (владелец): «по выполненным карточкам вы тоже можете
+      // слать кучу информации, которая мне нахуй не нужна». Поэтому
+      // закрытые карточки (completed/archived) отдают подзадачи теми же
+      // двумя числами, что и лёгкая проекция: из 990 подзадач базы 827
+      // висят на завершённых карточках, и все они уходили в список, где
+      // рисуется чип «2/5 шагов».
+      subtasks: listProjection || closed ? undefined : subtasks,
+      subtask_total: subtasks.length,
+      subtask_done: subtasks.filter((s: any) => Boolean(s.done)).length,
+      // Прогресс родителя в списке — ДВУМЯ ЧИСЛАМИ, а не массивом детей.
+      //
+      // Сначала здесь отдавался сам `children` в усечённом виде (id +
+      // status): списку больше и не нужно. Это положило нативный клиент —
+      // у него `children: [ApiTask]?`, то есть полноценная задача со
+      // всеми обязательными полями, и на двух ключах декодер падал с
+      // «данные отсутствуют» (поймано владельцем 10.09.2026 сразу после
+      // выкатки: «сеть недоступна… не удалось разобрать ответ сервера»).
+      //
+      // Урок общий: в список нельзя класть под именем существующего поля
+      // его обрезанную версию — у типизированных клиентов это не
+      // «меньше данных», а невалидный ответ. Полные объекты детей возит
+      // `GET /api/tasks/:id`, там они настоящие.
+      children_total: children.length,
+      children_done: (children as Array<{ status: string }>).filter(
+        (c) => c.status === "completed",
+      ).length,
+      // Третий путь отдачи задачи, и он тоже собирается вручную мимо
+      // hydrateTask. Островок на телефоне живёт как раз от списка, так что
+      // без этой строки время работы считалось бы от открытия приложения.
+      agent_started_at: t.id && t.agent_state ? (startedMap.get(t.id) ?? null) : null,
+    };
+  });
+}
+
 export function registerTaskRoutes(app: FastifyInstance) {
   registerIntegrationResponsibilityRoutes(app);
   const authPre = authOrApiToken;
@@ -726,113 +856,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const session = sessionOf(req);
     reply.header("X-TaskFlow-Sync-Cursor", ledgerCursor());
 
-    const taskIds = tasks.map((t: any) => t.id) as string[];
-    const ph = taskIds.map(() => "?").join(",");
-    const subtaskMap = new Map<string, any[]>();
-    const childMap = new Map<string, { id: string; status: string }[]>();
-    const labelMap = new Map<string, any[]>();
-    const startedMap = new Map<string, string>();
-    if (taskIds.length) {
-      for (const s of db.prepare(`SELECT * FROM subtasks WHERE task_id IN (${ph}) ORDER BY task_id, position`).all(...taskIds) as any[]) {
-        const arr = subtaskMap.get(s.task_id) ?? [];
-        arr.push(s);
-        subtaskMap.set(s.task_id, arr);
-      }
-      for (const c of db.prepare(`SELECT id, status, parent_id FROM tasks WHERE parent_id IN (${ph})`).all(...taskIds) as Array<{ id: string; status: string; parent_id: string }>) {
-        const arr = childMap.get(c.parent_id) ?? [];
-        arr.push({ id: c.id, status: c.status });
-        childMap.set(c.parent_id, arr);
-      }
-      for (const l of db.prepare(`SELECT tl.task_id AS task_id, l.id, l.name, l.color FROM labels l JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id IN (${ph})`).all(...taskIds) as any[]) {
-        const arr = labelMap.get(l.task_id) ?? [];
-        arr.push({ id: l.id, name: l.name, color: l.color });
-        labelMap.set(l.task_id, arr);
-      }
-      for (const r of db.prepare(`SELECT task_id, MAX(created_at) AS created_at FROM task_events WHERE task_id IN (${ph}) AND kind = 'claimed' GROUP BY task_id`).all(...taskIds) as Array<{ task_id: string; created_at: string }>) {
-        startedMap.set(r.task_id, r.created_at);
-      }
-    }
-
-    // Метка сессии вызывающего: кто именно спрашивает. По ней каждая
-    // задача помечается `mine` — ведёт ли её ЭТА сессия. Учётка агента
-    // одна на все сессии и на всех агентов, поэтому без такой пометки
-    // чужая незавершённая работа неотличима от своей, и любой скрипт
-    // реагирует на неё как на собственную (Максим 20.08.2026: «другие
-    // сессии к этой задаче отношения не имеют»). Пометка справочная:
-    // ничего не фильтрует и не прячет — владелец по-прежнему видит всё.
-    const items = tasks.map((t: any) => {
-      const subtasks = (subtaskMap.get(t.id) ?? []).map(withSubtaskState);
-      const children = childMap.get(t.id) ?? [];
-      // Закрытая карточка: завершена или в архиве. Для неё список не возит
-      // подзадачи (см. ниже) — только числа.
-      const closed =
-        Boolean(t.archived_at) || t.status === "completed" || Boolean(t.completed_at);
-      const bySubtask = subtasks.some(
-        (s: any) => s.agent_session_id && s.agent_session_id === session,
-      );
-      return {
-        ...withAgentStale(t, subtasks, children),
-        // Описание в списке рисуется одной строкой (`lineLimit(1)` в
-        // TFTaskRowContent), а присылалось целиком: 210 КБ на 126 задач, из
-        // которых видно было первые сорок символов. В лёгкой проекции —
-        // одна строка (29.10.2026, «телефон — чисто окошко»).
-        //
-        // 31.10.2026 (владелец): «по выполненным карточкам вы тоже можете
-        // слать кучу информации, которая мне нахуй не нужна». У закрытой
-        // карточки (completed/archived) строка списка тем более не
-        // раскрывается — там название, проект и дата. Поэтому её описание
-        // уходит одной строкой в любом случае: 341 КБ из 616 КБ ответа
-        // приходили на 125 завершённых карточек, которые никто не откроет.
-        ...(listProjection || closed ? { description: listDescription(t.description) } : {}),
-        // Снимок промпта списку не нужен: 2 МБ из 5 МБ ответа (20.10.2026),
-        // телефон перекачивал его на каждом обновлении. В базе остаётся.
-        composed_prompt_snapshot: undefined,
-        mine: session ? t.agent_session_id === session || bySubtask : null,
-        labels: labelMap.get(t.id) ?? [],
-        // Подзадачи в списке — ДВУМЯ ЧИСЛАМИ, а не массивом (29.10.2026).
-        //
-        // Подзадачи были 1,85 МБ из 2,9 МБ ответа: 716 штук по 22 поля.
-        // Телефон разбирал их в объекты, чтобы нарисовать чип «2/5 шагов»,
-        // а подробности шагов показываются в карточке — она берёт задачу
-        // целиком (`GET /api/tasks/:id`).
-        //
-        // Как и с `children` (10.09.2026): под прежним именем в списке нельзя
-        // класть обрезанную версию — у типизированного клиента это не
-        // «меньше данных», а невалидный ответ. Поэтому в списке их нет, а
-        // числа приходят новыми полями.
-        //
-        // 31.10.2026 (владелец): «по выполненным карточкам вы тоже можете
-        // слать кучу информации, которая мне нахуй не нужна». Поэтому
-        // закрытые карточки (completed/archived) отдают подзадачи теми же
-        // двумя числами, что и лёгкая проекция: из 990 подзадач базы 827
-        // висят на завершённых карточках, и все они уходили в список, где
-        // рисуется чип «2/5 шагов».
-        subtasks: listProjection || closed ? undefined : subtasks,
-        subtask_total: subtasks.length,
-        subtask_done: subtasks.filter((s: any) => Boolean(s.done)).length,
-        // Прогресс родителя в списке — ДВУМЯ ЧИСЛАМИ, а не массивом детей.
-        //
-        // Сначала здесь отдавался сам `children` в усечённом виде (id +
-        // status): списку больше и не нужно. Это положило нативный клиент —
-        // у него `children: [ApiTask]?`, то есть полноценная задача со
-        // всеми обязательными полями, и на двух ключах декодер падал с
-        // «данные отсутствуют» (поймано владельцем 10.09.2026 сразу после
-        // выкатки: «сеть недоступна… не удалось разобрать ответ сервера»).
-        //
-        // Урок общий: в список нельзя класть под именем существующего поля
-        // его обрезанную версию — у типизированных клиентов это не
-        // «меньше данных», а невалидный ответ. Полные объекты детей возит
-        // `GET /api/tasks/:id`, там они настоящие.
-        children_total: children.length,
-        children_done: (children as Array<{ status: string }>).filter(
-          (c) => c.status === "completed",
-        ).length,
-        // Третий путь отдачи задачи, и он тоже собирается вручную мимо
-        // hydrateTask. Островок на телефоне живёт как раз от списка, так что
-        // без этой строки время работы считалось бы от открытия приложения.
-        agent_started_at: t.id && t.agent_state ? (startedMap.get(t.id) ?? null) : null,
-      };
-    });
+    const items = buildTaskListItems(tasks, session, listProjection);
 
     // ETag по телу ответа (вариант B трафика iOS-клиента, владелец
     // 25.10.2026). Клиент, у которого список не менялся, присылает свой
@@ -1008,6 +1032,53 @@ export function registerTaskRoutes(app: FastifyInstance) {
       removed_ids: removedIds,
       full: false,
     };
+  });
+
+  // БАТЧ карточек по id (заметка «Кэш и синхронизация в мобильных клиентах»,
+  // п.3 плана: «батч-чтение изменённых карточек вместо N × GET /tasks/:id»).
+  //
+  // Зачем: дельта (`GET /api/tasks/changes`) отдаёт id изменённых карточек, и
+  // клиент раньше дёргал `GET /api/tasks/:id` по одной на каждую — до 60
+  // заходов подряд после разрыва связи, по 300–500 мс на заход.
+  //
+  // Форма ответа — как у списка (см. buildTaskListItems), иначе в локальной
+  // базе клиента окажутся две формы одной карточки.
+  //
+  // Закрытые (выполненные) карточки в батч ВХОДЯТ — в отличие от списка,
+  // где их нет: клиент должен убрать такую карточку из живых списков и
+  // положить в архив, а для этого ему нужно знать, что она закрыта.
+  app.post("/api/tasks/batch", { preHandler: authPre }, async (req: any) => {
+    const body = (req.body ?? {}) as { ids?: unknown };
+    const rawIds = Array.isArray(body.ids) ? body.ids : [];
+    const ids: string[] = [];
+    for (const value of rawIds) {
+      if (typeof value !== "string" || !value) continue;
+      if (!ids.includes(value)) ids.push(value);
+      if (ids.length >= 200) break;
+    }
+    if (!ids.length) return { tasks: [] };
+    const userId = req.userId;
+    const asOwner = isOwner(userId);
+    const ph = ids.map(() => "?").join(",");
+    // Приватность — как в списке: карточка из архивного проекта не отдаётся
+    // никому, из приватного — только владельцу трекера.
+    const privacy = asOwner
+      ? "(p.id IS NULL OR p.archived_at IS NULL)"
+      : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
+    const visibleClause = seesEveryTask(userId)
+      ? ""
+      : "AND (t.creator_id = ? OR t.assignee_id = ? OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))";
+    const rows = db
+      .prepare(
+        `SELECT ${taskColumnsForOutput()} ${TASK_JOINS}
+      WHERE t.id IN (${ph})
+        AND t.archived_at IS NULL
+        AND ${privacy}
+        ${visibleClause}
+      ORDER BY t.created_at DESC`,
+      )
+      .all(...ids, ...(seesEveryTask(userId) ? [] : [userId, userId, userId])) as any[];
+    return { tasks: buildTaskListItems(rows, sessionOf(req), true) };
   });
 
   // Агрегат по дням — данные для виджетов heatmap и calendar_grid (галерея
