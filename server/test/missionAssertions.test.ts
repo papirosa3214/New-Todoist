@@ -81,11 +81,14 @@ describe("контракт ассерций миссии", { timeout: 60000 }, (
     expect(r.statusCode).toBe(200);
   });
 
-  it("дыра в покрытии блокирует утверждение плана и называет ассерцию", async () => {
+  it("дыра в покрытии видна в покрытии, но не блокирует утверждение", async () => {
+    // План заявляет часть ассерций. Сама дыра (VAL-012 не заявлена) видна в
+    // покрытии и будет поймана, когда оркестратор закончит раскладку
+    // (02.11.2026). На утверждении блокируется только то, что уже можно
+    // проверить: две работы на одну ассерцию и ссылки на несуществующие.
     const id = await task("Миссия: дыра в покрытии");
     const ids = ids12();
     await contract(id, ids);
-    // VAL-012 не заявлена ни одной работой.
     const planId = await planWithFulfills(id, [
       { slot_key: "auth", role_key: "builder", fulfills: ids.slice(0, 3) },
       { slot_key: "session", role_key: "builder", fulfills: ids.slice(3, 6) },
@@ -93,8 +96,11 @@ describe("контракт ассерций миссии", { timeout: 60000 }, (
       { slot_key: "ui", role_key: "designer", fulfills: ids.slice(9, 11) },
     ]);
     const r = await approve(id, planId);
-    expect(r.statusCode).toBe(409);
-    expect(r.json().error).toContain("VAL-012");
+    expect(r.statusCode).toBe(200);
+
+    const coverage = (await app.inject({ method: "GET", url: `/api/tasks/${id}/collaboration-plans/${planId}/assertion-coverage`, headers: auth })).json();
+    expect(coverage.ok).toBe(false);
+    expect(coverage.violations.some((v: { assertion_id: string }) => v.assertion_id === "VAL-012")).toBe(true);
   });
 
   it("ассерция, заявленная в двух работах, блокирует утверждение", async () => {
@@ -140,6 +146,29 @@ describe("контракт ассерций миссии", { timeout: 60000 }, (
     await contract(id, ["VAL-CCC"]);
     const after = await app.inject({ url: `/api/tasks/${id}/mission-assertions`, headers: auth });
     expect(after.json().assertions.map((a: any) => a.assertion_id)).toEqual(["VAL-CCC"]);
+  });
+
+  it("план-скелет с контрактом утверждается: работы ещё не разложены", async () => {
+    // Режим «Оркестратор»: план утверждается пустым (два слота оркестратора),
+    // а работы по ролям оркестратор добавляет ПОСЛЕ утверждения. Строгая
+    // проверка покрытия на этом шаге заблокировала бы старт (02.11.2026).
+    const id = await task("Миссия: скелетный план");
+    await contract(id, ["VAL-SKEL-001"]);
+    const planId = await planWithFulfills(id, [{ slot_key: "skeleton", role_key: "builder", fulfills: [] }]);
+    const r = await approve(id, planId);
+    expect(r.statusCode).toBe(200);
+  });
+
+  it("ассерция, заявленная двумя работами, блокирует утверждение", async () => {
+    const id = await task("Миссия: дубль на утверждении");
+    await contract(id, ["VAL-DUP-001"]);
+    const planId = await planWithFulfills(id, [
+      { slot_key: "one", role_key: "builder", fulfills: ["VAL-DUP-001"] },
+      { slot_key: "two", role_key: "builder", fulfills: ["VAL-DUP-001"] },
+    ]);
+    const r = await approve(id, planId);
+    expect(r.statusCode).toBe(409);
+    expect(r.json().error).toContain("VAL-DUP-001");
   });
 
   it("кривой контракт отклоняется с понятным сообщением", async () => {

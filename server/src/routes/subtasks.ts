@@ -12,6 +12,8 @@ import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
+import { ORCHESTRATE_SLOT } from "../runtime/orchestratedPlan.js";
+import { validateAssertionCoverageComplete } from "../lib/missionContract.js";
 import { planNodeAgentRefusal, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { closeStaleInboxForSubtask } from "../runtime/topicInbox.js";
 import { logStepOutcome } from "../runtime/stepOutcome.js";
@@ -516,6 +518,20 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         // Узел плана с контрактом на результат роль не закрывает простой отметкой: без сданного
         // результата следующие шаги так и не получат вход и будут ждать молча (07.10.2026).
         if (done === true && !subtask.done && subtask.collaboration_plan_id && subtask.plan_node_key) {
+          // ГЕЙТ ПОКРЫТИЯ (02.11.2026). В режиме «Оркестратор» слот
+          // `orchestrate` закрывается, когда работа по ролям уже разложена.
+          // Вот здесь и проверяем контракт: каждая ассерция должна быть
+          // заявлена ровно одной работой. На утверждении плана этого проверить
+          // нельзя — там ещё скелет.
+          if (subtask.plan_node_key === ORCHESTRATE_SLOT) {
+            try {
+              validateAssertionCoverageComplete(subtask.collaboration_plan_id);
+            } catch (error) {
+              return reply.code(409).send({
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
           const actor = db.prepare("SELECT role_key FROM users WHERE id = ?").get(req.userId) as { role_key?: string | null } | undefined;
           const node = actor?.role_key
             ? db.prepare("SELECT output_artifact_json FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")

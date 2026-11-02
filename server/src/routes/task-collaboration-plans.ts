@@ -5,7 +5,7 @@ import { submissionReceipt } from "../lib/submissionReceipt.js";
 import { roleResultDocument } from "../lib/roleResultReport.js";
 import { normalizePlanStartCondition } from "../runtime/planArtifactGate.js";
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
-import { parseFulfills, parseFulfillsInput, missionAssertions, replaceMissionAssertions, assertionCoverage, validateAssertionCoverage, withAssertionInstruction, missionOutcome, missionEvents, appendMissionEvent } from "../lib/missionContract.js";
+import { parseFulfills, parseFulfillsInput, missionAssertions, replaceMissionAssertions, assertionCoverage, validateAssertionCoverage, validateAssertionCoverageForApproval, withAssertionInstruction, missionOutcome, missionEvents, appendMissionEvent } from "../lib/missionContract.js";
 import { missionSkills, registerMissionSkill, releaseMissionSkill } from "../lib/missionSkills.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
@@ -1022,7 +1022,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     // ассерция должна быть заявлена РОВНО ОДНОЙ работой. Дыра в покрытии
     // отменяет утверждение плана, а не проходит молча. Карточка без контракта
     // проверку не проходит вовсе — живёт по-старому.
-    try {validateAssertionCoverage(plan.id);}catch(error){return reply.code(409).send({error:(error as Error).message});}
+    try {validateAssertionCoverageForApproval(plan.id);}catch(error){return reply.code(409).send({error:(error as Error).message});}
 
     if(branchRoot(task.id)!==task.id) return reply.code(409).send({error:"План этой карточки согласуется в общем плане родителя",branch_root_task_id:branchRoot(task.id)});
     if(branchCards(task.id).length>1){

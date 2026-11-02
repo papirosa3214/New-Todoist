@@ -248,6 +248,35 @@ export function assertionCoverage(planId: string): Coverage {
   return { ok: violations.length === 0, violations, total: assertions.length };
 }
 
+/**
+ * Проверка покрытия в момент утверждения плана (02.11.2026).
+ *
+ * В режиме «Оркестратор» план утверждается СКЕЛЕТОМ: два слота оркестратора,
+ * а работы по ролям оркестратор добавляет в план уже после утверждения. Если
+ * контракт ассерций написан до утверждения, строгая проверка нашла бы «ассерция
+ * не заявлена ни одной работой» на пустом плане и заблокировала бы старт.
+ *
+ * Поэтому на утверждении проверяем только то, что уже можно проверить:
+ * ассерция не заявлена ДВУМЯ работами и работа не ссылается на несуществующую
+ * ассерцию. Дыру «не заявлена ни одной работой» ловим там, где декомпозиция
+ * закончена — на закрытии слота оркестратора.
+ */
+export function validateAssertionCoverageForApproval(planId: string): void {
+  const coverage = assertionCoverage(planId);
+  const blocking = coverage.violations.filter((v) => v.kind !== "uncovered");
+  if (!blocking.length) return;
+  const detail = blocking.map((v) => v.message).join("; ");
+  throw new Error(`Контракт ассерций не согласован с планом (${blocking.length}): ${detail}`);
+}
+
+/**
+ * Дыры покрытия в момент, когда декомпозиция закончена: каждая ассерция
+ * контракта должна быть заявлена ровно одной работой.
+ */
+export function validateAssertionCoverageComplete(planId: string): void {
+  validateAssertionCoverage(planId);
+}
+
 /** Бросает с перечислением дыр — вызывающий превращает это в отказ approve. */
 export function validateAssertionCoverage(planId: string): void {
   const coverage = assertionCoverage(planId);
