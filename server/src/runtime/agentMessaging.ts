@@ -68,7 +68,14 @@ export function agentMessagingTools(role: string, context: Context = {}) {
           throw new ToolError("У адресата несколько работающих этапов; используй тему задачи и slot_key");
         if(p.slot_key) throw new ToolError("slot_key задаётся в теме задачи");
         // Сессия отправителя: его личка (постоянная) — в ней живёт карточка.
-        const senderSession=context.chatId??ensurePersonalRoom(senderId);
+        //
+        // Именно `||`, а не `??`: набор инструментов роли на задаче собирается
+        // без чата, и каталог кладёт туда ПУСТУЮ строку вместо отсутствия
+        // (`roleToolCatalog.ts`: `chatId: input.chatId ?? ""`). При `??` пустая
+        // строка проходила дальше, и роль получала «Нет сессии отправителя для
+        // обращения» — то есть роль, работающая на задаче, не могла обратиться
+        // ни к кому вне своего плана (заход qa к исследователю, 02.11.2026).
+        const senderSession=context.chatId||ensurePersonalRoom(senderId);
         if(!senderSession) throw new ToolError("Нет сессии отправителя для обращения");
         if(sentCount>=4) throw new ToolError("Лимит 4 сообщений за ход исчерпан; продолжи работу или зафиксируй препятствие");
         const posted=postToRoleSession({
