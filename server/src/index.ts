@@ -72,6 +72,7 @@ import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerHostRoutes } from "./routes/hosts.js";
 import { startDeviceEventCleanup } from "./lib/deviceEvents.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
+import { registerSyncRoutes } from "./routes/sync.js";
 import { registerScheduleRoutes } from "./routes/schedules.js";
 import { registerAttentionRoutes } from "./routes/attention.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
@@ -576,6 +577,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     app.addHook("onClose", async () => stopDeviceEventCleanup());
   }
   registerTaskRoutes(app);
+  // Общий журнал синхронизации: /api/sync/changes — догон по курсору для
+  // проектов, меток, заметок, дневника, рутин и вложений.
+  registerSyncRoutes(app);
   // Рутины (крон-задачи): /api/schedules — CRUD и история запусков.
   registerScheduleRoutes(app);
   // «Входящие»: один ответ на весь экран важного (владелец 28.10.2026).

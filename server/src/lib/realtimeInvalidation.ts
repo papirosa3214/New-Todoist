@@ -58,7 +58,14 @@ export function installRealtimeInvalidation(db: Database.Database, emit: (taskID
     // ProjectStore, LabelStore, экран заметок, экран рутин).
     ['projects','id','project:changed'],
     ['labels','id','label:changed'],
-    ['notes','id','note:changed'],
+    // Правка заметки не порождала событие ВООБЩЕ: сервер следил за
+    // таблицей `notes` — заброшенной (в ней одна строка `main`), тогда как
+    // заметки лежат в `user_notes` (см. `routes/notes.ts`: «имя notes занято
+    // заброшенной таблицей»). Из-за этого правка заметки не доезжала до
+    // телефона даже «в моменте» — только ручным обновлением экрана
+    // (разбор 02.11.2026, У1 в заметке Архитектора).
+    ['user_notes','id','note:changed'],
+    ['journal_folders','id','note:changed'],
     ['journal_entries','id','note:changed'],
     ['task_schedules','id','schedule:changed'],
     ['attachments','id','attachment:changed'],
