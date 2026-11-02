@@ -70,8 +70,11 @@ it('publishes changes of entities outside tasks',async()=>{
  db.prepare("INSERT INTO labels(id,name) VALUES('energy-label','Entity label')").run();
  await tick();expect(messages.some(m=>m.type==='label:changed'&&m.id==='energy-label')).toBe(true);
 
+ // Заметки лежат в `user_notes`, а не в заброшенной `notes`: сервер
+ // следил именно за `notes`, из-за чего правка заметки не порождала
+ // событие вообще (У1 в заметке Архитектора, разбор 02.11.2026).
  messages.length=0;
- db.prepare("INSERT INTO notes(id,content) VALUES('energy-note','Entity note')").run();
+ db.prepare("INSERT INTO user_notes(id,title,content) VALUES('energy-note','Entity note','{}')").run();
  await tick();expect(messages.some(m=>m.type==='note:changed'&&m.id==='energy-note')).toBe(true);
 
  messages.length=0;
