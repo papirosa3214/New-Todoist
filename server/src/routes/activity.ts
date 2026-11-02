@@ -266,10 +266,94 @@ export function describeAction(a: Action): string {
 }
 
 /** Последние действия задачи — для раскрывающегося списка в карточке. */
+/**
+ * Статистика действий роли по журналу `role_tool_audit`.
+ *
+ * Журнал копится всегда и живёт вместе с задачей — это и есть «вся эта
+ * статистика должна копиться в журналах» (владелец 02.11.2026): сколько
+ * операций, сколько успешных, сколько ошибок и по каким операциям.
+ *
+ * Буфер в памяти для этого не годится: он живёт 30 минут и гаснет, а
+ * разбираться «почему оно падало» нужно спустя время.
+ */
+export function roleActionStats(taskId: string, subtaskId?: string | null) {
+  const rows = db.prepare(
+    `SELECT operation, outcome, error_message, error_code, created_at
+       FROM role_tool_audit
+      WHERE task_id = ?${subtaskId ? " AND subtask_id = ?" : ""}
+      ORDER BY created_at, rowid`,
+  ).all(...(subtaskId ? [taskId, subtaskId] : [taskId])) as Array<{
+    operation: string | null;
+    outcome: string;
+    error_message: string | null;
+    error_code: string | null;
+    created_at: string;
+  }>;
+  const byOperation = new Map<string, { operation: string; total: number; failed: number }>();
+  let ok = 0;
+  let failed = 0;
+  for (const row of rows) {
+    const operation = row.operation || "—";
+    const item = byOperation.get(operation) ?? { operation, total: 0, failed: 0 };
+    item.total += 1;
+    if (row.outcome === "error") {
+      item.failed += 1;
+      failed += 1;
+    } else {
+      ok += 1;
+    }
+    byOperation.set(operation, item);
+  }
+  const errors = rows
+    .filter((r) => r.outcome === "error")
+    .slice(-20)
+    .map((r) => ({
+      operation: r.operation || "—",
+      message: (r.error_message || r.error_code || "").slice(0, 300),
+      at: r.created_at,
+    }));
+  return {
+    total: rows.length,
+    ok,
+    failed,
+    by_operation: [...byOperation.values()].sort((a, b) => b.failed - a.failed || b.total - a.total),
+    errors,
+  };
+}
+
+/**
+ * Слоты (шаги) задачи: и из буфера, и из журнала.
+ *
+ * Буфер знает только те шаги, где роль что-то постила; журнал — все. После
+ * остановки роли буфер пуст, а статистика по шагу нужна владельцу именно по
+ * шагу (владелец 02.11.2026).
+ */
+function slotIds(taskId: string, entry?: Entry): string[] {
+  const ids = new Set<string>(Object.keys(entry?.subtaskTotals ?? {}));
+  const rows = db.prepare(
+    "SELECT DISTINCT subtask_id FROM role_tool_audit WHERE task_id = ? AND subtask_id IS NOT NULL",
+  ).all(taskId) as Array<{ subtask_id: string }>;
+  for (const row of rows) ids.add(row.subtask_id);
+  return [...ids];
+}
+
 export function recentActivity(taskId: string) {
   const metrics = taskStopMetrics(taskId);
   const e = buffers.get(taskId);
-  if (!e) return { text: null, actions: [] as Action[], total: 0, by_subtask: {}, metrics };
+  // Буфера нет (роль остановилась, сервер перезапустился) — но журнал
+  // `role_tool_audit` живёт вместе с задачей: статистика по нему всё равно
+  // есть, и она нужнее пустоты (владелец 02.11.2026).
+  if (!e) {
+    return {
+      text: null,
+      actions: [] as Action[],
+      total: 0,
+      by_subtask: Object.fromEntries(slotIds(taskId).map((id) => [id, {
+        total: 0, text: null, actions: [] as Action[], stats: roleActionStats(taskId, id) }])),
+      stats: roleActionStats(taskId),
+      metrics,
+    };
+  }
   // Каждому действию — ГОТОВАЯ формулировка, а не голый путь. Владелец
   // 25.08.2026, увидев раскрытый список на телефоне: «нахуя мне вот эта
   // сырая хуета». Он прав: наверху строка шла с глаголом, а внутри сыпались
@@ -279,11 +363,15 @@ export function recentActivity(taskId: string) {
     text: e.lastText,
     total: Math.max(e.total ?? 0, e.actions.length),
     actions: e.actions.map((a) => ({ ...a, text: describeAction(a) })),
-    by_subtask: Object.fromEntries(Object.entries(e.subtaskTotals ?? {}).map(([id, total]) => {
+    by_subtask: Object.fromEntries(slotIds(taskId, e).map((id) => {
       const actions = e.actions.filter(a => a.subtask_id === id);
+      const total = e.subtaskTotals?.[id] ?? actions.length;
       return [id, { total, text: actions.length ? describeAction(actions[actions.length - 1]) : null,
-        actions: actions.map(a => ({ ...a, text: describeAction(a) })) }];
+        actions: actions.map(a => ({ ...a, text: describeAction(a) })),
+        stats: roleActionStats(taskId, id) }];
     })),
+    // Статистика по журналу: она переживает и буфер, и перезапуск сервера.
+    stats: roleActionStats(taskId),
     metrics,
   };
 }
@@ -360,10 +448,27 @@ export function clearActivity(taskId: string) {
   buffers.delete(taskId);
 }
 
-function sweep(now: number) {
+/** Задача ушла в архив (выполнена или отменена) — её историю можно гасить. */
+function isArchivedTask(taskId: string): boolean {
+  const row = db.prepare(
+    "SELECT archived_at, status, completed_at FROM tasks WHERE id = ?",
+  ).get(taskId) as { archived_at?: string | null; status?: string | null; completed_at?: string | null } | undefined;
+  if (!row) return true;
+  return Boolean(row.archived_at) || row.status === "completed" || Boolean(row.completed_at);
+}
+
+/** Гасит буферы задач, ушедших в архив. Экспортировано — проверяется тестом. */
+export function sweepActivityBuffers(now: number) {
   for (const [id, e] of buffers) {
     const last = e.actions[e.actions.length - 1];
-    if (!last || now - last.at > TTL_MS) clearActivity(id);
+    if (!last) { clearActivity(id); continue; }
+    // Пока задача ЖИВА, её историю не трогаем: роль может думать дольше TTL
+    // (а ворд-операция ждёт ответа), и владельцу нужно видеть, что она уже
+    // сделала. Владелец 02.11.2026: «почему пока задача ещё в работе что-то
+    // по ней удаляется» — не должно.
+    if (now - last.at <= TTL_MS) continue;
+    // Гасим только у задачи, ушедшей в архив: выполнена или отменена.
+    if (isArchivedTask(id)) clearActivity(id);
   }
 }
 
@@ -453,9 +558,10 @@ async function interpretOnce(): Promise<void> {
   try {
     const task = hydrateTask(getTaskRow(taskId));
     // Задачу отдали или аренда протухла, пока фраза летела, — брифинг для
-    // никого, буфер туда же, куда его гасят POST/GET (см. clearActivity).
+    // никого. Буфер при этом НЕ гасим: в нём последние действия роли, и
+    // владельцу нужно понять, что она делала и почему встала (владелец
+    // 02.11.2026). Погаснет он сам — когда задача уйдёт в архив.
     if (!task || task.agent_state !== "in_progress" || task.agent_stale) {
-      clearActivity(taskId);
       return;
     }
 
@@ -603,9 +709,13 @@ export function registerActivityRoutes(app: FastifyInstance) {
 
       const task = hydrateTask(getTaskRow(row.id));
       // Показывать нечего, если над задачей никто не работает: строка в
-      // карточке — про «сейчас», а не про историю.
+      // карточке — про «сейчас», а не про историю. Действие не принимаем.
+      //
+      // Буфер при этом НЕ стираем: в нём последние действия роли до её
+      // остановки, и именно их владелец смотрит, когда разбирается, почему
+      // роль встала (владелец 02.11.2026). Погаснет буфер по TTL — через
+      // 30 минут после последнего действия.
       if (task.agent_state !== "in_progress") {
-        clearActivity(row.id);
         return { accepted: false, reason: "задача не в работе" };
       }
 
@@ -637,7 +747,7 @@ export function registerActivityRoutes(app: FastifyInstance) {
       db.prepare("UPDATE attempts SET heartbeat_at=datetime('now') WHERE task_id=? AND executor_id=? AND ended_at IS NULL AND subtask_id IN (SELECT id FROM subtasks WHERE task_id=? AND agent_id=? AND done=0 AND agent_state='in_progress')").run(row.id,req.userId,row.id,req.userId);
 
       const now = Date.now();
-      sweep(now);
+      sweepActivityBuffers(now);
 
       const action: Action = {
         kind,
@@ -713,14 +823,21 @@ export function registerActivityRoutes(app: FastifyInstance) {
       const row = getTaskForActivity(req.params.id, req.userId);
       if (!row) return reply.code(404).send({ error: "Задача не найдена" });
 
-      // Та же проверка, что при записи. Без неё строка «висит» до 30 минут
-      // после того, как агент отдал задачу: он больше не постит действия,
-      // и без этой проверки очистка буфера ждала бы события, которого не
-      // будет.
+      // Задача больше не «в работе» (роль отдала, заблокирована, аренда
+      // протухла). Буфер НЕ стираем: в нём последние действия роли, и
+      // владельцу нужно понять, ЧТО она делала и на чём встала — иначе
+      // «у меня нет информации, почему оно падает» (владелец 02.11.2026).
+      //
+      // Раньше здесь стояло clearActivity(): первое же чтение стирало историю
+      // ровно тогда, когда она нужнее всего. Погаснет буфер и без этого — по
+      // TTL (30 минут после последнего действия, см. sweep()), чтение срок
+      // жизни не продлевает.
+      //
+      // Наблюдатель (слой 3) для таких задач не запускается: его сигнал
+      // «на задачу смотрят» ниже остаётся только для «в работе».
       const task = hydrateTask(getTaskRow(row.id));
       if (task.agent_state !== "in_progress" || task.agent_stale) {
-        clearActivity(row.id);
-        return { text: null, actions: [] };
+        return recentActivity(row.id);
       }
 
       // Карточка открыта — этот GET и есть сигнал «на задачу смотрят»
