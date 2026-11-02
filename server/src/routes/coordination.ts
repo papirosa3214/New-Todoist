@@ -33,6 +33,11 @@ import {
   metricWindow,
 } from "../runtime/coordinationResolver.read.js";
 import { readChatTurns } from "../lib/roleLoadChatTurns.js";
+import { roleUserId } from "../roleRouting.js";
+import { evaluateRecipientAvailability } from "../runtime/roleMessageWait.js";
+import { pendingInboxCountsByTask } from "../runtime/topicInbox.js";
+import { listDiscussions } from "../runtime/taskDiscussion.js";
+import { questionEnvelope, type QuestionRow } from "../lib/chatQuestions.js";
 
 const MAX_EVIDENCE = 7;
 const MAX_NOTES = 500;
@@ -226,6 +231,280 @@ function logResolution(taskId: string, actorId: string | null, payload: Resoluti
   }
 }
 
+/** Состояние слота для владельца: короткий код и человеческий текст. */
+type ExecutorState =
+  | "working"
+  | "waiting"
+  | "ready"
+  | "queued"
+  | "blocked"
+  | "review"
+  | "done"
+  | "skipped"
+  | "unknown";
+
+/** Причина движения → состояние и текст. Один список на весь проект:
+ *  телефон не придумывает свои формулировки, он рисует то, что сказал сервер. */
+const EXECUTOR_STATE_BY_CAUSE: Record<string, { state: ExecutorState; title: string }> = {
+  ready_to_start: { state: "ready", title: "Готов начать" },
+  waiting_predecessor: { state: "waiting", title: "Ждёт предыдущий шаг" },
+  blocked_dependency: { state: "waiting", title: "Ждёт предыдущий шаг" },
+  waiting_transient: { state: "waiting", title: "Ждёт" },
+  waiting_owner: { state: "blocked", title: "Ждёт вас" },
+  waiting_human: { state: "blocked", title: "Ждёт вас" },
+  active_run: { state: "working", title: "Идёт работа" },
+  durable_queued_wake: { state: "queued", title: "В очереди" },
+  recovery_pending: { state: "working", title: "Идёт работа" },
+  stalled_manual_review: { state: "blocked", title: "Ждёт вас" },
+  step_stalled: { state: "blocked", title: "Ждёт вас" },
+  provider_limit: { state: "blocked", title: "Нужна помощь" },
+  permission_or_owner: { state: "blocked", title: "Нужна помощь" },
+  missing_config: { state: "blocked", title: "Нужна помощь" },
+  context_overflow: { state: "blocked", title: "Нужна помощь" },
+  review: { state: "review", title: "На проверке" },
+  branch_rework: { state: "review", title: "На доработке" },
+  awaiting_final_review: { state: "review", title: "На проверке" },
+  completed_pending_review: { state: "review", title: "Ждёт приёмки" },
+  unknown: { state: "unknown", title: "Состояние неизвестно" },
+};
+
+/** Обрезанный текст сообщения — на телефон уходит короткая выжимка. */
+function clipText(value: unknown, limit = 400): string {
+  const text = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+type ExecutorQuestionView = {
+  id: string;
+  chat_id: string;
+  role_key: string | null;
+  role_title: string | null;
+  created_at: string;
+  deadline_at: string | null;
+  payload: Record<string, unknown> | null;
+};
+
+type ExecutorMessageView = {
+  id: string;
+  text: string;
+  created_at: string;
+  direction: "owner_to_role" | "role_to_owner";
+};
+
+type ExecutorView = {
+  subtask_id: string;
+  plan_node_key: string | null;
+  title: string;
+  role: string | null;
+  role_title: string | null;
+  executor_id: string | null;
+  state: ExecutorState;
+  state_title: string;
+  status_text: string;
+  cause: string;
+  done: boolean;
+  skipped: boolean;
+  waiting_for: string[];
+  notes: string | null;
+  attempt: { started_at: string | null; ended_at: string | null; outcome: string | null };
+  metrics: { age_seconds: number; attempts_in_window: number; heartbeat_age: number };
+  addressable: boolean;
+  address_block_reason: string | null;
+  pending_messages: number;
+  discussion_id: string | null;
+  questions: ExecutorQuestionView[];
+  messages: ExecutorMessageView[];
+};
+
+/** Вопросы ролей, которые ждут владельца, — по темам карточки. */
+function readTaskQuestions(taskId: string): ExecutorQuestionView[] {
+  const rows = db
+    .prepare(
+      `SELECT q.id, q.chat_id, q.role_id, q.message_id, q.payload_json, q.answer_json,
+              q.status, q.created_at, q.deadline_at, q.answered_at,
+              u.role_key AS asking_role_key,
+              (SELECT title FROM roles WHERE key = u.role_key) AS asking_role_title
+         FROM chat_questions q
+         JOIN chats c ON c.id = q.chat_id
+         LEFT JOIN users u ON u.id = q.role_id
+        WHERE c.task_id = ?
+          AND q.status = 'open'
+          AND (q.deadline_at IS NULL OR julianday(q.deadline_at) > julianday('now'))
+        ORDER BY q.created_at DESC`,
+    )
+    .all(taskId) as Array<QuestionRow & { asking_role_key: string | null; asking_role_title: string | null }>;
+  const out: ExecutorQuestionView[] = [];
+  for (const row of rows) {
+    let payload: Record<string, unknown> | null = null;
+    try {
+      payload = questionEnvelope(row);
+    } catch {
+      payload = null;
+    }
+    out.push({
+      id: row.id,
+      chat_id: row.chat_id,
+      role_key: row.asking_role_key ?? null,
+      role_title: row.asking_role_title ?? null,
+      created_at: row.created_at,
+      deadline_at: row.deadline_at ?? null,
+      payload,
+    });
+  }
+  return out;
+}
+
+/** Последние сообщения темы задачи, адресованные слоту или отправленные им. */
+function readSlotMessages(taskId: string, slotId: string): ExecutorMessageView[] {
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.text, m.created_at, m.subtask_id, m.recipient_subtask_id
+         FROM chat_messages m
+        WHERE m.channel = 'chat'
+          AND m.chat_id IN (SELECT id FROM chats WHERE task_id = ?)
+          AND (m.subtask_id = ? OR m.recipient_subtask_id = ?)
+        ORDER BY m.created_at DESC, m.rowid DESC
+        LIMIT 6`,
+    )
+    .all(taskId, slotId, slotId) as Array<{
+    id: string;
+    text: string;
+    created_at: string;
+    subtask_id: string | null;
+    recipient_subtask_id: string | null;
+  }>;
+  return rows.map((row) => ({
+    id: row.id,
+    text: clipText(row.text),
+    created_at: row.created_at,
+    direction: row.recipient_subtask_id === slotId ? "owner_to_role" : "role_to_owner",
+  }));
+}
+
+/**
+ * Сводка по исполнителям карточки — «окно исполнителя» на телефоне.
+ * Только чтение: ничего не запускает, не перезапускает и не пишет в чат.
+ */
+function buildExecutorSummary(taskId: string) {
+  const task = db.prepare("SELECT id,title,status,archived_at FROM tasks WHERE id=?").get(taskId) as any;
+  const collected = collectFactsForTask(taskId);
+  const fallback = collected.length ? null : collectFacts(null, taskId);
+  const factsList = collected.length ? collected : fallback ? [fallback] : [];
+  const resolutions = factsList.map((facts) => {
+    const built = buildResolution({
+      facts,
+      links: defaultLinksForCause(facts.subtaskId ?? "", facts.taskId, "unknown"),
+    });
+    return readableResolution(built, facts);
+  });
+  const resolutionBySubtask = new Map<string, (typeof resolutions)[number]>();
+  for (const r of resolutions) {
+    if (r.subtask_id) resolutionBySubtask.set(r.subtask_id, r);
+  }
+
+  const slotRows = db
+    .prepare(
+      `SELECT s.id, s.plan_node_key, s.agent_id, s.done, s.agent_state,
+              n.role_key, n.skipped_at
+         FROM subtasks s
+         LEFT JOIN task_collaboration_plan_nodes n
+           ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+        WHERE s.task_id = ?
+        ORDER BY COALESCE(s.position, 0) ASC, s.rowid ASC`,
+    )
+    .all(taskId) as Array<{
+    id: string;
+    plan_node_key: string | null;
+    agent_id: string | null;
+    done: number;
+    agent_state: string | null;
+    role_key: string | null;
+    skipped_at: string | null;
+  }>;
+
+  const pendingInbox = new Map(pendingInboxCountsByTask(taskId).map((row) => [row.subtask_id, row.pending]));
+  const discussions = listDiscussions(taskId);
+  const questions = readTaskQuestions(taskId);
+
+  const executors: ExecutorView[] = slotRows.map((slot) => {
+    const resolution = resolutionBySubtask.get(slot.id);
+    const cause = resolution?.cause ?? "unknown";
+    const done = Boolean(slot.done) || resolution?.done === true;
+    const skipped = Boolean(slot.skipped_at) || resolution?.skipped === true;
+    const mapped = EXECUTOR_STATE_BY_CAUSE[cause] ?? EXECUTOR_STATE_BY_CAUSE.unknown;
+    const state: ExecutorState = done ? "done" : skipped ? "skipped" : mapped.state;
+    const stateTitle = done ? "Готово" : skipped ? "Пропущено" : mapped.title;
+    const roleKey =
+      slot.role_key ??
+      (resolution?.assignee?.kind === "role" ? resolution.assignee.key : null);
+    const roleTitle = roleKey
+      ? ((db.prepare("SELECT title FROM roles WHERE key=?").get(roleKey) as any)?.title ?? null)
+      : null;
+    const executorId = slot.agent_id ?? (roleKey ? roleUserId(roleKey) : null);
+    const attempt = db
+      .prepare(
+        `SELECT started_at, ended_at, outcome FROM attempts
+          WHERE subtask_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(slot.id) as { started_at: string; ended_at: string | null; outcome: string | null } | undefined;
+    const availability = evaluateRecipientAvailability({ recipientSubtaskId: slot.id });
+    const discussion = discussions.find((row) => row.subtask_id === slot.id && row.state === "open");
+    const slotQuestions = questions.filter((q) => q.role_key && q.role_key === roleKey);
+    return {
+      subtask_id: slot.id,
+      plan_node_key: slot.plan_node_key,
+      title: resolution?.title ?? slot.plan_node_key ?? "Шаг",
+      role: roleKey,
+      role_title: roleTitle,
+      executor_id: executorId,
+      state,
+      state_title: stateTitle,
+      status_text: resolution?.notes ?? stateTitle,
+      cause,
+      done,
+      skipped,
+      waiting_for: resolution?.waiting_for ?? [],
+      notes: resolution?.notes ?? null,
+      attempt: {
+        started_at: attempt?.started_at ?? null,
+        ended_at: attempt?.ended_at ?? null,
+        outcome: attempt?.outcome ?? null,
+      },
+      metrics: resolution?.metrics ?? { age_seconds: 0, attempts_in_window: 0, heartbeat_age: 0 },
+      addressable: availability.ok && !done && !skipped,
+      address_block_reason: availability.ok ? null : availability.error,
+      pending_messages: pendingInbox.get(slot.id) ?? 0,
+      discussion_id: discussion?.discussion_id ?? null,
+      questions: slotQuestions,
+      messages: readSlotMessages(taskId, slot.id),
+    } satisfies ExecutorView;
+  });
+
+  const orchestratorSlot = executors.find((row) => row.role === "code_orchestrator") ?? null;
+  const orchestratorTitle =
+    (db.prepare("SELECT title FROM roles WHERE key='code_orchestrator'").get() as any)?.title ??
+    "Оркестратор";
+  const looseQuestions = questions.filter(
+    (q) => !executors.some((row) => row.role && q.role_key === row.role),
+  );
+
+  return {
+    task_id: taskId,
+    task_title: task?.title ?? "Задача",
+    generated_at: new Date().toISOString(),
+    orchestrator: {
+      role: "code_orchestrator",
+      title: orchestratorTitle,
+      executor_id: roleUserId("code_orchestrator"),
+      slot_id: orchestratorSlot?.subtask_id ?? null,
+      addressable: orchestratorSlot?.addressable ?? false,
+      address_block_reason: orchestratorSlot?.address_block_reason ?? null,
+    },
+    executors,
+    pending_questions: looseQuestions,
+  };
+}
+
 export function registerCoordinationRoutes(app: FastifyInstance): void {
   const authPre = authOrApiToken;
 
@@ -315,6 +594,21 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
       });
       logResolution(att.taskId, req.userId ?? null, built);
       return reply.send(readableResolution(built, facts));
+    },
+  );
+
+  // 6. Сводка по исполнителям карточки — «окно исполнителя» на телефоне:
+  //   GET /api/coordination/tasks/:id/executors
+  //   Кто делает шаг, в каком он состоянии, чего ждёт, что ему уже писали и
+  //   что он отвечал, какие вопросы роли ждут владельца и можно ли сейчас
+  //   адресовать этот шаг. Только чтение — ничего не запускает и не пишет.
+  app.get<{ Params: { id: string } }>(
+    "/api/coordination/tasks/:id/executors",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const taskId = req.params.id;
+      if (!getTaskForRead(taskId, req.userId)) return reply.code(404).send({ error: "task_not_found" });
+      return reply.send(buildExecutorSummary(taskId));
     },
   );
 
