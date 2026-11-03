@@ -333,13 +333,20 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
     // провайдера»). Провайдер берём из ПРЕФИКСА модели: providerOfModel — грубая
     // эвристика, и opencode-go/... сводила ею к minimax, из-за чего провайдер
     // в ответ не попадал вовсе.
-    const providers = Array.from(new Set(
-      [
-        ...(Object.values(routing.models) as string[]),
-        // и запасные: opencode-go живёт именно в цепочке, а не в основной модели
-        ...Object.values(routing.fallbacks).flat(),
-      ].filter(Boolean).map((m) => parseModelRef(m as string).provider).filter(Boolean),
-    ));
+    const routedProviders = [
+      ...(Object.values(routing.models) as string[]),
+      // и запасные: opencode-go живёт именно в цепочке, а не в основной модели
+      ...Object.values(routing.fallbacks).flat(),
+    ].filter(Boolean).map((m) => parseModelRef(m as string).provider).filter(Boolean);
+    // Подключённые провайдеры (OAuth/ключ) тоже спрашиваем — иначе xAI по
+    // подписке не виден в «Остаток лимитов», пока его не назначили роли.
+    let connectedProviders: string[] = [];
+    try {
+      connectedProviders = (await piRuntime.listProviders())
+        .filter((p) => p.status === "connected")
+        .map((p) => p.id);
+    } catch { /* Pi недоступен — остаёмся на маршрутах */ }
+    const providers = Array.from(new Set([...routedProviders, ...connectedProviders]));
     const quota = await Promise.all(providers.map(async (provider) => {
       const q = await readProviderQuota(provider);
       return {

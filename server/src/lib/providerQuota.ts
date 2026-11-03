@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { EnvHttpProxyAgent } from "undici";
 
 export type ProviderQuota = {
   /** Разобрали ли ответ. false → сигнала нет, звать обычную пробу. */
@@ -32,16 +33,27 @@ export type ProviderQuota = {
 };
 
 const TIMEOUT_MS = 15_000;
+let proxyDispatcher: EnvHttpProxyAgent | undefined;
+function proxyFetchDispatcher(): EnvHttpProxyAgent | undefined {
+  if (!(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy)) {
+    return undefined;
+  }
+  if (!proxyDispatcher) {
+    try { proxyDispatcher = new EnvHttpProxyAgent(); } catch { return undefined; }
+  }
+  return proxyDispatcher;
+}
 const MINIMAX_REMAINS = "https://www.minimax.io/v1/token_plan/remains";
 const OPENCODE_GO_USAGE = "https://opencode.ai/zen/go/v1/usage";
 
-type AuthEntry = { type?: string; key?: string };
+type AuthEntry = { type?: string; key?: string; access?: string };
 
 function providerKey(provider: string): string | null {
   try {
     const raw = fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "auth.json"), "utf8");
     const auth = JSON.parse(raw) as Record<string, AuthEntry>;
-    const key = auth[provider]?.key;
+    const entry = auth[provider];
+    const key = entry?.key ?? (entry?.type === "oauth" ? entry?.access : undefined);
     return typeof key === "string" && key.trim() ? key.trim() : null;
   } catch {
     return null;
@@ -54,6 +66,7 @@ async function getJson(url: string, provider: string): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
+    const via = proxyFetchDispatcher();
     const res = await fetch(url, {
       headers: {
         Authorization: `Bearer ${key}`,
@@ -63,6 +76,7 @@ async function getJson(url: string, provider: string): Promise<unknown> {
         "User-Agent": "taskflow-quota-check/1.0",
       },
       signal: controller.signal,
+      ...(via ? { dispatcher: via } as RequestInit : {}),
     });
     if (!res.ok) return null;
     return await res.json();
@@ -118,11 +132,30 @@ async function opencodeGoQuota(): Promise<ProviderQuota> {
   };
 }
 
+const XAI_ME = "https://api.x.ai/v1/me";
+
+async function xaiQuota(): Promise<ProviderQuota> {
+  // Подписка SuperGrok / X Premium через OAuth: отдельного «остатка %»
+  // xAI не отдаёт. /v1/me подтверждает живую подписку и блокировку команды.
+  const data = (await getJson(XAI_ME, "xai")) as any;
+  if (!data || typeof data !== "object") return { known: false, limited: false, resetAt: null };
+  const blocked = data.team_blocked === true;
+  return {
+    known: true,
+    limited: blocked,
+    resetAt: null,
+    detail: blocked
+      ? "xAI: команда заблокирована на стороне подписки"
+      : "xAI · подписка, остаток окна API не отдаёт",
+  };
+}
+
 /** Остаток лимита провайдера. known:false — «не знаю», а не «жив». */
 export async function readProviderQuota(provider: string): Promise<ProviderQuota> {
   try {
     if (provider === "minimax") return await minimaxQuota();
     if (provider === "opencode" || provider === "opencode-go") return await opencodeGoQuota();
+    if (provider === "xai") return await xaiQuota();
     return { known: false, limited: false, resetAt: null };
   } catch {
     return { known: false, limited: false, resetAt: null };
