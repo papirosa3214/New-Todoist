@@ -196,6 +196,20 @@ export function recoverLiveDrafts(): number {
           .get(row.role_id);
         if (chatExists && roleExists) {
           messageId = messageId || `draft-${row.turn_id}`;
+          // items_json — массив LiveItem; в chat_messages.steps клиент ждёт
+          // SavedSteps {duration_ms, items}. Голый массив ронял разбор ленты.
+          let stepsJson: string | null = null;
+          if (row.items_json !== "[]") {
+            try {
+              const items = JSON.parse(row.items_json);
+              stepsJson = JSON.stringify({
+                duration_ms: 0,
+                items: Array.isArray(items) ? items : [],
+              });
+            } catch {
+              stepsJson = null;
+            }
+          }
           db.prepare(
             `INSERT INTO chat_messages
                (id, from_user_id, text, channel, chat_id, steps,
@@ -206,7 +220,7 @@ export function recoverLiveDrafts(): number {
             row.role_id,
             text,
             row.chat_id,
-            row.items_json === "[]" ? null : row.items_json,
+            stepsJson,
             row.trigger_message_id,
           );
         }

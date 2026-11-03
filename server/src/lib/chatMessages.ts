@@ -45,10 +45,36 @@ function stepDetails(steps: SavedSteps): SavedSteps {
   return steps;
 }
 
+/**
+ * К клиенту — только объект SavedSteps `{duration_ms, items, …}`.
+ * Черновик после рестарта раньше писал в `chat_messages.steps` голый
+ * массив items (chatLiveDraft): телефон ждал объект и падал на всей
+ * ленте («The data couldn’t be read…»). Нормализуем здесь — разбор
+ * формы на сервере, не на телефоне (владелец 03.11.2026 / 29.10.2026).
+ */
+export function normalizeSavedSteps(raw: unknown): SavedSteps | null {
+  if (raw == null) return null;
+  if (Array.isArray(raw)) {
+    return { duration_ms: 0, items: raw as SavedSteps["items"] };
+  }
+  if (typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  if (Array.isArray(obj.items)) {
+    return {
+      duration_ms: typeof obj.duration_ms === "number" && Number.isFinite(obj.duration_ms) ? obj.duration_ms : 0,
+      items: obj.items as SavedSteps["items"],
+      ...(obj.usage !== undefined ? { usage: obj.usage as SavedSteps["usage"] } : {}),
+      ...(obj.code_changes !== undefined ? { code_changes: obj.code_changes as SavedSteps["code_changes"] } : {}),
+    };
+  }
+  return null;
+}
+
 /** Шаги из БД; битая JSON-строка не должна ронять всю историю — null. */
 function savedSteps(raw: string): SavedSteps | null {
   try {
-    return stepDetails(JSON.parse(raw) as SavedSteps);
+    const normalized = normalizeSavedSteps(JSON.parse(raw));
+    return normalized ? stepDetails(normalized) : null;
   } catch {
     return null;
   }
@@ -114,10 +140,12 @@ export function formatChatMessage(message: any, projection: Projection = "full")
       return `[этап: ${row?.title ?? key}]`;
     });
   }
-  // JSON-строки из БД: одна битая не должна ронять всю историю.
-  let parsedSteps: any = null;
+  // JSON-строки из БД: одна битая / чужая форма не должны ронять всю историю.
+  let parsedSteps: SavedSteps | null = null;
   if (typeof message.steps === "string") {
-    try { parsedSteps = JSON.parse(message.steps); } catch { parsedSteps = null; }
+    try { parsedSteps = normalizeSavedSteps(JSON.parse(message.steps)); } catch { parsedSteps = null; }
+  } else if (message.steps && typeof message.steps === "object") {
+    parsedSteps = normalizeSavedSteps(message.steps);
   }
   let quickReplies: any = null;
   if (typeof message.quick_replies === "string") {
@@ -172,7 +200,11 @@ export function formatChatMessage(message: any, projection: Projection = "full")
     // (карточка 252c400e, §2.1). Поля аддитивные — старый клиент их игнорирует.
     stop_reason: message.stop_reason ?? null,
     partial: Boolean(message.partial),
-    steps: parsedSteps ? stepDetails(projection === "list" ? projectStepsForList(parsedSteps) as any : parsedSteps) : null,
+    steps: parsedSteps
+      ? stepDetails(
+          (projection === "list" ? projectStepsForList(parsedSteps) : parsedSteps) as SavedSteps,
+        )
+      : null,
     handoff: withTextBlocks(chatHandoff(message), ["summary"]),
     role_envelope: withTextBlocks(storedEnvelope
       ? compactChatReportMaterials(storedEnvelope).envelope
