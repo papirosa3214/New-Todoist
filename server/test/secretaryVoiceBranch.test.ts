@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import db, { migrate } from "../src/db.js";
 import { runMigrations } from "../src/migrations.js";
 import { seedRoleAccounts } from "./helpers/seedOwner.js";
@@ -8,6 +8,15 @@ import {
   readVoiceJob,
   shouldMirrorBranchResult,
 } from "../src/runtime/secretaryVoiceBranch.js";
+import { registerVoiceCall, clearVoiceCall } from "../src/lib/voiceCallRegistry.js";
+import {
+  createRoleSubagentCallTool,
+  pendingSubagentRuns,
+  resetAllSubagentCallCounters,
+  type SubagentRunner,
+} from "../src/runtime/roleSubagentCall.js";
+
+const RESEARCHER_ID = roleUserId("researcher");
 
 const SECRETARY_ID = roleUserId("secretary");
 const OWNER_ID = "voice-branch-owner";
@@ -28,10 +37,57 @@ beforeAll(() => {
     "Помощник",
     OWNER_ID,
   );
-  for (const member of [OWNER_ID, SECRETARY_ID]) {
+  for (const member of [OWNER_ID, SECRETARY_ID, RESEARCHER_ID]) {
     db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES(?,?)").run(PARENT_ID, member);
   }
 });
+
+beforeEach(() => {
+  resetAllSubagentCallCounters();
+  clearVoiceCall(PARENT_ID);
+});
+
+function stubRunner(answer = "Разбор готов.") {
+  const runner: SubagentRunner = async () => ({ text: answer, sessionId: "pi-session-stub" });
+  return runner;
+}
+
+const waitFor = async (predicate: () => boolean, ms = 8000) => {
+  const started = Date.now();
+  while (Date.now() - started < ms) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+};
+
+function secretaryTool(runner: SubagentRunner) {
+  return createRoleSubagentCallTool(
+    {
+      actor: SECRETARY_ID,
+      role: "secretary",
+      mode: "work",
+      runId: "voice-subagent",
+      chatId: PARENT_ID,
+      messageId: "voice-subagent-message",
+    },
+    runner,
+  );
+}
+
+function latestDigest() {
+  return db
+    .prepare(
+      "SELECT id, text FROM chat_messages WHERE chat_id=? AND text LIKE 'Ответ субагента%' ORDER BY rowid DESC LIMIT 1",
+    )
+    .get(PARENT_ID) as { id: string; text: string } | undefined;
+}
+
+function queueStatus(messageId: string) {
+  return db
+    .prepare("SELECT status FROM chat_message_queue WHERE message_id=?")
+    .get(messageId) as { status: string } | undefined;
+}
 
 describe("openSecretaryVoiceBranch", () => {
   it("возвращает accepted до конца хода и кладёт бриф в ветку", () => {
@@ -97,5 +153,39 @@ describe("openSecretaryVoiceBranch", () => {
     const job = readVoiceJob(result.questionId);
     expect(job.terminal).toBe(false);
     expect(job.spoken_text).toBe("");
+  });
+});
+
+describe("выжимка call_role во время звонка", () => {
+  it("живой звонок: выжимка call_role не будит текстовый ход", async () => {
+    registerVoiceCall(PARENT_ID, "call-1");
+    const tool = secretaryTool(stubRunner("Выжимка: план готов."));
+    const result: any = await tool.execute("voice-live", { role: "researcher", question: "Собери план?" });
+    await pendingSubagentRuns();
+    const digest = latestDigest();
+    expect(digest).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(queueStatus(digest!.id)?.status).toBe("pending");
+    const card = db
+      .prepare(
+        "SELECT steps FROM chat_messages WHERE chat_id=? AND message_type='system' AND json_extract(steps,'$.coordination.question_id')=?",
+      )
+      .get(PARENT_ID, result.details.question_id) as { steps: string };
+    const coordination = JSON.parse(card.steps).coordination;
+    expect(coordination.status === "answered" || coordination.answered === true || coordination.terminal === true).toBe(true);
+  });
+
+  it("звонка нет: выжимка по-прежнему будит текстовый ход", async () => {
+    clearVoiceCall(PARENT_ID);
+    const tool = secretaryTool(stubRunner("Выжимка: план готов."));
+    await tool.execute("voice-idle", { role: "researcher", question: "Собери план?" });
+    await pendingSubagentRuns();
+    const digest = latestDigest();
+    expect(digest).toBeTruthy();
+    const settled = await waitFor(() => {
+      const status = queueStatus(digest!.id)?.status;
+      return status !== "pending" && status !== "picked";
+    }, 15000);
+    expect(settled).toBe(true);
   });
 });

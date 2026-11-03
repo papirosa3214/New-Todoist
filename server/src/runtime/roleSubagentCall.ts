@@ -44,6 +44,7 @@ import {
 } from "./chatCoordination.js";
 import { applyOwnerBoundary } from "./chatOwnerBoundary.js";
 import { bumpChatGeneration, enqueueMessageDelivery, fencePairDeliveries } from "./chatQueue.js";
+import { activeVoiceCallId } from "../lib/voiceCallRegistry.js";
 import { openSubagentRoom, type SubagentRoom } from "./subagentRoom.js";
 import type { Context, Tool } from "./universalTaskflow.js";
 
@@ -435,6 +436,9 @@ function deliverDigest(input: BackgroundInput, answer: string): void {
       messageId,
       payload: { mode: "work", hop: 0 },
     });
+    // Пока голосовой звонок жив, выжимка лежит в очереди и карточке,
+    // но текстовый ход секретаря не поднимаем — его заберёт голос.
+    if (activeVoiceCallId(input.callerChatId)) return;
     // queueRowId — id СТРОКИ очереди (queued.id), а не delivery_id:
     // recoverAgentDelivery ищет именно по колонке id. С delivery_id
     // выжимка молча оставалась в очереди и роль не просыпалась.

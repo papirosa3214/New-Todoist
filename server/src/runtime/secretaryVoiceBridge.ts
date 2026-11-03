@@ -15,6 +15,8 @@ import { requestTaskSummary } from "../lib/secretaryTaskSummary.js";
 import { submitOwnerTaskText } from "../lib/ownerDraft.js";
 import { VOICE_TOOLS_GUIDE, lookupTaskDetails, roleLoadNow, voiceToolManifest, runVoiceTool, closeVoiceTools, closeAllVoiceTools } from "../lib/secretaryVoiceTools.js";
 import { sendSummaryToSecretaryChat } from "../lib/secretaryTaskSummary.js";
+import { registerVoiceCall, clearVoiceCall } from "../lib/voiceCallRegistry.js";
+import { readVoiceJob } from "./secretaryVoiceBranch.js";
 
 export const secretaryVoiceSocket = () => join(
   process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid!()}`,
@@ -38,6 +40,12 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       const chatId = query.get("chat_id"), ownerId=query.get("owner_id");
       if (chatId) {try {assertVoiceChat(ownerId || "",chatId);} catch {send(403,{error:"нет доступа к исходному чату"});return;}}
       send(200,{instructions:(composeLayer("secretary","secretary.voice")?.effective ?? "")+"\n\n"+roleInstructionText("secretary")+"\n\n"+VOICE_TOOLS_GUIDE+"\n\n"+chatExecutionInstruction(chatExecutionMode(chatId ?? undefined)),greeting:composeLayer("secretary","secretary.greeting")?.effective ?? "",manifest:instructionManifest("secretary","voice")}); return;
+    }
+    if (req.method === "GET" && new URL(req.url || "/", "http://localhost").pathname === "/secretary/voice-job") {
+      const questionId = new URL(req.url!, "http://localhost").searchParams.get("question_id");
+      if (!questionId) { send(400, { error: "нужен question_id" }); return; }
+      send(200, readVoiceJob(questionId));
+      return;
     }
     if (req.method === "GET" && new URL(req.url || "/", "http://localhost").pathname === "/secretary/tools") {
       try {
@@ -77,12 +85,14 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
         send(200,{message_id:saveVoiceMessage(owner.id,chatId!,body.event_id,body.role,body.text)}); return;
       }
       if (req.url === "/secretary/tools-close") {
+        if (chatId) clearVoiceCall(chatId);
         await closeVoiceTools(owner.id,{chatId,sessionId:body.session_id});
         send(200,{ok:true}); return;
       }
       if (req.url === "/secretary/roles") { send(200,roleLoadNow(owner.id)); return; }
       if (req.url === "/secretary/tool") {
         if (typeof body.name !== "string") { send(400,{error:"нужно имя инструмента"}); return; }
+        if (chatId && typeof body.call_id === "string" && body.call_id) registerVoiceCall(chatId, body.call_id);
         const messageId = chatId ? (db.prepare("SELECT id FROM chat_messages WHERE chat_id=? AND from_user_id=? ORDER BY rowid DESC LIMIT 1").get(chatId,owner.id) as {id:string}|undefined)?.id : undefined;
         const result = await runVoiceTool(owner.id,body.name,body.arguments,{chatId,messageId,sessionId:body.session_id,callId:body.call_id});
         if (chatId && body.name==="taskflow_task_summary") {
