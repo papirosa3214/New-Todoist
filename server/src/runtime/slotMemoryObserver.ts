@@ -1,11 +1,11 @@
 // Наблюдатель слота: после полного снимка done выносит устойчивый урок в
 // memories. Не в задании роли, не в ленте, не в карточках — только remember().
+// Модель и порог — из серверных настроек (телефон: Настройки → Наблюдатель памяти).
 import db from "../db.js";
-import { callUnifiedAi } from "../lib/aiClient.js";
+import { callRuntimeModel } from "../lib/runtimeAi.js";
+import { getSetting } from "../lib/serverSettings.js";
 import { remember } from "../lib/memory.js";
 import type { SlotSnapshotRow } from "./slotWorkSnapshot.js";
-
-const MIN_CONFIDENCE = 0.6;
 
 const SYSTEM = `Ты наблюдатель памяти TaskFlow. По готовому итогу слота реши, есть ли устойчивый урок на будущее.
 Это не отчёт о работе и не пересказ. Нужно правило, приём или факт, который пригодится в другой похожей задаче.
@@ -20,6 +20,7 @@ kind: lesson | fact | preference. confidence от 0 до 1.
 export async function observeSlotMemory(
   snapshot: SlotSnapshotRow,
 ): Promise<{ wrote: boolean; reason?: string }> {
+  if (!getSetting("memory_observer_enabled")) return { wrote: false, reason: "disabled" };
   if (snapshot.reason !== "done" || snapshot.is_complete !== 1)
     return { wrote: false, reason: "not_done" };
   const roleKey = snapshot.role_key;
@@ -42,21 +43,22 @@ export async function observeSlotMemory(
     .filter(Boolean)
     .join("\n");
 
+  const modelRef = String(getSetting("memory_observer_model") ?? "").trim();
   let raw: string;
   try {
-    raw = await callUnifiedAi({
+    raw = await callRuntimeModel({
       systemPrompt: SYSTEM,
       userPrompt,
-      think: false,
-      predictTokens: 400,
-      temperature: 0,
+      maxTokens: 400,
+      ...(modelRef ? { modelRef } : {}),
     });
   } catch {
     return { wrote: false, reason: "model" };
   }
   const parsed = parseObserverJson(raw);
   if (!parsed || parsed.action !== "remember") return { wrote: false, reason: "skip" };
-  if ((parsed.confidence ?? 0) < MIN_CONFIDENCE) return { wrote: false, reason: "low_confidence" };
+  const minConfidence = Number(getSetting("memory_observer_min_confidence") ?? 60) / 100;
+  if ((parsed.confidence ?? 0) < minConfidence) return { wrote: false, reason: "low_confidence" };
   const text = String(parsed.text ?? "").trim();
   if (!text) return { wrote: false, reason: "skip" };
   const kind = parsed.kind === "fact" || parsed.kind === "preference" ? parsed.kind : "lesson";
