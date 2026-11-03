@@ -5,6 +5,7 @@ import db from "../db.js";
 import { callRuntimeModel } from "../lib/runtimeAi.js";
 import { getSetting } from "../lib/serverSettings.js";
 import { remember } from "../lib/memory.js";
+import { recordMemoryObserverEvent } from "../lib/memoryObserverLog.js";
 import type { SlotSnapshotRow } from "./slotWorkSnapshot.js";
 
 const SYSTEM = `Ты наблюдатель памяти TaskFlow. По готовому итогу слота реши, есть ли устойчивый урок на будущее.
@@ -20,14 +21,30 @@ kind: lesson | fact | preference. confidence от 0 до 1.
 export async function observeSlotMemory(
   snapshot: SlotSnapshotRow,
 ): Promise<{ wrote: boolean; reason?: string }> {
-  if (!getSetting("memory_observer_enabled")) return { wrote: false, reason: "disabled" };
-  if (snapshot.reason !== "done" || snapshot.is_complete !== 1)
+  const base = {
+    role_key: snapshot.role_key,
+    task_id: snapshot.task_id,
+    subtask_id: snapshot.subtask_id,
+  };
+  if (!getSetting("memory_observer_enabled")) {
+    recordMemoryObserverEvent({ ...base, outcome: "disabled" });
+    return { wrote: false, reason: "disabled" };
+  }
+  if (snapshot.reason !== "done" || snapshot.is_complete !== 1) {
+    recordMemoryObserverEvent({ ...base, outcome: "not_done", detail: String(snapshot.reason) });
     return { wrote: false, reason: "not_done" };
+  }
   const roleKey = snapshot.role_key;
-  if (!roleKey) return { wrote: false, reason: "no_role" };
+  if (!roleKey) {
+    recordMemoryObserverEvent({ ...base, outcome: "no_role" });
+    return { wrote: false, reason: "no_role" };
+  }
   const sourceRef = `obs:${snapshot.subtask_id}:${snapshot.attempt_id ?? "none"}`.slice(0, 100);
   const already = db.prepare("SELECT id FROM memories WHERE source_ref = ?").get(sourceRef);
-  if (already) return { wrote: false, reason: "already" };
+  if (already) {
+    recordMemoryObserverEvent({ ...base, outcome: "already", source_ref: sourceRef });
+    return { wrote: false, reason: "already" };
+  }
 
   const task = db.prepare("SELECT title, project_id FROM tasks WHERE id = ?").get(snapshot.task_id) as
     | { title: string; project_id: string | null }
@@ -52,15 +69,52 @@ export async function observeSlotMemory(
       maxTokens: 400,
       ...(modelRef ? { modelRef } : {}),
     });
-  } catch {
+  } catch (error) {
+    recordMemoryObserverEvent({
+      ...base,
+      outcome: "model",
+      source_ref: sourceRef,
+      detail: error instanceof Error ? error.message : String(error),
+    });
     return { wrote: false, reason: "model" };
   }
   const parsed = parseObserverJson(raw);
-  if (!parsed || parsed.action !== "remember") return { wrote: false, reason: "skip" };
+  if (!parsed) {
+    recordMemoryObserverEvent({
+      ...base,
+      outcome: "parse_error",
+      source_ref: sourceRef,
+      detail: String(raw).slice(0, 200),
+    });
+    return { wrote: false, reason: "parse_error" };
+  }
+  if (parsed.action !== "remember") {
+    recordMemoryObserverEvent({
+      ...base,
+      outcome: "skip",
+      source_ref: sourceRef,
+      confidence: parsed.confidence ?? null,
+      detail: "model_skip",
+    });
+    return { wrote: false, reason: "skip" };
+  }
   const minConfidence = Number(getSetting("memory_observer_min_confidence") ?? 60) / 100;
-  if ((parsed.confidence ?? 0) < minConfidence) return { wrote: false, reason: "low_confidence" };
+  if ((parsed.confidence ?? 0) < minConfidence) {
+    recordMemoryObserverEvent({
+      ...base,
+      outcome: "low_confidence",
+      source_ref: sourceRef,
+      confidence: parsed.confidence ?? null,
+      title: parsed.title ?? null,
+      detail: `ниже порога ${Math.round(minConfidence * 100)}%`,
+    });
+    return { wrote: false, reason: "low_confidence" };
+  }
   const text = String(parsed.text ?? "").trim();
-  if (!text) return { wrote: false, reason: "skip" };
+  if (!text) {
+    recordMemoryObserverEvent({ ...base, outcome: "skip", source_ref: sourceRef, detail: "empty_text" });
+    return { wrote: false, reason: "skip" };
+  }
   const kind = parsed.kind === "fact" || parsed.kind === "preference" ? parsed.kind : "lesson";
   const result = await remember(
     {
@@ -74,7 +128,25 @@ export async function observeSlotMemory(
     { id: snapshot.author_id ?? `role_${roleKey}`, kind: "role" },
     { onDuplicate: "skip", skipWriteReview: true },
   );
-  if (result.skipped) return { wrote: false, reason: "similar" };
+  if (result.skipped) {
+    recordMemoryObserverEvent({
+      ...base,
+      outcome: "similar",
+      source_ref: sourceRef,
+      confidence: parsed.confidence ?? null,
+      title: parsed.title ?? null,
+      detail: "похожая запись уже есть",
+    });
+    return { wrote: false, reason: "similar" };
+  }
+  recordMemoryObserverEvent({
+    ...base,
+    outcome: "wrote",
+    source_ref: sourceRef,
+    confidence: parsed.confidence ?? null,
+    title: parsed.title ?? null,
+    detail: text.slice(0, 200),
+  });
   return { wrote: true };
 }
 

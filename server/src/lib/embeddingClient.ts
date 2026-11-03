@@ -109,7 +109,7 @@ export async function getEmbeddings(
     maxBatch?: number;
   } = {},
 ): Promise<EmbeddingResult> {
-  const model = opts.model ?? DEFAULT_EMBEDDING_MODEL;
+  const model = opts.model ?? String(getSetting("embedding_model") || DEFAULT_EMBEDDING_MODEL);
   const timeoutMs = opts.timeoutMs ?? getSetting("embedding_timeout_ms");
   const maxBatch = opts.maxBatch ?? EMBEDDING_MAX_BATCH;
 
