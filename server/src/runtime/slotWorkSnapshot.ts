@@ -201,6 +201,11 @@ export function saveSlotSnapshot(input: SnapshotInput): { snapshot: SlotSnapshot
   );
   pruneSlotSnapshots(slot.id);
   const snapshot = db.prepare("SELECT * FROM slot_work_snapshots WHERE id = ?").get(id) as SlotSnapshotRow;
+  if (complete && String(input.reason) === "done" && !process.env.VITEST) {
+    void import("./slotMemoryObserver.js")
+      .then((m) => m.observeSlotMemory(snapshot))
+      .catch((err: { message?: string }) => console.warn("[slot-memory-observer]", err?.message ?? err));
+  }
   return { snapshot, stale: Boolean(attemptId) && attemptId !== slot.current_attempt_id };
 }
 

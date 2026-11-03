@@ -121,6 +121,54 @@ function wordScore(query: string, text: string): number {
   return hits / words.length;
 }
 
+let ftsKnown: boolean | null = null;
+function ftsReady(): boolean {
+  if (ftsKnown != null) return ftsKnown;
+  try {
+    ftsKnown = Boolean(
+      db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='memories_fts'").get(),
+    );
+  } catch {
+    ftsKnown = false;
+  }
+  return ftsKnown;
+}
+
+/** Токены запроса в кавычках — FTS5 не разбирает их как операторы. */
+export function toFtsQuery(query: string): string | null {
+  const tokens = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}._-]+/u)
+    .map((t) => t.replace(/"/g, ""))
+    .filter((t) => t.length > 1)
+    .slice(0, 12);
+  if (!tokens.length) return null;
+  return tokens.map((t) => `"${t}"`).join(" OR ");
+}
+
+function ftsRankedIds(
+  table: "memories_fts" | "memory_chunks_fts",
+  joinSql: string,
+  vis: { sql: string; args: unknown[] },
+  match: string,
+  limit: number,
+): string[] {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT m.id FROM ${table} f
+           ${joinSql}
+          WHERE f MATCH ? AND ${vis.sql}
+          ORDER BY bm25(f)
+          LIMIT ${limit}`,
+      )
+      .all(match, ...vis.args) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  } catch {
+    return [];
+  }
+}
+
 // ── Проверка полей ─────────────────────────────────────────────────────
 
 function clean(text: unknown, max: number): string {
@@ -213,8 +261,14 @@ export function listMemories(filter: {
     args.push(filter.project_id);
   }
   if (filter.q) {
-    where.push("(text LIKE ? OR title LIKE ?)");
-    args.push(`%${filter.q}%`, `%${filter.q}%`);
+    const match = toFtsQuery(filter.q);
+    if (match && ftsReady()) {
+      where.push("rowid IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?)");
+      args.push(match);
+    } else {
+      where.push("(text LIKE ? OR title LIKE ?)");
+      args.push(`%${filter.q}%`, `%${filter.q}%`);
+    }
   }
   const limit = Math.min(Math.max(filter.limit ?? 200, 1), 500);
   return db
@@ -250,7 +304,8 @@ export interface Author {
 export async function remember(
   input: WriteInput,
   author: Author,
-): Promise<{ memory: MemoryRow; updated: boolean }> {
+  opts?: { onDuplicate?: "update" | "skip"; skipWriteReview?: boolean },
+): Promise<{ memory: MemoryRow; updated: boolean; skipped?: boolean }> {
   const text = clean(input.text, MEMORY_TEXT_MAX);
   if (!text) throw new MemoryError("пустая запись: что запомнить?");
   const kind = String(input.kind ?? "fact") as MemoryKind;
@@ -261,7 +316,7 @@ export async function remember(
   // Галочка «Проверка записи в память» (раздел JEV): только записи ролей,
   // владелец пишет что хочет. JEV уверен, что это разовая деталь, — отказ
   // с объяснением; не ответил или сомневается — запись идёт как обычно.
-  if (author.kind === "role") {
+  if (author.kind === "role" && !opts?.skipWriteReview) {
     try {
       await reviewMemoryWriteByJev({ kind, title, text });
     } catch (err) {
@@ -292,6 +347,8 @@ export async function remember(
     }
     // Запись владельца роль не перетирает — рядом ляжет своя.
     if (best && !(best.source_kind === "owner" && author.kind === "role")) {
+      if (opts?.onDuplicate === "skip")
+        return { memory: getMemory(best.id)!, updated: false, skipped: true };
       db.prepare(
         `UPDATE memories SET text = ?, title = COALESCE(?, title), kind = ?, embedding = ?, updated_by = ?, updated_at = datetime('now')
           WHERE id = ?`,
@@ -533,100 +590,129 @@ function visibleWhere(
  * Что роль помнит по теме: записи и куски файлов, видимые ей, по близости к
  * запросу. Закреплённые владельцем — всегда, первыми.
  */
+export type RecallMode = "full" | "index" | "detail";
+
 export async function recall(args: {
   roleKey: string | null;
   projectId?: string | null;
   query: string;
   limit?: number;
+  mode?: RecallMode;
+  ids?: string[];
+  countUsage?: boolean;
 }): Promise<RecallItem[]> {
   const memoryObservation=startObservation("enricher","teamMemory",{role:args.roleKey??undefined});
   try {
   const limit = Math.min(Math.max(args.limit ?? 6, 1), 20);
   const vis = visibleWhere(args.roleKey, args.projectId ?? null);
   const query = args.query.trim();
+  const mode: RecallMode = args.mode ?? "full";
+  const countUsage = args.countUsage ?? mode !== "index";
 
-  const notes = db
-    .prepare(
-      `SELECT m.id, m.kind, m.scope, m.title, m.text, m.pinned, m.source_kind, u.name AS author_name, m.embedding
-         FROM memories m LEFT JOIN users u ON u.id = m.created_by
-        WHERE ${vis.sql} AND m.kind <> 'file'`,
-    )
-    .all(...vis.args) as Array<{
-    id: string;
-    kind: MemoryKind;
-    scope: MemoryScope;
-    title: string | null;
-    text: string;
-    pinned: number;
-    source_kind: "owner" | "role";
-    author_name: string | null;
-    embedding: Buffer | null;
-  }>;
-  const chunks = db
-    .prepare(
-      `SELECT m.id, m.scope, m.title, m.pinned, m.source_kind, u.name AS author_name, c.text, c.embedding
-         FROM memory_chunks c
-         JOIN memories m ON m.id = c.memory_id
-         LEFT JOIN users u ON u.id = m.created_by
-        WHERE ${vis.sql}`,
-    )
-    .all(...vis.args) as Array<{
-    id: string;
-    scope: MemoryScope;
-    title: string | null;
-    pinned: number;
-    source_kind: "owner" | "role";
-    author_name: string | null;
-    text: string;
-    embedding: Buffer | null;
-  }>;
+  if (mode === "detail") {
+    const ids = (args.ids ?? []).filter(Boolean).slice(0, 20);
+    if (!ids.length) {
+      finishObservation(memoryObservation,{status:"skipped",reason:"empty"});
+      return [];
+    }
+    const items = loadRecallItems(vis, ids, mode);
+    if (countUsage && items.length) bumpUse(items.map((i) => i.id));
+    finishObservation(memoryObservation,{status:items.length?"ok":"skipped",reason:items.length?undefined:"empty",inputCount:ids.length,outputCount:items.length,details:items.map(p=>p.title??p.id)});
+    return items;
+  }
 
-  // Помнить нечего — и к модели эмбеддингов не ходим (каждый ход роли).
-  if (!notes.length && !chunks.length) return [];
-  const hasVectors =
-    notes.some((n) => n.embedding) || chunks.some((c) => c.embedding);
+  const anyRow = db.prepare(`SELECT 1 AS ok FROM memories m WHERE ${vis.sql} LIMIT 1`).get(...vis.args);
+  if (!anyRow) {
+    finishObservation(memoryObservation,{status:"skipped",reason:"empty"});
+    return [];
+  }
+
+  const ranked = new Map<string, number>();
+  const addRank = (id: string, rank: number, weight = 1) => {
+    ranked.set(id, (ranked.get(id) ?? 0) + weight / (60 + rank));
+  };
+  const match = query ? toFtsQuery(query) : null;
+  if (match && ftsReady()) {
+    ftsRankedIds(
+      "memories_fts",
+      "JOIN memories m ON m.rowid = f.rowid",
+      vis,
+      match,
+      40,
+    ).forEach((id, i) => addRank(id, i + 1));
+    ftsRankedIds(
+      "memory_chunks_fts",
+      "JOIN memory_chunks c ON c.rowid = f.rowid JOIN memories m ON m.id = c.memory_id",
+      vis,
+      match,
+      20,
+    ).forEach((id, i) => addRank(id, i + 1, 0.8));
+  }
+
+  const vecNotes = db
+    .prepare(
+      `SELECT m.id, m.title, m.embedding FROM memories m WHERE ${vis.sql} AND m.kind <> 'file' AND m.embedding IS NOT NULL`,
+    )
+    .all(...vis.args) as Array<{ id: string; title: string | null; embedding: Buffer | null }>;
+  const vecChunks = db
+    .prepare(
+      `SELECT m.id, c.embedding FROM memory_chunks c JOIN memories m ON m.id = c.memory_id WHERE ${vis.sql} AND c.embedding IS NOT NULL`,
+    )
+    .all(...vis.args) as Array<{ id: string; embedding: Buffer | null }>;
+  const hasVectors = vecNotes.some((n) => n.embedding) || vecChunks.some((c) => c.embedding);
   const qvec = query && hasVectors ? await embed(query) : null;
-
-  const score = (text: string, blob: Buffer | null): number => {
+  const vecHits: Array<{ id: string; score: number; title?: string | null }> = [];
+  const vecScore = (blob: Buffer | null, text = ""): number => {
     const vec = fromBlob(blob);
     if (qvec && vec) return cosine(qvec, vec);
     return query ? wordScore(query, text) * 0.6 : 0;
   };
+  for (const n of vecNotes) {
+    const s = vecScore(n.embedding, n.title ?? "");
+    if (s >= RECALL_MIN_SIMILARITY) vecHits.push({ id: n.id, score: s, title: n.title });
+  }
+  for (const c of vecChunks) {
+    const s = vecScore(c.embedding);
+    if (s >= RECALL_MIN_SIMILARITY) vecHits.push({ id: c.id, score: s });
+  }
+  vecHits
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 40)
+    .forEach((h, i) => addRank(h.id, i + 1));
 
-  const items: RecallItem[] = [];
-  for (const n of notes) {
-    const s = score(`${n.title ?? ""} ${n.text}`, n.embedding);
-    if (n.pinned || s >= RECALL_MIN_SIMILARITY) {
-      items.push({
-        id: n.id,
-        kind: n.kind,
-        scope: n.scope,
-        title: n.title,
-        text: n.text,
-        score: s,
-        pinned: Boolean(n.pinned),
-        source: n.source_kind,
-        author: n.author_name,
-      });
+  const tokens = query.toLowerCase().split(/[^\p{L}\p{N}._-]+/u).filter((t) => t.length > 1);
+  for (const n of vecNotes) {
+    const title = (n.title ?? "").toLowerCase();
+    if (tokens.some((t) => title.includes(t))) addRank(n.id, 1, 8);
+  }
+
+  const pinned = db
+    .prepare(`SELECT m.id FROM memories m WHERE ${vis.sql} AND m.pinned = 1`)
+    .all(...vis.args) as Array<{ id: string }>;
+  for (const p of pinned) addRank(p.id, 1, 20);
+
+  const candidateIds = [...ranked.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => id)
+    .slice(0, 40);
+  if (!candidateIds.length && !match) {
+    // Нет FTS-хитов и векторов — запасной обход по словам только по title/text без эмбеддингов.
+    const fallback = db
+      .prepare(`SELECT m.id, m.title, m.text FROM memories m WHERE ${vis.sql} AND m.kind <> 'file' LIMIT 80`)
+      .all(...vis.args) as Array<{ id: string; title: string | null; text: string }>;
+    for (const row of fallback) {
+      const s = wordScore(query, `${row.title ?? ""} ${row.text}`);
+      if (s > 0) ranked.set(row.id, s);
     }
   }
-  for (const c of chunks) {
-    const s = score(c.text, c.embedding);
-    if (s >= RECALL_MIN_SIMILARITY) {
-      items.push({
-        id: c.id,
-        kind: "file",
-        scope: c.scope,
-        title: c.title,
-        text: c.text,
-        score: s,
-        pinned: false,
-        source: c.source_kind,
-        author: c.author_name,
-      });
-    }
+  const ids = [...new Set([...pinned.map((p) => p.id), ...candidateIds, ...[...ranked.keys()]])].slice(0, 40);
+  let items = loadRecallItems(vis, ids, mode);
+  for (const item of items) {
+    item.score = ranked.get(item.id) ?? item.score;
+    if (tokens.some((t) => (item.title ?? "").toLowerCase().includes(t))) item.score += 0.15;
   }
-  // Владелец весомее роли; закреплённое — вперёд.
+  items = items.filter((i) => i.pinned || (ranked.has(i.id) && (ranked.get(i.id) ?? 0) > 0) || i.score >= RECALL_MIN_SIMILARITY);
+
   items.sort(
     (a, b) =>
       Number(b.pinned) - Number(a.pinned) ||
@@ -634,14 +720,10 @@ export async function recall(args: {
         (b.source === "owner" ? 0.05 : 0) -
         (a.score + (a.source === "owner" ? 0.05 : 0)),
   );
-  // Галочка «Отбор памяти для роли» (раздел JEV): из найденного по сходству
-  // JEV убирает уверенно ненужное и ставит полезное вперёд. Не ответил —
-  // исходный порядок.
   const ordered = (await withObservationContext({role:args.roleKey??undefined},()=>filterMemoryByJev(query, items))) ?? items;
   const picked: RecallItem[] = [];
   const seenFiles = new Map<string, number>();
   for (const item of ordered) {
-    // Из одного файла — не больше двух кусков, иначе он забьёт всё.
     if (item.kind === "file") {
       const n = seenFiles.get(item.id) ?? 0;
       if (n >= 2) continue;
@@ -650,18 +732,89 @@ export async function recall(args: {
     picked.push(item);
     if (picked.length >= limit) break;
   }
-  const used = [...new Set(picked.map((p) => p.id))];
-  if (used.length) {
-    db.prepare(
-      `UPDATE memories SET use_count = use_count + 1, last_used_at = datetime('now') WHERE id IN (${used.map(() => "?").join(",")})`,
-    ).run(...used);
-  }
+  if (countUsage && picked.length) bumpUse([...new Set(picked.map((p) => p.id))]);
   finishObservation(memoryObservation,{status:picked.length?"ok":"skipped",reason:picked.length?undefined:"empty",inputCount:items.length,outputCount:picked.length,details:picked.map(p=>p.title??p.id)});
   return picked;
   } catch(error) {
     finishObservation(memoryObservation,{status:"error",reason:"source_unavailable"});
     throw error;
   }
+}
+
+function bumpUse(ids: string[]): void {
+  if (!ids.length) return;
+  db.prepare(
+    `UPDATE memories SET use_count = use_count + 1, last_used_at = datetime('now') WHERE id IN (${ids.map(() => "?").join(",")})`,
+  ).run(...ids);
+}
+
+function loadRecallItems(
+  vis: { sql: string; args: unknown[] },
+  ids: string[],
+  mode: RecallMode,
+): RecallItem[] {
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  const notes = db
+    .prepare(
+      `SELECT m.id, m.kind, m.scope, m.title, m.text, m.pinned, m.source_kind, u.name AS author_name
+         FROM memories m LEFT JOIN users u ON u.id = m.created_by
+        WHERE ${vis.sql} AND m.kind <> 'file' AND m.id IN (${placeholders})`,
+    )
+    .all(...vis.args, ...ids) as Array<{
+    id: string;
+    kind: MemoryKind;
+    scope: MemoryScope;
+    title: string | null;
+    text: string;
+    pinned: number;
+    source_kind: "owner" | "role";
+    author_name: string | null;
+  }>;
+  const chunks = db
+    .prepare(
+      `SELECT m.id, m.scope, m.title, m.pinned, m.source_kind, u.name AS author_name, c.text
+         FROM memory_chunks c
+         JOIN memories m ON m.id = c.memory_id
+         LEFT JOIN users u ON u.id = m.created_by
+        WHERE ${vis.sql} AND m.id IN (${placeholders})`,
+    )
+    .all(...vis.args, ...ids) as Array<{
+    id: string;
+    scope: MemoryScope;
+    title: string | null;
+    pinned: number;
+    source_kind: "owner" | "role";
+    author_name: string | null;
+    text: string;
+  }>;
+  const hideBody = (pinned: boolean, source: "owner" | "role") =>
+    mode === "index" && !(pinned && source === "owner");
+  const items: RecallItem[] = notes.map((n) => ({
+    id: n.id,
+    kind: n.kind,
+    scope: n.scope,
+    title: n.title,
+    text: hideBody(Boolean(n.pinned), n.source_kind) ? "" : n.text,
+    score: 0,
+    pinned: Boolean(n.pinned),
+    source: n.source_kind,
+    author: n.author_name,
+  }));
+  for (const c of chunks) {
+    items.push({
+      id: c.id,
+      kind: "file",
+      scope: c.scope,
+      title: c.title,
+      text: hideBody(Boolean(c.pinned), c.source_kind) ? "" : c.text,
+      score: 0,
+      pinned: false,
+      source: c.source_kind,
+      author: c.author_name,
+    });
+  }
+  return items;
 }
 
 /** Блок «что ты помнишь» для задания роли. Пусто — пустая строка. */
@@ -672,7 +825,7 @@ export async function memoryBlock(args: {
 }): Promise<string> {
   let items: RecallItem[];
   try {
-    items = await recall({ ...args, limit: 8 });
+    items = await recall({ ...args, limit: 8, mode: "index", countUsage: false });
   } catch {
     return "";
   }
@@ -685,13 +838,14 @@ export async function memoryBlock(args: {
         ? `файл «${m.title ?? "без названия"}»`
         : m.title
           ? `«${m.title}»`
-          : "";
-    const text = m.text.replace(/\s+/g, " ").trim();
-    const clipped = text.length > 600 ? `${text.slice(0, 599)}…` : text;
-    return `- [${where}${m.pinned ? ", закреплено" : ""}] ${head}${head ? ": " : ""}${clipped}`;
+          : "запись";
+    const body = m.text.replace(/\s+/g, " ").trim();
+    const clipped = body.length > 600 ? `${body.slice(0, 599)}…` : body;
+    const extra = clipped ? `: ${clipped}` : "";
+    return `- [${where}${m.pinned ? ", закреплено" : ""}] ${head} (${m.kind}, id ${m.id})${extra}`;
   });
   return [
-    "Память команды (то, что уже известно; записи владельца важнее твоих):",
+    "Память команды (то, что уже известно; записи владельца важнее твоих). Тела — по запросу: taskflow_recall mode=detail и ids.",
     ...lines,
     "Устарело или неверно — поправь своей записью (taskflow_remember); новое устойчивое знание — запомни.",
   ].join("\n");
