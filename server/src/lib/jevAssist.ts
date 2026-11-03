@@ -48,7 +48,7 @@ export async function chatIntentBlockForMessage(messageId:string):Promise<string
   if(!jevScenario("chatIntent"))return "";
   const message=db.prepare("SELECT m.rowid seq,m.chat_id,m.text,m.task_id FROM chat_messages m JOIN users u ON u.id=m.from_user_id WHERE m.id=? AND u.role='owner'").get(messageId) as {seq:number;chat_id:string;text:string;task_id:string|null}|undefined;
   if(!message)return "";
-  const history=(db.prepare("SELECT u.name,m.text FROM chat_messages m LEFT JOIN users u ON u.id=m.from_user_id WHERE m.chat_id=? AND m.rowid<? AND COALESCE(m.is_session_marker,0)=0 AND COALESCE(m.message_type,"")!="system" AND m.from_user_id!="taskflow_system" ORDER BY m.rowid DESC LIMIT 4").all(message.chat_id,message.seq) as {name:string;text:string}[]).reverse().map(m=>m.name+": "+m.text.slice(0,1500)).join("\n");
+  const history=(db.prepare("SELECT u.name,m.text FROM chat_messages m LEFT JOIN users u ON u.id=m.from_user_id WHERE m.chat_id=? AND m.rowid<? AND COALESCE(m.is_session_marker,0)=0 AND COALESCE(m.message_type,)!=system AND m.from_user_id!=taskflow_system ORDER BY m.rowid DESC LIMIT 4").all(message.chat_id,message.seq) as {name:string;text:string}[]).reverse().map(m=>m.name+": "+m.text.slice(0,1500)).join("\n");
   return chatIntentGuidance(await classifyChatIntent({message:message.text,history,taskId:message.task_id??undefined}));
  }catch{return "";}
 }
