@@ -5616,6 +5616,32 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    id: "195_memory_observer_events",
+    description: "Журнал исходов наблюдателя памяти (wrote/skip/…) для экрана статистики",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_observer_events (
+          id TEXT PRIMARY KEY,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          outcome TEXT NOT NULL,
+          role_key TEXT,
+          task_id TEXT,
+          subtask_id TEXT,
+          source_ref TEXT,
+          confidence REAL,
+          title TEXT,
+          detail TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_observer_events_created
+          ON memory_observer_events(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_observer_events_outcome
+          ON memory_observer_events(outcome, created_at DESC);
+      `);
+    },
+
+  },
+
 ];
 /**
  * Опции прогона миграций.

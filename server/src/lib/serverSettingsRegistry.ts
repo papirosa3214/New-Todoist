@@ -112,6 +112,8 @@ export const DEFAULTS = {
 
   // Таймауты
   embedding_timeout_ms: 30_000,
+  embedding_model: "bge-m3-embed:latest",
+  memory_duplicate_similarity: 92,
 
   // Лимиты
 
@@ -178,6 +180,8 @@ export const SERVER_SETTINGS: readonly ServerSetting[] = [
 
   // Таймауты
   { key: "embedding_timeout_ms", label: "Таймаут эмбеддингов", group: "таймауты", kind: "interval_ms", default: DEFAULTS.embedding_timeout_ms, min: 1000, max: 10 * 60_000, applies_to: ["lib/embeddingClient.ts"] },
+  { key: "embedding_model", label: "Модель эмбеддингов", group: "память", kind: "string", default: DEFAULTS.embedding_model, applies_to: ["lib/embeddingClient.ts", "lib/memory.ts"] },
+  { key: "memory_duplicate_similarity", label: "Порог похожести дубля памяти, %", group: "память", kind: "int", default: DEFAULTS.memory_duplicate_similarity, min: 80, max: 99, applies_to: ["lib/memory.ts"] },
 
   // Лимиты
 
@@ -275,6 +279,8 @@ export const DEV_OVERRIDES: Defaults = {
     DEFAULTS.linear_sync_interval_min,
   ),
   embedding_timeout_ms: envOverride("embedding_timeout_ms", DEFAULTS.embedding_timeout_ms),
+  embedding_model: envOverride("embedding_model", DEFAULTS.embedding_model),
+  memory_duplicate_similarity: envOverride("memory_duplicate_similarity", DEFAULTS.memory_duplicate_similarity),
   activity_observer_enabled: envOverride("activity_observer_enabled", DEFAULTS.activity_observer_enabled),
   memory_observer_enabled: envOverride("memory_observer_enabled", DEFAULTS.memory_observer_enabled),
   memory_observer_model: envOverride("memory_observer_model", DEFAULTS.memory_observer_model),

@@ -1,3 +1,4 @@
+import { getSetting } from "./serverSettings.js";
 // Память ролей внутри приложения (владелец 02.10.2026): «с чистого листа;
 // пусть сами пишут, а я вижу и редактирую; и чтобы файлы можно было
 // закидывать».
@@ -59,7 +60,11 @@ export class MemoryError extends Error {
 export const MEMORY_TEXT_MAX = 2_000;
 const CHUNK_TARGET = 1_200;
 /** Похожая запись в той же области — обновляем её, а не плодим дубль. */
-const DUPLICATE_SIMILARITY = 0.92;
+function duplicateSimilarity(): number {
+  const pct = Number(getSetting("memory_duplicate_similarity") ?? 92);
+  if (!Number.isFinite(pct)) return 0.92;
+  return Math.min(0.99, Math.max(0.5, pct / 100));
+}
 /** Ниже этой близости запись в задание не попадает. */
 const RECALL_MIN_SIMILARITY = 0.35;
 
@@ -342,7 +347,7 @@ export async function remember(
     for (const row of near) {
       const other = fromBlob(row.embedding);
       const score = other ? cosine(vec, other) : 0;
-      if (score >= DUPLICATE_SIMILARITY && (!best || score > best.score))
+      if (score >= duplicateSimilarity() && (!best || score > best.score))
         best = { id: row.id, score, source_kind: row.source_kind };
     }
     // Запись владельца роль не перетирает — рядом ляжет своя.

@@ -28,6 +28,7 @@ import {
   updateMemory,
   type Author,
 } from "../lib/memory.js";
+import { memoryObserverStats } from "../lib/memoryObserverLog.js";
 import { saveUploadedFile, UploadRejected, UPLOAD_DIR } from "./attachments.js";
 import { extractAttachmentText } from "../lib/attachmentText.js";
 
@@ -60,6 +61,15 @@ async function fileText(filePath: string, mime: string, fileName: string): Promi
 
 export async function registerMemoryRoutes(app: FastifyInstance): Promise<void> {
   const authPre = authOrApiToken;
+
+  app.get<{ Querystring: { days?: string } }>(
+    "/api/admin/memory-observer/stats",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) return reply.code(403).send({ error: "доступно только владельцу" });
+      return memoryObserverStats(Number(req.query?.days ?? 7));
+    },
+  );
 
   app.get<{ Querystring: { scope?: string; role_key?: string; project_id?: string; q?: string; limit?: string } }>(
     "/api/memories",
