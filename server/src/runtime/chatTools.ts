@@ -347,21 +347,21 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         return { итог: resp?.updated ? "обновил похожую запись" : "запомнил", id: resp?.memory?.id, область: resp?.memory?.scope };
       }),
     T("taskflow_recall",
-      "Вспомнить, что известно по теме: общая память команды, твоя и проектная, включая файлы владельца.",
-      Type.Object({ query: Type.String(), project_id: S() }), async (p) => {
+      "Вспомнить, что известно по теме: общая память команды, твоя и проектная, включая файлы владельца. По умолчанию — с телами. mode=index — только id/вид/заголовок; mode=detail — тела по ids.",
+      Type.Object({ query: S("о чём вспомнить"), project_id: S(), mode: S("full | index | detail"), ids: S("через запятую, для detail") }), async (p) => {
+        const mode = String(p.mode ?? "full").trim() || "full";
         const query = String(p.query ?? "").trim();
-        if (!query) throw new ToolError("query — о чём вспомнить");
-        const items = ((await asRole(role, "GET", "/api/memories/recall?" + qs({ q: query, project_id: p.project_id })))?.items ?? []) as any[];
+        const ids = String(p.ids ?? "").trim();
+        if (!query && mode !== "detail") throw new ToolError("query — о чём вспомнить");
+        if (mode === "detail" && !ids) throw new ToolError("detail — укажи ids");
+        const items = ((await asRole(role, "GET", "/api/memories/recall?" + qs({ q: query, project_id: p.project_id, mode, ids })))?.items ?? []) as any[];
         if (!items.length) return { найдено: 0, подсказка: "ничего не помним — разберёшься, запиши через taskflow_remember" };
         const where: Record<string, string> = { team: "общее", role: "твоё", project: "проект" };
         return {
           найдено: items.length,
           записи: items.map((m) => ({
             id: m.id, откуда: where[m.scope] ?? m.scope, вид: m.kind, заголовок: m.title,
-            текст: String(m.text ?? "").slice(0, 1500),
-            // Кто именно записал: имя учётки из API. Без имени — по виду
-            // источника. Владелец 01.11.2026: подпись «владелец» у всех
-            // вводила в заблуждение — Оркестратор и Помощник пишут с его правами.
+            ...(mode === "index" ? {} : { текст: String(m.text ?? "").slice(0, 1500) }),
             записал: String(m.author ?? "") || (m.source === "owner" ? "владелец" : "роль"),
           })),
         };

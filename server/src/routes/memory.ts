@@ -78,16 +78,30 @@ export async function registerMemoryRoutes(app: FastifyInstance): Promise<void> 
     },
   );
 
-  app.get<{ Querystring: { q?: string; project_id?: string; role_key?: string; limit?: string } }>(
+  app.get<{ Querystring: { q?: string; project_id?: string; role_key?: string; limit?: string; mode?: string; ids?: string } }>(
     "/api/memories/recall",
     { preHandler: authPre },
     async (req: any, reply) => {
       const who = authorOf(req.userId);
       if (!who) return reply.code(403).send({ error: "нет доступа к памяти" });
+      const mode = req.query.mode === "index" || req.query.mode === "detail" ? req.query.mode : "full";
+      const ids = String(req.query.ids ?? "")
+        .split(",")
+        .map((s: string) => s.trim())
+        .filter(Boolean);
       const q = String(req.query.q ?? "").trim();
-      if (!q) return reply.code(400).send({ error: "нужен q — о чём вспомнить" });
+      if (!q && mode !== "detail") return reply.code(400).send({ error: "нужен q — о чём вспомнить" });
       const roleKey = who.author.kind === "role" ? who.roleKey : (req.query.role_key ?? who.roleKey);
-      return { items: await recall({ roleKey, projectId: req.query.project_id ?? null, query: q, limit: req.query.limit ? Number(req.query.limit) : 8 }) };
+      return {
+        items: await recall({
+          roleKey,
+          projectId: req.query.project_id ?? null,
+          query: q,
+          limit: req.query.limit ? Number(req.query.limit) : 8,
+          mode,
+          ids,
+        }),
+      };
     },
   );
 

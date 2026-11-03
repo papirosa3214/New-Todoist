@@ -5575,6 +5575,47 @@ const migrations: Migration[] = [
     }
   } },
 
+  {
+    id: "194_memories_fts",
+    description: "FTS5 по memories.title/text и memory_chunks.text — лексический поиск рядом с эмбеддингами",
+    up: () => {
+      const fts = db.prepare("SELECT sqlite_compileoption_used('ENABLE_FTS5') AS v").get() as { v: number };
+      if (!fts?.v) throw new Error("194_memories_fts: SQLite собран без FTS5");
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+          title, text, content='memories', content_rowid='rowid', tokenize='unicode61'
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(
+          text, content='memory_chunks', content_rowid='rowid', tokenize='unicode61'
+        );
+        CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories BEGIN
+          INSERT INTO memories_fts(rowid, title, text) VALUES (new.rowid, coalesce(new.title, ''), new.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS memories_fts_ad AFTER DELETE ON memories BEGIN
+          INSERT INTO memories_fts(memories_fts, rowid, title, text)
+            VALUES ('delete', old.rowid, coalesce(old.title, ''), old.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE OF title, text ON memories BEGIN
+          INSERT INTO memories_fts(memories_fts, rowid, title, text)
+            VALUES ('delete', old.rowid, coalesce(old.title, ''), old.text);
+          INSERT INTO memories_fts(rowid, title, text) VALUES (new.rowid, coalesce(new.title, ''), new.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS memory_chunks_fts_ai AFTER INSERT ON memory_chunks BEGIN
+          INSERT INTO memory_chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS memory_chunks_fts_ad AFTER DELETE ON memory_chunks BEGIN
+          INSERT INTO memory_chunks_fts(memory_chunks_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS memory_chunks_fts_au AFTER UPDATE OF text ON memory_chunks BEGIN
+          INSERT INTO memory_chunks_fts(memory_chunks_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+          INSERT INTO memory_chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+        END;
+      `);
+      db.exec("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')");
+      db.exec("INSERT INTO memory_chunks_fts(memory_chunks_fts) VALUES('rebuild')");
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.
