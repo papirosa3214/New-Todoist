@@ -180,6 +180,10 @@ class BackgroundRunner:
         self.pending: deque[tuple[str, str]] = deque()
         self._delivery: asyncio.Task | None = None
         self._closed = False
+        self.socket_path: str | None = None
+        self.watch_interval = 0.4
+        self._watching: set[str] = set()
+        self.fetch_job = self._fetch_job
 
     async def run(self, label: str, work: Callable[[], Awaitable[str]]) -> str:
         job = asyncio.ensure_future(work())
@@ -252,6 +256,49 @@ class BackgroundRunner:
                 await asyncio.sleep(0.05)
                 continue
             self.pending.popleft()
+
+
+    def watch_job(self, label: str, question_id: str) -> None:
+        """Следить за карточкой и один раз положить итог в очередь озвучки."""
+        if not question_id or question_id in self._watching or self._closed:
+            return
+        self._watching.add(question_id)
+        task = asyncio.get_running_loop().create_task(self._watch_loop(label, question_id))
+        self.jobs.add(task)
+        task.add_done_callback(lambda done: self.jobs.discard(done))
+
+    async def _fetch_job(self, question_id: str) -> dict:
+        if not self.socket_path:
+            return {"terminal": False, "status": "unknown", "spoken_text": ""}
+        connector = aiohttp.UnixConnector(path=self.socket_path)
+        try:
+            async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=10)) as http:
+                async with http.get("http://localhost/secretary/voice-job", params={"question_id": question_id}) as resp:
+                    if resp.status != 200:
+                        return {"terminal": False, "status": "error", "spoken_text": ""}
+                    body = await resp.json()
+                    return body if isinstance(body, dict) else {"terminal": False, "status": "error", "spoken_text": ""}
+        except (aiohttp.ClientError, TimeoutError, OSError):
+            return {"terminal": False, "status": "error", "spoken_text": ""}
+
+    async def _watch_loop(self, label: str, question_id: str) -> None:
+        delivered = False
+        try:
+            while not self._closed:
+                job = self.fetch_job(question_id)
+                if asyncio.iscoroutine(job):
+                    job = await job
+                if isinstance(job, dict) and job.get("terminal"):
+                    if not delivered:
+                        spoken = job.get("spoken_text")
+                        self.pending.append((label, "" if spoken is None else str(spoken)))
+                        delivered = True
+                        if not self._closed and self.session is not None and (self._delivery is None or self._delivery.done()):
+                            self._delivery = asyncio.create_task(self._deliver())
+                    return
+                await asyncio.sleep(self.watch_interval)
+        finally:
+            self._watching.discard(question_id)
 
     async def close(self, *_args) -> None:
         """Прекратить озвучивание при закрытии звонка; поручения не отменять."""
@@ -336,6 +383,20 @@ class VoiceConversationRecorder:
             await asyncio.gather(self._task, return_exceptions=True)
 
 
+
+def question_id_of(result: str) -> str | None:
+    try:
+        data = json.loads(result)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    qid = data.get("question_id") or data.get("questionId")
+    if isinstance(qid, str) and qid.strip():
+        return qid.strip()
+    return None
+
+
 async def shared_tools_via_api(socket_path: str, owner_id: str, runner: BackgroundRunner | None = None, chat_id: str | None = None, recorder: VoiceConversationRecorder | None = None, agent: Agent | None = None, session_id: str | None = None) -> list:
     """Общие инструменты Помощника владельца (те же, что в чате) — как инструменты звонка."""
     connector = aiohttp.UnixConnector(path=socket_path)
@@ -346,6 +407,7 @@ async def shared_tools_via_api(socket_path: str, owner_id: str, runner: Backgrou
             specs = (await response.json()).get("tools", [])
             if not specs or not any(spec.get("name") == "taskflow_tools" for spec in specs):
                 raise RuntimeError("Голосовой каталог неполон: нет отдельных инструментов и taskflow_tools")
+    call_id = str(uuid.uuid4())
 
     def build(spec: dict):
         async def call(raw_arguments: dict[str, object]) -> str:
@@ -361,7 +423,7 @@ async def shared_tools_via_api(socket_path: str, owner_id: str, runner: Backgrou
             try:
                 async with aiohttp.ClientSession(connector=inner, timeout=aiohttp.ClientTimeout(total=120)) as http:
                     async with http.post("http://localhost/secretary/tool",
-                                         json={"owner_id": owner_id, "name": spec["name"], "arguments": raw_arguments, "session_id": session_id, "call_id": str(uuid.uuid4()), **({"chat_id": chat_id} if chat_id else {})}) as resp:
+                                         json={"owner_id": owner_id, "name": spec["name"], "arguments": raw_arguments, "session_id": session_id, "call_id": call_id, **({"chat_id": chat_id} if chat_id else {})}) as resp:
                         body = await resp.json()
             except (aiohttp.ClientError, TimeoutError) as exc:
                 return f"Инструмент недоступен: {exc}"
@@ -370,7 +432,11 @@ async def shared_tools_via_api(socket_path: str, owner_id: str, runner: Backgrou
                     if agent is None:
                         return "Не удалось подключить инструменты: голосовой агент не привязан."
                     await agent.update_tools([build(item) for item in body["tools"]])
-                return body.get("result", "")
+                text = body.get("result", "")
+                qid = question_id_of(text if isinstance(text, str) else "")
+                if qid and runner is not None:
+                    runner.watch_job(spec["name"], qid)
+                return text
             return f"Инструмент отказал: {body.get('error', 'неизвестная ошибка')}"
         return function_tool(call, raw_schema={"name": spec["name"], "description": spec["description"], "parameters": spec["parameters"]})
 
@@ -510,6 +576,7 @@ async def entrypoint(ctx: JobContext) -> None:
     snapshot = await instructions_via_api(cfg.taskflow_socket_path, owner.identity, chat_id)
     runner = BackgroundRunner()
     runner.session = session
+    runner.socket_path = cfg.taskflow_socket_path
     ctx.add_shutdown_callback(runner.close)
     agent = Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=("Продолжи разговор из истории чата. Коротко скажи, что голос подключён; не повторяй прежние ответы." if history else snapshot["greeting"]), runner=runner, chat_ctx=context_from_messages(history), chat_id=chat_id, instructions_suffix=gender_instruction(voice) + "\nГолос и переписка — один разговор. Твои реплики сохраняются в исходном чате. Для файлов используй общий инструмент прикрепления к текущему чату; не говори, что файл отправлен без успешного результата инструмента.")
     async def close_tools():
