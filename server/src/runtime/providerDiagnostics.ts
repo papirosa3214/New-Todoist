@@ -2,6 +2,21 @@ import {randomUUID} from "node:crypto";
 import {AsyncLocalStorage} from "node:async_hooks";
 import {channel} from "node:diagnostics_channel";
 import { compressContextThoughts } from "./thinkingCompression.js";
+import { EnvHttpProxyAgent } from "undici";
+
+/** Pi подменяет global fetch и NODE_USE_ENV_PROXY перестаёт действовать
+ *  (см. widgets.ts / linearWrite.ts). Без явного dispatcher запросы к
+ *  api.x.ai / auth.x.ai уходят напрямую и ловят Cloudflare 403 «region». */
+let proxyDispatcher: EnvHttpProxyAgent | undefined;
+function proxyFetchDispatcher(): EnvHttpProxyAgent | undefined {
+  if (!(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy)) {
+    return undefined;
+  }
+  if (!proxyDispatcher) {
+    try { proxyDispatcher = new EnvHttpProxyAgent(); } catch { return undefined; }
+  }
+  return proxyDispatcher;
+}
 
 type NativeScope = {enabled:boolean; begin:(request:any)=>void; error:(request:any,error:unknown)=>void; headers:(request:any,status:number,headers?:any)=>void};
 const nativeScope = new AsyncLocalStorage<NativeScope>();
@@ -118,7 +133,11 @@ export function installProviderDiagnostics(runtime: Runtime, dependencies: Optio
         event("request_start");
         let response: Response;
         try {
-          response = await nativeScope.run({...native,enabled:false},()=> (fetchImpl ?? globalThis.fetch)(input, init));
+          const via = proxyFetchDispatcher();
+          const proxiedInit = via && !(init as { dispatcher?: unknown } | undefined)?.dispatcher
+            ? { ...(init ?? {}), dispatcher: via }
+            : init;
+          response = await nativeScope.run({...native,enabled:false},()=> (fetchImpl ?? globalThis.fetch)(input, proxiedInit as any));
         } catch (error) {
           event("transport_error", {phase:"request",category:transportCategory(error),abort_source:abortSource(),error:serializeError(error,clean),
             signal_aborted:signal?.aborted ?? false, abort_reason:signal?.aborted ? serializeError(signal.reason,clean) : undefined});

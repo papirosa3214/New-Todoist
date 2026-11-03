@@ -13,6 +13,7 @@ export const KNOWN_MODEL_PROVIDERS = [
   "openai",
   "kimi-coding",
   "ollama",
+  "xai",
 ] as const;
 
 export type ModelRef = { provider: string; id: string };

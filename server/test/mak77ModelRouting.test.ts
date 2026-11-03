@@ -10,6 +10,7 @@ describe("MAK-77: parseModelRef", () => {
   it("разбирает провайдера из префикса", () => {
     expect(parseModelRef("opencode-go/qwen3.8-flash")).toEqual({ provider: "opencode-go", id: "qwen3.8-flash" });
     expect(parseModelRef("opencode-go/deepseek-v4.1-flash")).toEqual({ provider: "opencode-go", id: "deepseek-v4.1-flash" });
+    expect(parseModelRef("xai/grok-4.7")).toEqual({ provider: "xai", id: "grok-4.7" });
     expect(parseModelRef("anthropic/claude-sonnet-5")).toEqual({ provider: "anthropic", id: "claude-sonnet-5" });
   });
 
