@@ -1,4 +1,4 @@
-import {installProviderDiagnostics, registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
+import {installProviderDiagnostics, installProxyAwareGlobalFetch, registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import { captureBash, withFileChanges } from "../lib/toolFileCapture.js";
 import { localCaptureIO } from "../lib/localCaptureIO.js";
 import {supportedThinkingLevels,validateChatThinking,thinkingLevelLabels} from "./thinkingLevels.js";
@@ -139,6 +139,7 @@ export async function getModelRuntime(): Promise<ModelRuntime> {
     try {
       modelRuntime = await ModelRuntime.create();
       installProviderDiagnostics(modelRuntime);
+      installProxyAwareGlobalFetch();
     } catch (error) {
       throw new RuntimeUnavailableError(
         `ModelRuntime.create() failed: ${error instanceof Error ? error.message : String(error)}`,

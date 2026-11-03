@@ -18,6 +18,33 @@ function proxyFetchDispatcher(): EnvHttpProxyAgent | undefined {
   return proxyDispatcher;
 }
 
+const PROXY_AWARE_FETCH = Symbol.for("taskflow.proxyAwareFetch");
+
+/** OAuth xAI (login/refresh) ходит через голый global fetch в pi-ai и не
+ *  попадает в обёртку model-stream из installProviderDiagnostics. После
+ *  импорта Pi NODE_USE_ENV_PROXY молчит → auth.x.ai отвечает 403 HTML
+ *  «region». Явный dispatcher на каждый global fetch — тот же приём, что
+ *  у widgets/linearWrite; setGlobalDispatcher не трогаем. */
+export function installProxyAwareGlobalFetch(): void {
+  const via = proxyFetchDispatcher();
+  if (!via) return;
+  const current = globalThis.fetch as typeof fetch & { [key: symbol]: boolean };
+  if (current[PROXY_AWARE_FETCH]) return;
+  const upstream = globalThis.fetch.bind(globalThis);
+  const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const hasDispatcher =
+      !!init &&
+      Object.prototype.hasOwnProperty.call(init, "dispatcher") &&
+      (init as { dispatcher?: unknown }).dispatcher != null;
+    const proxiedInit = hasDispatcher
+      ? init
+      : ({ ...(init ?? {}), dispatcher: via } as RequestInit);
+    return upstream(input, proxiedInit);
+  }) as typeof fetch & { [key: symbol]: boolean };
+  wrapped[PROXY_AWARE_FETCH] = true;
+  globalThis.fetch = wrapped;
+}
+
 type NativeScope = {enabled:boolean; begin:(request:any)=>void; error:(request:any,error:unknown)=>void; headers:(request:any,status:number,headers?:any)=>void};
 const nativeScope = new AsyncLocalStorage<NativeScope>();
 const nativeRequests = new WeakMap<object, NativeScope>();
