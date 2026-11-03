@@ -4,6 +4,7 @@ import { logEvent } from "../agentState.js";
 import { roleTitle } from "../roleRouting.js";
 import { ensureTaskArtifactFolder } from "./taskArtifactFolder.js";
 import { markdownToTiptap } from "./markdownToTiptap.js";
+import { noteSearchText } from "./noteSearchText.js";
 import { recordTaskDocument } from "./taskOutcome.js";
 
 export { validateRoleReport } from "./roleReportPolicy.js";
@@ -13,8 +14,9 @@ export function saveRoleResultReport(subtaskId: string, markdown: string, actorI
     if (!step) throw new Error("Этап не найден");
     const title = (step.role_key ? roleTitle(step.role_key) + " — " : "") + step.title + " · отчёт";
     const body = markdown.replace(/^#[ \t]+[^\n]+\n+/, "");
-    db.prepare("INSERT INTO user_notes(id,title,content,folder_id,updated_by) VALUES(?,?,?,?,?)")
-      .run(noteId,title,markdownToTiptap("# " + title + "\n\n" + body),ensureTaskArtifactFolder(step.task_id),actorId);
+    const content = markdownToTiptap("# " + title + "\n\n" + body);
+    db.prepare("INSERT INTO user_notes(id,title,content,folder_id,updated_by,search_text) VALUES(?,?,?,?,?,?)")
+      .run(noteId,title,content,ensureTaskArtifactFolder(step.task_id),actorId,noteSearchText(content));
     recordTaskDocument(step.task_id,noteId,actorId);
     logEvent({taskId:step.task_id,actorId,kind:"role_result_report",field:subtaskId,toValue:noteId});
     return noteId;

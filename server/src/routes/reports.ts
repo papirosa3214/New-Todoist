@@ -13,6 +13,7 @@ import { authOrApiToken } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
 import { buildReport } from "../lib/report.js";
 import { markdownToTiptap } from "../lib/markdownToTiptap.js";
+import { noteSearchText } from "../lib/noteSearchText.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -81,9 +82,9 @@ export function registerReportRoutes(app: FastifyInstance) {
             `_Отчёт по задаче «${task.title}» · ${author} · ${date}_\n\n`;
           const content = markdownToTiptap(header + markdown);
           db.prepare(
-            `INSERT INTO user_notes (id, title, content, folder_id, updated_by)
-             VALUES (?, ?, ?, ?, ?)`,
-          ).run(noteId, `Отчёт: ${title}`, content, folderId, req.userId);
+            `INSERT INTO user_notes (id, title, content, folder_id, updated_by, search_text)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          ).run(noteId, `Отчёт: ${title}`, content, folderId, req.userId, noteSearchText(content));
         }
       }
 

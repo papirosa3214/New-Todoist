@@ -30,6 +30,7 @@ import { installReviewHistory } from "./lib/reviewHistory.js";
 import type { Database } from "better-sqlite3";
 import db from "./db.js";
 import { refreshRoles } from "./roleRouting.js";
+import { noteSearchText } from "./lib/noteSearchText.js";
 
 export type Migration = {
   id: string;
@@ -5640,6 +5641,65 @@ const migrations: Migration[] = [
       `);
     },
 
+  },
+
+  {
+    id: "196_user_notes_fts",
+    description:
+      "FTS5 title+search_text по user_notes для taskflow_kb_search (BM25); plain-text рядом с TipTap content",
+    up: () => {
+      const fts = db
+        .prepare("SELECT sqlite_compileoption_used('ENABLE_FTS5') AS v")
+        .get() as { v: number };
+      if (!fts?.v) throw new Error("196_user_notes_fts: SQLite собран без FTS5");
+
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(user_notes)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!cols.has("search_text")) {
+        db.exec(
+          "ALTER TABLE user_notes ADD COLUMN search_text TEXT NOT NULL DEFAULT ''",
+        );
+      }
+
+      const sel = db.prepare(
+        "SELECT id, content FROM user_notes WHERE IFNULL(search_text, '') = ''",
+      );
+      const upd = db.prepare("UPDATE user_notes SET search_text = ? WHERE id = ?");
+      const rows = sel.all() as Array<{ id: string; content: string }>;
+      const tx = db.transaction((batch: Array<{ id: string; content: string }>) => {
+        for (const r of batch) upd.run(noteSearchText(r.content ?? ""), r.id);
+      });
+      const BATCH = 200;
+      for (let i = 0; i < rows.length; i += BATCH) tx(rows.slice(i, i + BATCH));
+
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS user_notes_fts USING fts5(
+          title,
+          search_text,
+          content='user_notes',
+          content_rowid='rowid',
+          tokenize='unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER IF NOT EXISTS user_notes_fts_ai AFTER INSERT ON user_notes BEGIN
+          INSERT INTO user_notes_fts(rowid, title, search_text)
+            VALUES (new.rowid, coalesce(new.title, ''), coalesce(new.search_text, ''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS user_notes_fts_ad AFTER DELETE ON user_notes BEGIN
+          INSERT INTO user_notes_fts(user_notes_fts, rowid, title, search_text)
+            VALUES ('delete', old.rowid, coalesce(old.title, ''), coalesce(old.search_text, ''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS user_notes_fts_au AFTER UPDATE OF title, search_text ON user_notes BEGIN
+          INSERT INTO user_notes_fts(user_notes_fts, rowid, title, search_text)
+            VALUES ('delete', old.rowid, coalesce(old.title, ''), coalesce(old.search_text, ''));
+          INSERT INTO user_notes_fts(rowid, title, search_text)
+            VALUES (new.rowid, coalesce(new.title, ''), coalesce(new.search_text, ''));
+        END;
+      `);
+      db.exec("INSERT INTO user_notes_fts(user_notes_fts) VALUES('rebuild')");
+    },
   },
 
 ];

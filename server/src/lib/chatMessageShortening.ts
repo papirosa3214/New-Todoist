@@ -16,6 +16,7 @@ import crypto from "node:crypto";
 import { getSetting } from "./serverSettings.js";
 import db from "../db.js";
 import { deriveTitleFromMarkdown, markdownToTiptap } from "./markdownToTiptap.js";
+import { noteSearchText } from "./noteSearchText.js";
 import { ensureTaskArtifactFolder } from "./taskArtifactFolder.js";
 import { recordTaskDocument } from "./taskOutcome.js";
 
@@ -95,10 +96,11 @@ export function shortenChatMessage(opts: {
   // сохраняем (заметка без папки): «ничего не теряется» важнее, чем
   // аккуратность каталога, а терять текст молча нельзя.
   const folderId = taskId ? ensureTaskArtifactFolder(taskId) : null;
+  const content = markdownToTiptap(text);
   db.prepare(
-    `INSERT INTO user_notes (id, title, content, folder_id, updated_by)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(id, title, markdownToTiptap(text), folderId, authorId);
+    `INSERT INTO user_notes (id, title, content, folder_id, updated_by, search_text)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, title, content, folderId, authorId, noteSearchText(content));
   // Заметка карточки попадает в её итог (Documents), как обычный doc_write.
   if (taskId) recordTaskDocument(taskId, id, authorId);
 

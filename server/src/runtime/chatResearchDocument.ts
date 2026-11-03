@@ -9,6 +9,7 @@
 import crypto from "node:crypto";
 import db from "../db.js";
 import { deriveTitleFromMarkdown, markdownToTiptap } from "../lib/markdownToTiptap.js";
+import { noteSearchText } from "../lib/noteSearchText.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
 
@@ -65,10 +66,11 @@ export function saveResearchDocument(params: {
       .get(params.projectId) as { notes_folder_id: number | null } | undefined;
     folderId = project?.notes_folder_id ?? null;
   }
+  const content = markdownToTiptap(text);
   db.prepare(
-    `INSERT INTO user_notes (id, title, content, folder_id, updated_by)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(id, title, markdownToTiptap(text), folderId, params.authorId);
+    `INSERT INTO user_notes (id, title, content, folder_id, updated_by, search_text)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, title, content, folderId, params.authorId, noteSearchText(content));
   if (params.taskId) {
     try {
       recordTaskDocument(params.taskId, id, params.authorId);
