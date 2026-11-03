@@ -29,6 +29,7 @@ import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
+import { shouldMirrorBranchResult } from "../runtime/secretaryVoiceBranch.js";
 import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, branchSummaryLines, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
@@ -2960,6 +2961,7 @@ function mirrorBranchResult(chatId: string, role: RoleName | null, text: string)
   const parentId = branch?.branch_of_chat_id;
   const roleId = roleAccountId(role ?? "builder");
   if (!parentId || !roleId) return;
+  if (!shouldMirrorBranchResult(chatId)) return;
   const firstLine =
     text
       .split("\n")

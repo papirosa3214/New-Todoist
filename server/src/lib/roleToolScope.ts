@@ -36,6 +36,7 @@ const ONLY: Record<string, string[]> = {
   // Вызов роли как субагента (28.10.2026): цепочки ролей заводит Помощник
   // владельца (совет по своей работе) и Оркестратор (разбор результата по
   // ролям). Остальным роль звать незачем — и опасно: цепочка ролей.
+  taskflow_chat_open_branch: ["secretary"],
   taskflow_call_role: ["secretary", "code_orchestrator"],
   taskflow_call_role_steer: ["secretary", "code_orchestrator"],
 };
