@@ -152,6 +152,13 @@ export function formatChatMessage(message: any, projection: Projection = "full")
     && typeof rawSteps === "object"
     && !Array.isArray(rawSteps)
     && Boolean((rawSteps as { coordination?: unknown }).coordination);
+  const memoryUpdateRaw = rawSteps
+    && typeof rawSteps === "object"
+    && !Array.isArray(rawSteps)
+    && (rawSteps as { memory_update?: unknown }).memory_update;
+  const memoryUpdate = memoryUpdateRaw && typeof memoryUpdateRaw === "object" && !Array.isArray(memoryUpdateRaw)
+    ? memoryUpdateRaw as { title?: string | null; kind?: string | null; confidence?: number | null }
+    : null;
   let quickReplies: any = null;
   if (typeof message.quick_replies === "string") {
     try { quickReplies = JSON.parse(message.quick_replies); } catch { quickReplies = null; }
@@ -218,6 +225,14 @@ export function formatChatMessage(message: any, projection: Projection = "full")
     // Ответ готовыми блоками: клиент рисует их, сам текст не разбирает (lib/chatBlocks.ts).
     blocks: typeof displayText === "string" && displayText ? chatBlocksCached(displayText) : [],
     ...(coordination ? { kind: "coordination", coordination: withTextBlocks(coordinationCardData(message), ["question", "answer"]) } : {}),
+    ...(memoryUpdate ? {
+      kind: "memory_update",
+      memory_update: {
+        title: typeof memoryUpdate.title === "string" ? memoryUpdate.title : null,
+        kind: typeof memoryUpdate.kind === "string" ? memoryUpdate.kind : null,
+        confidence: typeof memoryUpdate.confidence === "number" ? memoryUpdate.confidence : null,
+      },
+    } : {}),
   };
 }
 
