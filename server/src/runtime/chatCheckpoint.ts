@@ -343,7 +343,7 @@ export function collectChatHistory(input: {
   const limit = Math.min(200, Math.max(1, Math.floor(input.limit ?? 100)));
   const rows = db
     .prepare(
-      `SELECT from_user_id, text, created_at, steps FROM chat_messages
+      `SELECT from_user_id, text, created_at, steps, message_type FROM chat_messages
         WHERE chat_id = ? AND channel = 'chat'
         ORDER BY rowid DESC
         LIMIT ?`,
@@ -353,10 +353,13 @@ export function collectChatHistory(input: {
     text: string;
     created_at: string;
     steps: string | null;
+    message_type: string | null;
   }>;
   const ownerMessages: Array<{ text: string; createdAt?: string }> = [];
   const roleMessages: Array<{ text: string; createdAt?: string; steps?: unknown }> = [];
   for (const row of rows.reverse()) {
+    // Служебные system (в т.ч. чип памяти) — не в контекст роли.
+    if (row.message_type === "system" || row.from_user_id === "taskflow_system") continue;
     if (row.from_user_id === input.roleId) {
       roleMessages.push({
         text: row.text,

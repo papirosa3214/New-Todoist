@@ -222,12 +222,18 @@ function postMemoryUpdateChip(
   }
   const message = loadChatMessage(id);
   if (!message) return;
+  // Только людям (владелец): роли чип не шлём и в очередь не ставим —
+  // иначе «Память обновлена» могла бы попасть в их контекст как реплика.
   const audience = (
-    db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(chatId) as {
-      member_id: string;
-    }[]
+    db
+      .prepare(
+        `SELECT m.member_id FROM chat_members m
+          JOIN users u ON u.id = m.member_id
+         WHERE m.chat_id = ? AND COALESCE(u.type, '') != 'ai'`,
+      )
+      .all(chatId) as { member_id: string }[]
   ).map((row) => row.member_id);
-  broadcastToUsers(audience, { type: "chat:new", message });
+  if (audience.length) broadcastToUsers(audience, { type: "chat:new", message });
 }
 
 function parseObserverJson(raw: string): {

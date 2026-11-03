@@ -39,6 +39,7 @@ const { saveSlotSnapshot } = await import("../src/runtime/slotWorkSnapshot.js");
 const { ensurePersonalRoom } = await import("../src/lib/chatRooms.js");
 const { isQuietSystemMessage, visibleChatSql } = await import("../src/lib/serviceNoise.js");
 const { loadChatMessage } = await import("../src/lib/chatMessages.js");
+const { collectChatHistory } = await import("../src/runtime/chatCheckpoint.js");
 
 describe("чип памяти в чате после observeSlotMemory", () => {
   let app: FastifyInstance;
@@ -221,5 +222,32 @@ describe("чип памяти в чате после observeSlotMemory", () => {
     expect((db.prepare("SELECT COUNT(*) AS n FROM chat_messages WHERE chat_id = ?").get(dmId) as { n: number }).n).toBe(
       dmBefore,
     );
+  });
+
+  it("чип не попадает в collectChatHistory роли и не ставится в очередь", async () => {
+    const personal = ensurePersonalRoom("role_builder");
+    expect(personal).toBeTruthy();
+    const { snapshot } = seedDoneSlot("Невидимость чипа");
+    aiReply.mockResolvedValueOnce(
+      JSON.stringify({
+        action: "remember",
+        title: "Скрытый урок",
+        text: "Роль не должна видеть чип в истории.",
+        kind: "lesson",
+        confidence: 0.92,
+      }),
+    );
+    expect((await observeSlotMemory(snapshot)).wrote).toBe(true);
+
+    const history = collectChatHistory({ chatId: personal!, roleId: "role_builder" });
+    expect(history.ownerMessages.some((m) => m.text.includes("Память обновлена"))).toBe(false);
+    expect(history.roleMessages.some((m) => m.text.includes("Память обновлена"))).toBe(false);
+
+    const queued = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM chat_message_queue WHERE chat_id = ? AND message_id IN (SELECT id FROM chat_messages WHERE chat_id = ? AND message_type = 'system')",
+      )
+      .get(personal, personal) as { n: number };
+    expect(queued.n).toBe(0);
   });
 });
