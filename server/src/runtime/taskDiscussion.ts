@@ -180,7 +180,7 @@ export function collectDiscussionMessages(chatId: string): {
 } {
   const rows = db
     .prepare(
-      `SELECT from_user_id,text,created_at,steps FROM chat_messages
+      `SELECT from_user_id,text,created_at,steps,message_type FROM chat_messages
         WHERE chat_id=? AND channel='chat' ORDER BY rowid ASC`,
     )
     .all(chatId) as Array<{
@@ -188,10 +188,12 @@ export function collectDiscussionMessages(chatId: string): {
     text: string;
     created_at: string;
     steps: string | null;
+    message_type: string | null;
   }>;
   const ownerMessages: Array<{ text: string; createdAt?: string }> = [];
   const roleMessages: Array<{ text: string; createdAt?: string; steps?: unknown }> = [];
   for (const row of rows) {
+    if (row.message_type === "system" || row.from_user_id === "taskflow_system") continue;
     if (row.from_user_id.startsWith("role_")) {
       roleMessages.push({ text: row.text, createdAt: row.created_at, steps: row.steps ?? undefined });
       continue;

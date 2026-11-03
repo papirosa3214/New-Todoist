@@ -1,11 +1,12 @@
 // Наблюдатель слота: после полного снимка done выносит устойчивый урок в
-// memories. Не в задании роли, не в ленте, не в карточках — только remember().
+// memories. Роль вызов не видит. Чип владельцу — memoryObserverChatChip.ts.
 // Модель и порог — из серверных настроек (телефон: Настройки → Наблюдатель памяти).
 import db from "../db.js";
 import { callRuntimeModel } from "../lib/runtimeAi.js";
 import { getSetting } from "../lib/serverSettings.js";
 import { remember } from "../lib/memory.js";
 import { recordMemoryObserverEvent } from "../lib/memoryObserverLog.js";
+import { postMemoryUpdateChip } from "./memoryObserverChatChip.js";
 import type { SlotSnapshotRow } from "./slotWorkSnapshot.js";
 
 const SYSTEM = `Ты наблюдатель памяти TaskFlow. По готовому итогу слота реши, есть ли устойчивый урок на будущее.
@@ -116,12 +117,13 @@ export async function observeSlotMemory(
     return { wrote: false, reason: "skip" };
   }
   const kind = parsed.kind === "fact" || parsed.kind === "preference" ? parsed.kind : "lesson";
+  const title = String(parsed.title ?? "").trim() || null;
   const result = await remember(
     {
       scope: "role",
       role_key: roleKey,
       kind,
-      title: String(parsed.title ?? "").trim() || null,
+      title,
       text,
       source_ref: sourceRef,
     },
@@ -134,7 +136,7 @@ export async function observeSlotMemory(
       outcome: "similar",
       source_ref: sourceRef,
       confidence: parsed.confidence ?? null,
-      title: parsed.title ?? null,
+      title,
       detail: "похожая запись уже есть",
     });
     return { wrote: false, reason: "similar" };
@@ -144,8 +146,13 @@ export async function observeSlotMemory(
     outcome: "wrote",
     source_ref: sourceRef,
     confidence: parsed.confidence ?? null,
-    title: parsed.title ?? null,
+    title,
     detail: text.slice(0, 200),
+  });
+  postMemoryUpdateChip(snapshot, {
+    title,
+    kind,
+    confidence: parsed.confidence ?? null,
   });
   return { wrote: true };
 }
