@@ -18,6 +18,15 @@ def session_mock():
     return session
 
 
+class FakeIdleSession:
+    def __init__(self):
+        self.user_state = "speaking"
+        self.agent_state = "listening"
+
+    async def wait_for_idle(self):
+        await asyncio.sleep(0)
+
+
 class BackgroundRunnerTest(unittest.IsolatedAsyncioTestCase):
     async def test_quick_tool_answers_directly(self):
         runner = BackgroundRunner(quick_seconds=0.5)
@@ -58,6 +67,20 @@ class BackgroundRunnerTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.1)
         runner.session.generate_reply.assert_not_called()
         self.assertEqual(len(runner.pending), 1)
+
+    async def test_watch_job_enqueues_once_when_terminal(self):
+        runner = BackgroundRunner()
+        runner.session = FakeIdleSession()
+        runner.watch_interval = 0
+        reads = iter([
+            {"terminal": False, "status": "queued", "spoken_text": ""},
+            {"terminal": True, "status": "answered", "spoken_text": "План: встреча в 12."},
+            {"terminal": True, "status": "answered", "spoken_text": "План: встреча в 12."},
+        ])
+        runner.fetch_job = lambda _id: next(reads)
+        runner.watch_job("ветка", "q1")
+        await asyncio.sleep(0.05)
+        self.assertEqual(list(runner.pending), [("ветка", "План: встреча в 12.")])
 
 
 class GenderInstructionTest(unittest.TestCase):
