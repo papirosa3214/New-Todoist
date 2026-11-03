@@ -141,12 +141,17 @@ export function formatChatMessage(message: any, projection: Projection = "full")
     });
   }
   // JSON-строки из БД: одна битая / чужая форма не должны ронять всю историю.
-  let parsedSteps: SavedSteps | null = null;
+  let rawSteps: unknown = null;
   if (typeof message.steps === "string") {
-    try { parsedSteps = normalizeSavedSteps(JSON.parse(message.steps)); } catch { parsedSteps = null; }
+    try { rawSteps = JSON.parse(message.steps); } catch { rawSteps = null; }
   } else if (message.steps && typeof message.steps === "object") {
-    parsedSteps = normalizeSavedSteps(message.steps);
+    rawSteps = message.steps;
   }
+  const parsedSteps = normalizeSavedSteps(rawSteps);
+  const coordination = rawSteps
+    && typeof rawSteps === "object"
+    && !Array.isArray(rawSteps)
+    && Boolean((rawSteps as { coordination?: unknown }).coordination);
   let quickReplies: any = null;
   if (typeof message.quick_replies === "string") {
     try { quickReplies = JSON.parse(message.quick_replies); } catch { quickReplies = null; }
@@ -212,7 +217,7 @@ export function formatChatMessage(message: any, projection: Projection = "full")
     text: displayText,
     // Ответ готовыми блоками: клиент рисует их, сам текст не разбирает (lib/chatBlocks.ts).
     blocks: typeof displayText === "string" && displayText ? chatBlocksCached(displayText) : [],
-    ...(parsedSteps?.coordination ? { kind: "coordination", coordination: withTextBlocks(coordinationCardData(message), ["question", "answer"]) } : {}),
+    ...(coordination ? { kind: "coordination", coordination: withTextBlocks(coordinationCardData(message), ["question", "answer"]) } : {}),
   };
 }
 
