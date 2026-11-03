@@ -17,10 +17,9 @@ vi.mock("../src/lib/embeddingClient.js", () => ({
 }));
 
 const aiReply = vi.fn(async () => JSON.stringify({ action: "skip" }));
-vi.mock("../src/lib/aiClient.js", async (importOriginal) => {
-  const orig = await importOriginal<typeof import("../src/lib/aiClient.js")>();
-  return { ...orig, callUnifiedAi: (...args: unknown[]) => aiReply(...args) };
-});
+vi.mock("../src/lib/runtimeAi.js", () => ({
+  callRuntimeModel: (...args: unknown[]) => aiReply(...args),
+}));
 
 const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
@@ -230,5 +229,7 @@ describe("поиск и наблюдатель памяти", () => {
     );
     expect(src).not.toMatch(/taskflow_task|\/api\/tasks|\/api\/subtasks|chat_messages/);
     expect(src).toContain("remember(");
+    expect(src).toContain("getSetting");
+    expect(src).toContain("callRuntimeModel");
   });
 });

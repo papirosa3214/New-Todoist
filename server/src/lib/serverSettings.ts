@@ -364,6 +364,7 @@ function deserializeValue(
       return Number.isFinite(n) ? n : meta.default;
     }
     case "enum":
+    case "string":
       return typeof parsed === "string" ? parsed : String(parsed);
     default:
       return parsed;
@@ -405,6 +406,10 @@ function validateValue(
       if (meta.options && !meta.options.includes(value)) {
         return { ok: false, error: `допустимо: ${meta.options.join(", ")}` };
       }
+      return { ok: true };
+    }
+    case "string": {
+      if (typeof value !== "string") return { ok: false, error: "ожидается строка" };
       return { ok: true };
     }
     default:
