@@ -134,26 +134,68 @@ function resolvePiCliPath(): string {
  *  каталог провайдеров, читает credentials, проверяет доступность
  *  моделей), поэтому держим его в lazy-переменной. */
 let modelRuntime: ModelRuntime | null = null;
+let modelRuntimePending: Promise<ModelRuntime> | null = null;
+let catalogRefreshPending: Promise<void> | null = null;
+let catalogRefreshAfter = 0;
+
+/** Demand-driven refresh: no credentials leave the SDK; failed providers retain cached models. */
+async function refreshConnectedCatalog(rt: ModelRuntime): Promise<void> {
+  if (catalogRefreshPending) return catalogRefreshPending;
+  if (Date.now() < catalogRefreshAfter) return;
+  catalogRefreshPending = (async () => {
+    try {
+      const providers = rt.getProviders().filter(p =>
+        p.id === "opencode" || rt.getProviderAuthStatus(p.id).configured,
+      ).map(p => p.id);
+      const result = await rt.refresh({
+        allowNetwork: true, providers, signal: AbortSignal.timeout(15_000),
+      });
+      if (result?.aborted || result?.errors?.size) throw new Error("Provider catalog refresh incomplete");
+      catalogRefreshAfter = Date.now() + 6 * 60 * 60 * 1000;
+    } catch {
+      catalogRefreshAfter = Date.now() + 5 * 60 * 1000;
+      console.warn("model-catalog: refresh failed; retaining cached catalog, retry in five minutes");
+      // Persistent daily deduplication survives process restarts.
+      try {
+        const type = "model_catalog_watch";
+        const recent = db.prepare("SELECT 1 FROM notifications WHERE type=? AND created_at > datetime(?,?) LIMIT 1").get(type, "now", "-1 day");
+        const owner = db.prepare("SELECT id FROM users WHERE role=? AND COALESCE(archived,0)=0 LIMIT 1").get("owner") as { id: string } | undefined;
+        if (!recent && owner) db.prepare("INSERT INTO notifications (id,user_id,type,text) VALUES (?,?,?,?)").run(
+          crypto.randomUUID(), owner.id, type,
+          "Не удалось обновить каталог моделей провайдеров. Выбор использует сохранённый список; новые модели могут отсутствовать. Повтор через 5 минут. Проверьте доступность провайдеров и журнал сервера.",
+        );
+      } catch (error) { console.warn("model-catalog: watcher notification failed", error instanceof Error ? error.message : "unknown"); }
+    }
+  })().finally(() => { catalogRefreshPending = null; });
+  return catalogRefreshPending;
+}
+
 
 export async function getModelRuntime(): Promise<ModelRuntime> {
-  if (!modelRuntime) {
+  if (modelRuntime) return modelRuntime;
+  modelRuntimePending ??= (async () => {
     try {
-      modelRuntime = await ModelRuntime.create();
-      installProviderDiagnostics(modelRuntime);
+      const rt = await ModelRuntime.create();
+      installProviderDiagnostics(rt);
       installProxyAwareGlobalFetch();
+      modelRuntime = rt;
+      return rt;
     } catch (error) {
       throw new RuntimeUnavailableError(
         `ModelRuntime.create() failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-    }
-  }
-  return modelRuntime;
+    } finally { modelRuntimePending = null; }
+  })();
+  return modelRuntimePending;
 }
 
 /** Сбрасывает singleton — нужно тестам и после смены credentials, если
  *  SDK не увидел запись. */
 export function resetModelRuntime(): void {
   modelRuntime = null;
+  modelRuntimePending = null;
+  catalogRefreshPending = null;
+  catalogRefreshAfter = 0;
 }
 
 /** Какой уровень размышлений сервер передаёт в `createAgentSession` по
@@ -197,6 +239,7 @@ export function resolveThinkingLevel(
  *  RuntimeUnavailableError (503), а не пустой список. */
 async function loadModelCatalog(): Promise<SdkModel[]> {
   const rt = await getModelRuntime();
+  await refreshConnectedCatalog(rt);
   let all = rt.getModels() as readonly SdkModel[];
   if (all.length === 0) {
     try {
