@@ -27,6 +27,7 @@ import {
   type ChatWorkMode,
 } from "./chatWorkMode.js";
 import { getSetting } from "../lib/serverSettings.js";
+import { filterByZenCatalog, zenModelIds } from "../lib/zenModelCatalog.js";
 import { reserveChatItemAction, guardChatActions, assertChatBudgetAtTurnEnd } from "./chatActionBudget.js";
 import { chatWorkPlanPrompt, stopChatWorkPlan } from "../lib/subtaskWorkPlan.js";
 import {
@@ -701,7 +702,10 @@ export const piRuntime: RuntimeAdapter = {
           : undefined,
       });
     }
-    return models;
+    // Каталог models.dev держит в провайдере opencode модели, которых шлюз
+    // Zen уже не обслуживает: выбор такой модели даёт 400 «Model is
+    // unavailable». Сверяем с живым каталогом шлюза (кэш 6 часов).
+    return filterByZenCatalog(models, await zenModelIds());
   },
 
   async listProviders(): Promise<ProviderConnection[]> {
