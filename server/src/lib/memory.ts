@@ -18,8 +18,6 @@ import { getSetting } from "./serverSettings.js";
 // задание закреплённые записи и самые близкие к теме (memoryBlock).
 import crypto from "node:crypto";
 import db from "../db.js";
-import { toFtsQuery } from "./ftsQuery.js";
-export { toFtsQuery } from "./ftsQuery.js";
 import { startObservation, finishObservation, withObservationContext } from "./contextObservability.js";
 import {
   filterMemoryByJev,
@@ -139,6 +137,18 @@ function ftsReady(): boolean {
     ftsKnown = false;
   }
   return ftsKnown;
+}
+
+/** Токены запроса в кавычках — FTS5 не разбирает их как операторы. */
+export function toFtsQuery(query: string): string | null {
+  const tokens = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}._-]+/u)
+    .map((t) => t.replace(/"/g, ""))
+    .filter((t) => t.length > 1)
+    .slice(0, 12);
+  if (!tokens.length) return null;
+  return tokens.map((t) => `"${t}"`).join(" OR ");
 }
 
 function ftsRankedIds(

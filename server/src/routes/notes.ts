@@ -28,7 +28,6 @@ import {
   markdownToTiptap,
   deriveTitleFromMarkdown,
 } from "../lib/markdownToTiptap.js";
-import { noteSearchText } from "../lib/noteSearchText.js";
 
 // Таблица называется user_notes: имя notes занято заброшенной
 // таблицей из миграции 010 (единая страница «Заметки», одна строка).
@@ -153,9 +152,9 @@ export function registerNoteRoutes(app: FastifyInstance) {
       }
       const id = randomUUID();
       db.prepare(
-        `INSERT INTO user_notes (id, title, content, folder_id, updated_by, search_text)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(id, title, content, folderId, req.userId, noteSearchText(content));
+        `INSERT INTO user_notes (id, title, content, folder_id, updated_by)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(id, title, content, folderId, req.userId);
 
       // Схема базы знаний (cfa5cdcd): заметка, рождённая в папке задачи,
       // сразу получает ВРЕМЕННУЮ метку «Из задачи: …» и источник. Иначе
@@ -270,11 +269,8 @@ export function registerNoteRoutes(app: FastifyInstance) {
     }
     if (has("markdown") && typeof req.body.markdown === "string") {
       kbOnly = false;
-      const tip = markdownToTiptap(req.body.markdown);
       sets.push("content = ?");
-      params.push(tip);
-      sets.push("search_text = ?");
-      params.push(noteSearchText(tip));
+      params.push(markdownToTiptap(req.body.markdown));
       // Заголовок выводим из текста, если его не прислали явно: иначе в
       // списке останется старое название от прежнего содержимого.
       if (!has("title")) {
@@ -285,8 +281,6 @@ export function registerNoteRoutes(app: FastifyInstance) {
       kbOnly = false;
       sets.push("content = ?");
       params.push(req.body.content);
-      sets.push("search_text = ?");
-      params.push(noteSearchText(req.body.content));
     }
     if (has("folder_id")) {
       kbOnly = false;
