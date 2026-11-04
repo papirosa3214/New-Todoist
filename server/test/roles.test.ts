@@ -148,7 +148,7 @@ describe("role catalog API", () => {
       // scripts/role-routing.yaml (fallbacks.architect).
       fallbacks: [
         "opencode-go/deepseek-v4.1-flash",
-        "opencode/space-bunny-free",
+        "opencode/beam-free",
       ],
     });
     expect(details.json().skills).toEqual([
