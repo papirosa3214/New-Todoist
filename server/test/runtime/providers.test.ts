@@ -2,7 +2,7 @@ import { ROLE_NAMES } from "../../src/roleRouting.js";
 import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { buildApp } from "../../src/index.js";
 import db, { hashApiToken } from "../../src/db.js";
-import { resetModelRuntime } from "../../src/runtime/PiRuntimeAdapter.js";
+import { piRuntime, resetModelRuntime } from "../../src/runtime/PiRuntimeAdapter.js";
 
 // 18.09.2026 (доработка после ревью владельца): авторизация идёт через
 // AuthSession (§3-6), а не одним синхронным запросом. Проверяем:
@@ -619,4 +619,58 @@ describe("runtime providers API", () => {
     }).providers.find((p) => p.provider === "minimax");
     expect(minimax?.status).toBe("connected");
   });
+
+describe("connected provider catalog refresh", () => {
+  beforeEach(() => {
+    resetModelRuntime();
+    mockRuntime.refresh.mockReset().mockResolvedValue({});
+    mockRuntime.getModels.mockReturnValue(CATALOG);
+    mockState.connected.clear();
+    mockState.connected.add("minimax");
+  });
+
+  afterAll(() => { vi.restoreAllMocks(); resetModelRuntime(); });
+
+  it("refreshes connected providers before returning newly discovered models", async () => {
+    const fresh = { id: "new-live-model", provider: "minimax", name: "New model" };
+    mockRuntime.refresh.mockImplementationOnce(async () => {
+      mockRuntime.getModels.mockReturnValue([...CATALOG, fresh]);
+      return {};
+    });
+    const models = await piRuntime.listModels();
+    expect(models.some(m => m.id === fresh.id)).toBe(true);
+    expect(mockRuntime.refresh).toHaveBeenCalledWith(expect.objectContaining({
+      allowNetwork: true, providers: expect.arrayContaining(["minimax"]), signal: expect.any(AbortSignal),
+    }));
+  });
+
+  it("coalesces requests and refreshes again after six hours", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      await Promise.all([piRuntime.listModels(), piRuntime.listModels()]);
+      expect(mockRuntime.refresh).toHaveBeenCalledTimes(1);
+      await piRuntime.listModels();
+      expect(mockRuntime.refresh).toHaveBeenCalledTimes(1);
+      now.mockReturnValue(1_000_000 + 6 * 60 * 60 * 1000 + 1);
+      await piRuntime.listModels();
+      expect(mockRuntime.refresh).toHaveBeenCalledTimes(2);
+    } finally { now.mockRestore(); }
+  });
+
+  it("keeps the last catalog on refresh failure and retries after five minutes", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    mockRuntime.refresh.mockRejectedValue(new Error("catalog offline"));
+    try {
+      expect(await piRuntime.listModels()).toHaveLength(CATALOG.length);
+      await piRuntime.listModels();
+      expect(mockRuntime.refresh).toHaveBeenCalledTimes(1);
+      now.mockReturnValue(1_000_000 + 5 * 60 * 1000 + 1);
+      await piRuntime.listModels();
+      expect(mockRuntime.refresh).toHaveBeenCalledTimes(2);
+      const alerts = db.prepare("SELECT count(*) AS n FROM notifications WHERE type=?").get("model_catalog_watch") as { n: number };
+      expect(alerts.n).toBe(1);
+    } finally { now.mockRestore(); }
+  });
+});
+
 });
