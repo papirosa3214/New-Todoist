@@ -5,9 +5,13 @@
 // со своим именем и иконкой. Внутренние роли (Pi) это не трогает.
 //
 // Добавить нового агента в каталог — одна запись ниже. Запускать участника
-// умеет только агент с готовым адаптером (adapter): пока это Claude Code
-// (stream-json). Остальные находятся и показываются, но заводятся
-// участниками, только когда появится их адаптер.
+// умеет только агент с готовым адаптером (adapter). Остальные находятся и
+// показываются, но заводятся участниками, только когда появится их адаптер.
+//
+// Claude Code из каталога убран (владелец 04.11.2026): внешний агент не
+// нужен, а с ним из чатов и боковой панели уходил краб-аватаркой. Код
+// поддержки (stream-json) остался — он не оживает без записи в каталоге;
+// роль и учётка участника погашены миграцией 197.
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -45,19 +49,6 @@ export interface KnownAgent {
 const HOME = os.homedir();
 
 export const KNOWN_AGENTS: KnownAgent[] = [
-  {
-    runtime: "claude-code",
-    key: "claude_code",
-    title: "Claude Code",
-    binary: "claude",
-    adapter: "claude-stream-json",
-    summary:
-      "внешний агент Claude Code в своём окружении: память, MCP, скиллы. Код, разбор, исследование.",
-    color: "#D97757",
-    initials: "CC",
-    simpleIcon: "claude",
-    models: [{ id: "opus", title: "Opus" }, { id: "sonnet", title: "Sonnet" }, { id: "haiku", title: "Haiku" }],
-  },
   {
     runtime: "codex",
     key: "codex",

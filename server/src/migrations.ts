@@ -5701,6 +5701,18 @@ const migrations: Migration[] = [
       db.exec("INSERT INTO user_notes_fts(user_notes_fts) VALUES('rebuild')");
     },
   },
+  {
+    id: "197_external_agent_claude_code_removed",
+    description: "Claude Code убран из внешних агентов: роль выключена, учётка участника архивирована",
+    up: () => {
+      // Владелец 04.11.2026: «клод-код, крабик в чатах, в боковой панели…
+      // из агентов там внешних… он не нужен здесь». Роль не удаляем — история
+      // её задач остаётся; учётку участника архивируем, чтобы она ушла из
+      // списка участников (чаты, боковая панель) вместе с крабом-аватаркой.
+      db.prepare("UPDATE roles SET enabled = 0 WHERE key = 'claude_code'").run();
+      db.prepare("UPDATE users SET archived = 1 WHERE id = 'role_claude_code'").run();
+    },
+  },
 
 ];
 /**
