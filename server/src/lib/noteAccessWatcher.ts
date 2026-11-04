@@ -1,6 +1,5 @@
 import db from "../db.js";
 import { raiseIncident, incidentRaisedRecently } from "./incidents.js";
-import { noteSearchText } from "./noteSearchText.js";
 
 /**
  * Сторож прибора «учёт обращений к заметкам» (шаг 1 схемы базы знаний,
@@ -54,17 +53,12 @@ export function checkNoteAccessInstrument(): { ok: boolean; reason: string } {
     if (!t) return { ok: false, reason: "нет таблицы note_accesses" };
 
     id = probeId();
-    const probeContent = JSON.stringify({
-      type: "doc",
-      content: [{ type: "paragraph" }],
-    });
     db.prepare(
-      "INSERT INTO user_notes (id, title, content, created_at, updated_at, search_text) VALUES (?,?,?,datetime('now'),datetime('now'),?)",
+      "INSERT INTO user_notes (id, title, content, created_at, updated_at) VALUES (?,?,?,datetime('now'),datetime('now'))",
     ).run(
       id,
       "Служебная заметка сторожа",
-      probeContent,
-      noteSearchText(probeContent),
+      JSON.stringify({ type: "doc", content: [{ type: "paragraph" }] }),
     );
 
     // Читаем так же, как роль: инкремент должен произойти в маршруте.

@@ -13,7 +13,6 @@ import { roleTitle } from "../roleRouting.js";
 import { liveServerRepo, roleBranch } from "../runtime/roleWorkspace.js";
 import { ensureTaskArtifactFolder } from "./taskArtifactFolder.js";
 import { markdownToTiptap } from "./markdownToTiptap.js";
-import { noteSearchText } from "./noteSearchText.js";
 
 export type TaskOutcome = {
   verdict: { verdict: string; findings: string; reviewer_id: string; created_at: string; findings_blocks?: ChatBlock[] | null } | null;
@@ -148,15 +147,14 @@ export function writeOutcomeNote(taskId: string, authorId: string): string | nul
   const content = markdownToTiptap(markdown);
   const title = `Итог: ${task.title}`.slice(0, 200);
   const existing = outcomeNoteId(taskId);
-  const searchText = noteSearchText(content);
   if (existing) {
-    db.prepare("UPDATE user_notes SET title = ?, content = ?, search_text = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?")
-      .run(title, content, searchText, authorId, existing);
+    db.prepare("UPDATE user_notes SET title = ?, content = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(title, content, authorId, existing);
     return existing;
   }
   const id = crypto.randomUUID();
-  db.prepare("INSERT INTO user_notes (id, title, content, folder_id, updated_by, search_text) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(id, title, content, task.notes_folder_id, authorId, searchText);
+  db.prepare("INSERT INTO user_notes (id, title, content, folder_id, updated_by) VALUES (?, ?, ?, ?, ?)")
+    .run(id, title, content, task.notes_folder_id, authorId);
   recordTaskDocument(taskId, id, authorId, "outcome_note");
   return id;
 }
