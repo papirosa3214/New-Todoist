@@ -30,8 +30,8 @@ export function secretaryChatInput(values:Record<string,string>):string {
 }
 
 
-/** Runtime guidance belongs to the single owner text for secretary, not injected user/steering messages. */
+/** Permanent mode prefixes are omitted for secretary. Targeted tool-time feedback remains enabled. */
 export function chatUserTurnText(role:string,modeInstruction:string,text:string):string {
  return role==="secretary" || !modeInstruction ? text : modeInstruction+"\n\n"+text;
 }
-export function chatRuntimeGuidanceEnabled(role:string):boolean { return role!=="secretary"; }
+export function chatRuntimeGuidanceEnabled(_role:string):boolean { return true; }

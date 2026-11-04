@@ -73,10 +73,10 @@ it("project enrichment in data-only mode cannot append the old role and memory p
 });
 
 
-it("does not reintroduce secretary instructions through user prefixes or automatic steering",async()=>{
+it("keeps the short system and user text while allowing targeted runtime guidance",async()=>{
  const {chatUserTurnText,chatRuntimeGuidanceEnabled}=await import("../src/runtime/secretaryChatPrompt.js");
  expect(chatUserTurnText("secretary","OLD_MODE_DIRECTIVE","owner question")).toBe("owner question");
- expect(chatRuntimeGuidanceEnabled("secretary")).toBe(false);
+ expect(chatRuntimeGuidanceEnabled("secretary")).toBe(true);
  expect(chatUserTurnText("builder","MODE","question")).toBe("MODE\n\nquestion");
  expect(chatRuntimeGuidanceEnabled("builder")).toBe(true);
 });
