@@ -28,3 +28,10 @@ export function installSecretarySystem(session:any,role:string,text:string):void
 export function secretaryChatInput(values:Record<string,string>):string {
  return JSON.stringify({participants:values.participants??"",history:values.history??"",message:values.userText??""},null,2);
 }
+
+
+/** Runtime guidance belongs to the single owner text for secretary, not injected user/steering messages. */
+export function chatUserTurnText(role:string,modeInstruction:string,text:string):string {
+ return role==="secretary" || !modeInstruction ? text : modeInstruction+"\n\n"+text;
+}
+export function chatRuntimeGuidanceEnabled(role:string):boolean { return role!=="secretary"; }
