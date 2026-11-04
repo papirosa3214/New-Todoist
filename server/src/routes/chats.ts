@@ -1,3 +1,4 @@
+import {secretaryChatInput} from "../runtime/secretaryChatPrompt.js";
 import {snapshotChatPreferences,messageThinkingLevel,readChatPreferences} from "../lib/chatSessionPreferences.js";
 import { etagFor, etagMatches } from "../lib/etag.js";
 import {canWithdrawChatMessage} from "../runtime/chatMessageWithdrawal.js";
@@ -3357,7 +3358,7 @@ async function deliverAgentReply(args: {
   if(isIntegrationHandoff(trigger.id) && !integrationContext)return null;
   const triggerTask = trigger.task_id ? `\nКонтекст задачи: ${trigger.task_id}` : "";
   const triggerFiles = trigger.attachments ? `\n[вложения: ${trigger.attachments}]` : "";
-  const intentGuidance=isOwner(trigger.from_user_id) ? await chatIntentBlockForMessage(trigger.id) : "";
+  const intentGuidance=role!=="secretary" && isOwner(trigger.from_user_id) ? await chatIntentBlockForMessage(trigger.id) : "";
   const userText = `${integrationContext ? integrationContext+"\n" : ""}${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}${intentGuidance}`;
 
   const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
@@ -3414,13 +3415,14 @@ async function deliverAgentReply(args: {
     console.warn(`[chats] свежий ход без выжимки не запущен chat=${chatId} role=${role}: ${resumePlan.reason}`);
     return null;
   }
+  const renderChatInput=(block:string,values:Record<string,string>)=>role==="secretary"?secretaryChatInput(values):renderInstruction(role,block,values);
   let prompt: string;
   if(slot){prompt=userText;}
   else if (staleSession && checkpoint) {
     // Свежая сессия: выжимка вместо прежней истории. Дословные уточнения
     // владельца — в userText (он идёт в промпт как есть).
     const roleInstruction = teamStructureText(role);
-    prompt = renderInstruction(role, "chat.wrapper", {
+    prompt = renderChatInput("chat.wrapper",{
       roleInstruction,
       roleTitle,
       role,
@@ -3448,7 +3450,7 @@ async function deliverAgentReply(args: {
         CHAT_AGENT_FOLLOWUP_MESSAGES,
       ) as HistoryRow[];
     since.reverse();
-    prompt = renderInstruction(role, "chat.followup", {
+    prompt = renderChatInput("chat.followup",{
       roleTitle,
       role,
       history: since.map(historyLine).join("\n") || "(ничего нового)",
@@ -3468,7 +3470,7 @@ async function deliverAgentReply(args: {
     // Инструкция роли (общий шаблон + AGENTS.md) уже в системном промпте чата
     // (chatSystemPrompt) — второй раз её сюда не кладём (20.10.2026).
     const roleInstruction = teamStructureText(role);
-    prompt = renderInstruction(role, "chat.wrapper", {
+    prompt = renderChatInput("chat.wrapper",{
       roleInstruction,
       roleTitle,
       role,
@@ -3479,7 +3481,7 @@ async function deliverAgentReply(args: {
   }
 
   // Время — в каждый ход: сессия помнит старое, а час уже другой (14.10.2026).
-  prompt = clockLine() + "\n\n" + prompt;
+  prompt = (role==="secretary" ? JSON.stringify({now:new Date().toISOString(),timezone:"Europe/Moscow",mode:args.mode??"work",execution_mode:chatExecutionMode(chatId,trigger.id),chat_id:chatId,reply_to:trigger.id}) : clockLine()) + "\n\n" + prompt;
 
   // Память команды по теме сообщения (02.10.2026) — в каждый ход: тема
   // разговора меняется, и вспоминать надо то, что относится к ней сейчас.
@@ -3488,7 +3490,7 @@ async function deliverAgentReply(args: {
   ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
   // Чат задачи: первым блоком — сама задача и место роли в ней (lib/taskChatBrief.ts).
   if (topic) { const brief = taskChatBrief(topic.task_id, role); if (brief) prompt = `${brief}\n\n${prompt}`; }
-  const memory = await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text }));
+  const memory = await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text, dataOnly:role==="secretary" }));
   if (memory) prompt = `${prompt}\n\n${memory}`;
   // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
   // последний снимок в общий контекст роли — и для чата, и для работы»).
@@ -3499,9 +3501,11 @@ async function deliverAgentReply(args: {
     ? roleSlotSnapshotsBlock({ role, taskId: slot.task_id, subtaskId: slot.id })
     : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null, projectId: topic ? null : chatProject });
   if (snapshots) prompt = `${prompt}\n\n${snapshots}`;
+  if(role!=="secretary"){
   prompt += `\nОтвечаешь на сообщение ${trigger.id}; сервер свяжет итоговый текст с этим вопросом. Не отправляй тот же ответ повторно инструментом. Для отдельного нового вопроса коллеге используй taskflow_chat_send.`;
   prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Материалы сохраняй инструментом doc_write в документах проекта или прикладывай файлом к этому разговору; для этого не нужна карточка задачи. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
-  if(topic) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
+  }
+  if(topic && role!=="secretary") prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 
   if(integrationContext) prompt = integrationContext+"\n\n"+prompt;
 

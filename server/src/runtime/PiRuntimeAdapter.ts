@@ -1,3 +1,4 @@
+import {chatTurnSystemText,installSecretarySystem} from "./secretaryChatPrompt.js";
 import {installProviderDiagnostics, installProxyAwareGlobalFetch, registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import { captureBash, withFileChanges } from "../lib/toolFileCapture.js";
 import { localCaptureIO } from "../lib/localCaptureIO.js";
@@ -1529,11 +1530,9 @@ async function startChatRunOnce(
     // не просьбу «не забудь», а сам план с текущим этапом — роль не держит его
     // в голове и не выбирает шаг по ощущению.
     const chatPlanPrompt = chatWorkPlanPrompt(input.chatId, input.roleId);
-    const systemPrompt =
-      (await preparation.wait(chatSystemPrompt(role, mode, cwd))) + "\n\n" + chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)) +
-      "\n\n" +
-      ROLE_TOOL_INSTRUCTION +
-      (chatPlanPrompt ? "\n\n" + chatPlanPrompt : "");
+    const systemPrompt = chatTurnSystemText(role,
+      await preparation.wait(chatSystemPrompt(role,mode,cwd)),
+      [chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)),ROLE_TOOL_INSTRUCTION,chatPlanPrompt??""]);
     const resourceLoader = await preparation.wait(createTaskResourceLoader(
       role,
       cwd,
@@ -1648,6 +1647,7 @@ async function startChatRunOnce(
     }
     preparation.transfer();
 
+    installSecretarySystem(session,role,systemPrompt);
     observeProviderRetries(session, sessionManager.getSessionId());
     installNativeToolSchemas(session, toolCatalog);
     // Активно только ядро операций: остальное подключает taskflow_tools по
