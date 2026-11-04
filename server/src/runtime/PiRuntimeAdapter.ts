@@ -1,4 +1,4 @@
-import {chatTurnSystemText,installSecretarySystem} from "./secretaryChatPrompt.js";
+import {chatTurnSystemText,installSecretarySystem,chatUserTurnText,chatRuntimeGuidanceEnabled} from "./secretaryChatPrompt.js";
 import {installProviderDiagnostics, installProxyAwareGlobalFetch, registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import { captureBash, withFileChanges } from "../lib/toolFileCapture.js";
 import { localCaptureIO } from "../lib/localCaptureIO.js";
@@ -1748,7 +1748,7 @@ async function startChatRunOnce(
         runningTools.add(event.toolCallId);
       // Сторож топтания: повторы одного вызова и длинные серии чтений без
       // изменений — указание в тот же ход (владелец 23.10.2026).
-      if (event?.type === "tool_execution_start") {
+      if (event?.type === "tool_execution_start" && chatRuntimeGuidanceEnabled(role)) {
         const memoryNudge = memoryConsultation.observe(String(event.toolName ?? ""), event.args);
         const thrashNudge = thrash.observe({ tool: String(event.toolName ?? ""), argsDigest: stepDigest((event as any).args) });
         const nudge = [memoryNudge, thrashNudge].filter(Boolean).join("\n\n");
@@ -1828,9 +1828,7 @@ async function startChatRunOnce(
         await Promise.race([session.compact(), armCeiling()]);
       } else {
         await promptOnce(
-          input.mode
-            ? chatModeInstruction(input.mode) + "\n\n" + input.prompt
-            : input.prompt,
+          chatUserTurnText(role,input.mode ? chatModeInstruction(input.mode) : "",input.prompt),
         );
       }
       if (input.mode === "goal" && !input.compactOnly) {

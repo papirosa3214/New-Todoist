@@ -71,3 +71,12 @@ it("project enrichment in data-only mode cannot append the old role and memory p
   expect(data).not.toContain("Читай их через");
  }finally{recall.mockRestore();}
 });
+
+
+it("does not reintroduce secretary instructions through user prefixes or automatic steering",async()=>{
+ const {chatUserTurnText,chatRuntimeGuidanceEnabled}=await import("../src/runtime/secretaryChatPrompt.js");
+ expect(chatUserTurnText("secretary","OLD_MODE_DIRECTIVE","owner question")).toBe("owner question");
+ expect(chatRuntimeGuidanceEnabled("secretary")).toBe(false);
+ expect(chatUserTurnText("builder","MODE","question")).toBe("MODE\n\nquestion");
+ expect(chatRuntimeGuidanceEnabled("builder")).toBe(true);
+});
