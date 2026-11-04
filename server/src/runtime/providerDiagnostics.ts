@@ -1,3 +1,4 @@
+import {recordPromptAudit} from "./promptAudit.js";
 import {randomUUID} from "node:crypto";
 import {AsyncLocalStorage} from "node:async_hooks";
 import {channel} from "node:diagnostics_channel";
@@ -133,6 +134,7 @@ export function installProviderDiagnostics(runtime: Runtime, dependencies: Optio
         tool_count: Array.isArray(context?.tools) ? context.tools.length : 0,
       };
       const sessionContext={...sessions.get(options.sessionId)};
+      const audit=(phase:"context"|"payload",content:unknown)=>recordPromptAudit({...base,...sessionContext,call_id:callId,phase,content});
       const log = (event: string, data: Entry = {}) => emit({...base, origin:"runtime", ...sessionContext, event, elapsed_ms: Date.now()-started, ...data});
       const fetchImpl = options.fetch ?? dependencies.fetch;
       const instrumentedFetch = async (input: any, init?: any): Promise<Response> => {
@@ -275,7 +277,9 @@ export function installProviderDiagnostics(runtime: Runtime, dependencies: Optio
         onPayload: async (payload:any, selected:any) => {
           // Counts/size help diagnose context rejection without storing conversations.
           try { log("model_request",{payload_bytes:Buffer.byteLength(JSON.stringify(payload)),attempts_so_far:attempt}); } catch {}
-          return options.onPayload ? await options.onPayload(payload,selected) : undefined;
+          const replacement=options.onPayload ? await options.onPayload(payload,selected) : undefined;
+          audit("payload",replacement ?? payload);
+          return replacement;
         },
         onResponse: async (response:any, selected:any) => {
           log("sdk_response",{status:response.status});
@@ -285,7 +289,9 @@ export function installProviderDiagnostics(runtime: Runtime, dependencies: Optio
       try {
         // Рассуждения в запросе к модели — сжатые (владелец 02.11.2026): в модель
       // уходит два-три предложения вместо полного текста рассуждений.
-      const stream=nativeScope.run(native,()=>original(model,compressContextThoughts(context),wrappedOptions));
+      const requestContext=compressContextThoughts(context);
+      audit("context",requestContext);
+      const stream=nativeScope.run(native,()=>original(model,requestContext,wrappedOptions));
         // result() is a shared promise in Pi; observing it does not drain events.
         void Promise.resolve(stream.result()).then((message:any) => {
           for (const diagnostic of (message?.diagnostics ?? []).slice(0,16)) {
