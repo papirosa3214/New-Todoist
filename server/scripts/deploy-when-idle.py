@@ -11,9 +11,9 @@
    Только fast-forward: если локальный main ушёл вперёд, ничего не трогаем.
 2. В рабочем дереве .110 (ветка main) есть коммиты после последней выкладки,
    и они трогают `server/` — иначе ничего не делаем.
-3. Тихо: нет идущих попыток ролей (живой heartbeat за 10 минут) и
-   недоставленных сообщений в очереди чата — дважды, с паузой 90 секунд,
-   чтобы не влезть между шагами плана.
+3. Тихо: нет идущих попыток ролей (живой heartbeat за 10 минут), запусков в
+   очереди ролей (следующий шаг плана ждёт там) и недоставленных сообщений в
+   очереди чата. Никто не работает — выкладка сразу, без паузы.
 4. Резервная копия базы → `tsc --noEmit` (ошибка — выкладки нет, сервер
    работает на старом) → сборка `dist` → `systemctl --user restart` →
    `/api/health` = 200.
@@ -154,10 +154,25 @@ def pending_chat_deliveries(con, ttl_minutes=CHAT_DELIVERY_TTL_MIN,
     ).fetchone()[0]
 
 
+def pending_role_jobs(con, ttl_minutes=CHAT_DELIVERY_TTL_MIN):
+    """Запуски ролей, которые ещё будут выполнены: так видно следующий шаг плана.
+
+    `running` держит выкладку только пока жива аренда, ждущие — до срока жизни:
+    мёртвая строка не должна останавливать выкладку (карточка 568a2b93).
+    """
+    return con.execute(
+        "SELECT count(*) FROM role_run_jobs WHERE "
+        "(status IN ('queued','retry_wait') AND julianday(updated_at) >= julianday('now', ?)) OR "
+        "(status='running' AND julianday(lease_expires_at) > julianday('now'))",
+        (f"-{ttl_minutes} minutes",),
+    ).fetchone()[0]
+
+
 def busy():
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     try:
         runs = con.execute("SELECT count(*) FROM attempts WHERE ended_at IS NULL AND heartbeat_at > datetime('now','-10 minutes')").fetchone()[0]
+        runs += pending_role_jobs(con)
         queue = pending_chat_deliveries(con)
     finally:
         con.close()
@@ -259,11 +274,6 @@ def main():
     runs, queue = busy()
     if runs or queue:
         log(f"занято: попыток {runs}, в очереди {queue} — жду")
-        return
-    time.sleep(90)
-    runs, queue = busy()
-    if runs or queue:
-        log(f"после паузы занято: попыток {runs}, в очереди {queue} — жду")
         return
 
     if state("failed") == head:

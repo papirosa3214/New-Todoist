@@ -12,6 +12,42 @@ DEPLOY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DEPLOY)
 
 
+class PendingRoleJobsTests(unittest.TestCase):
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.db.execute(
+            "CREATE TABLE role_run_jobs (status TEXT NOT NULL, lease_expires_at TEXT, updated_at TEXT NOT NULL)"
+        )
+
+    def tearDown(self):
+        self.db.close()
+
+    def _row(self, status, updated, lease=None):
+        self.db.execute(
+            "INSERT INTO role_run_jobs(status, lease_expires_at, updated_at) "
+            "VALUES (?, datetime('now', ?), datetime('now', ?))",
+            (status, lease, updated),
+        )
+
+    def test_next_step_waiting_in_queue_blocks_deploy(self):
+        self._row("queued", "-1 minutes")
+        self._row("retry_wait", "-1 minutes")
+        self.assertEqual(DEPLOY.pending_role_jobs(self.db), 2)
+
+    def test_running_job_blocks_only_while_lease_is_alive(self):
+        self._row("running", "-1 minutes", "+2 minutes")
+        self.assertEqual(DEPLOY.pending_role_jobs(self.db), 1)
+        self.db.execute("DELETE FROM role_run_jobs")
+        self._row("running", "-1 minutes", "-1 minutes")
+        self.assertEqual(DEPLOY.pending_role_jobs(self.db), 0)
+
+    def test_finished_and_stale_jobs_do_not_block_deploy(self):
+        for status in ("succeeded", "skipped", "dead", "cancelled"):
+            self._row(status, "-1 minutes")
+        self._row("queued", "-61 minutes")
+        self.assertEqual(DEPLOY.pending_role_jobs(self.db), 0)
+
+
 class PendingChatDeliveriesTests(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
@@ -257,6 +293,25 @@ class RuntimeWrittenRoutingTests(unittest.TestCase):
         self._run_main_with_pending_server_commit()
         self.assertFalse([m for m in self.logs if "незакоммиченные" in m], self.logs)
         self.assertTrue([m for m in self.logs if "занято" in m], self.logs)
+
+    def test_main_does_not_pause_when_nobody_works(self):
+        (self.state / "deployed").write_text(self._head())
+        self._write("server/src/index.ts", "two\n")
+        self._git(self.repo, "add", "server/src/index.ts")
+        self._git(self.repo, "commit", "-q", "-m", "server change")
+        self._git(self.repo, "push", "-q", "github", "main")
+        # Метка «уже была тревога» останавливает main сразу после проверки
+        # занятости, до настоящей выкладки: перезапуска в тесте быть не должно.
+        (self.state / "failed").write_text(self._head())
+        setattr(DEPLOY, "busy", lambda: (0, 0))
+        pauses = []
+        original_sleep = DEPLOY.time.sleep
+        DEPLOY.time.sleep = pauses.append
+        try:
+            DEPLOY.main()
+        finally:
+            DEPLOY.time.sleep = original_sleep
+        self.assertEqual(pauses, [])
 
     def test_main_still_waits_for_other_server_changes(self):
         self._write(self.ROUTING, "models: new\n")
