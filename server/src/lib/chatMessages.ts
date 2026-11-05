@@ -4,6 +4,7 @@ import {isQuietSystemMessage} from "./serviceNoise.js";
 import { chatBlocksCached, withTextBlocks } from "./chatBlocks.js";
 import {compactChatReportMaterials} from "./chatReportMaterials.js";
 import {coordinationCardData} from "../runtime/chatCoordination.js";
+import {isSlotResumable,numberedSlotLabel} from "./slotResolution.js";
 // Сообщение чата с ролями в том виде, в каком его видит клиент.
 //
 // Один формат на все пути доставки: история (GET /api/chats/:id/messages),
@@ -89,6 +90,10 @@ function savedSteps(raw: string): SavedSteps | null {
  */
 export function formatChatMessage(message: any, projection: Projection = "full") {
   if (!message) return message;
+  // Две одинаковые роли в плане различаются номером и для владельца (05.11.2026).
+  const slotName = message.subtask_id ? numberedSlotLabel(message.subtask_id) : null;
+  if (slotName) message = { ...message, from_user_name: slotName };
+  message = { ...message, slot_resumable: isSlotResumable(message) };
   attachmentsOf ??= db.prepare(
     `SELECT id, file_name, mime, size FROM attachments
       WHERE chat_message_id = ? ORDER BY created_at`,

@@ -33,6 +33,7 @@ import { branchMembership } from "../runtime/branchPlan.js";
 import { completeSecretaryBranch, shouldMirrorBranchResult } from "../runtime/secretaryVoiceBranch.js";
 import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, branchSummaryLines, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
+import { RESOLUTION_PLAN_BEACON, hasResolutionPlan, slotFromMention, slotLabels } from "../lib/slotResolution.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { isDiscussionChat, discussionByChatId } from "../runtime/taskDiscussion.js";
 import { runDiscussionTurn } from "../runtime/taskDiscussionSession.js";
@@ -279,6 +280,7 @@ function chatRow(chatId: string) {
   return {
     ...chat,
     execution_mode: chatExecutionMode(chatId),
+    slots: chat.task_id ? slotLabels(chat.task_id) : [],
     members,
     closed_at: taskTopicClosedAt(chat as any),
     pinned_message_id: pinnedMessageId ?? null,
@@ -1123,6 +1125,29 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
   // сообщение сразу, а ответ роли придёт отдельным событием chat:new
   // (broadcast внутри try/catch не роняет запрос, даже если Пи упал —
   // пользовательский текст уже в ленте и не потеряется).
+  // «Продолжить» под планом решения (владелец 05.11.2026): заблокированный слот
+  // идёт дальше в той же сессии, согласие владельца приходит ему первым сообщением.
+  app.post<{Params:{id:string;messageId:string}}>("/api/chats/:id/messages/:messageId/continue-slot", {preHandler:authPre}, async(req:any,reply)=>{
+    if (!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
+    if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({error:"Продолжить может только владелец"});
+    const source=db.prepare("SELECT id,text,subtask_id,task_id FROM chat_messages WHERE id=? AND chat_id=?").get(req.params.messageId,req.params.id) as {id:string;text:string;subtask_id:string|null;task_id:string|null}|undefined;
+    if (!source) return reply.code(404).send({error:"Сообщение не найдено"});
+    if (!source.subtask_id || !hasResolutionPlan(source.text)) return reply.code(409).send({error:"В этом сообщении нет плана решения"});
+    const slot=db.prepare("SELECT agent_state,done FROM subtasks WHERE id=?").get(source.subtask_id) as {agent_state:string|null;done:number}|undefined;
+    if (slot?.agent_state!=="blocked" || slot.done) return reply.code(409).send({error:"Этап уже не заблокирован"});
+    const id=uid();
+    db.transaction(()=>{
+      db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,reply_to_message_id,recipient_subtask_id) VALUES(?,?,?,'chat',?,?,?,?)")
+        .run(id,req.userId,"Согласен с планом, продолжай по нему.",req.params.id,source.task_id,source.id,source.subtask_id);
+      db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(id,source.subtask_id);
+    })();
+    broadcastToUsers(memberIds(req.params.id),{type:"chat:new",message:loadChatMessage(id)});
+    const {startPlanSubtaskRun}=await import("../runtime/planSubtaskAdmission.js");
+    const started=await startPlanSubtaskRun(source.subtask_id,req.userId,{manualStart:true});
+    if (!started.ok) return reply.code(409).send({error:started.error});
+    return {ok:true,run_id:started.runId};
+  });
+
   // Панель чата: актуальное окно контекста живой сессии и команды роли
   // (карточка e11eae7a, пункты 4 и 5). Список команд НИЧЕГО не выполняет:
   // это только то, что у роли реально есть.
@@ -1253,7 +1278,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       if(replyTo && !db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=?").get(replyTo,chatId)) return reply.code(400).send({error:"Исходное сообщение не принадлежит этому чату"});
       if(taskId && !db.prepare("SELECT 1 FROM tasks WHERE id=?").get(taskId)) return reply.code(404).send({error:"Задача не найдена"});
       const sourceSlot=roleFromUserId(req.userId) && typeof req.body?.subtask_id==="string" ? req.body.subtask_id : null;
-      const recipientSlot=typeof req.body?.recipient_subtask_id==="string" ? req.body.recipient_subtask_id : null;
+      const recipientSlot=typeof req.body?.recipient_subtask_id==="string" ? req.body.recipient_subtask_id : (chat.task_id && !senderRole ? slotFromMention(chat.task_id,text) : null);
       const inTopicBranch=(stageTask:string)=>stageTask===chatTaskId || (!!chatTaskId && !!branchMembership(chatTaskId) && branchMembership(stageTask)?.root_plan_id===branchMembership(chatTaskId)?.root_plan_id);
       if(sourceSlot){
         const source=db.prepare("SELECT task_id FROM subtasks WHERE id=? AND agent_id=?").get(sourceSlot,req.userId) as {task_id:string}|undefined;
@@ -2619,7 +2644,8 @@ function topicSlotKey(text:string):string|undefined {
 function slotChoiceNotice(chatId:string,taskId:string,role:RoleName,replyTo:string):void {
   const roleId=roleAccountId(role);if(!roleId)return;
   const slots=topicSlots(taskId,role);
-  const text=slots.length ? "Уточни рабочий этап, к которому относится вопрос." : "В этой задаче у меня нет рабочего этапа. Обратись к назначенному участнику или открой общий чат со мной.";
+  const labels=slotLabels(taskId).filter(slot=>slot.role_id===roleId).map(slot=>"@"+slot.label).join(" или ");
+  const text=slots.length ? `Уточни, к кому вопрос: ${labels}.` : "В этой задаче у меня нет рабочего этапа. Обратись к назначенному участнику или открой общий чат со мной.";
   const name=(db.prepare("SELECT name FROM users WHERE id=?").get(roleId) as {name:string}).name;
   const id=uid();
   db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,reply_to_message_id,quick_replies) VALUES(?,?,?,'chat',?,?,?,?)").run(id,roleId,text,chatId,taskId,replyTo,slots.length ? JSON.stringify(slots.slice(0,4).map(slot=>`@${name} [этап: ${slot.title}]`)) : null);
@@ -3473,6 +3499,8 @@ async function deliverAgentReply(args: {
   ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
   // Чат задачи: первым блоком — сама задача и место роли в ней (lib/taskChatBrief.ts).
   if (topic) { const brief = taskChatBrief(topic.task_id, role); if (brief) prompt = `${brief}\n\n${prompt}`; }
+  // Заблокированный слот: не запрет, а маячок предложить план решения.
+  if (slot?.agent_state === "blocked" && fromOwner) prompt = `${prompt}\n\n${RESOLUTION_PLAN_BEACON}`;
   const memory = await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text, dataOnly:role==="secretary" }));
   if (memory) prompt = `${prompt}\n\n${memory}`;
   // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
