@@ -162,6 +162,7 @@ import {
 } from "../lib/roleContextResolver.js";
 import {
 } from "../runtime/inProcessRun.js";
+import { captureTelegramFinal } from "../integrations/telegram.js";
 import {
   attachmentRow,
   saveUploadedFile,
@@ -1376,6 +1377,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
 
       if(senderRole && parentMessage && !outstanding)traceCoordination(()=>registerCoordinationOrigin(id,parentMessage,req.userId));
       const message = loadChatMessage(id);
+      if (senderRole === "secretary" && replyTo) captureTelegramFinal(id);
       // Владелец написал в чат задачи — будим её план: готовые шаги стартуют, замолчавшие
       // перезапускаются той же ролью (runtime/taskNudge.ts). Ответ на сообщение этим не задерживаем.
       if (executionMode === "card" && chatTaskId && chat.parent_chat_id && isOwner(req.userId)) {

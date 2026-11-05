@@ -391,3 +391,11 @@ contextObservabilityWatcher: пробная запись + чтение/агре
 Архив: ~/.local/state/taskflow-prompt-audit (можно изменить TASKFLOW_PROMPT_AUDIT_DIR); папка 0700, файлы 0600. YYYY-MM-DD.jsonl — вызовы, objects/<sha256>.json — дедуплицированный полный контекст/тело, latest.md — последняя запись. Содержимое разговоров хранится по прямому поручению владельца отдельно от metadata-only диагностики. HTTP-заголовки и структурированные поля credentials редактируются; строки пользовательского контекста сохраняются. Автоочистка не включена, архив растёт.
 
 Сторож: пробная запись и чтение, права файлов, связь context/payload проверены целевым promptAudit.test.ts. Сбой записи не ломает модельный вызов; уведомление prompt_audit_watch в «Состояние системы» максимум одно в сутки. При недоступном диске проверять свободное место и права.
+
+## Telegram gateway ↔ chat-secretary (05.11.2026)
+
+- Прибор: `telegram_inbound_ledger`, `telegram_delivery_outbox`, polling offset gateway.
+- Проба: узкий `GET /api/integrations/telegram/status` с loopback и integration secret; проверяются last_update_id, pending/retry/ambiguous, oldest pending и свежесть state-файла polling.
+- Сбой: нет успешного poll 90 секунд, oldest pending растёт, ambiguous/retry не уменьшаются — уведомление владельцу в «Состояние системы», не чаще раза в сутки. Telegram не использовать для тревоги самого Telegram-gateway.
+- Код: `server/src/integrations/telegram.ts`, `server/src/routes/telegram-integration.ts`, `server/integrations/telegram-gateway/gateway.mjs`.
+- Ограничение первого релиза: сторож должен быть добавлен при установке unit; до установки секретов и активации gateway проба не запускается.

@@ -5739,6 +5739,53 @@ const migrations: Migration[] = [
   },
 
   {
+    id: "201_telegram_secretary_integration",
+    description: "Telegram ↔ chat-secretary: durable inbound dedupe и delivery outbox",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS telegram_inbound_ledger (
+          id TEXT PRIMARY KEY,
+          bot_id TEXT NOT NULL,
+          update_id INTEGER NOT NULL,
+          chat_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          message_id INTEGER NOT NULL,
+          payload_hash TEXT NOT NULL,
+          state TEXT NOT NULL CHECK(state IN ('received','authorized','materializing','posted','rejected','failed')),
+          taskflow_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL,
+          ack_delivery_id TEXT,
+          error_code TEXT,
+          received_at TEXT NOT NULL DEFAULT (datetime('now')),
+          authorized_at TEXT,
+          posted_at TEXT,
+          finished_at TEXT,
+          UNIQUE(bot_id, update_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_telegram_inbound_conversation ON telegram_inbound_ledger(bot_id,chat_id,state,received_at);
+        CREATE INDEX IF NOT EXISTS idx_telegram_inbound_principal ON telegram_inbound_ledger(bot_id,user_id,received_at);
+        CREATE TABLE IF NOT EXISTS telegram_delivery_outbox (
+          delivery_id TEXT PRIMARY KEY,
+          bot_id TEXT NOT NULL,
+          chat_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('ack','progress','final','error')),
+          payload_json TEXT NOT NULL,
+          state TEXT NOT NULL CHECK(state IN ('pending','sending','delivered','retry_wait','ambiguous','abandoned')),
+          attempts INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at TEXT,
+          telegram_message_id INTEGER,
+          source_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL,
+          last_error TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          delivered_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_telegram_outbox_ready ON telegram_delivery_outbox(state,next_attempt_at,created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_telegram_outbox_final_source ON telegram_delivery_outbox(source_message_id,kind) WHERE source_message_id IS NOT NULL AND kind='final';
+      `);
+    },
+  },
+
+  {
     id: "200_context_operation_items",
     description: "Что именно попало в контекст роли: записи, источник и объём (владелец 05.11.2026)",
     up: () => {

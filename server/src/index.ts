@@ -116,6 +116,7 @@ import { registerCompassRoutes } from "./routes/compass.js";
 import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
 import { registerAgentServiceRoutes } from "./routes/agent-service.js";
 import { registerIntegrationRoutes } from "./routes/integrations.js";
+import { registerTelegramIntegrationRoutes } from "./routes/telegram-integration.js";
 import { registerJournalFolderRoutes } from "./routes/journalFolders.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 import { registerTaskOutcomeRoutes } from "./routes/taskOutcome.js";
@@ -653,6 +654,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerDictationArchiveRoutes(app);
   registerAgentServiceRoutes(app);
   registerIntegrationRoutes(app);
+  registerTelegramIntegrationRoutes(app);
   registerJournalFolderRoutes(app);
   registerKnowledgeRoutes(app);
   registerTaskOutcomeRoutes(app);
