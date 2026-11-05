@@ -2,7 +2,7 @@ import db from "../db.js";
 import {roleUserId} from "../roleRouting.js";
 import {enqueueMessageDelivery} from "./chatQueue.js";
 
-/** Same durable message/outbox mechanism as the integration handoff. Called
+/** Durable message/outbox delivery of a negative verdict. Called
  * inside the review transaction: a negative verdict must wake its requester too. */
 export function enqueueReviewReturn(reviewId:string):{chatId:string;roleId:string;queueRowId:string;messageId:string}|null {
  const review=db.prepare("SELECT r.*,t.title FROM reviews r JOIN tasks t ON t.id=r.task_id WHERE r.id=?").get(reviewId) as any;

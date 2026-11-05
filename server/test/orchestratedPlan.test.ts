@@ -1,6 +1,6 @@
 // Режим «Оркестратор» (владелец 13.10.2026): план из двух шагов Оркестратора —
 // разложить работу по ролям и принять/собрать итог. Проверяем шаблон,
-// инструкции шагов, отключение автоинтегратора и побудку при блоке шага команды.
+// инструкции шагов, отключение ответственного за интеграцию и побудку при блоке шага команды.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 
@@ -48,7 +48,7 @@ describe("режим «Оркестратор»", () => {
     expect(plan.edges.map((e: any) => [e.from_slot_key, e.to_slot_key])).toEqual([["orchestrate", "assemble"]]);
   });
 
-  it("автоинтегратор для такого плана не назначается", () => {
+  it("ответственный за интеграцию для такого плана не назначается", () => {
     const state = integrationResponsibility(taskId);
     expect(state.mode).toBe("not_required");
     expect(state.owner_id).toBeNull();

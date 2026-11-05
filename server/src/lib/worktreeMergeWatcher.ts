@@ -1,8 +1,8 @@
 // Сторож автослияния (LOCK-WORKTREE-MANAGER-20261019, владелец 19.10.2026).
 //
-// Очередь слияния живёт сама: шаг интеграции сдан → копия → merge → тесты →
+// Очередь слияния живёт сама: результат принят → копия → merge → тесты →
 // fast-forward main → уборка. Ломается она тихо: строка висит в `queued`,
-// база падений протухла и не снимается, main грязный от чужих правок — и
+// main грязный от чужих правок — и
 // ни одна карточка больше не вливается, а снаружи это выглядит как «просто
 // ничего не происходит».
 //
@@ -36,7 +36,7 @@ export const LIMITS = {
   queuedHours: 2,
   runningHours: 1,
   dirtyMainHours: 6,
-  awaitingIntegratorHours: 72,
+  awaitingAuthorHours: 72,
 };
 
 let pollHandle: NodeJS.Timeout | null = null;
@@ -77,7 +77,7 @@ function probeQueueTable(): string | null {
   return null;
 }
 
-/** Пробный файл в каталоге копий: туда пишутся журнал, база падений, копии. */
+/** Пробный файл в каталоге копий: туда пишутся журнал и копии. */
 function probeWorktreesDir(): string | null {
   const file = path.join(worktreesBase(), `.merge-watch-probe-${process.pid}`);
   try {
@@ -147,12 +147,12 @@ export function checkWorktreeMerge(): MergeWatchResult {
     );
   }
   const waiting = [
-    ...hoursOld("conflict", LIMITS.awaitingIntegratorHours),
-    ...hoursOld("test_failed", LIMITS.awaitingIntegratorHours),
+    ...hoursOld("conflict", LIMITS.awaitingAuthorHours),
+    ...hoursOld("test_failed", LIMITS.awaitingAuthorHours),
   ];
   if (waiting.length) {
     problems.push(
-      `конфликт или красные тесты дольше ${LIMITS.awaitingIntegratorHours} ч, ответственный за интеграцию не разобрал: ${short(waiting)}`,
+      `конфликт или красные тесты дольше ${LIMITS.awaitingAuthorHours} ч, автор не разобрал: ${short(waiting)}`,
     );
   }
 

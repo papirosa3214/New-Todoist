@@ -99,7 +99,7 @@ describe("сторож автослияния", () => {
     row("stuck-queued", "queued", LIMITS.queuedHours + 1);
     row("stuck-running", "running", LIMITS.runningHours + 1);
     row("stuck-dirty", "blocked_dirty_main", LIMITS.dirtyMainHours + 1);
-    row("old-conflict", "conflict", LIMITS.awaitingIntegratorHours + 1);
+    row("old-conflict", "conflict", LIMITS.awaitingAuthorHours + 1);
     row("new-conflict", "conflict", 1);
     const { ok, problems } = checkWorktreeMerge();
     expect(ok).toBe(false);

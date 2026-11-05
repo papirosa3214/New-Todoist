@@ -1,7 +1,7 @@
 // Очередь автослияния: механика переноса ветки роли в main.
 // LOCK-WORKTREE-MANAGER-20261019, владелец 19.10.2026.
 //
-// Что решает система, а что остаётся за ответственным за интеграцию:
+// Что решает система:
 //   — решение «что вливается» — одобрение проверки или сдача сборки
 //     оркестратора (`acceptedMerge.ts`, владелец 05.11.2026).
 //   — система делает механику: чистая копия → merge → тесты → main.
@@ -238,8 +238,8 @@ function writeState(taskId: string, patch: Partial<MergeRow>): void {
 }
 
 /**
- * Поставить карточку в очередь. Точка входа — сдача шага интеграции
- * ответственным за интеграцию. Других входов нет.
+ * Поставить карточку в очередь. Точка входа — `acceptedMerge.ts`, других входов нет.
+ * Значение `integration_step` осталось именем допуска: роли на интеграции нет.
  * Повторная постановка того же состояния не плодит строки.
  */
 export function enqueueMerge(taskId: string, trigger: MergeTrigger): boolean {
@@ -252,7 +252,7 @@ export function enqueueMerge(taskId: string, trigger: MergeTrigger): boolean {
     | undefined;
   if (existing) {
     const previous = mergeQueueRow(taskId);
-    // Старый sweep не является допуском. Только новая сдача интегратора
+    // Старый sweep не является допуском. Только новая постановка из acceptedMerge
     // превращает такую запись в разрешённую очередь.
     if (previous?.trigger !== "integration_step") {
       db.prepare("UPDATE worktree_merge_queue SET trigger='integration_step', state='queued', error=NULL, updated_at=datetime('now') WHERE task_id=?").run(taskId);
@@ -389,7 +389,7 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   const outcome: MergeOutcome = { ...row };
   if (row.trigger !== "integration_step") {
     outcome.state = "disabled";
-    outcome.error = "нет допуска: требуется сданный шаг ответственного за интеграцию";
+    outcome.error = "нет допуска: результат не принят";
     writeState(taskId, { state: outcome.state, error: outcome.error });
     return outcome;
   }
