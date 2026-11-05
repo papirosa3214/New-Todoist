@@ -7,7 +7,6 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import db from "../src/db.js";
 import { reloadServerSettings, setSetting } from "../src/lib/serverSettings.js";
-import { saveBaseline } from "../src/lib/worktree/testGate.js";
 import { checkWorktreeMerge, LIMITS, MERGE_WATCH_ACTIONS } from "../src/lib/worktreeMergeWatcher.js";
 
 const testEnv = { ...process.env };
@@ -56,7 +55,7 @@ beforeAll(() => {
   git(live, ["config", "user.name", "t"]);
   process.env.MAK70_LIVE_REPO = live;
   process.env.TASKFLOW_ROLE_WORKTREES = base;
-  saveBaseline([], commit("a.txt", "1\n"));
+  commit("a.txt", "1\n");
 
   db.exec(`CREATE TABLE IF NOT EXISTS worktree_merge_queue (
     task_id TEXT PRIMARY KEY, trigger TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued',

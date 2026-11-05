@@ -45,7 +45,6 @@ export type MergeTrigger = "integration_step" | "orchestrator_step" | "sweep";
 export type MergeState =
   | "queued"
   | "running"
-  | "pr_open"
   | "merged"
   | "conflict"
   | "test_failed"
