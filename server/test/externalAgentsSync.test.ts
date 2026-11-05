@@ -19,9 +19,18 @@ describe("«Обновить»: внешние агенты заводятся �
     expect(user.avatar_url).toMatch(/^\/api\/avatars\/agent-claude-code-[0-9a-f]{12}\.svg$/);
     await syncExternalAgents(fakeFetch);
     expect((db.prepare("SELECT COUNT(*) AS n FROM roles WHERE key = 'claude_code'").get() as any).n).toBe(1);
-    // агенты без адаптера находятся, но участниками не заводятся
-    expect(db.prepare("SELECT 1 FROM roles WHERE key = 'codex'").get()).toBeUndefined();
     // внутренние роли остаются на Pi
     expect(externalRuntime("builder")).toBeNull();
+  });
+
+  it("«Обновить» со списком заводит только названных агентов, остальных не трогает", async () => {
+    const fakeFetch = (async () => new Response('<svg xmlns="http://www.w3.org/2000/svg"/>', { status: 200 })) as unknown as typeof fetch;
+    const first = await syncExternalAgents(fakeFetch);
+    if (!first.find((a) => a.runtime === "claude-code")?.installed) return;
+    db.prepare("UPDATE roles SET enabled = 0 WHERE key = 'claude_code'").run();
+    await syncExternalAgents(fakeFetch, ["opencode"]);
+    expect((db.prepare("SELECT enabled FROM roles WHERE key = 'claude_code'").get() as any).enabled).toBe(0);
+    await syncExternalAgents(fakeFetch, ["claude-code"]);
+    expect((db.prepare("SELECT enabled FROM roles WHERE key = 'claude_code'").get() as any).enabled).toBe(1);
   });
 });

@@ -25,7 +25,17 @@ const app = agent({ name: "fake-acp" })
   .onRequest(methods.agent.session.new, async ({ params }) => {
     counter += 1;
     log({ kind: "new", cwd: params.cwd, mcpServers: params.mcpServers });
-    return { sessionId: `fake-${counter}` };
+    return {
+      sessionId: `fake-${counter}`,
+      configOptions: [
+        { id: "mode", name: "Режим", category: "mode", type: "select", currentValue: "build", options: [{ value: "build", name: "Сборка" }] },
+        { id: "model", name: "Модель", category: "model", type: "select", currentValue: "fake/a", options: [{ value: "fake/a", name: "Модель А" }, { value: "fake/b", name: "Модель Б" }] },
+      ],
+    };
+  })
+  .onRequest(methods.agent.session.setConfigOption, async ({ params }) => {
+    log({ kind: "set_config", configId: params.configId, value: params.value });
+    return { configOptions: [] };
   })
   .onNotification(methods.agent.session.cancel, async ({ params }) => {
     cancels.get(params.sessionId)?.();

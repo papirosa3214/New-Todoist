@@ -62,8 +62,9 @@ export const KNOWN_AGENTS: KnownAgent[] = [
     runtime: "codex",
     key: "codex",
     title: "Codex",
-    binary: "codex",
-    adapter: null,
+    binary: "codex-acp",
+    adapter: "acp",
+    acpArgs: [],
     summary: "внешний агент Codex (OpenAI) в своём окружении.",
     color: "#10A37F",
     initials: "CX",
@@ -111,6 +112,7 @@ export const KNOWN_AGENTS: KnownAgent[] = [
 const EXTRA_DIRS = [
   path.join(HOME, ".npm-global/bin"),
   path.join(HOME, ".local/bin"),
+  path.join(HOME, ".opencode/bin"),
   "/usr/local/bin",
   "/usr/bin",
 ];
@@ -251,9 +253,11 @@ export function discoverExternalAgents(): DiscoveredAgent[] {
  */
 export async function syncExternalAgents(
   fetcher: typeof fetch = fetch,
+  only?: string[],
 ): Promise<DiscoveredAgent[]> {
   const found = discoverExternalAgents();
   for (const item of found) {
+    if (only && !only.includes(item.runtime)) continue;
     const agent = knownAgent(item.runtime)!;
     const role = db
       .prepare("SELECT runtime FROM roles WHERE key = ?")

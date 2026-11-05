@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAcpAgentSession } from "../src/runtime/acpAgentSession.js";
+import { createAcpAgentSession, listAcpModels } from "../src/runtime/acpAgentSession.js";
 
 const FAKE = path.resolve(__dirname, "fixtures/fake-acp-agent.mjs");
 const sessions: Array<{ dispose(): void }> = [];
@@ -88,5 +88,32 @@ describe("acpAgentSession: внешний агент по ACP с поверхн�
     const { session, log } = await start({ mcpServers });
     await session.prompt("привет");
     expect(log().find((e) => e.kind === "new")?.mcpServers).toEqual(mcpServers);
+  });
+
+  it("выбранная модель уходит агенту настройкой сессии и сообщается наверх", async () => {
+    const seen: string[] = [];
+    const { session, log } = await start({ model: "fake/b", onModel: (m: string) => seen.push(m) });
+    await session.prompt("привет");
+    expect(log().filter((e) => e.kind === "set_config")).toEqual([{ kind: "set_config", configId: "model", value: "fake/b" }]);
+    expect(seen).toEqual(["fake/b"]);
+  });
+
+  it("без выбора остаётся модель агента, и наверх сообщается она", async () => {
+    const seen: string[] = [];
+    const { session, log } = await start({ onModel: (m: string) => seen.push(m) });
+    await session.prompt("привет");
+    expect(log().some((e) => e.kind === "set_config")).toBe(false);
+    expect(seen).toEqual(["fake/a"]);
+  });
+
+  it("чужая модель не подменяется молча: ход падает с понятной ошибкой", async () => {
+    const { session, log } = await start({ model: "fake/нет-такой" });
+    await expect(session.prompt("привет")).rejects.toThrow(/нет модели «fake\/нет-такой»/);
+    expect(log().some((e) => e.kind === "prompt")).toBe(false);
+  });
+
+  it("список моделей агента читается из его ответа на создание сессии", async () => {
+    const models = await listAcpModels({ command: process.execPath, args: [FAKE], cwd: os.tmpdir() });
+    expect(models).toEqual([{ id: "fake/a", title: "Модель А" }, { id: "fake/b", title: "Модель Б" }]);
   });
 });

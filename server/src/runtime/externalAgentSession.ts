@@ -4,10 +4,11 @@
 // Операции TaskFlow агент получает одним набором — инструментами MCP-сервера
 // `taskflow_run` (scripts/run-mcp-bridge.mjs): фабрика регистрирует операции
 // запуска (runtime/runToolRegistry.ts) и снимает регистрацию при dispose.
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { knownAgent } from "../lib/externalAgents.js";
-import { createAcpAgentSession } from "./acpAgentSession.js";
+import { findBinary, knownAgent } from "../lib/externalAgents.js";
+import { createAcpAgentSession, listAcpModels, type AcpModel } from "./acpAgentSession.js";
 import { createCliAgentSession, type CliAgentSession, type CliSessionInput } from "./cliAgentSession.js";
 import { registerRunTools, type RunTool } from "./runToolRegistry.js";
 
@@ -29,6 +30,28 @@ function bridgeEnv(run: ExternalRunTools): Record<string, string> {
     TASKFLOW_RUN_ID: run.runId,
     TASKFLOW_TOKEN: run.token,
   };
+}
+
+const MODELS_TTL_MS = 10 * 60_000;
+const modelsCache = new Map<string, { at: number; models: AcpModel[] }>();
+
+/** Модели для пилюли: ACP-агент называет их сам, у остальных — список из каталога.
+ *  Агент не ответил (например, не выполнен вход) — пустой список, повтор при следующем запросе. */
+export async function externalAgentModels(runtime: string): Promise<AcpModel[]> {
+  const agent = knownAgent(runtime);
+  if (agent?.adapter !== "acp") return agent?.models ?? [];
+  const cached = modelsCache.get(runtime);
+  if (cached && Date.now() - cached.at < MODELS_TTL_MS) return cached.models;
+  const command = findBinary(agent.binary);
+  if (!command) return [];
+  try {
+    const models = await listAcpModels({ command, args: agent.acpArgs ?? [], cwd: os.tmpdir() });
+    if (models.length) modelsCache.set(runtime, { at: Date.now(), models });
+    return models;
+  } catch (error) {
+    console.warn(`[externalAgents] ${runtime}: модели не получены:`, error instanceof Error ? error.message : error);
+    return [];
+  }
 }
 
 export async function createExternalAgentSession(

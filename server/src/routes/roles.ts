@@ -7,7 +7,8 @@ import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken, ownerOrApiToken } from "../auth.js";
 import { piRuntime } from "../runtime/index.js";
-import { agentBinary, discoverExternalAgents, knownAgent, syncExternalAgents } from "../lib/externalAgents.js";
+import { agentBinary, discoverExternalAgents, syncExternalAgents } from "../lib/externalAgents.js";
+import { externalAgentModels } from "../runtime/externalAgentSession.js";
 import {
   ROLE_NAMES,
   allRoles,
@@ -412,7 +413,12 @@ export function registerRoleRoutes(app: FastifyInstance): void {
   // Внешние агенты (Claude Code, Codex, …): что установлено на машине и кто
   // заведён участником. «Обновить» заводит найденных участниками сама.
   app.get("/api/external-agents", { preHandler: authPre }, async () => ({ agents: discoverExternalAgents() }));
-  app.post("/api/external-agents/refresh", { preHandler: ownerOrApiToken }, async () => ({ agents: await syncExternalAgents() }));
+  app.post("/api/external-agents/refresh", { preHandler: ownerOrApiToken }, async (req) => {
+    // runtimes — завести только названных; без него — всех найденных.
+    const runtimes = (req.body as { runtimes?: unknown } | undefined)?.runtimes;
+    const only = Array.isArray(runtimes) ? runtimes.filter((r): r is string => typeof r === "string") : undefined;
+    return { agents: await syncExternalAgents(fetch, only) };
+  });
   // Модели для пилюли в окне ввода чата: у внешнего агента — его каталог,
   // у роли Pi — доступные модели Pi. current — чем роль работает сейчас.
   app.get<{ Params: { role: string } }>("/api/roles/:role/models", { preHandler: authPre }, async (req, reply) => {
@@ -421,7 +427,7 @@ export function registerRoleRoutes(app: FastifyInstance): void {
     const external = externalRuntime(role);
     if (external) {
       const last = (db.prepare("SELECT last_model FROM roles WHERE key = ?").get(role) as { last_model: string | null } | undefined)?.last_model ?? null;
-      return { current: last, models: knownAgent(external)?.models ?? [] };
+      return { current: last, models: await externalAgentModels(external) };
     }
     const models = await piRuntime.listModels().catch(() => []);
     return {

@@ -104,6 +104,68 @@ export class AcpUpdateTranslator {
   }
 }
 
+export interface AcpModel {
+  id: string;
+  title: string;
+}
+
+/** Настройка сессии с выбором модели (ACP session config options); нет её — null. */
+export function modelConfigOption(configOptions: unknown): { id: string; current: string; models: AcpModel[] } | null {
+  if (!Array.isArray(configOptions)) return null;
+  const option = configOptions.find((o: any) => o?.category === "model" && o?.type === "select");
+  if (!option) return null;
+  // Варианты бывают плоским списком или группами.
+  const flat = (option.options ?? []).flatMap((o: any) => (Array.isArray(o?.options) ? o.options : [o]));
+  return {
+    id: option.id,
+    current: option.currentValue,
+    models: flat.map((o: any) => ({ id: o.value, title: o.name ?? o.value })),
+  };
+}
+
+/** Каталог моделей агента: одна пустая сессия, агент сам называет, чем умеет работать. */
+export async function listAcpModels(input: {
+  command: string;
+  args: string[];
+  cwd: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+}): Promise<AcpModel[]> {
+  const child = spawn(input.command, input.args, {
+    cwd: input.cwd,
+    env: { ...cliEnv(), ...input.env },
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  child.stdin.on("error", () => {});
+  let timer: NodeJS.Timeout | undefined;
+  const failed = new Promise<never>((_, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => reject(new Error(`агент завершился с кодом ${code}`)));
+    timer = setTimeout(() => reject(new Error("агент не назвал модели вовремя")), input.timeoutMs ?? 20_000);
+  });
+  failed.catch(() => {});
+  try {
+    const connection = client({ name: "taskflow" }).connect(
+      ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>),
+    );
+    await Promise.race([
+      connection.agent.request(methods.agent.initialize, {
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      }),
+      failed,
+    ]);
+    const created = await Promise.race([
+      connection.agent.request(methods.agent.session.new, { cwd: input.cwd, mcpServers: [] }),
+      failed,
+    ]);
+    return modelConfigOption(created.configOptions)?.models ?? [];
+  } finally {
+    clearTimeout(timer);
+    child.kill();
+  }
+}
+
 export async function createAcpAgentSession(input: AcpSessionInput): Promise<CliAgentSession> {
   const listeners = new Set<Listener>();
   const messages: any[] = [];
@@ -167,6 +229,26 @@ export async function createAcpAgentSession(input: AcpSessionInput): Promise<Cli
       conn.agent.request(methods.agent.session.new, { cwd: input.cwd, mcpServers: input.mcpServers ?? [] }),
       spawnFailed,
     ]);
+    // Выбранная модель ставится настройкой сессии. Чужую не подменяем молча:
+    // иначе владелец думал бы, что работает одна модель, а работала другая.
+    const option = modelConfigOption(created.configOptions);
+    if (input.model && input.model !== option?.current) {
+      if (!option?.models.some((m) => m.id === input.model)) {
+        conn = null;
+        child.kill();
+        throw new Error(`у агента нет модели «${input.model}»`);
+      }
+      await Promise.race([
+        conn.agent.request(methods.agent.session.setConfigOption, {
+          sessionId: created.sessionId,
+          configId: option.id,
+          value: input.model,
+        }),
+        spawnFailed,
+      ]);
+    }
+    const activeModel = input.model ?? option?.current;
+    if (activeModel) input.onModel?.(activeModel);
     sessionId = created.sessionId;
   }
 
