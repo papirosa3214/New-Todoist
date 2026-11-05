@@ -116,7 +116,7 @@ import {
   checklistStateOfMessage,
   setChecklistItem,
 } from "../lib/chatChecklist.js";
-import { normalizeRoleReplyV1, structuredOutputText } from "../lib/roleContractV1.js";
+import { exhaustedRoleReplyFallback, normalizeRoleReplyV1, roleReplyCorrectionPrompt, shouldRetryRoleReply, structuredOutputText } from "../lib/roleContractV1.js";
 import { applyRoleFormat, roleFormatRefusal } from "../lib/roleFormat.js";
 import { roleProjectContext } from "../runtime/roleProjectContext.js";
 import { roleSlotSnapshotsBlock } from "../runtime/slotWorkSnapshot.js";
@@ -3574,6 +3574,33 @@ async function deliverAgentReply(args: {
       },
     });
     if((reply as {forwarded?:boolean})?.forwarded)throw new MessageForwardedToWork(false);
+
+    const firstAnswer = (reply?.text || "").trim();
+    const firstValidation = firstAnswer ? normalizeRoleReplyV1(firstAnswer) : null;
+    if (firstValidation && shouldRetryRoleReply(firstValidation)) {
+      const correctionPrompt = roleReplyCorrectionPrompt(firstValidation.validationErrors);
+      console.warn("[chats] ответ роли возвращён на однократное исправление:", {
+        role,
+        chatId,
+        validationErrors: firstValidation.validationErrors,
+      });
+      reply = topic && slot
+        ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt:correctionPrompt,onStep:(tool)=>typing(true,tool),onEvent:(event)=>{observeDeliveryActivity(chatId,roleUserId,event);live.onEvent(event);}})
+        : await startChatRun({
+            mode: integrationContext ? "work" : roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
+            messageId: trigger.id,
+            deliveryOutcome,
+            chatId,
+            role,
+            roleId: roleUserId,
+            prompt: correctionPrompt,
+            model: (db.prepare("SELECT model FROM chat_messages WHERE id = ?").get(trigger.id) as { model: string | null } | undefined)?.model ?? undefined,
+            thinkingLevel: messageThinkingLevel(trigger.id),
+            sessionId: reply?.sessionId ?? undefined,
+            onStep: (tool) => typing(true, tool),
+            onEvent: (event) => { observeDeliveryActivity(chatId,roleUserId,event); live.onEvent(event); },
+          });
+    }
   } catch (error) {
     if(error instanceof MessageForwardedToWork)throw error;
     // Онлайн-сессия не роняет HTTP-запрос, но и молчать нельзя (владелец
@@ -3602,13 +3629,16 @@ async function deliverAgentReply(args: {
   if (!cancelled && !failure) {
     const rawAnswer = (reply?.text || "").trim();
     if (rawAnswer) {
-      const normalized = normalizeRoleReplyV1(rawAnswer);
-      if (normalized.normalizedByServer) {
-        console.warn("[chats] ответ роли нормализован в JSON v1:", {
+      let normalized = normalizeRoleReplyV1(rawAnswer);
+      if (shouldRetryRoleReply(normalized)) {
+        console.warn("[chats] повторный ответ роли нормализован в fallback JSON v1:", {
           role,
           chatId,
           validationErrors: normalized.validationErrors,
         });
+        normalized = exhaustedRoleReplyFallback(normalized);
+      } else if (normalized.normalizedByServer) {
+        console.warn("[chats] plain-text ответ роли обёрнут в JSON v1:", { role, chatId });
       }
       // Разбор идёт и по отчёту: строка `БЫСТРО:` бывает внутри `report.sections`,
       // а не только в обычном блоке `text` (владелец 28.10.2026 — у отчёта

@@ -793,6 +793,51 @@ export interface NormalizedRoleReplyV1 {
 }
 
 /**
+ * Исправимая ошибка финального ответа: роль получает один адресный повтор,
+ * прежде чем сервер покажет владельцу безопасно нормализованный fallback.
+ */
+export function shouldRetryRoleReply(normalized: NormalizedRoleReplyV1): boolean {
+  return normalized.normalizedByServer && !(
+    normalized.validationErrors.length === 1 &&
+    normalized.validationErrors[0] === "Ответ не содержит JSON v1 конверт"
+  );
+}
+
+export function roleReplyCorrectionPrompt(errors: string[]): string {
+  const exact = errors.length ? errors : ["Ответ не прошёл проверку JSON-контракта v1"];
+  return [
+    "Исправь только формат предыдущего финального ответа и верни его заново. Не повторяй работу и не вызывай инструменты.",
+    "Ошибки валидации:",
+    ...exact.slice(0, 8).map((error) => `- ${error}`),
+    "Верни один JSON-объект без Markdown и пояснений в форме:",
+    '{"schema_version":1,"ok":true,"output":[{"type":"text","text":"Краткий результат"}],"artifacts":[],"plan_artifact":null,"error":null,"next_hint":null,"needs_human":false}',
+    "Сохрани факты, ссылки, материалы и доступные действия из предыдущего ответа; исправь только поля и блоки, названные выше.",
+  ].join("\n");
+}
+
+export function exhaustedRoleReplyFallback(normalized: NormalizedRoleReplyV1): NormalizedRoleReplyV1 {
+  const detail = normalized.displayText.trim();
+  const text = detail && detail !== BROKEN_CONTRACT_NOTE
+    ? detail
+    : "Роль завершила работу, но после одной попытки не смогла оформить ответ в поддерживаемом формате.";
+  const envelope: StructuredRoleEnvelopeV1 = {
+    schema_version: 1,
+    ok: false,
+    output: [{ type: "text", text }],
+    artifacts: [],
+    plan_artifact: null,
+    error: {
+      code: "invalid_role_reply",
+      message: "Ответ роли не прошёл проверку формата после автоматической попытки исправления.",
+      retryable: true,
+    },
+    next_hint: "Можно попросить роль повторить ответ.",
+    needs_human: false,
+  };
+  return { ...normalized, envelope, displayText: text };
+}
+
+/**
  * Normalize a completed role reply to the closed chat v1 envelope. This is a
  * server-side boundary guarantee: it does not constrain how the provider
  * generated the original text. Invalid or plain-text replies are preserved

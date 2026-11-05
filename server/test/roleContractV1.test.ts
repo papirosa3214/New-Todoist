@@ -2,8 +2,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import crypto from "node:crypto";
 vi.mock("../src/runtime/inProcessRun.js", async original => ({...await original<any>(), runRoleInProcess: vi.fn(async()=>({runId:"contract-v1-test",completion:Promise.resolve()}))}));
 import {
+  exhaustedRoleReplyFallback,
   normalizeRoleContractV1,
   normalizeRoleReplyV1,
+  roleReplyCorrectionPrompt,
+  shouldRetryRoleReply,
   parseRoleContractV1,
   ROLE_CONTRACT_V1,
   unwrapRoleEnvelopeText,
@@ -22,6 +25,24 @@ import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 // чат и на путь сдачи этапа.
 
 describe("нормализация финального ответа в JSON v1", () => {
+  it("строит адресную инструкцию исправления с точными ошибками и канонической формой", () => {
+    const prompt = roleReplyCorrectionPrompt(["output[0].type: неизвестный блок", "artifacts[0].ref: обязательное поле отсутствует"]);
+    expect(prompt).toContain("output[0].type: неизвестный блок");
+    expect(prompt).toContain("artifacts[0].ref: обязательное поле отсутствует");
+    expect(prompt).toContain('"schema_version":1');
+    expect(prompt).toContain("Не повторяй работу и не вызывай инструменты");
+    expect(shouldRetryRoleReply(normalizeRoleReplyV1("обычный текст"))).toBe(false);
+    expect(shouldRetryRoleReply(normalizeRoleReplyV1('{"schema_version":1,"ok":"yes","output":[]}'))).toBe(true);
+  });
+
+  it("после исчерпания повтора формирует понятный fallback без сырого конверта", () => {
+    const normalized = normalizeRoleReplyV1('{"schema_version":1,"ok":true,"output":"сломано"}');
+    const fallback = exhaustedRoleReplyFallback(normalized);
+    expect(fallback.envelope.ok).toBe(false);
+    expect(fallback.envelope.error).toMatchObject({ code: "invalid_role_reply", retryable: true });
+    expect(fallback.displayText).not.toContain("schema_version");
+  });
+
   it("сохраняет валидный структурированный ответ без изменений", () => {
     const source = {
       schema_version: 1, ok: true, output: [{ type: "heading", text: "Итог", level: 1 }, { type: "text", text: "Готово." }],
