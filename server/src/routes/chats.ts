@@ -29,7 +29,6 @@ import {
 import {hasCoordinationCard,registerCoordinationOrigin,registerCoordinationOriginSelf,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination,markDeliveredToWork,markCoordinationAnswered} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
-import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
 import { completeSecretaryBranch, shouldMirrorBranchResult } from "../runtime/secretaryVoiceBranch.js";
 import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, branchSummaryLines, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
@@ -2329,9 +2328,6 @@ async function recoverAgentDeliveryOnce(input: {
     fenceMessageDelivery(deliveryId);
     return { status: "fenced", replyId: null };
   }
-  if(isIntegrationHandoff(row.message_id) && !integrationHandoffContext(row.message_id,roleId)){
-    fenceMessageDelivery(deliveryId);return {status:"fenced",replyId:null};
-  }
   const role = roleFromUserId(roleId);
   if (!role) {
     // Роль убрали из чата (или переименовали) — fence, а не
@@ -2342,16 +2338,14 @@ async function recoverAgentDeliveryOnce(input: {
   if(!isMember(chatId,roleId)){fenceMessageDelivery(deliveryId);return {status:"fenced",replyId:null};}
   const trigger=db.prepare("SELECT text,recipient_subtask_id FROM chat_messages WHERE id=?").get(row.message_id) as {text:string;recipient_subtask_id:string|null}|undefined;
   const saved=JSON.parse(row.payload_json);
-  const integrationText=integrationHandoffContext(row.message_id,roleId);
   const recipientSlot=saved.subtaskId ?? trigger?.recipient_subtask_id ?? undefined;
   const topic=chatExecutionMode(chatId,row.message_id) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
   const slot=topic && trigger ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),recipientSlot) : null;
   const chatOnly=row.message_id.startsWith("review-return:") && saved.chatOnly===true;
   const activeDelivery=chatOnly || chatExecutionMode(chatId,row.message_id) === "chat" ? "idle" : slot ? await deliverTopicToWork(slot.task_id,role,row.message_id,trigger!.text,slot.plan_node_key)
-    : trigger ? await deliverChatToWork(role,chatId,row.message_id,integrationText ? integrationText+"\n"+trigger.text : trigger.text,recipientSlot) : "idle";
+    : trigger ? await deliverChatToWork(role,chatId,row.message_id,trigger.text,recipientSlot) : "idle";
   if(activeDelivery!=="idle"){
     if(activeDelivery==="busy"){
-      if(isIntegrationHandoff(row.message_id))retainForwardedDelivery(deliveryId);
       messengerAmbiguityNotice(chatId,roleId,row.message_id);
     }
     return {status:"skipped",replyId:null};
@@ -3366,12 +3360,10 @@ async function deliverAgentReply(args: {
     .get(args.triggerMessageId) as HistoryRow | undefined;
   // Сообщение удалили, пока ход ждал в очереди, — отвечать не на что.
   if (!trigger) return null;
-  const integrationContext=integrationHandoffContext(trigger.id,roleUserId);
-  if(isIntegrationHandoff(trigger.id) && !integrationContext)return null;
   const triggerTask = trigger.task_id ? `\nКонтекст задачи: ${trigger.task_id}` : "";
   const triggerFiles = trigger.attachments ? `\n[вложения: ${trigger.attachments}]` : "";
   const intentGuidance=role!=="secretary" && isOwner(trigger.from_user_id) ? await chatIntentBlockForMessage(trigger.id) : "";
-  const userText = `${integrationContext ? integrationContext+"\n" : ""}${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}${intentGuidance}`;
+  const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}${intentGuidance}`;
 
   const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
   // Обсуждение карточки — изолированная комната: доставки в работу нет.
@@ -3503,7 +3495,7 @@ async function deliverAgentReply(args: {
   // Чат задачи: первым блоком — сама задача и место роли в ней (lib/taskChatBrief.ts).
   // Чат задачи только для отчёта (владелец 05.11.2026): карта и выжимка вместо
   // данных проекта, памяти и библиотеки. Память остаётся в рабочем запуске.
-  const taskChatScoped = !!topic && role !== "secretary" && !integrationContext && !args.chatOnly;
+  const taskChatScoped = !!topic && role !== "secretary" && !args.chatOnly;
   if (topic) { const brief = taskChatBrief(topic.task_id, role, slot?.id ?? null, chatId, fromOwner ? unwrapRoleEnvelope(trigger.text) : null); if (brief) prompt = `${brief}\n\n${prompt}`; }
   // Заблокированный слот: не запрет, а маячок предложить план решения.
   if (slot?.agent_state === "blocked" && fromOwner) prompt = `${prompt}\n\n${RESOLUTION_PLAN_BEACON}`;
@@ -3524,7 +3516,6 @@ async function deliverAgentReply(args: {
   }
   if(topic && role!=="secretary" && !taskChatScoped) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 
-  if(integrationContext) prompt = integrationContext+"\n\n"+prompt;
 
   const roleName =
     (db.prepare("SELECT name FROM users WHERE id = ?").get(roleUserId) as
@@ -3567,7 +3558,7 @@ async function deliverAgentReply(args: {
     typing(true);
   try {
     reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:(event)=>{observeDeliveryActivity(chatId,roleUserId,event);live.onEvent(event);}}) : await startChatRun({
-      mode: integrationContext ? "work" : roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
+      mode: roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
       messageId: trigger.id,
       deliveryOutcome,
       chatId,
@@ -3605,7 +3596,7 @@ async function deliverAgentReply(args: {
       reply = topic && slot
         ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt:correctionPrompt,onStep:(tool)=>typing(true,tool),onEvent:(event)=>{observeDeliveryActivity(chatId,roleUserId,event);live.onEvent(event);}})
         : await startChatRun({
-            mode: integrationContext ? "work" : roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
+            mode: roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
             messageId: trigger.id,
             deliveryOutcome,
             chatId,

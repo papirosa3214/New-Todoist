@@ -26,7 +26,6 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { runRoleInProcess } from "./inProcessRun.js";
-import { INTEGRATION_STEP_MARKER } from "./integrationHandoff.js";
 import { planDelivered } from "./planMutations.js";
 import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
 import {
@@ -1168,17 +1167,6 @@ export function finishPlanIfComplete(
     plan_node_key: string | null;
   }>;
   if (nodes.length === 0 || nodes.some((n) => !n.done)) return false;
-  // Последним закрыт шаг интеграции — план уже был сдан и принят, второй сдачи нет.
-  const lastKey = nodes[nodes.length - 1].plan_node_key;
-  if (
-    lastKey &&
-    db
-      .prepare(
-        "SELECT 1 FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ? AND instructions LIKE ?",
-      )
-      .get(planId, lastKey, INTEGRATION_STEP_MARKER + "%")
-  )
-    return false;
   const task = db
     .prepare(
       "SELECT id, title, status, agent_state, creator_id, assignee_id, current_attempt_id FROM tasks WHERE id = ? AND archived_at IS NULL",

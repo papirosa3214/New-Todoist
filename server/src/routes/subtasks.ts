@@ -51,7 +51,6 @@ import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks 
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 import { finalizeWorktreeError } from "../lib/worktree/finalize.js";
 import { enqueueAfterStepSubmitted } from "../runtime/acceptedMerge.js";
-import { isIntegrationPlanStep } from "../runtime/integrationHandoff.js";
 import {
   SNAPSHOT_REASONS,
   saveSlotSnapshot,
@@ -449,10 +448,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           // Проверяем только для репозитория самого сервера: для чужого
           // проекта (живущего вне `server/..`) у сервера нет ни ветки, ни
           // понятия, как туда коммитить — там гард дал бы ложный отказ.
-          // Шаг интеграции сам вливает ветку в main: после этого поверх main коммитов нет.
-          const guardError = isIntegrationPlanStep(subtask.id)
-            ? null
-            : finalizeWorktreeError(subtask.task_id);
+          const guardError = finalizeWorktreeError(subtask.task_id);
           if (guardError) {
             return reply.code(400).send({ error: guardError });
           }
@@ -594,9 +590,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         // отметку). Пишем только при реальной смене, чтобы повторный
         // PATCH тем же значением не плодил одинаковые строки.
         if (done === true && !subtask.done) logEvent({taskId:subtask.task_id,actorId:req.userId,kind:"subtask_submission_confirmed",field:subtask.id});
-        // Шаг интеграции закрыт — работа роли признана принятой, дальше
-        // переносит система. Сдача сборки оркестратора — допуск к автослиянию
-        // (владелец 05.11.2026, раньше 24.10.2026 было наоборот).
+        // Сдача сборки оркестратора — допуск к автослиянию (владелец 05.11.2026).
         if (done === true && !subtask.done) {
           try {
             enqueueAfterStepSubmitted(req.params.id);

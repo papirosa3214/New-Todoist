@@ -9,7 +9,6 @@ import { logEvent } from "../agentState.js";
 import { missionBlocksCompletion } from "../lib/missionContract.js";
 import { liveRepo, refExists, roleBranch } from "../lib/worktree/paths.js";
 import { currentResultVersion } from "../resultVersions.js";
-import { isIntegrationPlanStep } from "./integrationHandoff.js";
 import { ORCHESTRATE_ASSEMBLE_SLOT } from "./orchestratedPlan.js";
 import { applyPlanOps } from "./planMutations.js";
 import { enqueueMerge, requeueMerge } from "./worktreeMergeQueue.js";
@@ -48,10 +47,7 @@ export function enqueueAcceptedReview(reviewId: string): boolean {
   return enqueueAcceptedMerge(review.task_id);
 }
 
-/**
- * Сданный шаг, который сам означает «принято»: сборка оркестратора. Сюда же
- * доходят шаги интеграции, заведённые до отмены роли, чтобы их работа не зависла.
- */
+/** Сданный шаг, который сам означает «принято»: сборка оркестратора. */
 export function enqueueAfterStepSubmitted(subtaskId: string): boolean {
   const step = db.prepare(`SELECT s.task_id,s.plan_node_key,p.profile FROM subtasks s
     LEFT JOIN task_collaboration_plans p ON p.id=s.collaboration_plan_id WHERE s.id=?`).get(subtaskId) as
@@ -59,7 +55,7 @@ export function enqueueAfterStepSubmitted(subtaskId: string): boolean {
     | undefined;
   if (!step) return false;
   const assembled = step.profile === "orchestrated" && step.plan_node_key === ORCHESTRATE_ASSEMBLE_SLOT;
-  if (!assembled && !isIntegrationPlanStep(subtaskId)) return false;
+  if (!assembled) return false;
   return enqueueAcceptedMerge(step.task_id);
 }
 

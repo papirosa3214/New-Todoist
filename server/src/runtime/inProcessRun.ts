@@ -24,7 +24,6 @@ import { beginTaskLiveTurn } from "./taskLiveTurn.js";
 import { broadcastToUsers } from "../ws.js";
 import { requireSubmissionReceipt, SUBMISSION_POLICY } from "../lib/submissionReceipt.js";
 import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
-import { integrationStepContext } from "./integrationHandoff.js";
 import { searchNotes } from "../lib/noteSearch.js";
 import { KB_CATEGORIES, KB_DROP_MARK } from "../lib/kbCategories.js";
 import { secretaryMailTools } from "./secretaryMailTools.js";
@@ -1034,7 +1033,7 @@ export function planSubtaskPrompt(taskId: string, role: string, subtaskId: strin
       ? renderInstruction(role, "task.orchestrate", { roleTitle: roleTitle(role), taskId, subtaskId, planId: orch.plan_id, selfSlot: ORCHESTRATE_SLOT, assembleSlot: ORCHESTRATE_ASSEMBLE_SLOT, rules })
       : renderInstruction(role, "task.orchestrate_assemble", { roleTitle: roleTitle(role), taskId, subtaskId, planId: orch.plan_id, rules });
   }
-  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: (subtask?.title ?? "") + "\n" + (integrationStepContext(subtaskId) ?? integrationResponsibilityPrompt(taskId)), artifactContract: artifactContractNote(subtaskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
+  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: (subtask?.title ?? "") + "\n" + integrationResponsibilityPrompt(taskId), artifactContract: artifactContractNote(subtaskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 // ── Папка проекта, справка, продолжение разговора (этап C3) ──────────────

@@ -7,7 +7,6 @@ import {chatExecutionMode} from "../runtime/chatExecutionMode.js";
 import db from "../db.js";
 import { isOwner } from "../access.js";
 import { roleTitle } from "../roleRouting.js";
-import { integrationResponsibility } from "./integrationResponsibility.js";
 import { buildRoleToolCatalog, installNativeToolCore, ROLE_TOOL_INSTRUCTION } from "../runtime/roleToolCatalog.js";
 import { secretaryThings3Tools } from "../runtime/secretaryThings3Tools.js";
 
@@ -36,20 +35,16 @@ const STEP_STATE: Record<string, string> = { in_progress: "в работе", blo
 function describeTask(id: string) {
   const task = db.prepare(`SELECT t.id,t.title,t.status,t.agent_state,t.assignee_id,t.due_date,t.completed_at,t.blocked_reason,u.name AS assignee_name,p.name AS project
     FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id LEFT JOIN projects p ON p.id=t.project_id WHERE t.id=?`).get(id) as any;
-  const steps = (db.prepare(`SELECT s.title,s.done,s.agent_state,s.result,n.role_key,n.instructions FROM subtasks s
+  const steps = (db.prepare(`SELECT s.title,s.done,s.agent_state,s.result,n.role_key FROM subtasks s
     JOIN task_collaboration_plans p ON p.id=s.collaboration_plan_id AND p.status='approved'
     JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key
     WHERE s.task_id=? AND n.skipped_at IS NULL ORDER BY s.position`).all(id) as any[]).map((s) => ({
       role: roleTitle(s.role_key), title: clip(s.title, 140),
       state: s.done ? "сделан" : STEP_STATE[s.agent_state] ?? "ждёт предыдущих шагов",
-      result: clip(s.result, 220) || null, integration: String(s.instructions ?? "").startsWith("[taskflow:integration]"),
+      result: clip(s.result, 220) || null,
     }));
   const review = db.prepare(`SELECT r.verdict,r.findings,r.created_at,u.name FROM reviews r LEFT JOIN users u ON u.id=r.reviewer_id
     WHERE r.task_id=? ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1`).get(id) as any;
-  const responsibility = integrationResponsibility(id);
-  const integrationStep = steps.find((s) => s.integration);
-  const integration = responsibility.mode === "not_required" ? "не требуется"
-    : `ответственный — ${responsibility.owner_title ?? "не назначен"}; ` + (integrationStep ? `шаг интеграции ${integrationStep.state}` : "шага интеграции в плане нет");
   const comments = (db.prepare(`SELECT COALESCE(u.name,c.user_id) AS author,c.text FROM comments c LEFT JOIN users u ON u.id=c.user_id
     WHERE c.task_id=? ORDER BY c.created_at DESC,c.rowid DESC LIMIT 3`).all(id) as any[]).map((c) => ({ author: c.author, text: clip(c.text, 220) }));
   const team = [...new Set(steps.map((s) => s.role))];
@@ -64,11 +59,11 @@ function describeTask(id: string) {
   const current = steps.find((s) => s.state === "в работе");
   const spoken = [`Задача «${clean(task.title) === task.title.toLowerCase() ? task.title : task.title.replace(/\\/g, "")}»: ${state}.`, `Исполнитель — ${executors}.`,
     steps.length ? `Шагов плана ${steps.length}, сделано ${done}${current ? `; сейчас работает ${current.role}` : ""}.` : "",
-    review ? `Последняя проверка: ${review.name ?? "проверяющий"} — ${verdict}.` : "Проверки ещё не было.", `Интеграция: ${integration}.`].filter(Boolean).join(" ");
+    review ? `Последняя проверка: ${review.name ?? "проверяющий"} — ${verdict}.` : "Проверки ещё не было."].filter(Boolean).join(" ");
   return { id: task.id, title: task.title.replace(/\\/g, ""), project: task.project ?? null, state, executors, due_date: task.due_date, completed_at: task.completed_at,
-    steps: steps.map(({ integration: _i, ...step }) => step),
+    steps,
     review: review ? { reviewer: review.name, verdict, findings: clip(review.findings, 300), at: review.created_at } : null,
-    integration, last_comments: comments, spoken_text: spoken };
+    last_comments: comments, spoken_text: spoken };
 }
 
 /** Найти задачу по словам из названия (или id) и вернуть её целиком. */

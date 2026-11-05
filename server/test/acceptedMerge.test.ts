@@ -95,12 +95,6 @@ it("шаг с тем же именем в обычном плане очеред
   expect(enqueueAfterStepSubmitted(`${f.id}_assemble`)).toBe(false);
 });
 
-it("старый незакрытый шаг интеграции при сдаче всё равно доводит до очереди", () => {
-  const f = fixture();
-  db.prepare("UPDATE task_collaboration_plan_nodes SET instructions='[taskflow:integration] version=v1' WHERE plan_id=? AND slot_key='build'").run(f.plan);
-  expect(enqueueAfterStepSubmitted(`${f.id}_build`)).toBe(true);
-});
-
 it("сбой слияния возвращается тому, кто писал код, с причиной", () => {
   const f = fixture({ slots: [["design", "designer"], ["build", "builder"], ["check", "critic_verifier"]] });
   expect(returnFailedMerge(f.id, "конфликт в: a.ts")).toBe(true);
