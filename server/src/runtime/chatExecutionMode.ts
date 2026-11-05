@@ -5,14 +5,18 @@ export function parseChatExecutionMode(value: unknown): ChatExecutionMode {
   if (value === "chat" || value === "card") return value;
   throw new Error("Выберите «В чате» или «По карточке»");
 }
-/** Explicit selection belongs to the room; accepted messages retain their snapshot. */
+/**
+ * Правило владельца (05.11.2026): способ выполнения не выбирается. Чат, привязанный
+ * к задаче, работает по карточке; любой другой — в чате. Уже принятое сообщение
+ * сохраняет свой способ.
+ */
 export function chatExecutionMode(chatId?: string, messageId?: string): ChatExecutionMode {
   if (chatId && messageId) {
     const message = db.prepare("SELECT execution_mode FROM chat_messages WHERE id=? AND chat_id=?").get(messageId,chatId) as any;
     if (message?.execution_mode) return parseChatExecutionMode(message.execution_mode);
   }
-  const chat = chatId ? db.prepare("SELECT execution_mode,task_id,parent_chat_id FROM chats WHERE id=?").get(chatId) as any : null;
-  return chat?.execution_mode ?? (chat?.task_id && chat?.parent_chat_id ? "card" : "chat");
+  const chat = chatId ? db.prepare("SELECT task_id FROM chats WHERE id=?").get(chatId) as any : null;
+  return chat?.task_id ? "card" : "chat";
 }
 export const CARD_WORK_OPERATIONS = new Set([
   "taskflow_create_task", "taskflow_suggest_subtasks", "taskflow_structure_dictation",

@@ -20,17 +20,34 @@ describe("chat/card execution boundary",()=>{
  });
  afterAll(async()=>app?.close());
  const send=async(text:string)=>(await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers:auth(owner),payload:{text}})).json().message;
- const mode=(value:any,u=owner)=>app.inject({method:"POST",url:`/api/chats/${chat.id}/execution-mode`,headers:auth(u),payload:{execution_mode:value}});
+ const boundTask=crypto.randomUUID();
+ const mode=async(value:"chat"|"card")=>{
+  db.prepare("INSERT OR IGNORE INTO tasks(id,title,creator_id) VALUES(?,'bound task',?)").run(boundTask,owner.user.id);
+  db.prepare("UPDATE chats SET task_id=? WHERE id=?").run(value==="card"?boundTask:null,chat.id);
+ };
  const invoke=(tool:any,name:string,id:string)=>tool.execute(id,{action:"invoke",operation:name,version:1,arguments:{},request_id:id}).then((r:any)=>JSON.parse(r.content[0].text));
  it("defaults a standalone room to chat",async()=>{
   const room=(await app.inject({url:`/api/chats/${chat.id}`,headers:auth(owner)})).json().chat;
   expect(room.execution_mode).toBe("chat");
  });
- it("only the owner can persist a valid mode",async()=>{
-  expect((await mode("card",other)).statusCode).toBe(403);
-  expect((await mode("anything")).statusCode).toBe(400);
-  const r=await mode("card");expect(r.statusCode).toBe(200);expect(r.json().chat.execution_mode).toBe("card");
-  expect((await mode("chat")).statusCode).toBe(200);
+ it("mode follows the task binding, the client cannot choose it",async()=>{
+  await mode("card");
+  expect(chatExecutionMode(chat.id)).toBe("card");
+  const inTask=await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers:auth(owner),payload:{text:"Работай здесь",execution_mode:"chat"}});
+  expect(chatExecutionMode(chat.id,inTask.json().message.id)).toBe("card");
+  await mode("chat");
+  expect(chatExecutionMode(chat.id)).toBe("chat");
+  const personal=await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers:auth(owner),payload:{text:"Работай здесь",execution_mode:"card"}});
+  expect(chatExecutionMode(chat.id,personal.json().message.id)).toBe("chat");
+  expect((await app.inject({method:"POST",url:`/api/chats/${chat.id}/execution-mode`,headers:auth(owner),payload:{execution_mode:"card"}})).statusCode).toBe(404);
+ });
+ it("a task chat ignores the chat model, a personal chat keeps it",async()=>{
+  await mode("card");
+  const fixed=await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers:auth(owner),payload:{text:"В карточке",model:"provider/any-model"}});
+  expect(db.prepare("SELECT model FROM chat_messages WHERE id=?").get(fixed.json().message.id)).toMatchObject({model:null});
+  await mode("chat");
+  const free=await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers:auth(owner),payload:{text:"В чате",model:"provider/any-model"}});
+  expect(db.prepare("SELECT model FROM chat_messages WHERE id=?").get(free.json().message.id)).toMatchObject({model:"provider/any-model"});
  });
  it("blocks hidden and direct card operations without losing coding/docs/plan tools",async()=>{
   const msg=await send("Исправь код прямо здесь");
@@ -56,18 +73,6 @@ describe("chat/card execution boundary",()=>{
   expect(make(card).context.executionMode).toBe("card");
   await mode("chat");
   expect(make(card).context.executionMode).toBe("card");
- });
- it("does not wake a card plan for online work in a task topic",async()=>{
-  const task=crypto.randomUUID(),topic=crypto.randomUUID();
-  const project=crypto.randomUUID(),parent=crypto.randomUUID();
-  db.prepare("INSERT INTO projects(id,name,owner_id) VALUES(?,?,?)").run(project,"Mode project",owner.user.id);
-  db.prepare("INSERT INTO tasks(id,title,creator_id,project_id) VALUES(?,?,?,?)").run(task,"mode task",owner.user.id,project);
-  db.prepare("INSERT INTO chats(id,kind,created_by,project_id) VALUES(?,'group',?,?)").run(parent,owner.user.id,project);
-  db.prepare("INSERT INTO chats(id,kind,created_by,task_id,parent_chat_id,project_id) VALUES(?,'group',?,?,?,?)").run(topic,owner.user.id,task,parent,project);
-  for(const id of [owner.user.id,other.user.id])db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)").run(topic,id);
-  nudge.mockClear();
-  const r=await app.inject({method:"POST",url:`/api/chats/${topic}/messages`,headers:auth(owner),payload:{text:"Работай здесь",execution_mode:"chat"}});
-  expect(r.statusCode).toBe(200);expect(nudge).not.toHaveBeenCalled();
  });
  it("inherits online mode across a role reply after the owner switches the room",async()=>{
   const source=await send("Сделай прямо здесь");
@@ -95,7 +100,6 @@ describe("chat/card execution boundary",()=>{
   const token=app.jwt.sign({id:"u-secretary"});
   const r=await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers:{authorization:`Bearer ${token}`},payload:{text:"Выбираю карточку",execution_mode:"card"}});
   expect(r.statusCode).toBe(403);
-  const selected=await mode("card",{token});expect(selected.statusCode).toBe(403);
  });
  it("planning remains read-only even with card execution selected",async()=>{
   await mode("card");const msg=await send("Сначала только план");

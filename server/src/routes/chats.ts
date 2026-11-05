@@ -8,7 +8,7 @@ import { extractQuickReplies, pullQuickReplies } from "../lib/quickReplies.js";
 import {compactChatReportMaterials} from "../lib/chatReportMaterials.js";
 import {preparedReportMaterials} from "../runtime/chatPreparedMaterials.js";
 import { prepareChatValue } from "../runtime/chatPreparationDeadline.js";
-import {chatExecutionMode,parseChatExecutionMode,isCardHandoffCommand,type ChatExecutionMode} from "../runtime/chatExecutionMode.js";
+import {chatExecutionMode,isCardHandoffCommand,type ChatExecutionMode} from "../runtime/chatExecutionMode.js";
 import {offerChatSteering} from "../runtime/chatSteering.js";
 import { autoTitleChat, ensurePersonalRoom, isDirectRoom, roomTurn, roomsSnapshot } from "../lib/chatRooms.js";
 import {
@@ -1123,21 +1123,6 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
   // сообщение сразу, а ответ роли придёт отдельным событием chat:new
   // (broadcast внутри try/catch не роняет запрос, даже если Пи упал —
   // пользовательский текст уже в ленте и не потеряется).
-  app.post<{Params:{id:string};Body:{execution_mode:unknown}}>("/api/chats/:id/execution-mode", {preHandler:authPre}, async(req:any,reply)=>{
-    if (!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
-    if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({error:"Способ выполнения выбирает владелец"});
-    let mode;
-    try {mode=parseChatExecutionMode(req.body?.execution_mode);} catch(error) {return reply.code(400).send({error:(error as Error).message});}
-    // 31.10.2026 (владелец): «у помощника мы делали только чат, но не нужно
-    // отбирать у него возможность создавать карточки». Раньше здесь стоял
-    // запрет «Помощнику — только в чате», и он же прятал карточные операции
-    // (taskflow_create_task и прочие) из набора инструментов. Теперь способ
-    // выполнения выбирает владелец и в чате с Помощником — как в любом
-    // другом. По умолчанию комната по-прежнему «в чате».
-    db.prepare("UPDATE chats SET execution_mode=?,updated_at=datetime('now') WHERE id=?").run(mode,req.params.id);
-    return {chat:chatRow(req.params.id)};
-  });
-
   // Панель чата: актуальное окно контекста живой сессии и команды роли
   // (карточка e11eae7a, пункты 4 и 5). Список команд НИЧЕГО не выполняет:
   // это только то, что у роли реально есть.
@@ -1177,11 +1162,8 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       try { mode = parseChatWorkMode(req.body?.work_mode); }
       catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
       if (mode !== "work" && roleFromUserId(req.userId)) return reply.code(403).send({error: "Режим выбирает человек"});
-      let requestedExecutionMode;
-      if (req.body?.execution_mode !== undefined) {
-        if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({error:"Способ выполнения выбирает владелец"});
-        try {requestedExecutionMode=parseChatExecutionMode(req.body.execution_mode);} catch {return reply.code(400).send({error:"Неизвестный способ выполнения"});}
-      }
+      // Способ выполнения следует из привязки к задаче: старый клиент ещё шлёт поле, оно не влияет.
+      if (req.body?.execution_mode !== undefined && (!isOwner(req.userId) || roleFromUserId(req.userId))) return reply.code(403).send({error:"Способ выполнения следует из привязки к задаче"});
       const text = String(req.body?.text || "").trim();
       // MAK-98 и гейт формата ниже используют отправителя — считаем один раз.
       const senderRole = roleFromUserId(req.userId);
@@ -1311,7 +1293,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       const sourceMessage = senderRole && parentMessage ? db.prepare("SELECT chat_id FROM chat_messages WHERE id=?").get(parentMessage) as {chat_id:string}|undefined : undefined;
       const executionMode = senderRole
         ? sourceSlot ? "card" : sourceMessage && isMember(sourceMessage.chat_id,req.userId) ? effectiveExecutionMode(sourceMessage.chat_id,parentMessage) : "chat"
-        : isOwner(req.userId) && isCardHandoffCommand(text) ? "card" : requestedExecutionMode ?? effectiveExecutionMode(chatId);
+        : isOwner(req.userId) && isCardHandoffCommand(text) ? "card" : effectiveExecutionMode(chatId);
       // Явный вызов команды («/skill:имя » или «/mcp:имя ») проверяется при
       // отправке: неизвестное имя отклоняется и НЕ исполняется; известный
       // навык подключается настоящим текстом, инструмент — реальным вызовом
@@ -1336,9 +1318,9 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       db.prepare(
         `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id,quick_replies)
          VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, req.userId, storedText, chatId, taskId, mode === "goal" ? "work" : mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot,quickReplies?JSON.stringify(quickReplies):null);
+      ).run(id, req.userId, storedText, chatId, taskId, mode === "goal" ? "work" : mode, chat.task_id ? null : chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot,quickReplies?JSON.stringify(quickReplies):null);
       db.prepare("UPDATE chat_messages SET execution_mode=? WHERE id=?").run(executionMode,id);
-      if(isOwner(req.userId)&&!senderRole)snapshotChatPreferences(id,chatId,chatModelChoice(req.body?.model));
+      if(isOwner(req.userId)&&!senderRole&&!chat.task_id)snapshotChatPreferences(id,chatId,chatModelChoice(req.body?.model));
       if(outstanding && ["pending","picked"].includes(outstanding.status)){
         pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
         db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);

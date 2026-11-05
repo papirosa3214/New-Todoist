@@ -123,20 +123,13 @@ describe("панель чата: модели, controls, Помощник, ко�
   });
 
   it("Помощник в личной переписке работает только в чате", async () => {
-    const mode = await app.inject({
-      method: "POST",
-      url: `/api/chats/${chat.id}/execution-mode`,
-      headers: auth(owner),
-      payload: { execution_mode: "card" },
-    });
-    expect(mode.statusCode).toBe(403);
     const card = await app.inject({
       method: "POST",
       url: `/api/chats/${chat.id}/messages`,
       headers: auth(owner),
-      payload: { text: "Оформи как карточку", execution_mode: "card" },
+      payload: { text: "Работай здесь", execution_mode: "card" },
     });
-    expect(card.statusCode).toBe(403);
+    expect(card.statusCode).toBe(200);
     const room = (await app.inject({ url: `/api/chats/${chat.id}`, headers: auth(owner) })).json().chat;
     expect(room.execution_mode).toBe("chat");
   });

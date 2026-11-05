@@ -270,6 +270,7 @@ describe("агент роли внутри сервера", () => {
     const {taskId}=builderTask("Занят на карточке");
     const headers={authorization:`Bearer ${ownerToken}`};
     const chat=(await app.inject({method:"POST",url:"/api/chats",headers,payload:{kind:"direct",title:"Уточнение работы",member_ids:["role_builder"]}})).json().chat;
+    db.prepare("UPDATE chats SET task_id=? WHERE id=?").run(taskId,chat.id);
     let entered!:()=>void, release!:()=>void;
     const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
     script.steering=[];script.steps=async()=>{entered();await gate;};
@@ -384,6 +385,7 @@ describe("агент роли внутри сервера", () => {
     db.prepare("UPDATE subtasks SET agent_id='role_architect' WHERE id=?").run(b.stepId);
     const headers={authorization:`Bearer ${ownerToken}`};
     const chat=(await app.inject({method:"POST",url:"/api/chats",headers,payload:{kind:"group",member_ids:["role_builder","role_architect"]}})).json().chat.id;
+    db.prepare("UPDATE chats SET task_id=? WHERE id=?").run(a.taskId,chat);
     let entered!:()=>void,release!:()=>void,starts=0;
     const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
     script.steps=async()=>{if(++starts===2)entered();await gate;};
@@ -408,6 +410,7 @@ describe("агент роли внутри сервера", () => {
     db.prepare("UPDATE subtasks SET agent_id='role_builder' WHERE id=?").run(a.stepId);
     const headers={authorization:`Bearer ${ownerToken}`};
     const chat=(await app.inject({method:"POST",url:"/api/chats",headers,payload:{kind:"group",member_ids:["role_builder"]}})).json().chat.id;
+    db.prepare("UPDATE chats SET task_id=? WHERE id=?").run(a.taskId,chat);
     let releaseQueue!:()=>void;
     const queueGate=new Promise<void>(r=>releaseQueue=r);
     const occupied=enqueueChatReply(chat,"role_builder",async()=>{await queueGate;return null;});

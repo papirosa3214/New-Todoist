@@ -35,7 +35,8 @@ describe("закрытый инструмент голосового Помощ�
   beforeAll(async()=>{
     app=await buildApp();
     db.prepare("UPDATE users SET task_intake_mode='manual' WHERE id='u1'").run();
-    db.prepare("INSERT INTO chats(id,kind,created_by,execution_mode) VALUES ('voice-card-fixture','direct','u1','card')").run();
+    db.prepare("INSERT OR IGNORE INTO tasks(id,title,creator_id) VALUES ('voice-card-task','Карточка голоса','u1')").run();
+    db.prepare("INSERT INTO chats(id,kind,created_by,task_id) VALUES ('voice-card-fixture','direct','u1','voice-card-task')").run();
     for (const member of ["u1","u-secretary"]) db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES ('voice-card-fixture',?)").run(member);
     stop=await startSecretaryVoiceBridge(app,socket);
   });
