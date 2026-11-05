@@ -525,7 +525,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
             : null,
           unread_count: unread,
           // Ход роли в этой комнате: идёт / чем кончился (владелец 27.10.2026).
-          turn: roomTurn(c.id, req.userId),
+          turn: roomTurn(c.id),
           context_usage: readChatListContext(c.id),
           // Название задачи для пометки в строке списка: по ней видно, какой
           // чат за какой задачей (владелец 21.09.2026, LOCK-195).

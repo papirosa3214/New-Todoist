@@ -107,33 +107,9 @@ function isLive(chatId: string): boolean {
   return !!db.prepare("SELECT 1 FROM chat_message_queue WHERE chat_id=? AND status IN ('pending','picked') LIMIT 1").get(chatId);
 }
 
-export type RoomTurnOutcome = "answered" | "failed" | "limit";
-
-/**
- * Ход роли в комнате для строки списка (владелец 27.10.2026): `running` —
- * роль сейчас отвечает здесь (анимированная аватарка); `outcome` — чем
- * кончился последний ход, пока зритель не открыл комнату: ответила
- * (зелёная точка), отвалилась (жёлтая), кончился лимит (красная). Открыл
- * комнату — отметка прочтения новее ответа, итог гаснет.
- */
-export function roomTurn(chatId: string, viewerId: string | null): { running: boolean; outcome: RoomTurnOutcome | null } {
-  const running = !!db.prepare("SELECT 1 FROM chat_message_queue WHERE chat_id=? AND status='picked' LIMIT 1").get(chatId);
-  if (running || !viewerId) return { running, outcome: null };
-  const read = db.prepare("SELECT last_read_at FROM chat_members WHERE chat_id=? AND member_id=?").get(chatId, viewerId) as
-    | { last_read_at: string | null }
-    | undefined;
-  // Зритель не участник комнаты (переписка ролей) — отметки прочтения нет,
-  // итог показывать не на что гасить.
-  if (!read) return { running, outcome: null };
-  const last = db.prepare(`SELECT m.stop_reason FROM chat_messages m JOIN users u ON u.id=m.from_user_id
-      WHERE m.chat_id=? AND u.type='ai' AND COALESCE(m.is_session_marker,0)=0 AND COALESCE(m.message_type,'')!='system'
-        AND m.created_at > COALESCE(?, '1970-01-01')
-      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1`).get(chatId, read.last_read_at) as { stop_reason: string | null } | undefined;
-  if (!last) return { running, outcome: null };
-  if (!last.stop_reason) return { running, outcome: "answered" };
-  if (last.stop_reason === "limit") return { running, outcome: "limit" };
-  if (last.stop_reason === "owner_interrupt") return { running, outcome: null };
-  return { running, outcome: "failed" };
+/** Ход роли в комнате для строки списка (владелец 27.10.2026): роль сейчас отвечает здесь. */
+export function roomTurn(chatId: string): { running: boolean } {
+  return { running: !!db.prepare("SELECT 1 FROM chat_message_queue WHERE chat_id=? AND status='picked' LIMIT 1").get(chatId) };
 }
 
 /** Работает ли роль прямо сейчас: забранная доставка любого чата. */
@@ -162,10 +138,9 @@ export function roomsSnapshot(previewText?: (text: string) => string) {
   const externalCandidates = all.filter((r) => r.external && !r.has_room).map(({ external: _e, has_room: _h, ...role }) => role);
   const dms = db.prepare(`SELECT c.id, GROUP_CONCAT(m.member_id) AS members FROM chats c JOIN chat_members m ON m.chat_id=c.id
       WHERE c.room_kind='dm' AND c.closed_at IS NULL GROUP BY c.id`).all() as Array<{ id: string; members: string }>;
-  const viewer = ownerId();
   const dmInfo = dms.map((d) => {
     const pair = d.members.split(",").sort();
-    return { chat_id: d.id, members: pair, pair: pair.join(":"), live: isLive(d.id), turn: roomTurn(d.id, viewer), last_message: lastMessage(d.id) };
+    return { chat_id: d.id, members: pair, pair: pair.join(":"), live: isLive(d.id), turn: roomTurn(d.id), last_message: lastMessage(d.id) };
   });
   return {
     common: { chat_id: COMMON_CHAT_ID, live: isLive(COMMON_CHAT_ID), last_message: lastMessage(COMMON_CHAT_ID) },
@@ -177,7 +152,7 @@ export function roomsSnapshot(previewText?: (text: string) => string) {
       return {
         ...role,
         personal_chat_id: personal,
-        personal_turn: personal ? roomTurn(personal, viewer) : null,
+        personal_turn: personal ? roomTurn(personal) : null,
         working: isWorking(role.id),
         last_message: personal ? lastMessage(personal) : null,
         dms: mine.map((d) => ({

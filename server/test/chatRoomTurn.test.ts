@@ -1,6 +1,4 @@
-// Ход роли в строке комнаты (владелец 27.10.2026): идёт ход — анимация
-// аватарки; после хода точка: ответила — зелёная, отвалилась — жёлтая,
-// кончился лимит — красная; открыл комнату — точка гаснет.
+// Ход роли в строке комнаты (владелец 27.10.2026): идёт ход или нет.
 import crypto from "node:crypto";
 import { beforeAll, afterAll, it, expect } from "vitest";
 import { buildApp } from "../src/index.js";
@@ -26,33 +24,18 @@ function reply(chatId: string, stopReason: string | null, at = "2026-10-27 11:00
     .run(crypto.randomUUID(), chatId, role, "Ответ", stopReason, at);
 }
 
-it("идёт ход — running, итога нет", () => {
+it("идёт ход — running", () => {
   const chatId = room();
   reply(chatId, null);
   db.prepare(`INSERT INTO chat_message_queue(id,chat_id,role_id,delivery_id,payload_json,status) VALUES(?,?,?,?,'{}','picked')`)
     .run(crypto.randomUUID(), chatId, role, crypto.randomUUID());
-  expect(roomTurn(chatId, "u1")).toEqual({ running: true, outcome: null });
+  expect(roomTurn(chatId)).toEqual({ running: true });
 });
 
-it("ответ после прочтения — зелёная", () => {
+it("хода нет — только running, чем кончился прошлый, не отдаётся", () => {
   const chatId = room();
-  reply(chatId, null);
-  expect(roomTurn(chatId, "u1")).toEqual({ running: false, outcome: "answered" });
-});
-
-it("отвалился — жёлтая, лимит — красная", () => {
-  const failed = room();
-  reply(failed, "error");
-  expect(roomTurn(failed, "u1").outcome).toBe("failed");
-  const limit = room();
-  reply(limit, "limit");
-  expect(roomTurn(limit, "u1").outcome).toBe("limit");
-});
-
-it("зашёл в комнату — точка гаснет", () => {
-  const chatId = room("2026-10-27 12:00:00");
   reply(chatId, "error");
-  expect(roomTurn(chatId, "u1")).toEqual({ running: false, outcome: null });
+  expect(roomTurn(chatId)).toEqual({ running: false });
 });
 
 it("причина обрыва: лимит отдельно от сбоя", () => {
