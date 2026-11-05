@@ -1,13 +1,26 @@
 import fs from "node:fs";
 
-/** Sole owner-controlled system instruction for secretary text chat. No fallback to the common canon. */
-export function secretaryChatPrompt():string {
- const text=fs.readFileSync(new URL("../../scripts/secretary-chat-system.md",import.meta.url),"utf8");
- if(!text.trim())throw new Error("Secretary chat system instruction is empty");
+/**
+ * Роли, у которых в текстовом чате одна выбранная владельцем инструкция, без
+ * общего канона, AGENTS.md и серверных дополнений. Исследователь — с 05.11.2026
+ * (сжатие Qwen по слову владельца), Помощник — с 04.11.2026.
+ */
+const SINGLE_CHAT_SYSTEM:Record<string,string>={
+ secretary:"secretary-chat-system.md",
+ researcher:"researcher-chat-system.md",
+};
+export function hasSingleChatSystem(role:string):boolean { return Object.hasOwn(SINGLE_CHAT_SYSTEM,role); }
+export function singleChatSystemPrompt(role:string):string {
+ const file=SINGLE_CHAT_SYSTEM[role];
+ if(!file)throw new Error("No single chat system instruction for role "+role);
+ const text=fs.readFileSync(new URL("../../scripts/"+file,import.meta.url),"utf8");
+ if(!text.trim())throw new Error("Chat system instruction is empty: "+role);
  return text;
 }
+/** Sole owner-controlled system instruction for secretary text chat. No fallback to the common canon. */
+export function secretaryChatPrompt():string { return singleChatSystemPrompt("secretary"); }
 export function chatTurnSystemText(role:string,base:string,extras:string[]):string {
- return role==="secretary" ? base : [base,...extras.filter(Boolean)].join("\n\n");
+ return hasSingleChatSystem(role) ? base : [base,...extras.filter(Boolean)].join("\n\n");
 }
 /** Preserve the current tool loadout, but remove every old/server/SDK system message, including resumed history. */
 export function projectSecretarySystem(messages:any[],text:string):any[] {
@@ -20,7 +33,7 @@ export function projectSecretarySystem(messages:any[],text:string):any[] {
   ...(tools.size?{toolsAdded:[...tools.values()]}:{})},...messages.filter(m=>m.role!=="system")];
 }
 export function installSecretarySystem(session:any,role:string,text:string):void {
- if(role!=="secretary")return;
+ if(!hasSingleChatSystem(role))return;
  const previous=session.agent.transformContext;
  session.agent.transformContext=async(messages:any[],signal?:AbortSignal)=>
   projectSecretarySystem(previous?await previous(messages,signal):messages,text);

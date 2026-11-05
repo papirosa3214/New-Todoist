@@ -1,4 +1,4 @@
-import {secretaryChatPrompt} from "./secretaryChatPrompt.js";
+import {hasSingleChatSystem,singleChatSystemPrompt} from "./secretaryChatPrompt.js";
 import {behaviorInstruction} from './roleBehavior.js';
 import { stageSkillNames } from "../lib/collaborationTemplates.js";
 import { PLANNING_TOOLS, chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
@@ -180,7 +180,7 @@ export async function listRoleSkills(role: string) {
 /** Тот же набор файлов роли; cwd задачи не меняется, executable extensions отключены. */
 export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}, sharedChatSkills=false):Promise<ResourceLoader & {disposeResources:()=>void}> {
  const home=ensureRoleHome(role);
- if(role==="secretary" && sharedChatSkills && !work){
+ if(hasSingleChatSystem(role) && sharedChatSkills && !work){
   const loader=new DefaultResourceLoader({
    cwd,agentDir:home.dir,settingsManager:SettingsManager.inMemory(),
    noExtensions:true,noThemes:true,noSkills:true,noPromptTemplates:true,noContextFiles:true,
@@ -235,7 +235,7 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  * AGENTS.md и навыки подмешивает загрузчик ресурсов (createTaskResourceLoader).
  */
 export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:string):Promise<string> {
- if(role==="secretary")return secretaryChatPrompt();
+ if(hasSingleChatSystem(role))return singleChatSystemPrompt(role);
  instructionResources(cwd);
  const discovered=await discoverChatResources(role,true);
  const custom=discovered.systemPromptSource;
