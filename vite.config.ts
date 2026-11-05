@@ -1,17 +1,28 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import basicSsl from "@vitejs/plugin-basic-ssl";
 
 // HTTPS на :5180 нужен ради getUserMedia (микрофон): браузер даёт его
 // только в secure context, а IP LAN в это исключение не входит.
-// Сертификат — локальный CA mkcert на 192.168.1.110 + localhost
-// (~/Проекты/Инфраструктура/lan-ca). Корневой CA стоит в связке Mac.
-const lanCertDir = "/home/maksim/Проекты/Инфраструктура/lan-ca";
+// На .110 сертификат — локальный CA mkcert (~/Проекты/Инфраструктура/lan-ca,
+// другой каталог задаёт TASKFLOW_LAN_CERT_DIR). На машине без него HTTPS
+// остаётся самоподписанным через basicSsl: конфиг обязан грузиться везде.
+const lanCertDir =
+  process.env.TASKFLOW_LAN_CERT_DIR ??
+  path.join(os.homedir(), "Проекты", "Инфраструктура", "lan-ca");
+const lanCertFile = path.join(lanCertDir, "lan.pem");
+const lanKeyFile = path.join(lanCertDir, "lan-key.pem");
+const lanCert =
+  fs.existsSync(lanCertFile) && fs.existsSync(lanKeyFile)
+    ? { cert: fs.readFileSync(lanCertFile), key: fs.readFileSync(lanKeyFile) }
+    : null;
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), ...(lanCert ? [] : [basicSsl()])],
   // @capacitor/local-notifications не установлен (нужен только нативной
   // оболочке), но useTaskActivity.ts импортирует его. Направляем и vite, и
   // vitest на локальную заглушку — иначе `npm test` падает на резолве.
@@ -24,10 +35,7 @@ export default defineConfig({
     },
   },
   server: {
-    https: {
-      cert: fs.readFileSync(path.join(lanCertDir, "lan.pem")),
-      key: fs.readFileSync(path.join(lanCertDir, "lan-key.pem")),
-    },
+    ...(lanCert ? { https: lanCert } : {}),
     proxy: {
       "/api": "http://192.168.1.110:3001",
       "/ws": { target: "ws://192.168.1.110:3001", ws: true },
