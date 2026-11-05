@@ -3,8 +3,9 @@ import { Type } from "typebox";
 import db from "../db.js";
 import { readChatPreferences } from "../lib/chatSessionPreferences.js";
 import { roleUserId } from "../roleRouting.js";
-import { ensureSubagentCoordinationCard, coordinationCardData } from "./chatCoordination.js";
+import { ensureSubagentCoordinationCard, coordinationAnswered, coordinationCardData } from "./chatCoordination.js";
 import { enqueueMessageDelivery } from "./chatQueue.js";
+import { activeVoiceCallId } from "../lib/voiceCallRegistry.js";
 import type { Context, Tool } from "./universalTaskflow.js";
 
 const SECRETARY_ID = roleUserId("secretary");
@@ -25,6 +26,54 @@ export function isVoiceDelegatedBranch(chatId: string): boolean {
 
 export function shouldMirrorBranchResult(chatId: string): boolean {
   return !isVoiceDelegatedBranch(chatId);
+}
+
+/**
+ * Завершает фоновую ветку Помощника: закрывает coordination-карточку,
+ * кладёт результат в родительский чат и будит исходную сессию Помощника.
+ */
+export function completeSecretaryBranch(chatId: string, answer: string, failed = false): boolean {
+  const row = db
+    .prepare(
+      `SELECT id, chat_id, steps FROM chat_messages
+        WHERE message_type='system' AND json_valid(steps)
+          AND json_extract(steps, '$.coordination.child_chat_id') = ?
+          AND json_extract(steps, '$.coordination.recipient_id') = ?
+        ORDER BY rowid DESC LIMIT 1`,
+    )
+    .get(chatId, SECRETARY_ID) as { id: string; chat_id: string; steps: string } | undefined;
+  if (!row) return false;
+  const coordination = coordinationCardData(row);
+  if (!coordination || coordination.terminal) return false;
+
+  const result = answer.trim() || (failed ? "Ход ветки завершился ошибкой без текста." : "Ветка завершилась без текста ответа.");
+  coordinationAnswered(coordination.question_id, SECRETARY_ID, result, failed);
+
+  const messageId = uid();
+  const text = [
+    `Результат фоновой ветки «${coordination.question.slice(0, 160)}»:`,
+    "",
+    result,
+  ].join("\n");
+  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)")
+    .run(messageId, SECRETARY_ID, text, row.chat_id);
+  db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(row.chat_id);
+
+  const queued = enqueueMessageDelivery({
+    chatId: row.chat_id,
+    roleId: SECRETARY_ID,
+    deliveryId: `branch-result:${coordination.question_id}`,
+    messageId,
+    payload: { mode: "work", hop: 0 },
+  });
+  if (!activeVoiceCallId(row.chat_id) && !process.env.VITEST) {
+    void import("../routes/chats.js")
+      .then(({ recoverAgentDelivery }) =>
+        recoverAgentDelivery({ chatId: row.chat_id, roleId: SECRETARY_ID, queueRowId: queued.id }),
+      )
+      .catch((error) => console.warn("[voice-branch] результат ветки не разбудил родительский чат:", error));
+  }
+  return true;
 }
 
 export function readVoiceJob(questionId: string): {

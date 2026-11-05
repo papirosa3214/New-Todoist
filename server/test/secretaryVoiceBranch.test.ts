@@ -4,6 +4,7 @@ import { runMigrations } from "../src/migrations.js";
 import { seedRoleAccounts } from "./helpers/seedOwner.js";
 import { roleUserId } from "../src/roleRouting.js";
 import {
+  completeSecretaryBranch,
   openSecretaryVoiceBranch,
   readVoiceJob,
   shouldMirrorBranchResult,
@@ -153,6 +154,28 @@ describe("openSecretaryVoiceBranch", () => {
     const job = readVoiceJob(result.questionId);
     expect(job.terminal).toBe(false);
     expect(job.spoken_text).toBe("");
+  });
+
+  it("завершение ветки закрывает карточку и ставит результат в очередь родительскому Помощнику", () => {
+    const result = openSecretaryVoiceBranch({
+      parentChatId: PARENT_ID,
+      brief: "Проверь доставку результата ветки",
+      ownerId: OWNER_ID,
+    });
+
+    expect(completeSecretaryBranch(result.branchId, "Готово: результат опубликован.")).toBe(true);
+    expect(readVoiceJob(result.questionId)).toMatchObject({
+      terminal: true,
+      status: "answered",
+      spoken_text: "Готово: результат опубликован.",
+    });
+
+    const digest = db.prepare(
+      "SELECT id,text FROM chat_messages WHERE chat_id=? AND text LIKE 'Результат фоновой ветки%' ORDER BY rowid DESC LIMIT 1",
+    ).get(PARENT_ID) as { id: string; text: string } | undefined;
+    expect(digest?.text).toContain("Готово: результат опубликован.");
+    expect(queueStatus(digest!.id)?.status).toBe("pending");
+    expect(completeSecretaryBranch(result.branchId, "Повтор")).toBe(false);
   });
 });
 

@@ -30,7 +30,7 @@ import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
-import { shouldMirrorBranchResult } from "../runtime/secretaryVoiceBranch.js";
+import { completeSecretaryBranch, shouldMirrorBranchResult } from "../runtime/secretaryVoiceBranch.js";
 import { shouldFanOutOwnerMessage, shouldFanOutTaskTopic, taskTopicBranchAck, branchSummaryLines, fanoutTitle, fanoutBranchAck, fanoutParentAck } from "../lib/chatOwnerFanout.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
@@ -3721,6 +3721,10 @@ async function deliverAgentReply(args: {
     // текст в неё не копируем (иначе дубль), если карточка в другой
     // комнате (обращение роли к роли) — копируем, иначе итог негде увидеть.
     traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure,chatId));
+    // Фоновая ветка Помощника использует синтетический question_id, а не id
+    // сообщения-триггера. Закрываем её карточку отдельно и будим родительский
+    // чат результатом; иначе карточка навсегда остаётся «ожидание событий».
+    traceCoordination(()=>completeSecretaryBranch(chatId,replyText,!!failure));
     // Живой черновик закрыт итоговым сообщением: текст уже в истории,
     // страховка больше не нужна (владелец 31.10.2026).
     markLiveDraftSaved(live.turnId, replyId);
