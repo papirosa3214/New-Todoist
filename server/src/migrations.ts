@@ -5717,6 +5717,14 @@ const migrations: Migration[] = [
   },
 
   {
+    id: "201_drop_chat_paused_work",
+    description: "Пауза в личном чате убрана 23.10.2026 в день появления: таблица осталась пустой",
+    up: () => {
+      db.exec("DROP TABLE IF EXISTS chat_paused_work");
+    },
+  },
+
+  {
     id: "200_context_operation_items",
     description: "Что именно попало в контекст роли: записи, источник и объём (владелец 05.11.2026)",
     up: () => {

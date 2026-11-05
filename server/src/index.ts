@@ -28,7 +28,6 @@ import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startModelUsageRetention } from "./lib/modelUsageRetention.js";
 import { startScheduler } from "./runtime/scheduler.js";
 import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
-import { startChatAutoClose } from "./runtime/chatAutoClose.js";
 import { closeOrphanedAttempts, startOrphanedAttemptSweep } from "./runtime/orphanedAttempts.js";
 import { startProviderProbe } from "./runtime/providerProbe.js";
 import { startLinearAutoImport } from "./lib/linearAutoImport.js";
@@ -1017,7 +1016,6 @@ if (isMain) {
     let stopDataRetention: (() => void) | null = null;
     let stopScheduler: (() => void) | null = null;
     let stopStalledWatch: (() => void) | null = null;
-    let stopChatAutoClose: (() => void) | null = null;
     let stopOrphanedAttempts: (() => void) | null = null;
     let stopProviderProbe: (() => void) | null = null;
     let stopLinearAutoImport: (() => void) | null = null;
@@ -1032,7 +1030,6 @@ if (isMain) {
       stopDataRetention?.();
       stopScheduler?.();
       stopStalledWatch?.();
-      stopChatAutoClose?.();
       stopOrphanedAttempts?.();
       stopProviderProbe?.();
       stopLinearAutoImport?.();
@@ -1135,7 +1132,6 @@ if (isMain) {
     // Сторож зависших шагов: пинг 10/авто-перезапуск 20/blocked 30+ минут без пульса.
     // Карточка 71651ad0; до этого всё чинил оркестратор руками (А30/А37/Г1-к/Г1-л).
     if (!sandbox) stopStalledWatch = startStalledStepWatch();
-    if (!sandbox) stopChatAutoClose = startChatAutoClose();
     if (!sandbox) stopOrphanedAttempts = startOrphanedAttemptSweep();
     // Метка «провайдер в лимите» снимается по факту сброса: пробный запрос раз в 5 минут
     // (runtime/providerProbe.ts), а не только по пятичасовому таймеру.
