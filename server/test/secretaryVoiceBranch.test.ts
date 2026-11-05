@@ -1,4 +1,11 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const wsMock = vi.hoisted(() => ({ broadcastToUsers: vi.fn() }));
+vi.mock("../src/ws.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/ws.js")>()),
+  broadcastToUsers: wsMock.broadcastToUsers,
+}));
+
 import db, { migrate } from "../src/db.js";
 import { runMigrations } from "../src/migrations.js";
 import { seedRoleAccounts } from "./helpers/seedOwner.js";
@@ -10,6 +17,7 @@ import {
   shouldMirrorBranchResult,
 } from "../src/runtime/secretaryVoiceBranch.js";
 import { registerVoiceCall, clearVoiceCall } from "../src/lib/voiceCallRegistry.js";
+import { ensureSubagentCoordinationCard } from "../src/runtime/chatCoordination.js";
 import {
   createRoleSubagentCallTool,
   pendingSubagentRuns,
@@ -176,6 +184,43 @@ describe("openSecretaryVoiceBranch", () => {
     expect(digest?.text).toContain("Готово: результат опубликован.");
     expect(queueStatus(digest!.id)?.status).toBe("pending");
     expect(completeSecretaryBranch(result.branchId, "Повтор")).toBe(false);
+  });
+
+  it("итог ветки сразу рассылается участникам родительского чата", () => {
+    const result = openSecretaryVoiceBranch({
+      parentChatId: PARENT_ID,
+      brief: "Проверь рассылку итога ветки",
+      ownerId: OWNER_ID,
+    });
+    wsMock.broadcastToUsers.mockClear();
+
+    expect(completeSecretaryBranch(result.branchId, "Итог для открытого чата")).toBe(true);
+
+    const sent = wsMock.broadcastToUsers.mock.calls.find(
+      ([, event]) => event?.type === "chat:new" && String(event.message?.text ?? "").includes("Итог для открытого чата"),
+    );
+    expect(sent?.[0]).toEqual(expect.arrayContaining([OWNER_ID, SECRETARY_ID]));
+  });
+
+  it("ответ в обычной комнате не закрывает чужое обращение к Помощнику", () => {
+    const roomId = "voice-branch-plain-room";
+    const originId = "voice-branch-plain-origin";
+    db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES(?,?,'direct',?)").run(roomId, "Переговорка", OWNER_ID);
+    db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id) VALUES(?,?)").run(roomId, SECRETARY_ID);
+    db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)")
+      .run(originId, RESEARCHER_ID, "Вопрос Помощнику", PARENT_ID);
+    const questionId = ensureSubagentCoordinationCard({
+      chatId: PARENT_ID,
+      requesterId: RESEARCHER_ID,
+      recipientId: SECRETARY_ID,
+      question: "Вопрос Помощнику",
+      originMessageId: originId,
+      roomChatId: roomId,
+    }) ?? "";
+    expect(questionId).not.toBe("");
+
+    expect(completeSecretaryBranch(roomId, "Ответ владельцу на другую тему")).toBe(false);
+    expect(readVoiceJob(questionId).terminal).toBe(false);
   });
 });
 

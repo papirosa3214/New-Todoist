@@ -41,6 +41,8 @@ import {
 } from "../src/runtime/PiRuntimeAdapter.js";
 import { _resetChatRolePickerForTests } from "../src/routes/chats.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
+import { roleUserId } from "../src/roleRouting.js";
+import { completeSecretaryBranch, openSecretaryVoiceBranch } from "../src/runtime/secretaryVoiceBranch.js";
 import { liveCatalogEntryOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
 const fakeClients: any[] = [];
@@ -93,6 +95,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
       return {
         session: {
           sessionId: "sess-test",
+          agent: {},
           subscribe: () => () => {},
           prompt: async () => {},
           abort: () => {},
@@ -189,6 +192,28 @@ describe("chatQueue: recovery", () => {
       .prepare(`SELECT status FROM chat_message_queue WHERE id=?`)
       .get("cmq_rec_1") as { status: string };
     expect(row.status).toBe("done");
+  });
+
+  it("итог фоновой ветки реально будит Помощника в родительском чате и он отвечает", async () => {
+    const secretary = roleUserId("secretary");
+    const parentId = `branch_wake_parent_${Date.now()}`;
+    db.prepare("INSERT INTO chats (id, title, kind, created_by) VALUES (?, 'Родитель', 'direct', ?)").run(parentId, OWNER_USER);
+    for (const member of [OWNER_USER, secretary]) {
+      db.prepare("INSERT INTO chat_members (chat_id, member_id) VALUES (?, ?)").run(parentId, member);
+    }
+    const branch = openSecretaryVoiceBranch({ parentChatId: parentId, brief: "Проверка отбивки", ownerId: OWNER_USER });
+    expect(completeSecretaryBranch(branch.branchId, "Ветка закончила")).toBe(true);
+    const queued = db
+      .prepare("SELECT id FROM chat_message_queue WHERE chat_id=? AND role_id=? AND delivery_id LIKE 'branch-result:%'")
+      .get(parentId, secretary) as { id: string };
+
+    const result = await recoverAgentDelivery({ chatId: parentId, roleId: secretary, queueRowId: queued.id });
+
+    expect(result.status).toBe("done");
+    expect(getMessageDelivery(queued.id)?.status).toBe("done");
+    expect(result.replyId).toBeTruthy();
+    const reply = db.prepare("SELECT chat_id, from_user_id FROM chat_messages WHERE id=?").get(result.replyId) as { chat_id: string; from_user_id: string };
+    expect(reply).toEqual({ chat_id: parentId, from_user_id: secretary });
   });
 
   it("pending со старой generation fence-ится без постановки в очередь", () => {

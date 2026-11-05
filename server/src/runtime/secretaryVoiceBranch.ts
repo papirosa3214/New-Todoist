@@ -6,6 +6,8 @@ import { roleUserId } from "../roleRouting.js";
 import { ensureSubagentCoordinationCard, coordinationAnswered, coordinationCardData } from "./chatCoordination.js";
 import { enqueueMessageDelivery } from "./chatQueue.js";
 import { activeVoiceCallId } from "../lib/voiceCallRegistry.js";
+import { loadChatMessage } from "../lib/chatMessages.js";
+import { broadcastToUsers } from "../ws.js";
 import type { Context, Tool } from "./universalTaskflow.js";
 
 const SECRETARY_ID = roleUserId("secretary");
@@ -35,13 +37,14 @@ export function shouldMirrorBranchResult(chatId: string): boolean {
 export function completeSecretaryBranch(chatId: string, answer: string, failed = false): boolean {
   const row = db
     .prepare(
-      `SELECT id, chat_id, steps FROM chat_messages
-        WHERE message_type='system' AND json_valid(steps)
-          AND json_extract(steps, '$.coordination.child_chat_id') = ?
-          AND json_extract(steps, '$.coordination.recipient_id') = ?
-        ORDER BY rowid DESC LIMIT 1`,
+      `SELECT m.id, m.chat_id, m.steps FROM chat_messages m
+         JOIN chats branch ON branch.id = ? AND branch.branch_of_chat_id = m.chat_id
+        WHERE m.message_type='system' AND json_valid(m.steps)
+          AND json_extract(m.steps, '$.coordination.child_chat_id') = ?
+          AND json_extract(m.steps, '$.coordination.recipient_id') = ?
+        ORDER BY m.rowid DESC LIMIT 1`,
     )
-    .get(chatId, SECRETARY_ID) as { id: string; chat_id: string; steps: string } | undefined;
+    .get(chatId, chatId, SECRETARY_ID) as { id: string; chat_id: string; steps: string } | undefined;
   if (!row) return false;
   const coordination = coordinationCardData(row);
   if (!coordination || coordination.terminal) return false;
@@ -58,6 +61,11 @@ export function completeSecretaryBranch(chatId: string, answer: string, failed =
   db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)")
     .run(messageId, SECRETARY_ID, text, row.chat_id);
   db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(row.chat_id);
+  const message = loadChatMessage(messageId);
+  if (message) {
+    const audience = db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(row.chat_id) as { member_id: string }[];
+    broadcastToUsers(audience.map((member) => member.member_id), { type: "chat:new", message });
+  }
 
   const queued = enqueueMessageDelivery({
     chatId: row.chat_id,
