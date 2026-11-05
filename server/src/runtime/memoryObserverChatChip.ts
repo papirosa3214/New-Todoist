@@ -10,8 +10,11 @@ import type { SlotSnapshotRow } from "./slotWorkSnapshot.js";
 
 const SYSTEM_USER_ID = "taskflow_system";
 
+/** Кому показать чип: роль и, если урок из шага, его карточка. */
+export type MemoryChipTarget = Pick<SlotSnapshotRow, "author_id" | "role_key"> & { task_id: string | null };
+
 /** Только personal owner↔role. Не тема задачи и не dm ролей. */
-function resolveMemoryChipChatId(snapshot: SlotSnapshotRow): string | null {
+function resolveMemoryChipChatId(snapshot: MemoryChipTarget): string | null {
   const roleId =
     snapshot.author_id ??
     (
@@ -33,7 +36,7 @@ function resolveMemoryChipChatId(snapshot: SlotSnapshotRow): string | null {
 }
 
 export function postMemoryUpdateChip(
-  snapshot: SlotSnapshotRow,
+  snapshot: MemoryChipTarget,
   update: { title: string | null; kind: string; confidence: number | null },
 ): void {
   const chatId = resolveMemoryChipChatId(snapshot);

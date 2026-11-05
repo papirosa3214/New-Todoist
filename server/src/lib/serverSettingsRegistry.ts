@@ -124,6 +124,7 @@ export const DEFAULTS = {
   memory_observer_enabled: true,
   memory_observer_model: "",
   memory_observer_min_confidence: 60,
+  memory_observer_chat_idle_min: 15,
 
   // Режим приёма
   task_intake_mode: "manual",
@@ -189,6 +190,7 @@ export const SERVER_SETTINGS: readonly ServerSetting[] = [
   { key: "activity_observer_enabled", label: "Наблюдатель за действиями включён", group: "лимиты", kind: "bool", default: DEFAULTS.activity_observer_enabled, applies_to: ["routes/activity.ts"] },
   { key: "memory_observer_enabled", label: "Наблюдатель памяти включён", group: "память", kind: "bool", default: DEFAULTS.memory_observer_enabled, applies_to: ["runtime/slotMemoryObserver.ts"] },
   { key: "memory_observer_model", label: "Модель наблюдателя памяти", group: "память", kind: "string", default: DEFAULTS.memory_observer_model, applies_to: ["runtime/slotMemoryObserver.ts"] },
+  { key: "memory_observer_chat_idle_min", label: "Тишина в чате до наблюдателя памяти, мин", group: "память", kind: "int", default: DEFAULTS.memory_observer_chat_idle_min, applies_to: ["runtime/chatMemoryObserver.ts"] },
   { key: "memory_observer_min_confidence", label: "Порог уверенности наблюдателя памяти, %", group: "память", kind: "int", default: DEFAULTS.memory_observer_min_confidence, min: 50, max: 95, applies_to: ["runtime/slotMemoryObserver.ts"] },
 
   // Режим приёма
@@ -285,6 +287,7 @@ export const DEV_OVERRIDES: Defaults = {
   memory_observer_enabled: envOverride("memory_observer_enabled", DEFAULTS.memory_observer_enabled),
   memory_observer_model: envOverride("memory_observer_model", DEFAULTS.memory_observer_model),
   memory_observer_min_confidence: envOverride("memory_observer_min_confidence", DEFAULTS.memory_observer_min_confidence),
+  memory_observer_chat_idle_min: envOverride("memory_observer_chat_idle_min", DEFAULTS.memory_observer_chat_idle_min),
   auto_merge_mode: envOverride("auto_merge_mode", DEFAULTS.auto_merge_mode),
   auto_merge_test_timeout_min: envOverride("auto_merge_test_timeout_min", DEFAULTS.auto_merge_test_timeout_min),
   task_intake_mode: envOverride("task_intake_mode", DEFAULTS.task_intake_mode),

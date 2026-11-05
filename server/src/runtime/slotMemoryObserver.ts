@@ -6,7 +6,7 @@ import { callRuntimeModel } from "../lib/runtimeAi.js";
 import { getSetting } from "../lib/serverSettings.js";
 import { remember } from "../lib/memory.js";
 import { recordMemoryObserverEvent } from "../lib/memoryObserverLog.js";
-import { postMemoryUpdateChip } from "./memoryObserverChatChip.js";
+import { postMemoryUpdateChip, type MemoryChipTarget } from "./memoryObserverChatChip.js";
 import { shouldObserveSlot, type SlotSnapshotRow } from "./slotWorkSnapshot.js";
 
 const SYSTEM = `Ты наблюдатель памяти TaskFlow. По готовому итогу слота реши, есть ли устойчивый урок на будущее.
@@ -61,6 +61,29 @@ export async function observeSlotMemory(
     .filter(Boolean)
     .join("\n");
 
+  return observeAndRemember({
+    base: { ...base, role_key: roleKey },
+    sourceRef,
+    userPrompt,
+    authorId: snapshot.author_id ?? `role_${roleKey}`,
+    chip: snapshot,
+  });
+}
+
+/** Общее ядро: спросить модель, проверить порог, записать урок в личную память роли. */
+export async function observeAndRemember(input: {
+  base: { role_key: string; task_id: string | null; subtask_id: string | null };
+  sourceRef: string;
+  userPrompt: string;
+  authorId: string;
+  chip: MemoryChipTarget;
+}): Promise<{ wrote: boolean; reason?: string }> {
+  const { base, sourceRef, userPrompt, authorId, chip } = input;
+  const roleKey = base.role_key;
+  if (db.prepare("SELECT id FROM memories WHERE source_ref = ?").get(sourceRef)) {
+    recordMemoryObserverEvent({ ...base, outcome: "already", source_ref: sourceRef });
+    return { wrote: false, reason: "already" };
+  }
   const modelRef = String(getSetting("memory_observer_model") ?? "").trim();
   let raw: string;
   try {
@@ -127,7 +150,7 @@ export async function observeSlotMemory(
       text,
       source_ref: sourceRef,
     },
-    { id: snapshot.author_id ?? `role_${roleKey}`, kind: "role" },
+    { id: authorId, kind: "role" },
     { onDuplicate: "skip", skipWriteReview: true },
   );
   if (result.skipped) {
@@ -149,7 +172,7 @@ export async function observeSlotMemory(
     title,
     detail: text.slice(0, 200),
   });
-  postMemoryUpdateChip(snapshot, {
+  postMemoryUpdateChip(chip, {
     title,
     kind,
     confidence: parsed.confidence ?? null,

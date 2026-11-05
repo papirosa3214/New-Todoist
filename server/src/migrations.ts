@@ -5717,6 +5717,20 @@ const migrations: Migration[] = [
   },
 
   {
+    id: "202_chat_memory_cursor",
+    description: "Докуда наблюдатель памяти прочитал личный чат. Старые разговоры задним числом не разбираем",
+    up: () => {
+      db.exec(`CREATE TABLE IF NOT EXISTS chat_memory_cursor (
+        chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+        last_rowid INTEGER NOT NULL,
+        observed_at TEXT NOT NULL
+      )`);
+      db.exec(`INSERT OR IGNORE INTO chat_memory_cursor(chat_id, last_rowid, observed_at)
+        SELECT chat_id, MAX(rowid), datetime('now') FROM chat_messages WHERE chat_id IS NOT NULL GROUP BY chat_id`);
+    },
+  },
+
+  {
     id: "201_drop_chat_paused_work",
     description: "Пауза в личном чате убрана 23.10.2026 в день появления: таблица осталась пустой",
     up: () => {

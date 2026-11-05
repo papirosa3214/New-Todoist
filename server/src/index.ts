@@ -1,3 +1,4 @@
+import { startChatMemoryObserver } from "./runtime/chatMemoryObserver.js";
 import {registerChatSessionPreferenceRoutes} from "./routes/chat-session-preferences.js";
 import {startBudgetCaptureWatcher} from "./runtime/chatBudgetCases.js";
 import { serverListenOptions } from "./runtime/systemdSocket.js";
@@ -1018,6 +1019,7 @@ if (isMain) {
     let stopStalledWatch: (() => void) | null = null;
     let stopOrphanedAttempts: (() => void) | null = null;
     let stopProviderProbe: (() => void) | null = null;
+    let stopChatMemoryObserver: (() => void) | null = null;
     let stopLinearAutoImport: (() => void) | null = null;
     let stopLinearSync: (() => void) | null = null;
     let stopWebhookDelivery: (() => void) | null = null;
@@ -1032,6 +1034,7 @@ if (isMain) {
       stopStalledWatch?.();
       stopOrphanedAttempts?.();
       stopProviderProbe?.();
+      stopChatMemoryObserver?.();
       stopLinearAutoImport?.();
       stopLinearSync?.();
       stopWebhookDelivery?.();
@@ -1136,6 +1139,7 @@ if (isMain) {
     // Метка «провайдер в лимите» снимается по факту сброса: пробный запрос раз в 5 минут
     // (runtime/providerProbe.ts), а не только по пятичасовому таймеру.
     if (!sandbox) stopProviderProbe = startProviderProbe();
+    if (!sandbox) stopChatMemoryObserver = startChatMemoryObserver();
     // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
     // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
     if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();

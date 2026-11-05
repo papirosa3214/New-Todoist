@@ -1,3 +1,4 @@
+import { observeChatMemory } from "../runtime/chatMemoryObserver.js";
 import {secretaryChatInput} from "../runtime/secretaryChatPrompt.js";
 import {snapshotChatPreferences,messageThinkingLevel,readChatPreferences} from "../lib/chatSessionPreferences.js";
 import { etagFor, etagMatches } from "../lib/etag.js";
@@ -731,6 +732,8 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (closed) cancelQuestionsForChat(chat.id);
       // Закрытая комната — ходы ролей в ней обрываем (владелец 27.10.2026).
       if (closed) await stopRoomRuns(chat.id, "owner_close");
+      // Сессию закрыли: разговор окончен, ждать тишины незачем (владелец 05.11.2026).
+      if (closed) void observeChatMemory(chat.id).catch((error) => console.warn("[chat-memory-observer]", error));
       // Ветка закрыта — её сводка уходит в комнату-родитель, к основной роли.
       const branch = db.prepare("SELECT branch_of_chat_id, title FROM chats WHERE id=?").get(chat.id) as
         | { branch_of_chat_id: string | null; title: string | null }
