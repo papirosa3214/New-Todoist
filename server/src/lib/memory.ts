@@ -81,6 +81,7 @@ async function embed(text: string): Promise<Float32Array | null> {
   try {
     const { getEmbeddings } = await import("./embeddingClient.js");
     const result = await getEmbeddings(text.slice(0, 4_000), {
+      purpose: "memory",
       timeoutMs: 8_000,
     });
     const vec = result.embeddings as number[];

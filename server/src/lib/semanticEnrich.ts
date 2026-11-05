@@ -86,7 +86,7 @@ export async function matchRoleForText(
     .all() as RoleEmbeddingRow[];
   if (rows.length === 0) return { matched: [], duration_ms: Date.now() - startedAt };
 
-  const { embeddings, dim } = await getEmbeddings(trimmed);
+  const { embeddings, dim } = await getEmbeddings(trimmed, { purpose: "taskMatch" });
   if (!Array.isArray(embeddings) || dim === 0) return { matched: [], duration_ms: Date.now() - startedAt };
   const queryF32 = new Float32Array(embeddings as number[]);
 

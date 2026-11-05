@@ -87,7 +87,7 @@ export async function memoryObserverStats(days = 7): Promise<MemoryObserverStats
   let dim: number | null = null;
   let error: string | null = null;
   try {
-    const result = await getEmbeddings("ping", { model, timeoutMs: Math.min(timeout_ms, 15_000) });
+    const result = await getEmbeddings("ping", { purpose: "probe", model, timeoutMs: Math.min(timeout_ms, 15_000) });
     const vec = result.embeddings as number[];
     if (Array.isArray(vec) && vec.length > 0) {
       ok = true;

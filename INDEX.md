@@ -263,3 +263,9 @@ Things 3 — 20 операций `things_*`, Todoist — 46 операций `to
 - Время и расход: `time` в `GET /api/coordination/tasks/:id/executors`, `server/src/lib/missionTime.ts`. Токены считаются с 05.11.2026 (`model_usage.task_id`), раньше привязки к задаче не было.
 - Журнал: `GET /api/tasks/:id/mission-events` отдаёт `missionLog`: события контракта и ход работы одной лентой.
 
+## Видимость контекста (владелец 05.11.2026)
+
+- Все срабатывания энричеров, JEV и, с 05.11.2026, эмбеддинговой модели лежат в `context_operations` с задачей и этапом.
+- По задаче и этапам: `GET /api/coordination/tasks/:id/context-observability`, за период: `GET /api/coordination/context-observability`. В обоих ответах `models`.
+- Новый вызов `getEmbeddings` передаёт `purpose`, иначе он попадёт в «other» и его не отличить.
+

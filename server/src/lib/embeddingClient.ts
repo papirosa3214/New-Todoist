@@ -13,6 +13,7 @@
 // датасетов RAGFlow идёт через другое имя (`bge-m3-gpu@Ollama`) —
 // специально оставлено, чтобы не ломать то, что на нём держится.
 
+import { finishObservation, startObservation } from "./contextObservability.js";
 import { getSetting } from "./serverSettings.js";
 
 export const OLLAMA_BASE_URL = (
@@ -107,6 +108,8 @@ export async function getEmbeddings(
     model?: string;
     timeoutMs?: number;
     maxBatch?: number;
+    /** Зачем вызвали: так видно, где реально работает эмбеддинговая модель. */
+    purpose?: string;
   } = {},
 ): Promise<EmbeddingResult> {
   const model = opts.model ?? String(getSetting("embedding_model") || DEFAULT_EMBEDDING_MODEL);
@@ -125,10 +128,17 @@ export async function getEmbeddings(
   }
 
   const startedAt = Date.now();
+  const observation = startObservation("embedding", opts.purpose ?? "other");
   const out: number[][] = [];
-  for (const prompt of inputs) {
-    out.push(await fetchOne(prompt, model, timeoutMs));
+  try {
+    for (const prompt of inputs) {
+      out.push(await fetchOne(prompt, model, timeoutMs));
+    }
+  } catch (error) {
+    finishObservation(observation, { status: "error", reason: "provider_error", inputCount: inputs.length, details: [model] });
+    throw error;
   }
+  finishObservation(observation, { status: "ok", inputCount: inputs.length, outputCount: out.length, details: [model] });
   const durationMs = Date.now() - startedAt;
   const dim = out[0]?.length ?? 0;
 

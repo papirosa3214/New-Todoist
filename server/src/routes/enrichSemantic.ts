@@ -154,7 +154,7 @@ export function registerEnrichSemanticRoutes(app: FastifyInstance) {
       let embeddings: number[];
       let dim: number;
       try {
-        const out = await getEmbeddings(text);
+        const out = await getEmbeddings(text, { purpose: "taskMatch" });
         embeddings = out.embeddings as number[];
         dim = out.dim;
       } catch (err) {

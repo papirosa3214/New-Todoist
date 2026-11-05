@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import db from "../db.js";
+import { getSetting } from "./serverSettings.js";
 export const OBSERVABILITY_SCHEMA = `
  CREATE TABLE IF NOT EXISTS context_operations (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, scenario TEXT NOT NULL,
@@ -43,8 +44,8 @@ const select=`SELECT o.id,o.kind,o.scenario,o.task_id taskId,o.subtask_id subtas
 export function readObservability(window='24h') {
  const since=observationSince(window);
  const events=(db.prepare(select+' WHERE o.started_at>=? ORDER BY o.started_at DESC,o.rowid DESC LIMIT 100').all(since) as any[]).map(e=>({...e,details:JSON.parse(e.details)}));
- const summary=db.prepare(`SELECT kind,scenario,count(*) calls,sum(status='ok') succeeded,sum(status='skipped') skipped,sum(status IN ('error','timeout')) failed,sum(status='running') running,sum(duration_ms) durationMs,sum(input_count) inputCount,sum(output_count) outputCount FROM context_operations WHERE started_at>=? GROUP BY kind,scenario ORDER BY kind,scenario`).all(since);
- return {window,since,trackingSince:startedAt(),events,summary,limit:100};
+ const summary=db.prepare(`SELECT kind,scenario,count(*) calls,sum(status='ok') succeeded,sum(status='skipped') skipped,sum(status IN ('error','timeout')) failed,sum(status='running') running,sum(duration_ms) durationMs,sum(input_count) inputCount,sum(output_count) outputCount,max(started_at) lastAt FROM context_operations WHERE started_at>=? GROUP BY kind,scenario ORDER BY kind,scenario`).all(since);
+ return {window,since,trackingSince:startedAt(),models:contextModels(),events,summary,limit:100};
 }
 export function readJevUsage(keyId:string|null,window='24h') {
  const since=observationSince(window);
@@ -52,4 +53,30 @@ export function readJevUsage(keyId:string|null,window='24h') {
  const totals=db.prepare(`SELECT count(*) calls,COALESCE(sum(status='ok'),0) succeeded,COALESCE(sum(status IN ('error','timeout')),0) failed,COALESCE(sum(status='running'),0) running,COALESCE(sum(input_tokens),0) inputTokens,COALESCE(sum(output_tokens),0) outputTokens,COALESCE(sum(input_tokens IS NULL OR output_tokens IS NULL),0) unknownUsageCalls FROM context_operations WHERE ${where}`).get(keyId,since) as any;
  const scenarios=db.prepare(`SELECT scenario,count(*) calls,COALESCE(sum(input_tokens),0) inputTokens,COALESCE(sum(output_tokens),0) outputTokens,COALESCE(sum(input_tokens IS NULL OR output_tokens IS NULL),0) unknownUsageCalls FROM context_operations WHERE ${where} GROUP BY scenario ORDER BY scenario`).all(keyId,since);
  return {window,since,trackingSince:startedAt(),scope:'taskflow_current_key',hasKey:keyId!==null,...totals,scenarios,moneyStatus:'unavailable',balance:null,cost:null};
+}
+
+/** На каких моделях работает контекст: настройки сервера, значения ключей сюда не входят. */
+export function contextModels():{embedding:string;jev:string|null;observer:string|null} {
+ const jev=db.prepare("SELECT model FROM jev_settings WHERE id=1").get() as {model:string|null}|undefined;
+ const observer=getSetting("memory_observer_model");
+ return {embedding:String(getSetting("embedding_model")),jev:jev?.model??null,observer:observer?String(observer):null};
+}
+
+/**
+ * Контекст одной задачи с дочерними карточками (владелец 05.11.2026): участвовал ли каждый
+ * источник и чем закончился. `stages` — то же по этапам, последним срабатыванием источника.
+ */
+export function readTaskObservability(taskId:string) {
+ const tree=`WITH RECURSIVE tree(id) AS (SELECT ? UNION ALL SELECT t.id FROM tasks t JOIN tree ON t.parent_id=tree.id)`;
+ const summary=db.prepare(`${tree} SELECT kind,scenario,count(*) calls,sum(status='ok') succeeded,sum(status='skipped') skipped,
+  sum(status IN ('error','timeout')) failed,sum(status='running') running,sum(duration_ms) durationMs,max(started_at) lastAt,
+  (SELECT o2.reason FROM context_operations o2 WHERE o2.kind=o.kind AND o2.scenario=o.scenario AND o2.task_id IN tree AND o2.status<>'ok' ORDER BY o2.started_at DESC LIMIT 1) lastReason
+  FROM context_operations o WHERE task_id IN tree GROUP BY kind,scenario ORDER BY kind,scenario`).all(taskId);
+ // Голые столбцы рядом с max() в SQLite берутся из той же строки: это и есть последнее срабатывание.
+ const rows=db.prepare(`${tree} SELECT subtask_id subtaskId,kind,scenario,count(*) calls,max(started_at) lastAt,status,reason,
+  input_count inputCount,output_count outputCount,details,duration_ms durationMs
+  FROM context_operations WHERE task_id IN tree AND subtask_id IS NOT NULL GROUP BY subtask_id,kind,scenario ORDER BY kind,scenario`).all(taskId) as any[];
+ const stages:Record<string,unknown[]>={};
+ for(const {subtaskId,details,...row} of rows)(stages[subtaskId]??=[]).push({...row,details:JSON.parse(details)});
+ return {trackingSince:startedAt(),models:contextModels(),summary,stages};
 }

@@ -2581,7 +2581,7 @@ export async function pickRoleForChat(args: {
     const { getEmbeddings } = await import("../lib/embeddingClient.js");
     const text = messageText.trim();
     if (!text) return null;
-    const result = await getEmbeddings(text);
+    const result = await getEmbeddings(text, { purpose: "chat" });
     const query = new Float32Array(result.embeddings as number[]);
     if (query.length === 0) return null;
 

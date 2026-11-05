@@ -6,7 +6,8 @@
 //   DELETE /api/jev/settings  — сбросить всё и удалить ключ
 //   POST   /api/jev/test      — живая проверка сохранённого подключения
 //   GET    /api/jev/effectiveness — шаги с JEV против шагов без него
-import { readObservability, readJevUsage } from "../lib/contextObservability.js";
+import { readObservability, readJevUsage, readTaskObservability } from "../lib/contextObservability.js";
+import { getTaskForRead } from "../access.js";
 import { currentJevKeyIdentity } from "../lib/jev.js";
 import { readJevEffectiveness } from "../lib/jevEffectiveness.js";
 import { startContextObservabilityWatcher } from "../lib/contextObservabilityWatcher.js";
@@ -28,6 +29,11 @@ function ownerOr403(req: any, reply: any): boolean {
 }
 
 export function registerJevRoutes(app: FastifyInstance): void {
+  app.get<{Params:{id:string}}>("/api/coordination/tasks/:id/context-observability",{preHandler:authOrApiToken},async(req:any,reply)=>{
+    if(!ownerOr403(req,reply))return;
+    if(!getTaskForRead(req.params.id,req.userId))return reply.code(404).send({error:"task_not_found"});
+    return readTaskObservability(req.params.id);
+  });
   for(const url of ["/api/coordination/context-observability","/api/jev/usage"]) app.get(url,{preHandler:authOrApiToken},async(req:any,reply)=>{
     if(!ownerOr403(req,reply))return;
     const window=req.query?.window??"24h";
