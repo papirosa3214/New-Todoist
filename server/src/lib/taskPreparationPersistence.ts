@@ -35,22 +35,14 @@ export function persistPreparedPlan(taskId:string,actorId:string,raw:TaskPrepara
     db.prepare("UPDATE task_collaboration_plan_nodes SET work_choice='planned' WHERE plan_id=? AND source_subtask_id IS NOT NULL").run(plan.id);
   }
   for (const w of preparation.workstreams) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='task_preparation',instructions=? WHERE plan_id=? AND slot_key=?").run(JSON.stringify(w),plan.id,w.key);
-  // Авто-назначение ответственного за интеграцию в репозиторий:
-  // approve плана требует integration_owner_id (см. lib/integrationResponsibility).
-  // Создатель плана знает роли узлов — назначаем code_orchestrator/architect,
-  // иначе первого исполнителя (задача 12.10.2026, 5 красных «Intake / preparation»).
-  // Не назначаем, если у плана остался вопрос — владелец ещё не разрешил,
-  // а значит решение по интеграции преждевременно.
+  // Поле для веба (lib/integrationResponsibility): code_orchestrator/architect, иначе
+  // первый исполнитель. Пока у плана остался вопрос, не назначаем.
   if(!preparation.question){
     const roles=db.prepare(`SELECT DISTINCT role_key FROM task_collaboration_plan_nodes WHERE plan_id=?`).all(plan.id) as Array<{role_key:string}>;
     const userIdForRole=(role:string):string|null=>{
       if(role==='secretary')return 'u-secretary';
       return 'role_'+role;
     };
-    // Берём code_orchestrator/architect, иначе первого исполнителя —
-    // approve плана требует integration_owner_id. Явный выбор владельца
-    // перебивает через PATCH /integration-responsibility в любой момент
-    // до approve.
     const pick=roles.find(r=>r.role_key==='code_orchestrator'||r.role_key==='architect')??(roles[0]??null);
     if(pick){
       db.prepare("UPDATE tasks SET integration_owner_id=? WHERE id=?").run(userIdForRole(pick.role_key),taskId);

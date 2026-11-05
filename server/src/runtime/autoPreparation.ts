@@ -120,11 +120,7 @@ export async function processOnePreparation(input:{workerId:string;analyze?:Anal
           const plan=createDraftPlan(task.id,project.owner_id,prep.workstreams.length===1?"single_executor":"manual",prep.reason,task.context_version??null,{nodes,edges});
           planId=plan.id;
           for(const w of prep.workstreams) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='auto_preparation',instructions=? WHERE plan_id=? AND slot_key=?").run(JSON.stringify(w),plan.id,w.key);
-          // Авто-назначение ответственного за интеграцию в репозиторий —
-          // чтобы approve плана не падал с 409 «Назначьте ответственного…»
-          // для типовых задач auto-preparation (5 красных тестов Intake,
-          // 12.10.2026). Создатель плана знает роли узлов; выбираем
-          // code_orchestrator/architect, иначе первого исполнителя.
+          // Поле для веба: code_orchestrator/architect, иначе первый исполнитель.
           const ownerRoles=db.prepare(`SELECT DISTINCT role_key FROM task_collaboration_plan_nodes WHERE plan_id=?`).all(plan.id) as Array<{role_key:string}>;
           const pick=ownerRoles.find(r=>r.role_key==='code_orchestrator'||r.role_key==='architect')??(ownerRoles[0]??null);
           if(pick) db.prepare("UPDATE tasks SET integration_owner_id=? WHERE id=?").run(pick.role_key==='secretary'?'u-secretary':'role_'+pick.role_key,task.id);
@@ -143,12 +139,8 @@ export async function processOnePreparation(input:{workerId:string;analyze?:Anal
       return {id,owner:project.owner_id};
     })();
     if(notification) broadcastToUsers([notification.owner],{type:"notification:new",notificationId:notification.id,taskId:job.task_id});
-    // Назначить ответственного за интеграцию сразу после создания авто-плана:
-    // без владельца approve отвечает 409 (см. регламент 09.10.2026 и
-    // карточку 71c1cd6e-…). integrationResponsibility() при mode='auto'
-    // сам выбирает кандидата; в плане без архитектора/оркестратора
-    // suggested=null, и тогда mode переключается на 'manual' с
-    // фолбэком на первого участника, чтобы approve не падал задним числом.
+    // Поле для веба: при mode='auto' кандидата выбирает integrationResponsibility(),
+    // без него mode становится 'manual' с первым участником.
     const finalJob = db.prepare("SELECT status, plan_id FROM task_preparation_jobs WHERE id=?").get(job.id) as {status:string, plan_id:string|null}|undefined;
     if (finalJob?.status === "ready" && finalJob.plan_id) {
       try {

@@ -5,7 +5,9 @@ import {getTaskForRead,getTaskForWrite} from '../access.js';
 import {logEvent} from '../agentState.js';
 import {broadcastTaskEvent} from '../ws.js';
 
-export const INTEGRATION_REQUIRED = 'Назначьте ответственного за перенос изменений в основную ветку';
+// Роли на интеграции нет (владелец 05.11.2026, `runtime/acceptedMerge.ts`). Поле живёт
+// для замороженного веба: он читает и меняет его этими маршрутами, а режим
+// `not_required` по-прежнему держит результат вне очереди слияния.
 type Choice = {id:string;title:string;role:string};
 type Stored = {id:string;integration_mode:string;integration_owner_id:string|null};
 function root(taskId:string):string {
@@ -33,21 +35,10 @@ export function integrationResponsibility(taskId:string) {
  if(!candidates.length){const u=db.prepare("SELECT u.id,u.name title FROM users u JOIN tasks t ON t.assignee_id=u.id WHERE t.id=? AND COALESCE(u.archived,0)=0").get(scopeId) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:'executor'});}
  candidates.sort((a,b)=>a.title.localeCompare(b.title));
  const suggested=candidates.find(c=>c.role==='code_orchestrator'||c.role==='orchestrator')??candidates.find(c=>c.role==='architect')??candidates[0]??null;
- // Ответственным за интеграцию может быть только участник команды. Если в
- // карточке сохранён владелец, которого среди участников плана нет, в auto
- // mode он авторизует интеграцию только если это агент: прежний агент после
- // замены плана и авто-выбор при подготовке (id может не существовать) — не
- // посторонние, для них действует assigned ?? suggested, то есть первый
- // кандидат (карточка 39fe9350, группа Intake/preparation). Сохранённый
- // человек — например, владелец карточки — авторизацию не даёт: показываем
- // suggested, но valid=false, approve плана и серверная передача ждут выбора
- // участника (тест main «auto mode never authorizes a stored non-participant
- // integration owner»).
+ // Показать можно только участника команды. Сохранённый агент не из плана заменяется
+ // на assigned ?? suggested; сохранённый человек даёт suggested и valid=false.
  const assigned=candidates.find(c=>c.id===task.integration_owner_id)??null;
-// Режим «Оркестратор» (владелец 13.10.2026): итог и вливание в main делает
- // шаг сборки самого Оркестратора, отдельный автоинтегратор после него —
- // дубль работы. Пока у карточки действующий план orchestrated, интеграция
- // считается «не требуется», и сервер не добавляет шаг «Интеграция».
+ // План orchestrated: в очередь слияния результат ведёт шаг сборки оркестратора.
  if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND profile='orchestrated' AND status IN ('draft','approved') LIMIT 1").get(scopeId))
   return {scope_task_id:scopeId,mode:'not_required' as const,owner_id:null,owner_title:null,candidates,suggested_owner_id:null,valid:true};
  const stored=task.integration_owner_id?db.prepare('SELECT type FROM users WHERE id=?').get(task.integration_owner_id) as {type:string}|undefined:undefined;
@@ -55,10 +46,6 @@ export function integrationResponsibility(taskId:string) {
  const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?assigned:(assigned??suggested);
  const valid=task.integration_mode==='not_required'||(!stray&&!!owner);
  return {scope_task_id:scopeId,mode:task.integration_mode,owner_id:owner?.id??null,owner_title:owner?.title??null,candidates,suggested_owner_id:suggested?.id??null,valid};
-}
-export function integrationResponsibilityPrompt(taskId:string):string {
- const state=integrationResponsibility(taskId);
- return state.mode==='not_required'?'Интеграция в репозиторий: явно не требуется.':`Ответственный за интеграцию: ${state.owner_title??'не назначен'} (${state.owner_id??'нет'}), карточка ${state.scope_task_id}. Передайте ему точные коммиты и проверки. После положительного ревью он переносит изменения в main и проверяет совместный результат. Не считайте рабочую ветку интегрированной. После положительного ревью сервер сам добавляет в план шаг «Интеграция» на ответственного (у карточки без плана — сообщение через очередь чата). Не создавайте второго ответственного и не добавляйте такой шаг сами. Укажите настоящий SHA main и проверки, либо конкретную причину ожидания.`;
 }
 export function registerIntegrationResponsibilityRoutes(app:FastifyInstance):void {
  app.get<{Params:{id:string}}>('/api/tasks/:id/integration-responsibility',{preHandler:authOrApiToken},async(req:any,reply)=>{

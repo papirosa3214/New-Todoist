@@ -16,7 +16,6 @@ import { clockLine } from "../lib/clockLine.js";
 import { currentChatGeneration, claimMessageDelivery, finishMessageDelivery, fenceMessageDelivery } from "./chatQueue.js";
 import { agentMessagingTools } from "./agentMessaging.js";
 import { WORK_PLAN_INSTRUCTION } from "../lib/subtaskWorkPlan.js";
-import {integrationResponsibilityPrompt} from '../lib/integrationResponsibility.js';
 import { orchestratorTools } from "./orchestratorTools.js";
 import { ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT } from "./orchestratedPlan.js";
 import { resolveReviewTaskId } from "../lib/reviewTaskId.js";
@@ -977,7 +976,7 @@ function taskForLaunchContext(taskId: string): Record<string, unknown> {
 /** Задание по умолчанию — когда вызывающий не собрал своё (ручной запуск). */
 export function defaultTaskPrompt(taskId: string, role: string): string {
   const task = db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title?: string } | undefined;
-  return renderInstruction(role, "task.start", { roleTitle: roleTitle(role), taskId, title: (task?.title ?? "") + "\n" + integrationResponsibilityPrompt(taskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
+  return renderInstruction(role, "task.start", { roleTitle: roleTitle(role), taskId, title: task?.title ?? "", rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 /**
@@ -1033,7 +1032,7 @@ export function planSubtaskPrompt(taskId: string, role: string, subtaskId: strin
       ? renderInstruction(role, "task.orchestrate", { roleTitle: roleTitle(role), taskId, subtaskId, planId: orch.plan_id, selfSlot: ORCHESTRATE_SLOT, assembleSlot: ORCHESTRATE_ASSEMBLE_SLOT, rules })
       : renderInstruction(role, "task.orchestrate_assemble", { roleTitle: roleTitle(role), taskId, subtaskId, planId: orch.plan_id, rules });
   }
-  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: (subtask?.title ?? "") + "\n" + integrationResponsibilityPrompt(taskId), artifactContract: artifactContractNote(subtaskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
+  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: subtask?.title ?? "", artifactContract: artifactContractNote(subtaskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 // ── Папка проекта, справка, продолжение разговора (этап C3) ──────────────

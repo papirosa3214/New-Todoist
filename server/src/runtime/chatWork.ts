@@ -199,9 +199,8 @@ export async function proposeWork(
     stepIds.set(s.slot, stepId);
     addStep.run(stepId, taskId, `${roleTitle(s.role_key)}: ${s.result}`.slice(0, 200), i);
   });
-  // Перенос в основную ветку: сервер требует назвать ответственного до старта
-  // команды. Если он не выводится сам (оркестратор → архитектор → единственный
-  // исполнитель), им становится разработчик, иначе роль первого шага.
+  // Поле для веба: если ответственный не выводится сам, это разработчик, иначе
+  // роль первого шага.
   const rolesInPlan = [...new Set(stored.map((s) => s.role_key))];
   if (rolesInPlan.length > 1 && !rolesInPlan.includes("architect") && !rolesInPlan.includes("code_orchestrator")) {
     const responsible = roleUserId(rolesInPlan.includes("builder") ? "builder" : rolesInPlan[0]);
