@@ -15,6 +15,7 @@
 // объясняет. Действия (retry, replace, cancel, lift) вызываются через
 // существующие маршруты, ссылки на них возвращаются в `links`.
 
+import { missionTime } from "../lib/missionTime.js";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import {getTaskForRead} from "../access.js";
@@ -502,6 +503,7 @@ function buildExecutorSummary(taskId: string) {
     },
     executors,
     pending_questions: looseQuestions,
+    time: missionTime(taskId),
   };
 }
 
