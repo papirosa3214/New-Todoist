@@ -115,6 +115,7 @@ import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
 import { registerAgentServiceRoutes } from "./routes/agent-service.js";
 import { registerIntegrationRoutes } from "./routes/integrations.js";
 import { registerJournalFolderRoutes } from "./routes/journalFolders.js";
+import { registerKbFolderRoutes } from "./routes/kbFolders.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 import { registerTaskOutcomeRoutes } from "./routes/taskOutcome.js";
 import { registerNoteRoutes } from "./routes/notes.js";
@@ -636,6 +637,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAgentServiceRoutes(app);
   registerIntegrationRoutes(app);
   registerJournalFolderRoutes(app);
+  registerKbFolderRoutes(app);
   registerKnowledgeRoutes(app);
   registerTaskOutcomeRoutes(app);
   registerNoteRoutes(app);

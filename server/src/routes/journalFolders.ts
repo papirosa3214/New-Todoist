@@ -43,6 +43,17 @@ function toApi(row: FolderRow): ApiJournalFolder {
   };
 }
 
+/**
+ * Удаление папки — общий код для маршрута Дневника и маршрута базы знаний
+ * (/api/kb/folders/:id). Вынесен, чтобы оба пути удаляли одинаково: заметки
+ * «выпадают» в корень (ON DELETE SET NULL), подпапки каскадом удаляются по
+ * parent_id (ON DELETE CASCADE). Возвращает false, если папки уже нет.
+ */
+export function deleteJournalFolder(id: number): boolean {
+  const result = db.prepare("DELETE FROM journal_folders WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
 export function registerJournalFolderRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
 
@@ -174,8 +185,8 @@ export function registerJournalFolderRoutes(app: FastifyInstance) {
       // (см. миграцию 012_journal_folders) — заметки «выпадают» в корень
       // «Без папки», не теряются. Подпапки каскадом удаляются по parent_id
       // (ON DELETE CASCADE).
-      const result = db.prepare("DELETE FROM journal_folders WHERE id = ?").run(id);
-      if (result.changes === 0) return reply.code(404).send({ error: "Папка не найдена" });
+      const result = deleteJournalFolder(id);
+      if (!result) return reply.code(404).send({ error: "Папка не найдена" });
       return reply.code(204).send();
     },
   );
