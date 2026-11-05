@@ -46,6 +46,7 @@ import { ThrashGuard, stepDigest } from "./thrashGuard.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { roleProjectContext,roleProjectSnapshot } from "./roleProjectContext.js";
 import { saveSlotSnapshot, slotSnapshotBlock, technicalSlotSnapshot } from "./slotWorkSnapshot.js";
+import { resolutionHandoff, slotTeamMap } from "../lib/taskChatScope.js";
 import { buildTaskHistory } from "./taskHistoryContext.js";
 import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
 import { buildRoleSliceText, collectRoleSlice } from "./roleSlice.js";
@@ -1881,7 +1882,7 @@ try {
       });
       const queued=input.subtaskId ? db.prepare("SELECT m.id,m.text FROM slot_topic_inbox i JOIN chat_messages m ON m.id=i.message_id WHERE i.subtask_id=? AND i.delivered_at IS NULL ORDER BY m.created_at,m.rowid").all(input.subtaskId) as {id:string;text:string}[] : [];
       for(const m of queued){runControl.messengerMessages.add(m.id);runControl.unacknowledgedMessengerMessages.add(m.id);}
-      const messages=queued.map(m=>`Сообщение темы задачи ${taskId}, id ${m.id}. Ответь через taskflow_chat_reply(message_id=${m.id},text=...). Данные: ${JSON.stringify(m.text)}`).join("\n");
+      const messages=queued.map(m=>{const handoff=resolutionHandoff(m.id);return `${handoff ? handoff+"\n" : ""}Сообщение темы задачи ${taskId}, id ${m.id}. Ответь через taskflow_chat_reply(message_id=${m.id},text=...). Данные: ${JSON.stringify(m.text)}`;}).join("\n");
       // Снимок предыдущей попытки этого слота (владелец 04.10.2026): ход роли
       // умирает вместе с процессом, и без снимка следующий вызов начинает с
       // нуля. Ставим после задания этапа и ДО контекста запуска, чтобы роль
@@ -1894,7 +1895,9 @@ try {
       // запуска и памяти, инструкция о плане терялась: модель к этому месту
       // уже увлечена задачей и 89% плановых слотов оставались без плана.
       // Перед постановкой — первое, что агент читает, поэтому и заполняет.
-      const workPlanPrompt = input.subtaskId ? "\n\n" + (composeLayer(role, "tool.runtime.taskflow_work_plan")?.effective ?? WORK_PLAN_INSTRUCTION) : "";
+      // Карта команды (владелец 05.11.2026): роль отвечает за свой кусок и знает, кто идёт дальше.
+      const teamMap = input.subtaskId ? slotTeamMap(input.subtaskId) : "";
+      const workPlanPrompt = (input.subtaskId ? "\n\n" + (composeLayer(role, "tool.runtime.taskflow_work_plan")?.effective ?? WORK_PLAN_INSTRUCTION) : "") + (teamMap ? "\n\n" + teamMap : "");
       assertRunTaskAvailable(taskId);
       await session.prompt(workPlanPrompt + (mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt));
       // Лимит провайдера библиотека не бросает: ход молча кончается ответом с ошибкой 429

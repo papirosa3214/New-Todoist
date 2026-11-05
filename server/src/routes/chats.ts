@@ -3498,17 +3498,20 @@ async function deliverAgentReply(args: {
     "SELECT COALESCE(c.project_id,t.project_id) project_id FROM chats c LEFT JOIN tasks t ON t.id = c.task_id WHERE c.id = ?",
   ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
   // Чат задачи: первым блоком — сама задача и место роли в ней (lib/taskChatBrief.ts).
-  if (topic) { const brief = taskChatBrief(topic.task_id, role); if (brief) prompt = `${brief}\n\n${prompt}`; }
+  // Чат задачи только для отчёта (владелец 05.11.2026): карта и выжимка вместо
+  // данных проекта, памяти и библиотеки. Память остаётся в рабочем запуске.
+  const taskChatScoped = !!topic && role !== "secretary" && !integrationContext && !args.chatOnly;
+  if (topic) { const brief = taskChatBrief(topic.task_id, role, slot?.id ?? null, chatId, fromOwner ? unwrapRoleEnvelope(trigger.text) : null); if (brief) prompt = `${brief}\n\n${prompt}`; }
   // Заблокированный слот: не запрет, а маячок предложить план решения.
   if (slot?.agent_state === "blocked" && fromOwner) prompt = `${prompt}\n\n${RESOLUTION_PLAN_BEACON}`;
-  const memory = await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text, dataOnly:role==="secretary" }));
+  const memory = taskChatScoped ? null : await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text, dataOnly:role==="secretary" }));
   if (memory) prompt = `${prompt}\n\n${memory}`;
   // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
   // последний снимок в общий контекст роли — и для чата, и для работы»).
   // Для конкретного этапа — его снимок, без этапа — короткий перечень моих
   // слотов. Это ДАННЫЕ о работе, а не инструкция: в чат ничего не отправляется
   // автоматически, роль сама решает, упоминать ли это в ответе.
-  const snapshots = slot
+  const snapshots = taskChatScoped ? null : slot
     ? roleSlotSnapshotsBlock({ role, taskId: slot.task_id, subtaskId: slot.id })
     : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null, projectId: topic ? null : chatProject });
   if (snapshots) prompt = `${prompt}\n\n${snapshots}`;
@@ -3516,7 +3519,7 @@ async function deliverAgentReply(args: {
   prompt += `\nОтвечаешь на сообщение ${trigger.id}; сервер свяжет итоговый текст с этим вопросом. Не отправляй тот же ответ повторно инструментом. Для отдельного нового вопроса коллеге используй taskflow_chat_send.`;
   prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Материалы сохраняй инструментом doc_write в документах проекта или прикладывай файлом к этому разговору; для этого не нужна карточка задачи. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
   }
-  if(topic && role!=="secretary") prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
+  if(topic && role!=="secretary" && !taskChatScoped) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 
   if(integrationContext) prompt = integrationContext+"\n\n"+prompt;
 
@@ -3568,6 +3571,7 @@ async function deliverAgentReply(args: {
       role,
       roleId: roleUserId,
       prompt,
+      ...(taskChatScoped && topic ? { taskChatTaskId: topic.task_id } : {}),
       model: (db.prepare("SELECT model FROM chat_messages WHERE id = ?").get(trigger.id) as { model: string | null } | undefined)?.model ?? undefined,
       thinkingLevel: messageThinkingLevel(trigger.id),
       // Свежий ход после прерырования: прежняя сессия не продолжается —

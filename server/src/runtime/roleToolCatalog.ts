@@ -6,6 +6,7 @@ import {Check,Errors} from "typebox/value";
 import {createHash} from "node:crypto";
 import {taskflowTools} from "./inProcessRun.js";
 import {roleToolAllowed} from "../lib/roleToolScope.js";
+import {scopeTaskChatOperations,TASK_CHAT_MODE} from "./taskChatTools.js";
 import {roleUserId} from "../roleRouting.js";
 import {createUniversalTaskflow,isReadOperation,operationRestriction,UNIVERSAL_INSTRUCTION,type Tool,type Context} from "./universalTaskflow.js";
 import {toolRequestStore} from "./toolRequestStore.js";
@@ -78,7 +79,9 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  ? [createRoleSubagentSteerTool(context)] : [];
  // Новый ход роли — счётчик вызовов субагента сбрасывается: лимит «3 за ход».
  if(subagentCallTools.length)resetSubagentCallCounters(input.role,input.chatId??"");
- const operations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...hostTools,...openBranchTools,...subagentCallTools,...subagentSteerTools,...adapters];
+ const allOperations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...hostTools,...openBranchTools,...subagentCallTools,...subagentSteerTools,...adapters];
+ // Чат задачи: чужую карточку, документ и коллегу пускает только слово владельца.
+ const operations=input.mode===TASK_CHAT_MODE ? scopeTaskChatOperations(allOperations,{taskId:input.taskId,messageId:input.messageId,role:input.role}) : allOperations;
  const universal=createUniversalTaskflow(operations,context,toolRequestStore);
  const handledCalls=new Set<string>();
  const sdkMistakes=new Map<string,number>();

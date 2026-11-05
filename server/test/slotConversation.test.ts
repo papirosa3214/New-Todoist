@@ -64,17 +64,17 @@ it("ambiguous roles require a slot; explicit targeting cannot select another rol
  const shared=roleProjectSnapshot('builder',null,'shared_task');
  expect(shared).toContain('Исходный блок');expect(shared).toContain('Дополнительный этап');expect(shared).toContain('постоянный участник');
 });
-// Владелец 20.10.2026: «Обсуждение» — то же, что работа по задаче, без ограничений.
-it("discussion has the same tools as work",()=>{
+// Владелец 05.11.2026: разговор со слотом только читает и только свою задачу.
+it("slot conversation is read-only",()=>{
  const names=slotConversationTools('builder','test','shared_task','slot_a').map(tool=>tool.name);
  expect(names).toContain('taskflow_doc_read');expect(names).toContain('taskflow_task');
- expect(names).toContain('taskflow_state');expect(names).toContain('taskflow_subtask_done');expect(names).toContain('taskflow_doc_write');expect(names).toContain('taskflow_topic_send');expect(names).toContain('taskflow');
+ expect(names).not.toContain('taskflow_state');expect(names).not.toContain('taskflow_subtask_done');expect(names).not.toContain('taskflow_doc_write');expect(names).not.toContain('taskflow_kb_search');expect(names).toContain('taskflow_topic_send');
 });
-it("conversation continues work file without changing slot state or creating attempts",async()=>{
+it("conversation has its own session: work file, slot state and attempts stay untouched",async()=>{
  const before=db.prepare("SELECT * FROM subtasks WHERE id='slot_a'").get();const attempts=(db.prepare("SELECT count(*) n FROM attempts").get() as any).n;
  const saved=(db.prepare("SELECT * FROM slot_sessions WHERE subtask_id='slot_a'").get() as any);
  const reply=await startSlotConversation({taskId:'shared_task',subtaskId:'slot_a',role:'builder',chatId:'shared_chat',messageId:'shared_message',prompt:'Поясни блок'});
- expect(reply.text).toBe('Ответ по сохранённому этапу');expect(reply.sessionId).toBe(saved.session_id);
+ expect(reply.text).toBe('Ответ по сохранённому этапу');expect(reply.sessionId).not.toBe(saved.session_id);
  expect(db.prepare("SELECT * FROM subtasks WHERE id='slot_a'").get()).toEqual(before);expect((db.prepare("SELECT count(*) n FROM attempts").get() as any).n).toBe(attempts);
  expect((db.prepare("SELECT session_file FROM slot_sessions WHERE subtask_id='slot_a'").get() as any).session_file).toBe(saved.session_file);
  expect(harness.options.at(-1).tools).not.toContain('taskflow');expect(harness.options.at(-1).tools).toContain('taskflow_task');expect(harness.options.at(-1).tools).not.toContain('bash');expect(harness.options.at(-1).tools).not.toContain('write');

@@ -1,3 +1,4 @@
+import { TASK_CHAT_FILE_TOOLS, TASK_CHAT_MODE } from "./taskChatTools.js";
 import {chatTurnSystemText,installSecretarySystem,chatUserTurnText,chatRuntimeGuidanceEnabled} from "./secretaryChatPrompt.js";
 import {installProviderDiagnostics, installProxyAwareGlobalFetch, registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import { captureBash, withFileChanges } from "../lib/toolFileCapture.js";
@@ -1242,6 +1243,8 @@ export async function modelExists(ref: string): Promise<boolean> {
 /** Аргументы старта живой сессии Пи в чате. Никакого taskId — чат живёт
  *  отдельной осью, карточки и аренда остаются нетронутыми. */
 export interface StartChatRunInput {
+  /** Чат задачи: только чтение своей задачи (владелец 05.11.2026). */
+  taskChatTaskId?: string;
   /** Settles after the visible reply is persisted, never merely on SDK completion. */
   deliveryOutcome?: Promise<boolean>;
   mode?: ChatWorkMode;
@@ -1548,6 +1551,7 @@ async function startChatRunOnce(
     ), resource => resource.close());
     // «Обсуждение» — как «Работа» (владелец 20.10.2026); ограничен только «План».
     const allowed = (name: string) =>
+      input.taskChatTaskId ? TASK_CHAT_FILE_TOOLS.includes(name) :
       mode !== "plan" ||
       PLANNING_TOOLS.includes(name) ||
       [
@@ -1600,10 +1604,11 @@ async function startChatRunOnce(
       {
         role,
         model: resolvedModel,
-        mode,
+        mode: input.taskChatTaskId ? TASK_CHAT_MODE : mode,
         runId: sessionManager.getSessionId(),
         chatId: input.chatId,
         messageId: input.messageId,
+        ...(input.taskChatTaskId ? { taskId: input.taskChatTaskId } : {}),
       },
       [...composio.tools, ...infra.tools, ...secretary],
     );

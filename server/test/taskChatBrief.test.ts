@@ -22,19 +22,19 @@ describe("первый блок подсказки в чате задачи", ()
   });
   afterAll(async () => { purgeTasks(["brief-task"]); await app.close(); });
 
-  it("участнику с шагом: задача, описание, его шаг и результат", () => {
+  it("участнику с шагом: задача, описание, карта и его итог как есть", () => {
     const [a] = roles();
     const brief = taskChatBrief("brief-task", a);
-    expect(brief.startsWith("ЗАДАЧА ЭТОГО РАЗГОВОРА")).toBe(true);
-    expect(brief).toContain("Ты участник задачи «Задача для брифа»");
-    expect(brief).toContain("изучи задачу целиком");
+    expect(brief.startsWith("ЧАТ ЗАДАЧИ")).toBe(true);
+    expect(brief).toContain("Твоя задача: «Задача для брифа»");
+    expect(brief).toContain("← ТЫ ЗДЕСЬ");
     expect(brief).toContain("Нужно починить выгрузку отчёта");
-    expect(brief).toContain("слот work: Починить выгрузку — сдан; результат: Исправлен разбор дат");
+    expect(brief).toContain("Исправлен разбор дат");
   });
 
   it("роли без шага: честно сказано, что шага нет; несуществующая задача — пусто", () => {
     const [a, b] = roles();
-    expect(taskChatBrief("brief-task", b && b !== a ? b : "no_such_role")).toContain("Своего шага в плане этой задачи у тебя нет");
+    expect(taskChatBrief("brief-task", b && b !== a ? b : "no_such_role")).toContain("Своего этапа в плане у тебя нет");
     expect(taskChatBrief("no-such-task", a)).toBe("");
   });
 });

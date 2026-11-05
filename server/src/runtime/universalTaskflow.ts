@@ -18,6 +18,8 @@ export type Tool = {
     onUpdate?: any,
   ) => Promise<any>;
 };
+import { TASK_CHAT_MODE, isTaskChatTool } from "./taskChatTools.js";
+
 export type Context = {
   actor: string;
   executionMode?: ChatExecutionMode;
@@ -141,6 +143,12 @@ export function operationRestriction(
   // f3ada2e0, §5.2). Это ЯВНО ПОМЕЧЕННЫЙ новый режим «task_discussion»:
   // обычный чат в режиме «discussion» (владелец 20.10.2026) — работа по
   // задаче без ограничений, его политика здесь не меняется.
+  // Чат задачи (владелец 05.11.2026): только чтение своей задачи.
+  if (c.mode === TASK_CHAT_MODE && !isTaskChatTool(name))
+    return {
+      code: "MODE_RESTRICTED",
+      message: "Чат задачи — только чтение своей задачи",
+    };
   if (c.mode === "task_discussion" && (!isReadOperation(name) || name.startsWith("mcp__infra__")))
     return {
       code: "MODE_RESTRICTED",
