@@ -5701,6 +5701,20 @@ const migrations: Migration[] = [
       db.exec("INSERT INTO user_notes_fts(user_notes_fts) VALUES('rebuild')");
     },
   },
+  {
+    id: "197_chat_context_usage",
+    description: "Последний замер контекста сессии чата: список чатов показывает его и после перезапуска сервера",
+    up: () => {
+      db.exec(`CREATE TABLE IF NOT EXISTS chat_context_usage (
+        chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tokens INTEGER NOT NULL,
+        context_window INTEGER NOT NULL,
+        measured_at TEXT NOT NULL,
+        PRIMARY KEY (chat_id, role_id)
+      )`);
+    },
+  },
 
 ];
 /**

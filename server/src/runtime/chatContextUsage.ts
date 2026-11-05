@@ -11,6 +11,7 @@
 // После сброса сессии старые числа не показываются: новая сессия — другой
 // sessionId, и замер обнуляется.
 
+import db from "../db.js";
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 
 export type ChatContextStatus = "measured" | "no_session" | "after_compaction" | "unavailable";
@@ -125,9 +126,44 @@ export function contextBreakdown(session: any, total: number): ChatContextBreakd
 
 /** Замер по живой сессии. Значения SDK помечены как оценка — это честно. */
 export function measureChatSession(chatId: string, roleId: string): void {
-  const id = key(chatId, roleId);
-  const entry = entries.get(id);
+  const entry = entries.get(key(chatId, roleId));
   if (!entry || !entry.session) return;
+  measureEntry(entry);
+  persistListContext(chatId, roleId, entry);
+}
+
+/**
+ * Список чатов показывает контекст каждой сессии, а `entries` живёт в памяти
+ * процесса и теряется при перезапуске: для списка замер лежит в базе. Сбой
+ * записи не должен мешать ходу роли.
+ */
+function persistListContext(chatId: string, roleId: string, entry: Entry | null): void {
+  try {
+    if (entry?.tokens == null || entry.contextWindow == null) {
+      db.prepare("DELETE FROM chat_context_usage WHERE chat_id=? AND role_id=?").run(chatId, roleId);
+      return;
+    }
+    db.prepare(
+      `INSERT INTO chat_context_usage(chat_id,role_id,tokens,context_window,measured_at) VALUES(?,?,?,?,datetime('now'))
+       ON CONFLICT(chat_id,role_id) DO UPDATE SET tokens=excluded.tokens,context_window=excluded.context_window,measured_at=excluded.measured_at`,
+    ).run(chatId, roleId, entry.tokens, entry.contextWindow);
+  } catch (error) {
+    console.warn("[chat-context] замер для списка не записан:", error instanceof Error ? error.message : error);
+  }
+}
+
+/** Последний замер контекста сессии для строки в списке чатов. */
+export function readChatListContext(chatId: string): { tokens: number; context_window: number; measured_at: string } | null {
+  return (
+    (db
+      .prepare(
+        "SELECT tokens,context_window,measured_at FROM chat_context_usage WHERE chat_id=? ORDER BY measured_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(chatId) as { tokens: number; context_window: number; measured_at: string } | undefined) ?? null
+  );
+}
+
+function measureEntry(entry: Entry): void {
   let usage: any;
   try {
     usage = entry.session.getContextUsage?.();
@@ -169,6 +205,7 @@ export function closeChatSession(chatId: string, roleId: string): void {
 /** Сброс сессии (новая ветка, новая сессия) — старые числа не показываем. */
 export function resetChatContext(chatId: string, roleId: string): void {
   entries.delete(key(chatId, roleId));
+  persistListContext(chatId, roleId, null);
 }
 
 /**
@@ -183,6 +220,7 @@ export function markChatContextCompacted(chatId: string, roleId: string): void {
   entry.status = "after_compaction";
   entry.isEstimate = false;
   entry.measuredAt = new Date().toISOString();
+  persistListContext(chatId, roleId, entry);
 }
 
 export function readChatContext(chatId: string, roleId: string): ChatContextSnapshot {

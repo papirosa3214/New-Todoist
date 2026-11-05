@@ -52,7 +52,7 @@ import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
 import { externalRuntime } from "../roleRouting.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { listChatCommands, parseSlashInvocation, resolveSlashCommand, type SlashInvocation } from "../runtime/chatCommands.js";
-import { markChatContextCompacted, readChatContext, resetChatContext } from "../runtime/chatContextUsage.js";
+import { markChatContextCompacted, readChatContext, readChatListContext, resetChatContext } from "../runtime/chatContextUsage.js";
 import { ensureResearchDocument } from "../runtime/chatResearchDocument.js";
 import { renderInstruction } from "../lib/roleContextResolver.js";
 // Чаты с ролями-агентами (владелец 21.09.2026, план
@@ -526,6 +526,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           unread_count: unread,
           // Ход роли в этой комнате: идёт / чем кончился (владелец 27.10.2026).
           turn: roomTurn(c.id, req.userId),
+          context_usage: readChatListContext(c.id),
           // Название задачи для пометки в строке списка: по ней видно, какой
           // чат за какой задачей (владелец 21.09.2026, LOCK-195).
           task_title: c.task_id
