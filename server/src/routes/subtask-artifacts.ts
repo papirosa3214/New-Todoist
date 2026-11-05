@@ -1,3 +1,4 @@
+import { enqueueAfterStepSubmitted } from "../runtime/acceptedMerge.js";
 import { sandboxSubmissionError, submissionReceipt } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import type { FastifyInstance } from "fastify";
@@ -180,6 +181,12 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
       }
     }    logEvent({ taskId: current.task_id, actorId: req.userId, kind: "plan_subtask_artifact_submitted", field: current.plan_node_key, toValue: contract.key + " v" + versionNo });
     })();
+    try {
+      // Сдача с артефактом обходила очередь: с 24.10.2026 в неё не попал ни один шаг.
+      if ((db.prepare("SELECT done FROM subtasks WHERE id=?").get(current.id) as { done: number }).done === 1) enqueueAfterStepSubmitted(current.id);
+    } catch (error) {
+      logEvent({ taskId: current.task_id, actorId: req.userId, kind: "merge_queue_error", field: current.id, toValue: error instanceof Error ? error.message : String(error) });
+    }
     await unlockReadyPlanSubtasks(current.collaboration_plan_id, current.task_id, req.userId);
     const fullTask = getFullTask(current.task_id);
     broadcastTaskEvent([current.task_creator_id, current.task_assignee_id], { type: "task:updated", task: fullTask });

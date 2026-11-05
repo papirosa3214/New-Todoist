@@ -4,13 +4,13 @@ vi.mock('../src/runtime/inProcessRun.js',async orig=>({...await orig<any>(),runR
 vi.mock('../src/runtime/planSubtaskAdmission.js',async orig=>({...await orig<any>(),startPlanSubtaskRun:vi.fn(async()=>({ok:true,runId:'mock'}))}));
 import {buildApp} from '../src/index.js';
 import db from '../src/db.js';
-import {integrationResponsibility,requireIntegrationResponsibility,integrationResponsibilityPrompt} from '../src/lib/integrationResponsibility.js';
+import {integrationResponsibility,integrationResponsibilityPrompt} from '../src/lib/integrationResponsibility.js';
 import {seedRoleAccounts,demoteSeededOwner} from './helpers/seedOwner.js';
 let app:any,auth:any,owner:string;
 beforeAll(async()=>{app=await buildApp();demoteSeededOwner(db);seedRoleAccounts(db);db.prepare("INSERT OR IGNORE INTO users(id,name,email,password_hash,role,type,is_system_bot) VALUES ('u-secretary','Secretary','secretary@test','!','agent','ai',1)").run();db.prepare("INSERT OR IGNORE INTO roles(key,title,summary,enabled,position) VALUES ('code_orchestrator','Orchestrator','',1,100)").run();db.prepare("INSERT OR IGNORE INTO users(id,name,email,password_hash,role,role_key,type,is_system_bot) VALUES ('role_code_orchestrator','Orchestrator','orch@test','!','agent','code_orchestrator','ai',1)").run();owner=crypto.randomUUID();db.prepare("INSERT INTO users(id,name,email,password_hash,role,type) VALUES (?,'Owner',?,'!','owner','human')").run(owner,owner+'@test');auth={authorization:'Bearer '+app.jwt.sign({id:owner})};});
 afterAll(async()=>app.close());
 async function fixture(roles:string[]){const id=crypto.randomUUID();db.prepare("INSERT INTO tasks(id,title,creator_id) VALUES (?,'Integration',?)").run(id,owner);const r=await app.inject({method:'POST',url:`/api/tasks/${id}/collaboration-plans`,headers:auth,payload:{profile:'manual',nodes:roles.map((role,i)=>({slot_key:'w'+i,role_key:role,expected_result:'Result '+i})),edges:[]}});expect(r.statusCode,r.body).toBe(201);return {id,plan:r.json().plan.id};}
-it('single worker is automatically selected; critic is not an executor',async()=>{const f=await fixture(['builder','critic_verifier']);expect(integrationResponsibility(f.id).owner_id).toBe('role_builder');requireIntegrationResponsibility(f.id);expect(db.prepare('SELECT integration_owner_id FROM tasks WHERE id=?').get(f.id)).toEqual({integration_owner_id:'role_builder'});expect(integrationResponsibilityPrompt(f.id)).toContain('role_builder');});
+it('single worker is automatically selected; critic is not an executor',async()=>{const f=await fixture(['builder','critic_verifier']);expect(integrationResponsibility(f.id).owner_id).toBe('role_builder');expect(integrationResponsibilityPrompt(f.id)).toContain('role_builder');});
 it('architect precedes executors',async()=>{const f=await fixture(['builder','researcher','architect']);expect(integrationResponsibility(f.id).owner_id).toBe('role_architect');});
 it('multiple executors: any participant can take integration; explicit selection stays optional',async()=>{
   const f=await fixture(['builder','researcher']);
@@ -24,13 +24,13 @@ it('multiple executors: any participant can take integration; explicit selection
   expect(view.valid).toBe(true);
   expect(view.mode).toBe('auto');
   expect(['role_builder','role_researcher']).toContain(view.owner_id);
-  expect(()=>requireIntegrationResponsibility(f.id)).not.toThrow();
+  
   const r=await app.inject({method:'POST',url:`/api/tasks/${f.id}/collaboration-plans/${f.plan}/approve`,headers:auth});
   expect(r.statusCode).toBe(200);
   expect(db.prepare('SELECT COUNT(*) n FROM subtasks WHERE task_id=?').get(f.id)).toEqual({n:2});
 });
-it('manual choice survives reads and permits launch; foreign account rejected',async()=>{const f=await fixture(['builder','researcher']);let r=await app.inject({method:'PATCH',url:`/api/tasks/${f.id}/integration-responsibility`,headers:auth,payload:{mode:'manual',owner_id:owner}});expect(r.statusCode).toBe(400);r=await app.inject({method:'PATCH',url:`/api/tasks/${f.id}/integration-responsibility`,headers:auth,payload:{mode:'manual',owner_id:'role_researcher'}});expect(r.statusCode,r.body).toBe(200);expect(integrationResponsibility(f.id).owner_id).toBe('role_researcher');expect(()=>requireIntegrationResponsibility(f.id)).not.toThrow();expect(integrationResponsibilityPrompt(f.id)).toContain('role_researcher');});
-it('not required is an explicit choice; clearing manual choice rejects launch',async()=>{const f=await fixture(['builder']);for(const [mode,valid] of [['manual',false],['not_required',true]] as const){const r=await app.inject({method:'PATCH',url:`/api/tasks/${f.id}/integration-responsibility`,headers:auth,payload:{mode,owner_id:null}});expect(r.statusCode).toBe(200);expect(r.json().valid).toBe(valid);}expect(()=>requireIntegrationResponsibility(f.id)).not.toThrow();});
+it('manual choice survives reads and permits launch; foreign account rejected',async()=>{const f=await fixture(['builder','researcher']);let r=await app.inject({method:'PATCH',url:`/api/tasks/${f.id}/integration-responsibility`,headers:auth,payload:{mode:'manual',owner_id:owner}});expect(r.statusCode).toBe(400);r=await app.inject({method:'PATCH',url:`/api/tasks/${f.id}/integration-responsibility`,headers:auth,payload:{mode:'manual',owner_id:'role_researcher'}});expect(r.statusCode,r.body).toBe(200);expect(integrationResponsibility(f.id).owner_id).toBe('role_researcher');expect(integrationResponsibilityPrompt(f.id)).toContain('role_researcher');});
+it('not required is an explicit choice; clearing manual choice rejects launch',async()=>{const f=await fixture(['builder']);for(const [mode,valid] of [['manual',false],['not_required',true]] as const){const r=await app.inject({method:'PATCH',url:`/api/tasks/${f.id}/integration-responsibility`,headers:auth,payload:{mode,owner_id:null}});expect(r.statusCode).toBe(200);expect(r.json().valid).toBe(valid);}});
 
 it('orchestrator precedes architect',async()=>{const f=await fixture(['builder','architect','analyst']);db.prepare("UPDATE task_collaboration_plan_nodes SET role_key='code_orchestrator' WHERE plan_id=? AND role_key='analyst'").run(f.plan);expect(integrationResponsibility(f.id).owner_id).toBe('role_code_orchestrator');});
 

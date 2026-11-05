@@ -64,7 +64,7 @@ describe("режим «Оркестратор»", () => {
     expect(first).toContain(planId);
     expect(first).not.toContain("Сделай работу.");
     const second = planSubtaskPrompt(taskId, "code_orchestrator", steps.find(s => s.plan_node_key === "assemble")!.id);
-    expect(second).toContain("влей ветки команды в main");
+    expect(second).toContain("сам в main не вливай");
   });
 
   it("Оркестратор раскладывает работу: шаги ролей встают между его шагами и применяются сразу", () => {

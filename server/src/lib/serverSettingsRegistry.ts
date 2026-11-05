@@ -160,7 +160,7 @@ export const SERVER_SETTINGS: readonly ServerSetting[] = [
   { key: "max_restarts_per_window", label: "Перезапусков на слот за 2 часа", group: "перезапуски", kind: "int", default: DEFAULTS.max_restarts_per_window, min: 0, max: 10, applies_to: ["runtime/stalledStepWatcher.ts"] },
 
   // Расписания
-  { key: "auto_merge_mode", label: "Автослияние веток в main", group: "интеграция", kind: "enum", default: DEFAULTS.auto_merge_mode, options: ["off", "dry", "on", "pr"], applies_to: ["runtime/worktreeMergeQueue.ts"] },
+  { key: "auto_merge_mode", label: "Автослияние веток в main", group: "интеграция", kind: "enum", default: DEFAULTS.auto_merge_mode, options: ["off", "dry", "on"], applies_to: ["runtime/worktreeMergeQueue.ts"] },
   { key: "auto_merge_test_timeout_min", label: "Таймаут тестов при слиянии", group: "интеграция", kind: "duration_min", default: DEFAULTS.auto_merge_test_timeout_min, min: 1, max: 120, applies_to: ["runtime/worktreeMergeQueue.ts"] },
   { key: "scheduler_interval_ms", label: "Интервал планировщика", group: "расписания", kind: "interval_ms", default: DEFAULTS.scheduler_interval_ms, min: 30_000, max: 24 * 60 * 60_000, applies_to: ["runtime/scheduler.ts"] },
   { key: "retry_delay_min", label: "Задержка перед повтором", group: "расписания", kind: "duration_min", default: DEFAULTS.retry_delay_min, min: 0, max: 1440, applies_to: ["runtime/scheduler.ts"] },

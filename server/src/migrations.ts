@@ -5716,6 +5716,15 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    id: "198_merge_queue_direct",
+    description: "Очередь слияния без PR: прямой перенос в main (владелец 05.11.2026)",
+    up: () => {
+      const settings = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='server_settings'").get();
+      if (settings) db.prepare("UPDATE server_settings SET value = ?, updated_at = datetime('now'), updated_by = NULL WHERE key = 'auto_merge_mode' AND value = ?").run(JSON.stringify("on"), JSON.stringify("pr"));
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.

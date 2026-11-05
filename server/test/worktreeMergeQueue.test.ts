@@ -11,7 +11,6 @@ import db from "../src/db.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, recoverStaleRunning, requeueMerge, retryClearedObstructions, sweepMergeScratch, syncPullRequests, worktreeMaintenancePass } from "../src/runtime/worktreeMergeQueue.js";
 import { reloadServerSettings, setSetting } from "../src/lib/serverSettings.js";
-import { saveBaseline } from "../src/lib/worktree/testGate.js";
 
 // Хук `test/setup.ts` запрещает коммиты в живом репозитории и цепляется
 // ко всем git-вызовам прогона через GIT_CONFIG_*. Здесь работа идёт
@@ -48,19 +47,19 @@ function freshRepo(): Repo {
   git(live, "init", "-q", "-b", "main");
   git(live, "config", "user.email", "t@t");
   git(live, "config", "user.name", "t");
-  fs.writeFileSync(path.join(live, "a.txt"), "1\n");
-  git(live, "add", "a.txt");
+  fs.mkdirSync(path.join(live, "server/src"), { recursive: true });
+  fs.mkdirSync(path.join(live, "server/test"), { recursive: true });
+  fs.writeFileSync(path.join(live, "server/src/a.ts"), "1\n");
+  fs.writeFileSync(path.join(live, "server/test/a.test.ts"), "// тест\n");
+  git(live, "add", ".");
   git(live, "commit", "-q", "-m", "init");
   process.env.MAK70_LIVE_REPO = live;
   process.env.TASKFLOW_ROLE_WORKTREES = base;
-  // База падений main для гейта: в тестах main считается зелёным, иначе
-  // гейт запретит слияние раньше, чем проверка регрессии сможет что-то сказать.
-  saveBaseline([], git(live, "rev-parse", "main"));
   return { live, base };
 }
 
 /** Копия роли на ветке roles/<id> с одним коммитом поверх main. */
-function seedBranch(repo: Repo, taskId: string, file = "a.txt", content = "2\n"): string {
+function seedBranch(repo: Repo, taskId: string, file = "server/src/a.ts", content = "2\n"): string {
   const dir = path.join(repo.base, taskId);
   fs.mkdirSync(dir, { recursive: true });
   git(repo.live, "worktree", "prune");
@@ -98,11 +97,15 @@ beforeAll(() => {
   db.exec(`CREATE TABLE IF NOT EXISTS server_settings_log (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, old_value TEXT, new_value TEXT, reason TEXT, actor_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
   reloadServerSettings();
   setSetting("auto_merge_mode", "on", null, "тест очереди слияния");
+  hooks.runBaseTests = async () => ({ ok: true, output: "ok" });
+  hooks.syncMain = () => {};
 });
 
 afterEach(() => {
   // Тесты не запускаем: крюк подменён на каждом кейсе, где он нужен.
   hooks.runTests = async () => ({ ok: true, output: "ok" });
+  hooks.runBaseTests = async () => ({ ok: true, output: "ok" });
+  hooks.syncMain = () => {};
   db.prepare("DELETE FROM worktree_merge_queue").run();
 });
 
@@ -120,7 +123,7 @@ describe("очередь автослияния", () => {
     const repo = freshRepo();
     seedBranch(repo, "t-dirty-main");
     seedTask("t-dirty-main");
-    fs.writeFileSync(path.join(repo.live, "черновик.txt"), "чужая правка\n");
+    fs.writeFileSync(path.join(repo.live, "server/src/a.ts"), "чужая правка\n");
     enqueueMerge("t-dirty-main", "integration_step");
     const outcome = await processMerge("t-dirty-main");
     expect(outcome.state).toBe("blocked_dirty_main");
@@ -135,7 +138,7 @@ describe("очередь автослияния", () => {
     enqueueMerge("t-green", "integration_step");
     const outcome = await processMerge("t-green");
     expect(outcome.state).toBe("merged");
-    expect(fs.readFileSync(path.join(repo.live, "a.txt"), "utf8")).toBe("2\n");
+    expect(fs.readFileSync(path.join(repo.live, "server/src/a.ts"), "utf8")).toBe("2\n");
     expect(fs.existsSync(path.join(repo.base, "t-green"))).toBe(false);
     expect(git(repo.live, "branch", "--list", "roles/t-green")).toBe("");
     const task = db.prepare("SELECT merged_at, merged_into_commit FROM tasks WHERE id = ?").get("t-green") as
@@ -164,13 +167,13 @@ describe("очередь автослияния", () => {
     seedBranch(repo, "t-conflict");
     seedTask("t-conflict");
     // main уходит вперёд и меняет тот же файл, что и роль.
-    fs.writeFileSync(path.join(repo.live, "a.txt"), "из main\n");
+    fs.writeFileSync(path.join(repo.live, "server/src/a.ts"), "из main\n");
     git(repo.live, "commit", "-q", "-am", "правка main");
     const mainBefore = git(repo.live, "rev-parse", "main");
     enqueueMerge("t-conflict", "integration_step");
     const outcome = await processMerge("t-conflict");
     expect(outcome.state).toBe("conflict");
-    expect(outcome.error).toContain("a.txt");
+    expect(outcome.error).toContain("server/src/a.ts");
     expect(git(repo.live, "rev-parse", "main")).toBe(mainBefore);
     expect(fs.existsSync(path.join(repo.base, "t-conflict"))).toBe(true);
     // Следующая попытка после разрешения конфликта возможна.
@@ -215,12 +218,12 @@ describe("очередь автослияния", () => {
     const repo = freshRepo();
     const dir = seedBranch(repo, "t-unblock-main");
     seedTask("t-unblock-main");
-    fs.writeFileSync(path.join(repo.live, "черновик.txt"), "чужая правка\n");
+    fs.writeFileSync(path.join(repo.live, "server/src/a.ts"), "чужая правка\n");
     enqueueMerge("t-unblock-main", "integration_step");
     expect((await processMerge("t-unblock-main")).state).toBe("blocked_dirty_main");
     // Помеха снята (человек разобрался с чужим незакоммиченным) — роль
     // про это не знает и шаг заново не сдаёт: возвращать должен проход.
-    fs.rmSync(path.join(repo.live, "черновик.txt"));
+    git(repo.live, "checkout", "--", "server/src/a.ts");
     expect(retryClearedObstructions()).toEqual(["t-unblock-main"]);
     expect(mergeQueueRow("t-unblock-main")?.state).toBe("queued");
     expect(mergeQueueRow("t-unblock-main")?.error).toBeNull();
@@ -249,7 +252,7 @@ describe("очередь автослияния", () => {
     const repo = freshRepo();
     seedBranch(repo, "t-still-dirty");
     seedTask("t-still-dirty");
-    fs.writeFileSync(path.join(repo.live, "черновик.txt"), "чужая правка\n");
+    fs.writeFileSync(path.join(repo.live, "server/src/a.ts"), "чужая правка\n");
     enqueueMerge("t-still-dirty", "integration_step");
     await processMerge("t-still-dirty");
     expect(retryClearedObstructions()).toEqual([]);
@@ -263,12 +266,11 @@ describe("очередь автослияния", () => {
     const repo = freshRepo();
     seedBranch(repo, "t-manual-conflict");
     seedTask("t-manual-conflict");
-    fs.writeFileSync(path.join(repo.live, "a.txt"), "ушёл вперёд\n");
+    fs.writeFileSync(path.join(repo.live, "server/src/a.ts"), "ушёл вперёд\n");
     git(repo.live, "commit", "-q", "-am", "правка main");
     enqueueMerge("t-manual-conflict", "integration_step");
     expect((await processMerge("t-manual-conflict")).state).toBe("conflict");
 
-    saveBaseline([], git(repo.live, "rev-parse", "main"));
     seedBranch(repo, "t-manual-red");
     seedTask("t-manual-red");
     hooks.runTests = async () => ({ ok: false, output: " ❯ test/roles.test.ts (2 tests | 1 failed)" });
@@ -288,7 +290,7 @@ describe("очередь автослияния", () => {
     seedBranch(repo, "t-retry");
     seedTask("t-retry");
     enqueueMerge("t-retry", "integration_step");
-    fs.writeFileSync(path.join(repo.live, "a.txt"), "ушёл вперёд\n");
+    fs.writeFileSync(path.join(repo.live, "server/src/a.ts"), "ушёл вперёд\n");
     git(repo.live, "commit", "-q", "-am", "правка main");
     await processMerge("t-retry");
     expect(mergeQueueRow("t-retry")?.state).toBe("conflict");
@@ -360,9 +362,8 @@ describe("очередь автослияния", () => {
 
 
 describe("maintenance demand", () => {
-  it("does not refresh a stale baseline when the queue is empty", async () => {
-    const repo = freshRepo();
-    saveBaseline([], "stale");
+  it("does not run tests when the queue is empty", async () => {
+    freshRepo();
     let calls = 0;
     hooks.runTests = async () => { calls++; return { ok: true, output: "ok" }; };
     await worktreeMaintenancePass();
@@ -373,8 +374,7 @@ describe("maintenance demand", () => {
     seedTask("t-maint-dirty");
     seedBranch(repo, "t-maint-dirty");
     enqueueMerge("t-maint-dirty", "integration_step");
-    saveBaseline([], "stale");
-    fs.writeFileSync(path.join(repo.live, "dirty.txt"), "owner work");
+    fs.writeFileSync(path.join(repo.live, "server/src/a.ts"), "owner work");
     let calls = 0;
     hooks.runTests = async () => { calls++; return { ok: true, output: "ok" }; };
     await worktreeMaintenancePass();
@@ -410,16 +410,6 @@ describe("test process lifecycle", () => {
 
 
 describe("merge demand and pause", () => {
-  it("refreshes stale main only for a ready merge", async () => {
-    const repo = freshRepo();
-    seedTask("t-ready-refresh"); seedBranch(repo, "t-ready-refresh");
-    enqueueMerge("t-ready-refresh", "integration_step");
-    saveBaseline([], "stale");
-    let calls = 0;
-    hooks.runTests = async () => { calls++; return { ok: true, output: "ok" }; };
-    expect((await processMerge("t-ready-refresh")).state).toBe("merged");
-    expect(calls).toBe(2);
-  });
   it("does not move main if disabled during tests", async () => {
     const repo = freshRepo();
     seedTask("t-pause-tests"); seedBranch(repo, "t-pause-tests");
@@ -438,11 +428,10 @@ describe("merge demand and pause", () => {
 
 
 describe("interrupted validation", () => {
-  it("does not accept a timed out baseline as green", async () => {
+  it("does not accept a timed out run as green", async () => {
     const repo = freshRepo();
     seedTask("t-baseline-timeout"); seedBranch(repo, "t-baseline-timeout");
     enqueueMerge("t-baseline-timeout", "integration_step");
-    saveBaseline([], "stale");
     const before = git(repo.live, "rev-parse", "main");
     hooks.runTests = async () => ({ ok: false, output: "[прервано по таймауту 20 с]" });
     expect((await processMerge("t-baseline-timeout")).state).toBe("test_failed");
@@ -486,116 +475,84 @@ describe("integration stamp is the only admission",()=>{
   });
 });
 
-// Режим pr (владелец 28.10.2026): ветка роли уходит на GitHub, открывается
-// PR, тесты и слияние — CI на GitHub. Сервер main не двигает и тестов не
-// гоняет, только следит за исходом PR.
-describe("режим pr: слияние через PR на GitHub", () => {
-  const real = { pushBranch: hooks.pushBranch, ensurePullRequest: hooks.ensurePullRequest, pullRequestStatus: hooks.pullRequestStatus };
-  let pushed: string[] = [];
-  let status: ReturnType<typeof hooks.pullRequestStatus>;
-
-  beforeAll(() => {
-    for (const column of ["pr_number INTEGER", "pr_url TEXT"]) {
-      try { db.exec(`ALTER TABLE worktree_merge_queue ADD COLUMN ${column}`); } catch { /* уже есть */ }
-    }
-  });
-  afterAll(() => {
-    Object.assign(hooks, real);
-    setSetting("auto_merge_mode", "on", null, "возврат боевого режима");
-  });
-  afterEach(() => {
-    pushed = [];
-  });
-
-  function prMode(): void {
-    setSetting("auto_merge_mode", "pr", null, "тест режима pr");
-    hooks.pushBranch = (_live, branch) => { pushed.push(branch); };
-    hooks.ensurePullRequest = () => ({ number: 42, url: "https://github.com/o/r/pull/42" });
-    status = { state: "OPEN", mergeable: "MERGEABLE", merge_commit: null, checks_failed: false };
-    hooks.pullRequestStatus = () => status;
-  }
-
-  it("сдача шага: ветка отправлена, PR открыт, main и тесты не тронуты", async () => {
+describe("очередь без роли и без полного прогона (владелец 05.11.2026)", () => {
+  it("чужая правка в main в другом файле слиянию не мешает", async () => {
     const repo = freshRepo();
-    seedBranch(repo, "t-pr");
-    seedTask("t-pr");
-    prMode();
+    seedTask("t-unrelated-dirty"); seedBranch(repo, "t-unrelated-dirty");
+    fs.writeFileSync(path.join(repo.live, "чужой.txt"), "правка\n");
+    enqueueMerge("t-unrelated-dirty", "integration_step");
+    expect((await processMerge("t-unrelated-dirty")).state).toBe("merged");
+    expect(fs.existsSync(path.join(repo.live, "чужой.txt"))).toBe(true);
+  });
+
+  it("запускает только тесты изменённого файла", async () => {
+    const repo = freshRepo();
+    seedTask("t-targeted"); seedBranch(repo, "t-targeted");
+    let asked: string[] | undefined;
+    hooks.runTests = async (_cwd, _timeout, files) => { asked = files; return { ok: true, output: "ok" }; };
+    enqueueMerge("t-targeted", "integration_step");
+    expect((await processMerge("t-targeted")).state).toBe("merged");
+    expect(asked).toEqual(["test/a.test.ts"]);
+  });
+
+  it("тест, упавший и на main до слияния, слияние не держит", async () => {
+    const repo = freshRepo();
+    seedTask("t-old-red"); seedBranch(repo, "t-old-red");
+    const red = { ok: false, output: " ❯ test/a.test.ts (2 tests | 1 failed)" };
+    hooks.runTests = async () => red;
+    hooks.runBaseTests = async () => red;
+    enqueueMerge("t-old-red", "integration_step");
+    expect((await processMerge("t-old-red")).state).toBe("merged");
+  });
+
+  it("у правки нет своих тестов: проверка типов только по изменённым файлам", async () => {
+    const repo = freshRepo();
+    seedTask("t-no-tests");
+    const dir = seedBranch(repo, "t-no-tests", "server/src/a.ts");
+    fs.writeFileSync(path.join(dir, "server/src/b.ts"), "2\n");
+    git(dir, "add", ".");
+    git(dir, "commit", "-q", "-m", "ещё");
+    fs.rmSync(path.join(repo.live, "server/test/a.test.ts"));
+    git(repo.live, "add", "-A");
+    git(repo.live, "commit", "-q", "-m", "без теста");
+    let checked: string[] = [];
+    hooks.typecheck = async (_cwd, _timeout, changed) => { checked = changed; return { ok: false, output: "src/a.ts(1,1): error" }; };
     let tests = 0;
     hooks.runTests = async () => { tests++; return { ok: true, output: "ok" }; };
-    const mainBefore = git(repo.live, "rev-parse", "main");
-    enqueueMerge("t-pr", "integration_step");
-    const outcome = await processMerge("t-pr");
-    expect(outcome.state).toBe("pr_open");
-    expect(pushed).toEqual(["roles/t-pr"]);
+    enqueueMerge("t-no-tests", "integration_step");
+    const outcome = await processMerge("t-no-tests");
+    expect(outcome.state).toBe("test_failed");
+    expect(outcome.error).toContain("ошибки типов");
+    expect(checked).toContain("src/a.ts");
     expect(tests).toBe(0);
-    expect(git(repo.live, "rev-parse", "main")).toBe(mainBefore);
-    expect(mergeQueueRow("t-pr")).toMatchObject({ state: "pr_open", pr_number: 42, pr_url: "https://github.com/o/r/pull/42" });
   });
 
-  it("грязный живой main не мешает: PR всё равно открывается", async () => {
+  it("правка вне сервера проходит без тестов", async () => {
     const repo = freshRepo();
-    seedBranch(repo, "t-pr-dirty");
-    seedTask("t-pr-dirty");
-    prMode();
-    fs.writeFileSync(path.join(repo.live, "черновик.txt"), "чужая правка\n");
-    enqueueMerge("t-pr-dirty", "integration_step");
-    expect((await processMerge("t-pr-dirty")).state).toBe("pr_open");
+    seedTask("t-docs");
+    const dir = path.join(repo.base, "t-docs");
+    git(repo.live, "worktree", "add", "-b", "roles/t-docs", dir, "main");
+    fs.writeFileSync(path.join(dir, "readme.md"), "текст\n");
+    git(dir, "add", ".");
+    git(dir, "commit", "-q", "-m", "документ");
+    let tests = 0;
+    hooks.runTests = async () => { tests++; return { ok: true, output: "ok" }; };
+    enqueueMerge("t-docs", "integration_step");
+    expect((await processMerge("t-docs")).state).toBe("merged");
+    expect(tests).toBe(0);
   });
 
-  it("PR влит на GitHub: карточка получает «влито» и коммит слияния", async () => {
+  it("сбой слияния в проходе очереди уходит автору", async () => {
     const repo = freshRepo();
-    seedBranch(repo, "t-pr-merged");
-    seedTask("t-pr-merged");
-    prMode();
-    enqueueMerge("t-pr-merged", "integration_step");
-    await processMerge("t-pr-merged");
-    expect(syncPullRequests()).toBe(0); // ещё идёт проверка
-    status = { state: "MERGED", mergeable: "UNKNOWN", merge_commit: "abc123", checks_failed: false };
-    expect(syncPullRequests()).toBe(1);
-    expect(mergeQueueRow("t-pr-merged")).toMatchObject({ state: "merged", result_sha: "abc123" });
-    const task = db.prepare("SELECT merged_at, merged_into_commit FROM tasks WHERE id = ?").get("t-pr-merged") as
-      { merged_at: string | null; merged_into_commit: string | null };
-    expect(task.merged_at).toBeTruthy();
-    expect(task.merged_into_commit).toBe("abc123");
-  });
-
-  it("конфликт в PR: роли на разбор, повторная сдача снова отправляет ветку", async () => {
-    const repo = freshRepo();
-    seedBranch(repo, "t-pr-conflict");
-    seedTask("t-pr-conflict");
-    prMode();
-    enqueueMerge("t-pr-conflict", "integration_step");
-    await processMerge("t-pr-conflict");
-    status = { state: "OPEN", mergeable: "CONFLICTING", merge_commit: null, checks_failed: false };
-    syncPullRequests();
-    expect(mergeQueueRow("t-pr-conflict")?.state).toBe("conflict");
-    expect(mergeQueueRow("t-pr-conflict")?.error).toContain("PR #42");
-    expect(requeueMerge("t-pr-conflict")).toBe(true);
-    expect((await processMerge("t-pr-conflict")).state).toBe("pr_open");
-    expect(pushed).toEqual(["roles/t-pr-conflict", "roles/t-pr-conflict"]);
-  });
-
-  it("красные проверки CI: test_failed с номером PR", async () => {
-    const repo = freshRepo();
-    seedBranch(repo, "t-pr-red");
-    seedTask("t-pr-red");
-    prMode();
-    enqueueMerge("t-pr-red", "integration_step");
-    await processMerge("t-pr-red");
-    status = { state: "OPEN", mergeable: "MERGEABLE", merge_commit: null, checks_failed: true };
-    syncPullRequests();
-    expect(mergeQueueRow("t-pr-red")).toMatchObject({ state: "test_failed" });
-  });
-
-  it("GitHub недоступен: строка остаётся в очереди для повтора", async () => {
-    const repo = freshRepo();
-    seedBranch(repo, "t-pr-net");
-    seedTask("t-pr-net");
-    prMode();
-    hooks.pushBranch = () => { throw new Error("сеть"); };
-    enqueueMerge("t-pr-net", "integration_step");
-    const outcome = await processMerge("t-pr-net");
-    expect(outcome.state).toBe("queued");
-    expect(outcome.error).toContain("PR не открыт");
+    seedTask("t-return"); seedBranch(repo, "t-return");
+    hooks.runTests = async () => ({ ok: false, output: " ❯ test/a.test.ts (2 tests | 1 failed)" });
+    const returned: string[] = [];
+    const real = hooks.mergeFailed;
+    hooks.mergeFailed = async (taskId) => { returned.push(taskId); };
+    enqueueMerge("t-return", "integration_step");
+    try {
+      await drainMergeQueue(1);
+      expect(returned).toEqual(["t-return"]);
+    } finally { hooks.mergeFailed = real; }
   });
 });

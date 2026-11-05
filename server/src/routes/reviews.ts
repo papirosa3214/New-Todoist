@@ -1,6 +1,6 @@
 import {enqueueReviewReturn} from "../runtime/reviewReturn.js";
 import {loadChatMessage} from "../lib/chatMessages.js";
-import {enqueueIntegrationHandoff, ensureIntegrationPlanStep} from "../runtime/integrationHandoff.js";
+import {enqueueAcceptedReview} from "../runtime/acceptedMerge.js";
 import { sandboxSubmissionError, submissionReceipt } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { completePlanFinalReview } from "../runtime/planReviewLifecycle.js";
@@ -162,7 +162,6 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     const midCritic = reviewer && hasPlan && !oneShot ? openMidPlanCritic(taskId) : null;
     const reviewId = crypto.randomUUID();
     let reviewReturn:ReturnType<typeof enqueueReviewReturn> = null;
-    let handoff:ReturnType<typeof enqueueIntegrationHandoff> = null;
     try {
       db.transaction(()=>{
     db.prepare(
@@ -179,8 +178,8 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
           db.prepare("UPDATE tasks SET agent_state='review',current_attempt_id=NULL WHERE id=?").run(taskId);
           planReturn={planId:reviewPlan.id,managed:true};
         }else if (reviewer && !midCritic) planReturn = completePlanFinalReview(taskId,req.userId,verdict,findings ?? "",body.rework_steps);
-        // План есть — интеграция встаёт в него шагом; без плана — прежняя передача через чат.
-        if (verdict === "approved" && !midCritic && !(planReturn && ensureIntegrationPlanStep(reviewId))) handoff = enqueueIntegrationHandoff(reviewId);
+        // Принято — сразу в очередь слияния, роли на интеграции нет (владелец 05.11.2026).
+        if (verdict === "approved" && !midCritic) enqueueAcceptedReview(reviewId);
         if (reportMarkdown) {
           const step = reportStep ?? db.prepare("SELECT s.id FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key WHERE s.task_id=? AND n.role_key='critic_verifier' ORDER BY s.position DESC LIMIT 1").get(taskId) as {id:string}|undefined;
           if (!step) throw new Error("Этап проверяющего не найден");
@@ -206,20 +205,6 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
           }),
         )
         .catch(error=>console.warn("[review-return] delivery pending",error));
-    }
-    const committedHandoff=handoff as ReturnType<typeof enqueueIntegrationHandoff>;
-    if (committedHandoff) {
-      const audience=(db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(committedHandoff.chatId) as Array<{member_id:string}>).map(r=>r.member_id);
-      broadcastToUsers(audience,{type:"chat:new",message:loadChatMessage(committedHandoff.messageId)});
-      void import("./chats.js")
-        .then(({recoverAgentDelivery}) =>
-          recoverAgentDelivery({
-            chatId: committedHandoff.chatId,
-            roleId: committedHandoff.roleId,
-            queueRowId: committedHandoff.queueRowId,
-          }),
-        )
-        .catch(error => console.warn("[integration-handoff] delivery pending",error));
     }
     const managedPlan = planReturn as ReturnType<typeof completePlanFinalReview>;
     if (managedPlan) await unlockReadyPlanSubtasks(managedPlan.planId,taskId,req.userId);

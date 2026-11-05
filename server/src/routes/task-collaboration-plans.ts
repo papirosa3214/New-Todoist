@@ -1,6 +1,5 @@
 import { TEMPLATE_PROFILES, additionalTemplate, templateInstructions } from "../lib/collaborationTemplates.js";
 import { SCHEDULER_USER_ID } from "../serviceUser.js";
-import {requireIntegrationResponsibility} from '../lib/integrationResponsibility.js';
 import { submissionReceipt } from "../lib/submissionReceipt.js";
 import { roleResultDocument } from "../lib/roleResultReport.js";
 import { normalizePlanStartCondition } from "../runtime/planArtifactGate.js";
@@ -737,7 +736,7 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
     // Режим «Оркестратор» (владелец 13.10.2026): сам код не пишет — первым
     // шагом раскладывает работу по ролям в этом же плане, вторым принимает
     // их результаты, вливает в main и собирает итог. Инструкции — task.orchestrate.
-    orchestrated: { nodes: [node(ORCHESTRATE_SLOT, "code_orchestrator", "Разложить работу по ролям и запустить команду"), node(ORCHESTRATE_ASSEMBLE_SLOT, "code_orchestrator", "Принять результаты команды, влить в main и собрать итог")], edges: [edge(ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT)], rationale: "Режим оркестратора: декомпозиция, назначение ролей, приёмка и сборка итога — за Оркестратором." },
+    orchestrated: { nodes: [node(ORCHESTRATE_SLOT, "code_orchestrator", "Разложить работу по ролям и запустить команду"), node(ORCHESTRATE_ASSEMBLE_SLOT, "code_orchestrator", "Принять результаты команды и собрать итог")], edges: [edge(ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT)], rationale: "Режим оркестратора: декомпозиция, назначение ролей, приёмка и сборка итога — за Оркестратором." },
   };
   const chosen = additionalTemplate(profile) ?? templates[profile];
   if (requested === "auto" && jevPick) {
@@ -1053,7 +1052,6 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       db.transaction(() => {
       const current=planForTask(task.id,plan.id);
       if(current?.status!=="draft" || (req.body?.base_version!==undefined && current.version!==req.body.base_version))throw new Error("План изменился — обновите карточку");
-      requireIntegrationResponsibility(task.id);
       const existing = db.prepare("SELECT COUNT(*) AS count FROM subtasks WHERE collaboration_plan_id = ?").get(plan.id) as { count: number };
       if (existing.count !== 0) throw new Error("узлы этой revision уже materialized");
       const maxPos = (db.prepare("SELECT COALESCE(MAX(position), 0) AS m FROM subtasks WHERE task_id = ?").get(task.id) as { m: number }).m;

@@ -17,7 +17,6 @@ import path from "node:path";
 import db from "../db.js";
 import { getSetting } from "./serverSettings.js";
 import { raiseIncident, incidentRaisedRecently } from "./incidents.js";
-import { loadBaseline } from "./worktree/testGate.js";
 import { loadPushStatus } from "./worktree/pushHosts.js";
 import {
   dirtyFiles,
@@ -37,7 +36,6 @@ export const LIMITS = {
   queuedHours: 2,
   runningHours: 1,
   dirtyMainHours: 6,
-  baselineStaleHours: 2,
   awaitingIntegratorHours: 72,
 };
 
@@ -131,26 +129,6 @@ export function checkWorktreeMerge(): MergeWatchResult {
   const dir = probeWorktreesDir();
   if (dir) problems.push(dir);
 
-  if (mainSha) {
-    const baseline = loadBaseline();
-    const mainAgeH = Number(
-      gitOrNull(live, ["log", "-1", "--format=%ct", "main"], 30_000) ?? 0,
-    );
-    const sinceMainH = mainAgeH ? (Date.now() / 1000 - mainAgeH) / 3600 : 0;
-    if (!baseline) {
-      problems.push(
-        "нет базы падений тестов (merge-baseline.json) — без неё гейт не пропустит ни одно слияние",
-      );
-    } else if (
-      baseline.main_sha !== mainSha &&
-      sinceMainH > LIMITS.baselineStaleHours
-    ) {
-      problems.push(
-        `база падений снята на ${baseline.main_sha.slice(0, 8)}, а main уже ${mainSha.slice(0, 8)} больше ${LIMITS.baselineStaleHours} ч — пересъём не удаётся, слияния стоят`,
-      );
-    }
-  }
-
   const queued = hoursOld("queued", LIMITS.queuedHours);
   if (queued.length)
     problems.push(
@@ -204,8 +182,7 @@ export const MERGE_WATCH_ACTIONS: readonly string[] = [
   "- Журнал: `tail ~/.local/state/taskflow-runs/worktrees/merge-journal.log`.",
   "- Грязный main — закоммитить или убрать чужие правки в `~/Проекты/New-Todoist`: как только main станет чистым, эти строки вернутся в очередь сами (проход обслуживания ходит каждые несколько минут).",
   "- Грязная копия роли — закоммитить в самой копии, строка вернётся в очередь сама.",
-  "- База падений не снимается — смотреть `merge-baseline.json` и прогон `npm test` в `server/`.",
-  "- Конфликт / красные тесты — это решение ответственного за интеграцию: починить в копии и сдать шаг снова. Автоповтора тут нет намеренно.",
+  "- Конфликт / красные тесты — работа уже вернулась автору шагом плана; нет шага — смотреть событие merge_return_failed.",
   "- main не доехал до хоста — `~/.local/state/taskflow-runs/worktrees/push-status.json`; после починки `~/infra-ops/git-sync/git-sync.sh ~/Проекты/New-Todoist`. Расхождение без слова владельца не форсить.",
 ];
 

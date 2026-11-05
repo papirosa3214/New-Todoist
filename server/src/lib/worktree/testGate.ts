@@ -161,3 +161,22 @@ export async function refreshBaseline(
     gitOrNull(live, ["worktree", "prune"]);
   }
 }
+
+/**
+ * Какие тесты проверяют правку (владелец 05.11.2026): изменённые файлы тестов и
+ * тесты, названные как изменённый исходник. Пути — от папки server.
+ */
+export function selectTargetedTests(changed: string[], allTests: string[]): string[] {
+  const chosen = new Set<string>();
+  const known = new Set(allTests);
+  for (const file of changed) {
+    if (known.has(file)) chosen.add(file);
+    const source = /^server\/src\/(?:.*\/)?([^/]+)\.tsx?$/.exec(file);
+    if (!source) continue;
+    for (const test of allTests) {
+      const name = test.slice(test.lastIndexOf("/") + 1);
+      if (name === `${source[1]}.test.ts` || name.startsWith(`${source[1]}.`)) chosen.add(test);
+    }
+  }
+  return [...chosen].map((file) => file.slice("server/".length)).sort();
+}

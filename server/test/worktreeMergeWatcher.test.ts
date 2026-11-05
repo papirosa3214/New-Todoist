@@ -112,17 +112,6 @@ describe("сторож автослияния", () => {
     expect(text).not.toContain("new-conf");
   });
 
-  it("видит протухшую базу падений, но не сразу после сдвига main", () => {
-    const before = git(live, ["rev-parse", "main"]);
-    commit("b.txt", "fresh\n");
-    expect(checkWorktreeMerge().ok).toBe(true);
-    commit("c.txt", "old\n", "2020-01-01T00:00:00Z");
-    const { ok, problems } = checkWorktreeMerge();
-    expect(ok).toBe(false);
-    expect(problems.join("\n")).toContain(before.slice(0, 8));
-    saveBaseline([], git(live, ["rev-parse", "main"]));
-  });
-
   it("при выключенном автослиянии ничего не проверяет", () => {
     row("stuck-queued", "queued", LIMITS.queuedHours + 1);
     setSetting("auto_merge_mode", "off", null, "тест сторожа слияния");
@@ -170,6 +159,6 @@ describe("сторож автослияния", () => {
     expect(text).toMatch(/Грязная копия роли/);
     // Ручные разборы так и остаются ручными.
     expect(text).toMatch(/Конфликт \/ красные тесты/);
-    expect(text).toMatch(/сдать шаг снова/);
+    expect(text).toMatch(/вернулась автору/);
   });
 });

@@ -56,11 +56,6 @@ export function integrationResponsibility(taskId:string) {
  const valid=task.integration_mode==='not_required'||(!stray&&!!owner);
  return {scope_task_id:scopeId,mode:task.integration_mode,owner_id:owner?.id??null,owner_title:owner?.title??null,candidates,suggested_owner_id:suggested?.id??null,valid};
 }
-export function requireIntegrationResponsibility(taskId:string):void {
- const state=integrationResponsibility(taskId);
- if(!state.valid)throw new Error(INTEGRATION_REQUIRED);
- if(state.mode==='auto')db.prepare('UPDATE tasks SET integration_owner_id=? WHERE id=?').run(state.owner_id,state.scope_task_id);
-}
 export function integrationResponsibilityPrompt(taskId:string):string {
  const state=integrationResponsibility(taskId);
  return state.mode==='not_required'?'Интеграция в репозиторий: явно не требуется.':`Ответственный за интеграцию: ${state.owner_title??'не назначен'} (${state.owner_id??'нет'}), карточка ${state.scope_task_id}. Передайте ему точные коммиты и проверки. После положительного ревью он переносит изменения в main и проверяет совместный результат. Не считайте рабочую ветку интегрированной. После положительного ревью сервер сам добавляет в план шаг «Интеграция» на ответственного (у карточки без плана — сообщение через очередь чата). Не создавайте второго ответственного и не добавляйте такой шаг сами. Укажите настоящий SHA main и проверки, либо конкретную причину ожидания.`;

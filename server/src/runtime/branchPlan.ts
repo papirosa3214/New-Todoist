@@ -1,4 +1,3 @@
-import {requireIntegrationResponsibility} from '../lib/integrationResponsibility.js';
 import { beforeSlots, parentPrepResults } from "./branchPhase.js";
 import {hasOnlyBranchCoordination} from "./branchCoordination.js";
 import { materializeWorkChoices } from "../lib/planWorkSelection.js";
@@ -111,7 +110,6 @@ export function approveBranch(rootPlanId:string,ownerId:string,snapshot:string):
     const teamRoles=new Set(selected.flatMap(x=>planNodes(x.plan!.id).map(n=>n.role_key)));
     teamRoles.add('architect');teamRoles.add('critic_verifier');
     if(teamRoles.size>6)throw new Error('В общей команде больше шести участников, включая Критика. Пересмотрите назначения перед согласованием.');
-    requireIntegrationResponsibility(root.task_id);
     // Parent assembly nodes are explicit architects in the agreed root plan.
     const rootNodes=planNodes(root.id).filter(n=>n.role_key!=="critic_verifier");
     if(rootNodes.length===1 && ['linear_import','auto_template','auto_preparation'].includes(rootNodes[0].origin)) db.prepare("UPDATE task_collaboration_plan_nodes SET role_key='architect' WHERE plan_id=? AND slot_key=?").run(root.id,rootNodes[0].slot_key);

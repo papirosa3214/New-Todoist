@@ -2,8 +2,8 @@
 // LOCK-WORKTREE-MANAGER-20261019, владелец 19.10.2026.
 //
 // Что решает система, а что остаётся за ответственным за интеграцию:
-//   — решение «что вливается» принимает шаг интеграции (роль или
-//     владелец). Он и кладёт карточку в очередь — см. `enqueueMerge`.
+//   — решение «что вливается» — одобрение проверки или сдача сборки
+//     оркестратора (`acceptedMerge.ts`, владелец 05.11.2026).
 //   — система делает механику: чистая копия → merge → тесты → main.
 //
 // Ключевое отличие от «слить и надеяться»: main двигается ПОСЛЕ зелёных
@@ -25,7 +25,7 @@ import { logEvent } from "../agentState.js";
 import { getSetting } from "../lib/serverSettings.js";
 import { inspectWorktree } from "../lib/worktree/inspect.js";
 import { cleanupWorktree, sweepTestLeftovers } from "../lib/worktree/cleanup.js";
-import { checkForRegression, loadBaseline, refreshBaseline, parseFailedTestFiles } from "../lib/worktree/testGate.js";
+import { parseFailedTestFiles, selectTargetedTests } from "../lib/worktree/testGate.js";
 import { pushMainToHosts, type PushStatus } from "../lib/worktree/pushHosts.js";
 import {
   GitError,
@@ -67,82 +67,41 @@ export interface MergeRow {
   created_at: string;
   updated_at: string;
   finished_at: string | null;
-  /** Номер и ссылка PR на GitHub (режим `pr`). */
-  pr_number?: number | null;
-  pr_url?: string | null;
 }
 
 const LOCK_FILE = "merge.lock";
 const LOCK_STALE_MS = 30 * 60_000;
 
-// ───────────────────────── GitHub (режим pr) ─────────────────────────
-//
-// Владелец 28.10.2026: ветки ролей идут той же дорогой, что и правки
-// Claude, — ветка → GitHub → PR → тесты CI → зелёный без конфликтов
-// вливается сам (job `automerge` в .github/workflows/ci.yml). Сервер
-// больше не сливает и не гоняет тесты на .110: он отправляет ветку,
-// открывает PR и следит за его исходом.
-
 const GITHUB_REMOTE = "github";
 const NET_TIMEOUT_MS = 120_000;
 
-export interface PullRequestStatus {
-  state: "OPEN" | "MERGED" | "CLOSED";
-  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
-  merge_commit: string | null;
-  /** Хотя бы одна проверка CI красная. */
-  checks_failed: boolean;
-}
-
-/** Репозиторий на GitHub (`owner/name`) из адреса remote `github`. */
-function githubRepo(live: string): string {
-  const url = git(live, ["remote", "get-url", GITHUB_REMOTE]);
-  const match = /github\.com[:/](.+?)(?:\.git)?$/.exec(url.trim());
-  if (!match) throw new Error(`remote ${GITHUB_REMOTE} — не GitHub: ${url}`);
-  return match[1];
-}
-
-/** `gh` с ключом из хранилища; значение ключа в вывод не попадает. */
-function gh(args: string[]): string {
-  const vault = process.env.TASKFLOW_VAULT_RUN ?? path.join(os.homedir(), ".claude", "vault-run.py");
-  return execFileSync("python3", [vault, "--secret", "GH_TOKEN=GITHUB_TOKEN", "--", "gh", ...args], {
-    encoding: "utf8",
-    timeout: NET_TIMEOUT_MS,
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-}
-
 /** Крюк для тестов: реальный запуск `npm test` занимает минуты. */
 export const hooks = {
-  /** Отправить ветку роли на GitHub (перезаписью своей же ветки). */
-  pushBranch: (live: string, branch: string): void => {
-    git(live, ["push", "--force", GITHUB_REMOTE, `refs/heads/${branch}:refs/heads/${branch}`], NET_TIMEOUT_MS);
-  },
-  /** Открытый PR ветки или новый. */
-  ensurePullRequest: (live: string, branch: string, title: string, body: string): { number: number; url: string } => {
-    const repo = githubRepo(live);
-    const open = JSON.parse(gh(["pr", "list", "-R", repo, "--head", branch, "--state", "open", "--json", "number,url"]) || "[]");
-    if (open.length) return { number: open[0].number, url: open[0].url };
-    gh(["pr", "create", "-R", repo, "--base", "main", "--head", branch, "--title", title, "--body", body]);
-    const made = JSON.parse(gh(["pr", "view", branch, "-R", repo, "--json", "number,url"]));
-    return { number: made.number, url: made.url };
-  },
-  /** Состояние PR: влит, закрыт, конфликт, красные проверки. */
-  pullRequestStatus: (live: string, number: number): PullRequestStatus => {
-    const raw = JSON.parse(gh(["pr", "view", String(number), "-R", githubRepo(live), "--json", "state,mergeable,mergeCommit,statusCheckRollup"]));
-    const checks = Array.isArray(raw.statusCheckRollup) ? raw.statusCheckRollup : [];
-    return {
-      state: raw.state,
-      mergeable: raw.mergeable,
-      merge_commit: raw.mergeCommit?.oid ?? null,
-      checks_failed: checks.some((c: { conclusion?: string }) => c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT"),
-    };
-  },
   /** Отправка main во все git-хосты после слияния; тесты подменяют. */
   pushHosts: (live: string): PushStatus => pushMainToHosts(live),
-  runTests: async (cwd: string, timeoutMs: number): Promise<{ ok: boolean; output: string }> => {
-    const command = process.env.TASKFLOW_AUTO_MERGE_TEST_CMD || "npm test -- --maxWorkers=2";
-    return runShell(command, cwd, timeoutMs);
+  /** Только явные файлы (владелец 05.11.2026): полный прогон на .110 запрещён. */
+  runTests: async (cwd: string, timeoutMs: number, files: string[] = []): Promise<{ ok: boolean; output: string }> => {
+    const list = files.map((file) => `'${file.replace(/'/g, "")}'`).join(" ");
+    return runShell(process.env.TASKFLOW_AUTO_MERGE_TEST_CMD || `npx vitest run ${list} --maxWorkers=4`, cwd, timeoutMs);
+  },
+  /** Те же файлы на main до слияния: упавшее и там — не наша регрессия. */
+  runBaseTests: async (cwd: string, timeoutMs: number, files: string[]): Promise<{ ok: boolean; output: string }> =>
+    hooks.runTests(cwd, timeoutMs, files),
+  /** Проверка типов, если своих тестов у правки нет: ошибки только в изменённых файлах. */
+  typecheck: async (cwd: string, timeoutMs: number, changed: string[]): Promise<{ ok: boolean; output: string }> => {
+    const result = await runShell("npx tsc --noEmit -p .", cwd, timeoutMs);
+    const own = result.output.split("\n").filter((line) => changed.some((file) => line.startsWith(file)));
+    return { ok: own.length === 0, output: own.join("\n") };
+  },
+  /** Live-main догоняет GitHub: в main пишут и напрямую. */
+  syncMain: (live: string): void => {
+    gitOrNull(live, ["fetch", "--quiet", GITHUB_REMOTE, "main"], NET_TIMEOUT_MS);
+    gitOrNull(live, ["merge", "--ff-only", "--quiet", `${GITHUB_REMOTE}/main`], 60_000);
+  },
+  /** Сбой слияния уходит автору; своя таблица планов есть не у всех прогонов. */
+  mergeFailed: async (taskId: string, error: string): Promise<void> => {
+    const { returnFailedMerge } = await import("./acceptedMerge.js");
+    returnFailedMerge(taskId, error);
   },
 };
 
@@ -242,7 +201,7 @@ function releaseLock(file: string | null): void {
 
 // ───────────────────────── очередь в БД ─────────────────────────
 
-export function mergeMode(): "off" | "dry" | "on" | "pr" {
+export function mergeMode(): "off" | "dry" | "on" {
   return getSetting("auto_merge_mode");
 }
 
@@ -365,6 +324,66 @@ function dropScratch(live: string, taskId: string): void {
   gitOrNull(live, ["worktree", "prune"]);
 }
 
+/** Незакоммиченное в живом main мешает только там, где его заденет слияние. */
+function dirtyInTheWay(live: string, taskId: string): string[] {
+  // Строки `git status --porcelain`: состояние и путь; ведущий пробел мог срезать git-обёртка.
+  const dirty = dirtyFiles(live).map((line) => line.replace(/^\s*\S{1,2}\s+/, "").split(" -> ").pop()!.replace(/^"|"$/g, ""));
+  if (!dirty.length) return [];
+  const touched = new Set((gitOrNull(live, ["diff", "--name-only", `main...${roleBranch(taskId)}`], 60_000) ?? "").split("\n").filter(Boolean));
+  return dirty.filter((file) => touched.has(file));
+}
+
+type MergeGate = { ok: true } | { ok: false; reason: string; regressions: string[] };
+
+/**
+ * Проверка слияния (владелец 05.11.2026): только тесты изменённого. Решает не цвет
+ * прогона, а регрессия: файл, упавший и на main до слияния, чужая красная база.
+ */
+async function verifyMerged(taskId: string, dir: string, live: string, base: string, changed: string[], timeoutMs: number): Promise<MergeGate> {
+  if (!changed.some((file) => file.startsWith("server/"))) return { ok: true };
+  const server = path.join(dir, "server");
+  const known = (gitOrNull(dir, ["ls-files", "server/test"], 60_000) ?? "").split("\n").filter(Boolean);
+  const files = selectTargetedTests(changed, known);
+  if (!files.length) {
+    const sources = changed.filter((file) => /^server\/.*\.ts$/.test(file)).map((file) => file.slice("server/".length));
+    if (!sources.length) return { ok: true };
+    const types = await hooks.typecheck(server, timeoutMs, sources);
+    return types.ok ? { ok: true } : { ok: false, reason: `ошибки типов в изменённых файлах:\n${types.output}`, regressions: [] };
+  }
+  const tests = await hooks.runTests(server, timeoutMs, files);
+  if (tests.ok) return { ok: true };
+  const failed = parseFailedTestFiles(tests.output);
+  if (!failed.length || /\[прервано по таймауту|\[запуск не удался/.test(tests.output)) {
+    return { ok: false, reason: `прогон тестов не завершён: ${tail(tests.output)}`, regressions: [] };
+  }
+  const preexisting = await failingOnMain(taskId, live, base, failed, timeoutMs);
+  const regressions = failed.filter((file) => !preexisting.has(file));
+  return regressions.length
+    ? { ok: false, reason: `новые падения после слияния: ${regressions.join(", ")}`, regressions }
+    : { ok: true };
+}
+
+async function failingOnMain(taskId: string, live: string, base: string, failed: string[], timeoutMs: number): Promise<Set<string>> {
+  const dir = path.join(worktreesBase(), `.merge-base-${taskId}`);
+  gitOrNull(live, ["worktree", "remove", "--force", dir]);
+  fs.rmSync(dir, { recursive: true, force: true });
+  gitOrNull(live, ["worktree", "prune"]);
+  try {
+    git(live, ["worktree", "add", "--detach", dir, base], 300_000);
+    linkNodeModules(dir, live);
+    const present = failed.filter((file) => fs.existsSync(path.join(dir, "server", file)));
+    if (!present.length) return new Set();
+    const result = await hooks.runBaseTests(path.join(dir, "server"), timeoutMs, present);
+    return new Set(result.ok ? [] : parseFailedTestFiles(result.output));
+  } catch {
+    // Базу снять не удалось: честнее считать падение новым и вернуть автору.
+    return new Set();
+  } finally {
+    gitOrNull(live, ["worktree", "remove", "--force", dir]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /** Попытка слить одну карточку. Ничего не бросает наружу. */
 export async function processMerge(taskId: string): Promise<MergeOutcome> {
   const row = mergeQueueRow(taskId) ?? ({ task_id: taskId, trigger: "sweep", state: "queued" } as MergeRow);
@@ -378,9 +397,8 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   const live = liveRepo();
   const branch = roleBranch(taskId);
 
-  // Режим pr: живой main не трогаем вовсе — его незакоммиченное слиянию
-  // через GitHub не мешает. Проверки ветки и копии роли — те же.
-  const dirtyMain = mergeMode() === "pr" ? [] : dirtyFiles(live);
+  hooks.syncMain(live);
+  const dirtyMain = dirtyInTheWay(live, taskId);
   if (dirtyMain.length > 0) {
     outcome.state = "blocked_dirty_main";
     outcome.error = `в main есть незакоммиченное (${dirtyMain.length}): ${dirtyMain.slice(0, 3).join(", ")}`;
@@ -411,7 +429,6 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
 
   const mainShaBefore = git(live, ["rev-parse", "main"]);
   outcome.main_sha_before = mainShaBefore;
-  if (mergeMode() === "pr") return openPullRequest(taskId, row, branch, live, mainShaBefore, outcome);
   writeState(taskId, { state: "running", main_sha_before: mainShaBefore, error: null });
   // Счётчик попыток: по нему видно, что слияние упирается в одно и то же
   // (создание копии) и пора звать человека.
@@ -466,45 +483,26 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   }
   const mergedSha = git(dir, ["rev-parse", "HEAD"]);
 
-  // 2. Тесты — тоже в изолированной копии. main ещё не тронут.
+  // 2. Точечная проверка — тоже в изолированной копии. main ещё не тронут.
   const timeoutMs = getSetting("auto_merge_test_timeout_min") * 60_000;
-  // Дорогой снимок main нужен только для готового слияния, под блокировкой
-  // очереди. Пустой проход, грязный main и конфликт тесты не запускают.
-  const baseline = loadBaseline();
-  if (!baseline || baseline.main_sha !== mainShaBefore) {
-    const refreshed = await refreshBaseline(hooks.runTests, timeoutMs, live);
-    if (!refreshed) {
-      dropScratch(live, taskId);
-      outcome.state = "test_failed";
-      outcome.error = "не удалось снять базу падений main";
-      writeState(taskId, { state: outcome.state, error: outcome.error });
-      return outcome;
-    }
-  }
-  // Владелец мог выключить автоматику во время долгого снимка.
-  if (mergeMode() === "off") {
-    dropScratch(live, taskId);
-    outcome.state = "queued";
-    writeState(taskId, { state: "queued", error: null });
-    return outcome;
-  }
-  const tests = await hooks.runTests(path.join(dir, "server"), timeoutMs);
-
-  // Решает не цвет прогона, а РЕГРЕССИЯ: на самом main уже есть своя
-  // красная база, требовать «все тесты зелёные» значит не сливать никогда.
-  const interrupted = !tests.ok && (parseFailedTestFiles(tests.output).length === 0 ||
-    /\[прервано по таймауту|\[запуск не удался/.test(tests.output));
-  const gate = interrupted
-    ? { ok: false, regressions: [], reason: "прогон тестов не завершён: " + tail(tests.output) }
-    : checkForRegression(tests.output, live);
+  const changed = (gitOrNull(dir, ["diff", "--name-only", mainShaBefore, mergedSha], 60_000) ?? "").split("\n").filter(Boolean);
+  const gate = await verifyMerged(taskId, dir, live, mainShaBefore, changed, timeoutMs);
   if (!gate.ok) {
     dropScratch(live, taskId);
     outcome.state = "test_failed";
     outcome.result_sha = mergedSha;
-    outcome.error = tail(gate.reason ?? tail(tests.output));
+    outcome.error = tail(gate.reason);
     writeState(taskId, { state: outcome.state, result_sha: mergedSha, error: outcome.error });
     journal({ task_id: taskId, state: "test_failed", main_sha_before: mainShaBefore, result_sha: mergedSha, regressions: gate.regressions });
     safeLogEvent(taskId, "merge_test_failed", branch, mergedSha);
+    return outcome;
+  }
+
+  // Владелец мог выключить автоматику во время прогона.
+  if (mergeMode() === "off") {
+    dropScratch(live, taskId);
+    outcome.state = "queued";
+    writeState(taskId, { state: "queued", error: null });
     return outcome;
   }
 
@@ -519,12 +517,6 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
     return outcome;
   }
 
-  if (mergeMode() === "off") {
-    dropScratch(live, taskId);
-    outcome.state = "queued";
-    writeState(taskId, { state: "queued", error: null });
-    return outcome;
-  }
   // 4. Двигаем main — только теперь, после зелёных тестов.
   try {
     git(live, ["merge", "--ff-only", integrationBranch]);
@@ -570,98 +562,6 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   return outcome;
 }
 
-/** Режим pr: ветка роли → GitHub → PR. Тесты и слияние — CI на GitHub. */
-function openPullRequest(
-  taskId: string,
-  row: MergeRow,
-  branch: string,
-  live: string,
-  mainShaBefore: string,
-  outcome: MergeOutcome,
-): MergeOutcome {
-  writeState(taskId, { state: "running", main_sha_before: mainShaBefore, error: null });
-  let taskTitle: string | null = null;
-  try {
-    taskTitle = (db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title: string } | undefined)?.title ?? null;
-  } catch {
-    /* без названия — PR назовётся по карточке */
-  }
-  const title = `${taskTitle ?? "Работа роли"} (карточка ${taskId.slice(0, 8)})`;
-  const body = [
-    `Ветка роли \`${branch}\`, карточка TaskFlow \`${taskId}\`.`,
-    "",
-    "Открыта очередью слияния ролей. Зелёные проверки без конфликтов — PR вливается сам;",
-    "конфликт или красные тесты — роль обновляет ветку от main и сдаёт шаг заново.",
-  ].join("\n");
-  try {
-    hooks.pushBranch(live, branch);
-    const pr = hooks.ensurePullRequest(live, branch, title, body);
-    db.prepare("UPDATE worktree_merge_queue SET pr_number = ?, pr_url = ?, attempts = 0 WHERE task_id = ?").run(pr.number, pr.url, taskId);
-    outcome.state = "pr_open";
-    outcome.error = null;
-    outcome.pr_number = pr.number;
-    outcome.pr_url = pr.url;
-    writeState(taskId, { state: "pr_open", error: null });
-    journal({ task_id: taskId, state: "pr_open", pr: pr.url, main_sha_before: mainShaBefore });
-    safeLogEvent(taskId, "merge_pr_opened", branch, pr.url);
-  } catch (error) {
-    const attempts = Number(row.attempts ?? 0) + 1;
-    db.prepare("UPDATE worktree_merge_queue SET attempts = ? WHERE task_id = ?").run(attempts, taskId);
-    const message = error instanceof Error ? error.message : String(error);
-    // Сеть или GitHub недоступны — следующий проход повторит; упорный
-    // отказ отдаём ответственному за интеграцию.
-    outcome.state = attempts >= 4 ? "conflict" : "queued";
-    outcome.error = `PR не открыт: ${tail(message, 600)}`;
-    writeState(taskId, { state: outcome.state, error: outcome.error });
-    journal({ task_id: taskId, state: outcome.state, reason: "pr_failed", error: outcome.error });
-  }
-  return outcome;
-}
-
-/**
- * Режим pr: сверить открытые PR с GitHub. Влит — карточке «влито» и
- * уборка копии; конфликт, красные тесты или закрытый PR — роли на разбор
- * (повторная сдача шага интеграции снова отправит ветку и обновит PR).
- */
-export function syncPullRequests(limit = 20): number {
-  if (mergeMode() !== "pr") return 0;
-  const live = liveRepo();
-  const rows = db
-    .prepare("SELECT task_id, pr_number FROM worktree_merge_queue WHERE state = 'pr_open' AND pr_number IS NOT NULL ORDER BY updated_at LIMIT ?")
-    .all(limit) as Array<{ task_id: string; pr_number: number }>;
-  let changed = 0;
-  for (const row of rows) {
-    let status: PullRequestStatus;
-    try {
-      status = hooks.pullRequestStatus(live, row.pr_number);
-    } catch {
-      continue; // GitHub недоступен — следующий проход
-    }
-    const pr = `PR #${row.pr_number}`;
-    if (status.state === "MERGED") {
-      db.prepare(
-        "UPDATE tasks SET merged_at = datetime('now'), merged_into_commit = ?, merged_into_branch = 'main' WHERE id = ?",
-      ).run(status.merge_commit, row.task_id);
-      writeState(row.task_id, { state: "merged", result_sha: status.merge_commit, error: null });
-      journal({ task_id: row.task_id, state: "merged", pr: row.pr_number, result_sha: status.merge_commit });
-      safeLogEvent(row.task_id, "auto_merged", pr, status.merge_commit);
-      changed += 1;
-    } else if (status.state === "CLOSED") {
-      writeState(row.task_id, { state: "conflict", error: `${pr} закрыт без слияния` });
-      changed += 1;
-    } else if (status.mergeable === "CONFLICTING") {
-      writeState(row.task_id, { state: "conflict", error: `конфликт с main в ${pr}: обнови ветку от main, разреши конфликт и сдай шаг заново` });
-      safeLogEvent(row.task_id, "merge_conflict", pr, "конфликт с main");
-      changed += 1;
-    } else if (status.checks_failed) {
-      writeState(row.task_id, { state: "test_failed", error: `проверки CI в ${pr} красные: почини и сдай шаг заново` });
-      safeLogEvent(row.task_id, "merge_test_failed", pr, null);
-      changed += 1;
-    }
-  }
-  return changed;
-}
-
 function tail(output: string, limit = 4000): string {
   return output.trim().slice(-limit);
 }
@@ -694,12 +594,11 @@ export function retryClearedObstructions(limit = 20): string[] {
     )
     .all(limit) as Array<{ task_id: string; state: string }>;
   if (!rows.length) return [];
-  const mainClean = dirtyFiles(live).length === 0;
   const requeued: string[] = [];
   for (const row of rows) {
     const cleared =
       row.state === "blocked_dirty_main"
-        ? mainClean
+        ? dirtyInTheWay(live, row.task_id).length === 0
         : (() => {
             const state = inspectWorktree(row.task_id, "main", live);
             return state.worktree_exists && state.dirty.length === 0;
@@ -814,7 +713,11 @@ export async function drainMergeQueue(limit = 1): Promise<MergeOutcome[]> {
       .all(limit) as Array<{ task_id: string }>;
     const out: MergeOutcome[] = [];
     for (const row of rows) {
-      out.push(await processMerge(row.task_id));
+      const outcome = await processMerge(row.task_id);
+      out.push(outcome);
+      if ((outcome.state === "conflict" || outcome.state === "test_failed") && outcome.error) {
+        await hooks.mergeFailed(row.task_id, outcome.error).catch((error) => console.warn("[merge-queue] автору не вернули", error));
+      }
     }
     return out;
   } finally {
@@ -868,7 +771,7 @@ export async function worktreeMaintenancePass(): Promise<number> {
   // Зависшие в `running` строки (сервер упал посреди слияния) — тоже
   // в очередь: иначе карточка висит до прихода человека.
   const recovered = recoverStaleRunning().length;
-  const merged = (await drainMergeQueue(1)).filter((row) => row.state === "merged").length + syncPullRequests();
+  const merged = (await drainMergeQueue(1)).filter((row) => row.state === "merged").length;
   const cleaned = await sweepMergedWorkspaces();
   const leftovers = sweepTestLeftovers() + sweepMergeScratch();
   return unblocked + recovered + merged + cleaned + leftovers;
