@@ -357,6 +357,8 @@ export type MissionEventKind =
   | "assertion_blocked"
   | "gate_rework"
   | "mission_closed"
+  | "mission_paused"
+  | "mission_resumed"
   | "mission_skill_registered"
   | "mission_skill_released"
   | "mission_skill_release_failed";
@@ -458,4 +460,24 @@ export function orchestrateContractError(taskId: string, planId: string): string
     return error instanceof Error ? error.message : String(error);
   }
   return null;
+}
+
+/** Что из обычных событий карточки показывать в журнале миссии. Остальное — служебный шум. */
+const MISSION_LOG_KINDS = [
+  "plan_subtask_started", "subtask_done", "plan_subtask_artifact_submitted", "step_abandoned",
+  "collaboration_plan_changed", "plan_help_requested", "accepted_merge_queued", "auto_merged",
+  "merge_conflict", "merge_test_failed", "merge_returned_to_author", "merge_held_by_contract",
+];
+
+/** Журнал миссии: события контракта и ход работы одной лентой, новые сверху. */
+export function missionLog(taskId: string, limit = 200): Array<{
+  id: string; ts: string; kind: string; actor_id: string | null; slot_key: string | null; payload_json: string | null;
+}> {
+  const marks = MISSION_LOG_KINDS.map(() => "?").join(",");
+  const work = db
+    .prepare(`SELECT id, created_at AS ts, kind, actor_id, field AS slot_key, to_value AS payload_json FROM task_events
+               WHERE task_id = ? AND kind IN (${marks}) ORDER BY created_at DESC, rowid DESC LIMIT ?`)
+    .all(taskId, ...MISSION_LOG_KINDS, limit) as ReturnType<typeof missionLog>;
+  const moment = (ts: string) => Date.parse(ts.includes("T") ? ts : `${ts.replace(" ", "T")}Z`) || 0;
+  return [...missionEvents(taskId, limit), ...work].sort((a, b) => moment(b.ts) - moment(a.ts)).slice(0, limit);
 }

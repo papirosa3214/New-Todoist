@@ -41,7 +41,7 @@ import { releaseSubtaskWork } from "../agentState.js";
  *  в одном месте с уже существующим releaseSubtaskWork: agent_state /
  *  agent_id / agent_heartbeat_at обнуляются одной командой, чтобы карточка
  *  на доске сразу перестала показываться «в работе». */
-function cancelSubtaskAttempt(subtaskId: string, reason: string, actorId: string): {
+export function cancelSubtaskAttempt(subtaskId: string, reason: string, actorId: string): {
   subtaskId: string;
   aborted: boolean;
   attemptClosed: boolean;

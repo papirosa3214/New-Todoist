@@ -5717,6 +5717,21 @@ const migrations: Migration[] = [
   },
 
   {
+    id: "199_mission_pause_and_usage",
+    description: "Пауза плана и расход токенов по карточке для Mission Control (владелец 05.11.2026)",
+    up: () => {
+      const plans = new Set((db.prepare("PRAGMA table_info(task_collaboration_plans)").all() as Array<{ name: string }>).map((c) => c.name));
+      if (!plans.has("paused_at")) db.exec("ALTER TABLE task_collaboration_plans ADD COLUMN paused_at TEXT");
+      const usage = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='model_usage'").get();
+      if (usage) {
+        const cols = new Set((db.prepare("PRAGMA table_info(model_usage)").all() as Array<{ name: string }>).map((c) => c.name));
+        if (!cols.has("task_id")) db.exec("ALTER TABLE model_usage ADD COLUMN task_id TEXT");
+        db.exec("CREATE INDEX IF NOT EXISTS idx_model_usage_task ON model_usage(task_id)");
+      }
+    },
+  },
+
+  {
     id: "198_merge_queue_direct",
     description: "Очередь слияния без PR: прямой перенос в main (владелец 05.11.2026)",
     up: () => {

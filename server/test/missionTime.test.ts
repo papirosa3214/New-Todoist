@@ -28,7 +28,7 @@ describe("время миссии", () => {
 
   it("задача без попыток: ноль и не идёт", () => {
     addTask("mt_empty");
-    expect(missionTime("mt_empty", NOW)).toEqual({ started_at: null, worked_seconds: 0, running: false });
+    expect(missionTime("mt_empty", NOW)).toMatchObject({ started_at: null, worked_seconds: 0, running: false });
   });
 
   it("считает и дочерние карточки, идущая попытка тянется до сейчас", () => {
@@ -36,12 +36,12 @@ describe("время миссии", () => {
     addTask("mt_child", "mt_root");
     addAttempt("mt_a1", "mt_root", "2026-11-05 10:00:00", "2026-11-05 10:10:00");
     addAttempt("mt_a2", "mt_child", "2026-11-05T11:50:00Z", null, "2026-11-05T11:59:00Z");
-    expect(missionTime("mt_root", NOW)).toEqual({ started_at: "2026-11-05 10:00:00", worked_seconds: 20 * 60, running: true });
+    expect(missionTime("mt_root", NOW)).toMatchObject({ started_at: "2026-11-05 10:00:00", worked_seconds: 20 * 60, running: true });
   });
 
   it("брошенная попытка без конца не тикает вечно: обрывается на последнем сигнале", () => {
     addTask("mt_lost");
     addAttempt("mt_a3", "mt_lost", "2026-11-05T08:00:00Z", null, "2026-11-05T08:05:00Z");
-    expect(missionTime("mt_lost", NOW)).toEqual({ started_at: "2026-11-05T08:00:00Z", worked_seconds: 5 * 60, running: false });
+    expect(missionTime("mt_lost", NOW)).toMatchObject({ started_at: "2026-11-05T08:00:00Z", worked_seconds: 5 * 60, running: false });
   });
 });

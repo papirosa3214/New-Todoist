@@ -7,7 +7,7 @@ export function ensureModelUsageSchema() {
  db.exec(`CREATE TABLE IF NOT EXISTS model_usage (
  id TEXT PRIMARY KEY, occurred_at TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
  input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_read INTEGER NOT NULL,
- cache_write INTEGER NOT NULL, estimated_cost_usd REAL, source TEXT NOT NULL);
+ cache_write INTEGER NOT NULL, estimated_cost_usd REAL, source TEXT NOT NULL, task_id TEXT);
  CREATE INDEX IF NOT EXISTS idx_model_usage_time ON model_usage(occurred_at);`);
  schemaReady=true;
 }
@@ -18,7 +18,7 @@ function canonical(v:any):string {
  return JSON.stringify(v)??"null";
 }
 /** Only numerical metadata is stored. Stable fingerprint deduplicates replayed/copied session messages. */
-export function recordModelUsage(message:unknown,source:string):boolean {
+export function recordModelUsage(message:unknown,source:string,taskId:string|null=null):boolean {
  const m=message as any,u=m?.usage;
  if(m?.role!=="assistant" || !u || !count(m.timestamp) || !Number.isFinite(new Date(m.timestamp).getTime()))return false;
  if(![u.input,u.output,u.cacheRead??0,u.cacheWrite??0].every(count))return false;
@@ -27,8 +27,8 @@ export function recordModelUsage(message:unknown,source:string):boolean {
  const cost=typeof u.cost?.total==="number" && Number.isFinite(u.cost.total) && u.cost.total>0?u.cost.total:null;
  const id=createHash("sha256").update(canonical({timestamp:m.timestamp,provider,model,usage:u,content:m.content})).digest("hex");
  ensureModelUsageSchema();
- const r=db.prepare("INSERT OR IGNORE INTO model_usage VALUES(?,?,?,?,?,?,?,?,?,?)").run(
- id,new Date(m.timestamp).toISOString(),provider,model,u.input,u.output,u.cacheRead??0,u.cacheWrite??0,cost,source);
+ const r=db.prepare("INSERT OR IGNORE INTO model_usage(id,occurred_at,provider,model,input_tokens,output_tokens,cache_read,cache_write,estimated_cost_usd,source,task_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(
+ id,new Date(m.timestamp).toISOString(),provider,model,u.input,u.output,u.cacheRead??0,u.cacheWrite??0,cost,source,taskId);
  return r.changes>0;
 }
 const aggregate=`count(*) calls,COALESCE(sum(input_tokens),0) inputTokens,COALESCE(sum(output_tokens),0) outputTokens,

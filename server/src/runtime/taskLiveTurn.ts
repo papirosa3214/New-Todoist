@@ -143,6 +143,7 @@ export function beginTaskLiveTurn(args: {
     args.publish(snapshot);
   };
   live = new LiveTurn({
+    usageTaskId: args.taskId,
     chatId: args.taskId, userId: args.userId, name: args.name, audience: () => [],
     publish: send,
   });

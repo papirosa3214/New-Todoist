@@ -410,10 +410,11 @@ export async function startPlanSubtaskRun(
   if (!node) return { ok: false, error: "узел плана не найден в DAG" };
 
   const approved = db
-    .prepare("SELECT status FROM task_collaboration_plans WHERE id=?")
-    .get(current.collaboration_plan_id) as { status: string } | undefined;
+    .prepare("SELECT status,paused_at FROM task_collaboration_plans WHERE id=?")
+    .get(current.collaboration_plan_id) as { status: string; paused_at: string | null } | undefined;
   if (approved?.status !== "approved")
     return { ok: false, error: "План ещё не утверждён" };
+  if (approved.paused_at) return { ok: false, error: "План на паузе: сначала снимите паузу" };
   if (!manual && !canPlanSubtaskBecomeReady(current))
     return {
       ok: false,

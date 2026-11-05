@@ -3,6 +3,7 @@
  * реально работала. Параллельные попытки не складываются, дочерние карточки входят.
  */
 import db from "../db.js";
+import { ensureModelUsageSchema } from "./modelUsage.js";
 
 /** Попытка без конца и без свежего сигнала считается брошенной. */
 const STALE_MS = 10 * 60_000;
@@ -31,7 +32,7 @@ export function mergedSeconds(intervals: Interval[]): number {
   return Math.round(total / 1000);
 }
 
-export function missionTime(taskId: string, nowMs = Date.now()): { started_at: string | null; worked_seconds: number; running: boolean } {
+export function missionTime(taskId: string, nowMs = Date.now()): { started_at: string | null; worked_seconds: number; running: boolean; tokens: number } {
   const rows = db
     .prepare(
       `WITH RECURSIVE tree(id) AS (
@@ -65,5 +66,15 @@ export function missionTime(taskId: string, nowMs = Date.now()): { started_at: s
     }
     if (end > start) intervals.push({ start, end });
   }
-  return { started_at: startedAt, worked_seconds: mergedSeconds(intervals), running };
+  ensureModelUsageSchema();
+  // Ввод и вывод модели, без кэша: кэш многократно считает один и тот же контекст.
+  const usage = db
+    .prepare(
+      `WITH RECURSIVE tree(id) AS (
+         SELECT ? UNION ALL SELECT t.id FROM tasks t JOIN tree ON t.parent_id = tree.id
+       )
+       SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens FROM model_usage WHERE task_id IN tree`,
+    )
+    .get(taskId) as { tokens: number };
+  return { started_at: startedAt, worked_seconds: mergedSeconds(intervals), running, tokens: usage.tokens };
 }

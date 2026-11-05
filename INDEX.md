@@ -257,3 +257,9 @@ Things 3 — 20 операций `things_*`, Todoist — 46 операций `to
 - Шаг с пунктами контракта сдаётся только артефактом с `payload.assertions`. Описания артефакта у шага может не быть: его подставляет `effectiveArtifactContract`.
 - Критику пункты не назначают: он сдаёт только вердикт.
 
+## Данные Mission Control (владелец 05.11.2026)
+
+- Пауза: `POST /api/tasks/:id/collaboration-plans/:planId/pause` и `/resume`. Идущие шаги прерываются, новые не стартуют, снятие запускает готовое. Поле плана `paused_at`.
+- Время и расход: `time` в `GET /api/coordination/tasks/:id/executors`, `server/src/lib/missionTime.ts`. Токены считаются с 05.11.2026 (`model_usage.task_id`), раньше привязки к задаче не было.
+- Журнал: `GET /api/tasks/:id/mission-events` отдаёт `missionLog`: события контракта и ход работы одной лентой.
+

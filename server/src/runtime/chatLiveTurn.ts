@@ -394,6 +394,7 @@ export class LiveTurn {
   private lastSnapshotAt = 0;
   private readonly audience: () => string[];
   private readonly publish?: (turn: LiveTurnSnapshot | null) => void;
+  private readonly usageTaskId: string | null;
   private readonly startedAt = new Date();
   /** Последнее событие рантайма — сколько молчала модель перед сбоем. */
   private lastEventAt = Date.now();
@@ -431,6 +432,8 @@ export class LiveTurn {
     audience: () => string[];
     detached?: boolean;
     publish?: (turn: LiveTurnSnapshot | null) => void;
+    /** К какой карточке относить расход токенов. */
+    usageTaskId?: string | null;
   }) {
     this.chatId = args.chatId;
     this.userId = args.userId;
@@ -439,6 +442,7 @@ export class LiveTurn {
     this.messageId = args.messageId ?? null;
     this.audience = args.audience;
     this.publish = args.publish;
+    this.usageTaskId = args.usageTaskId ?? null;
     this.detached = args.detached ?? false;
     this.draftStartedAt = this.startedAt.toISOString();
     if (this.detached) this.closed = true;
@@ -489,7 +493,7 @@ export class LiveTurn {
     if (sub && this.genStartedAt === null) this.genStartedAt = Date.now();
     if (e.type === "message_end" || e.type === "turn_usage") this.addUsage(event);
     if (e.type === "message_end") {
-      try { recordModelUsage((event as any).message, this.publish ? "task" : "chat"); }
+      try { recordModelUsage((event as any).message, this.publish ? "task" : "chat", this.usageTaskId); }
       catch { if(!usagePersistenceWarning){usagePersistenceWarning=true;console.warn("[model-usage] could not save response counters");} }
     }
     // Ответ модели без текста — молчание (21.10.2026). Помечаем последний

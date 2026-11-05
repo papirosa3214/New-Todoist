@@ -1,10 +1,11 @@
+import { cancelSubtaskAttempt } from "./control.js";
 import { TEMPLATE_PROFILES, additionalTemplate, templateInstructions } from "../lib/collaborationTemplates.js";
 import { SCHEDULER_USER_ID } from "../serviceUser.js";
 import { submissionReceipt } from "../lib/submissionReceipt.js";
 import { roleResultDocument } from "../lib/roleResultReport.js";
 import { normalizePlanStartCondition } from "../runtime/planArtifactGate.js";
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
-import { parseFulfills, parseFulfillsInput, missionAssertions, replaceMissionAssertions, assertionCoverage, validateAssertionCoverage, validateAssertionCoverageForApproval, withAssertionInstruction, missionOutcome, missionEvents, appendMissionEvent } from "../lib/missionContract.js";
+import { parseFulfills, parseFulfillsInput, missionAssertions, missionLog, replaceMissionAssertions, assertionCoverage, validateAssertionCoverage, validateAssertionCoverageForApproval, withAssertionInstruction, missionOutcome, missionEvents, appendMissionEvent } from "../lib/missionContract.js";
 import { missionSkills, registerMissionSkill, releaseMissionSkill } from "../lib/missionSkills.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
@@ -54,6 +55,7 @@ type Plan = {
   approved_at: string | null;
   created_at: string;
   version?: number;
+  paused_at?: string | null;
 };
 
 type ArtifactContract = { key: string; type: string; format: "json"; required_fields: string[] };
@@ -125,6 +127,7 @@ function presentSingle(plan: Plan) {
     })),
     edges,
     version: plan.version ?? 1,
+    paused_at: plan.paused_at ?? null,
     pending_proposals: plan.status === "superseded" ? [] : pendingPlanProposals(plan.id),
   };
 }
@@ -1206,6 +1209,33 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     }
   });
 
+  // Пауза миссии (владелец 05.11.2026): идущие шаги прерываются, новые не стартуют.
+  // Снятие паузы запускает всё, что к этому моменту готово.
+  for (const action of ["pause", "resume"] as const) {
+    app.post<{ Params: { id: string; planId: string } }>(
+      `/api/tasks/:id/collaboration-plans/:planId/${action}`,
+      { preHandler: authOrApiToken },
+      async (req: any, reply) => {
+        if (!mayManage(req.userId)) return reply.code(403).send({ error: "паузу ставит владелец или оркестратор" });
+        const task = getTaskForRead(req.params.id, req.userId);
+        if (!task) return reply.code(404).send({ error: "Not found" });
+        const plan = planForTask(task.id, req.params.planId);
+        if (!plan) return reply.code(404).send({ error: "plan not found" });
+        if (plan.status !== "approved") return reply.code(409).send({ error: "на паузу ставят только утверждённый план" });
+        const pausing = action === "pause";
+        if (pausing === !!plan.paused_at) return { plan: present(plan) };
+        db.prepare("UPDATE task_collaboration_plans SET paused_at = ? WHERE id = ?").run(pausing ? new Date().toISOString() : null, plan.id);
+        if (pausing) {
+          const running = db.prepare("SELECT id FROM subtasks WHERE collaboration_plan_id = ? AND done = 0 AND agent_state IN ('in_progress','todo')").all(plan.id) as Array<{ id: string }>;
+          for (const step of running) cancelSubtaskAttempt(step.id, "Пауза миссии", req.userId);
+        }
+        appendMissionEvent(task.id, { kind: pausing ? "mission_paused" : "mission_resumed", actor_id: req.userId, payload: {} });
+        if (!pausing) await afterLiveChange(plan.id, task.id, req.userId);
+        return { plan: present(planForTask(task.id, plan.id)!) };
+      },
+    );
+  }
+
   // Предложение роли сверх лимита — решает владелец.
   for (const decision of ["approve", "reject"] as const) {
     app.post<{ Params: { id: string; planId: string; opId: string } }>(
@@ -1418,7 +1448,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
     const limit = Number(req.query?.limit ?? 200) || 200;
-    return { events: missionEvents(task.id, limit) };
+    return { events: missionLog(task.id, limit) };
   });
 
   /**
