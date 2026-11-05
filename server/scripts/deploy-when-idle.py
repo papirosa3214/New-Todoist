@@ -38,6 +38,10 @@ HEALTH = "http://127.0.0.1:3001/api/health"
 # «origin» — локальный Gitea в Docker, он умирает вместе с машиной и бэкапом
 # не является; GitHub переживает смерть .110.
 GITHUB_REMOTE = "github"
+# Этот файл пишет само приложение при смене моделей на экране настроек.
+# Его правка — живая настройка, а не чужая незаконченная работа: выкладку
+# не держит. fast-forward всё равно не перезапишет её (git откажет сам).
+RUNTIME_WRITTEN = "server/scripts/role-routing.yaml"
 
 
 def log(msg):
@@ -54,6 +58,12 @@ def state(name, value=None):
         return open(path).read().strip() if os.path.exists(path) else ""
     with open(path, "w") as f:
         f.write(value)
+
+
+def tree_dirty(scope="."):
+    """Есть ли незакоммиченные правки, кроме файла, который пишет приложение."""
+    status = sh("git", "status", "--porcelain", "--", scope, f":(exclude){RUNTIME_WRITTEN}")
+    return bool(status.stdout.strip())
 
 
 def sync_from_github():
@@ -77,7 +87,7 @@ def sync_from_github():
     if sh("git", "merge-base", "--is-ancestor", remote, local).returncode == 0:
         log(f"{GITHUB_REMOTE}/main отстаёт от локального main — не обновляю")
         return
-    if sh("git", "status", "--porcelain").stdout.strip():
+    if tree_dirty():
         log("рабочее дерево грязное — не обновляю из GitHub")
         return
     merge = sh("git", "merge", "--ff-only", f"{GITHUB_REMOTE}/main", timeout=120)
@@ -235,7 +245,7 @@ def main():
     if sh("git", "diff", "--quiet", deployed, head, "--", "server/").returncode == 0:
         state("deployed", head)  # серверный код не менялся — перезапуск не нужен
         return
-    if sh("git", "status", "--porcelain", "--", "server/").stdout.strip():
+    if tree_dirty("server/"):
         log("в server/ незакоммиченные правки — жду")
         return
 

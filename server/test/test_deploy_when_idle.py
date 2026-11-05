@@ -1,5 +1,8 @@
 import importlib.util
+import os
 import sqlite3
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -155,6 +158,112 @@ class SyncFromGithubTests(unittest.TestCase):
         }
         self._run()  # не должно бросить исключение
         self.assertEqual(len([c for c in self.calls if c[:3] == ("git", "merge", "--ff-only")]), 1)
+
+
+class RuntimeWrittenRoutingTests(unittest.TestCase):
+    """Смена модели в приложении пишет role-routing.yaml и не держит выкладку."""
+
+    ROUTING = "server/scripts/role-routing.yaml"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.bare = root / "github.git"
+        self.repo = root / "repo"
+        self.state = root / "state"
+        self.state.mkdir()
+        self._git(root, "init", "-q", "--bare", "-b", "main", str(self.bare))
+        self._git(root, "clone", "-q", str(self.bare), str(self.repo))
+        self._git(self.repo, "checkout", "-q", "-B", "main")
+        self._git(self.repo, "remote", "rename", "origin", "github")
+        self._write(self.ROUTING, "models: old\n")
+        self._write("server/src/index.ts", "one\n")
+        self._write("vite.config.ts", "one\n")
+        self._commit("start")
+        self._git(self.repo, "push", "-q", "github", "main")
+
+        self.logs = []
+        self.originals = {k: getattr(DEPLOY, k) for k in ("sh", "log", "STATE", "busy")}
+        repo = self.repo
+        def sh(*cmd, cwd=None, timeout=600):
+            return subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=timeout)
+        setattr(DEPLOY, "sh", sh)
+        setattr(DEPLOY, "log", self.logs.append)
+        setattr(DEPLOY, "STATE", str(self.state))
+
+    def tearDown(self):
+        for key, value in self.originals.items():
+            setattr(DEPLOY, key, value)
+        self.tmp.cleanup()
+
+    def _git(self, cwd, *args):
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        return subprocess.run(("git",) + args, cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
+
+    def _write(self, rel, text, base=None):
+        path = (base or self.repo) / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def _commit(self, message, base=None):
+        self._git(base or self.repo, "add", "-A")
+        self._git(base or self.repo, "commit", "-q", "-m", message)
+
+    def _advance_github(self, rel):
+        other = Path(self.tmp.name) / "other"
+        self._git(Path(self.tmp.name), "clone", "-q", "-b", "main", str(self.bare), str(other))
+        self._write(rel, "from github\n", other)
+        self._commit("upstream", other)
+        self._git(other, "push", "-q", "origin", "main")
+
+    def _head(self):
+        return self._git(self.repo, "rev-parse", "HEAD")
+
+    def test_sync_fast_forwards_and_keeps_model_change(self):
+        self._write(self.ROUTING, "models: new\n")
+        self._advance_github("server/src/index.ts")
+        DEPLOY.sync_from_github()
+        self.assertEqual(self._head(), self._git(self.repo, "rev-parse", "github/main"))
+        self.assertEqual((self.repo / self.ROUTING).read_text(), "models: new\n")
+
+    def test_sync_still_waits_for_other_dirty_files(self):
+        self._write(self.ROUTING, "models: new\n")
+        self._write("vite.config.ts", "local\n")
+        before = self._head()
+        self._advance_github("server/src/index.ts")
+        DEPLOY.sync_from_github()
+        self.assertEqual(self._head(), before)
+
+    def test_sync_never_overwrites_model_change_when_github_changed_it(self):
+        self._write(self.ROUTING, "models: new\n")
+        before = self._head()
+        self._advance_github(self.ROUTING)
+        DEPLOY.sync_from_github()
+        self.assertEqual(self._head(), before)
+        self.assertEqual((self.repo / self.ROUTING).read_text(), "models: new\n")
+
+    def _run_main_with_pending_server_commit(self):
+        (self.state / "deployed").write_text(self._head())
+        self._write("server/src/index.ts", "two\n")
+        self._git(self.repo, "add", "server/src/index.ts")
+        self._git(self.repo, "commit", "-q", "-m", "server change")
+        self._git(self.repo, "push", "-q", "github", "main")
+        setattr(DEPLOY, "busy", lambda: (1, 0))
+        DEPLOY.main()
+
+    def test_main_is_not_held_by_model_change(self):
+        self._write(self.ROUTING, "models: new\n")
+        self._run_main_with_pending_server_commit()
+        self.assertFalse([m for m in self.logs if "незакоммиченные" in m], self.logs)
+        self.assertTrue([m for m in self.logs if "занято" in m], self.logs)
+
+    def test_main_still_waits_for_other_server_changes(self):
+        self._write(self.ROUTING, "models: new\n")
+        self._run_main_with_pending_server_commit()
+        self.logs.clear()
+        self._write("server/src/other.ts", "wip\n")
+        DEPLOY.main()
+        self.assertTrue([m for m in self.logs if "незакоммиченные" in m], self.logs)
 
 
 if __name__ == "__main__":
