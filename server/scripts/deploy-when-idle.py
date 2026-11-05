@@ -4,7 +4,7 @@
 
 Роли работают внутри процесса сервера, поэтому ни одна роль не может выкладывать
 сама — перезапуск оборвал бы её ход и чужие. Этот сторож живёт снаружи
-(таймер systemd `taskflow-deploy-idle.timer`, раз в 2 минуты):
+(юнит systemd `taskflow-deploy-idle.path` будит его при пуше в main; таймер — только после загрузки):
 
 1. Подтянуть `main` с GitHub (`git fetch` + fast-forward) — источник правды
    теперь GitHub (AGENTS.md: «всё идёт на GitHub», решение 05.10.2026).
@@ -154,6 +154,25 @@ def pending_chat_deliveries(con, ttl_minutes=CHAT_DELIVERY_TTL_MIN,
     ).fetchone()[0]
 
 
+RECHECK_SEC = 30
+
+
+def recheck():
+    """Выкладка ждёт: разбудить себя один раз позже.
+
+    Сторож будит пуш (taskflow-deploy-idle.path). Повтор назначается только
+    пока есть что выкладывать, поэтому без работы сторож вообще не просыпается.
+    """
+    result = sh(
+        "systemd-run", "--user", "--collect", f"--on-active={RECHECK_SEC}",
+        "--unit=taskflow-deploy-recheck",
+        "systemctl", "--user", "start", "taskflow-deploy-idle.service",
+    )
+    # Повтор уже назначен — это норма; иное значит, что выкладка может зависнуть.
+    if result.returncode != 0 and "already" not in result.stderr:
+        log(f"повтор проверки не назначился: {result.stderr.strip()[:200]}")
+
+
 def pending_role_jobs(con, ttl_minutes=CHAT_DELIVERY_TTL_MIN):
     """Запуски ролей, которые ещё будут выполнены: так видно следующий шаг плана.
 
@@ -262,6 +281,7 @@ def main():
         return
     if tree_dirty("server/"):
         log("в server/ незакоммиченные правки — жду")
+        recheck()
         return
 
     pending_since = state("pending_since")
@@ -274,6 +294,7 @@ def main():
     runs, queue = busy()
     if runs or queue:
         log(f"занято: попыток {runs}, в очереди {queue} — жду")
+        recheck()
         return
 
     if state("failed") == head:
@@ -332,6 +353,9 @@ def main():
         state("deployed", head)
         state("pending_since", "")
         log(f"выложено {head[:8]}")
+        # Пуш во время выкладки сторож мог не заметить: он был занят.
+        if sh("git", "rev-parse", "github/main").stdout.strip() != head:
+            recheck()
         # Уборка склада копий — только после успешной выкладки: до неё
         # свежая копия нужна для отката.
         prune_backups()

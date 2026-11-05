@@ -220,13 +220,15 @@ class RuntimeWrittenRoutingTests(unittest.TestCase):
         self._git(self.repo, "push", "-q", "github", "main")
 
         self.logs = []
-        self.originals = {k: getattr(DEPLOY, k) for k in ("sh", "log", "STATE", "busy")}
+        self.originals = {k: getattr(DEPLOY, k) for k in ("sh", "log", "STATE", "busy", "recheck")}
         repo = self.repo
         def sh(*cmd, cwd=None, timeout=600):
             return subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=timeout)
         setattr(DEPLOY, "sh", sh)
         setattr(DEPLOY, "log", self.logs.append)
         setattr(DEPLOY, "STATE", str(self.state))
+        self.rechecks = []
+        setattr(DEPLOY, "recheck", lambda: self.rechecks.append(1))
 
     def tearDown(self):
         for key, value in self.originals.items():
@@ -294,6 +296,22 @@ class RuntimeWrittenRoutingTests(unittest.TestCase):
         self.assertFalse([m for m in self.logs if "незакоммиченные" in m], self.logs)
         self.assertTrue([m for m in self.logs if "занято" in m], self.logs)
 
+    def test_busy_server_schedules_one_recheck(self):
+        self._run_main_with_pending_server_commit()
+        self.assertEqual(self.rechecks, [1])
+
+    def test_dirty_tree_schedules_recheck(self):
+        self._run_main_with_pending_server_commit()
+        self.rechecks.clear()
+        self._write("server/src/other.ts", "wip\n")
+        DEPLOY.main()
+        self.assertEqual(self.rechecks, [1])
+
+    def test_nothing_to_deploy_means_no_recheck(self):
+        (self.state / "deployed").write_text(self._head())
+        DEPLOY.main()
+        self.assertEqual(self.rechecks, [])
+
     def test_main_does_not_pause_when_nobody_works(self):
         (self.state / "deployed").write_text(self._head())
         self._write("server/src/index.ts", "two\n")
@@ -311,7 +329,8 @@ class RuntimeWrittenRoutingTests(unittest.TestCase):
             DEPLOY.main()
         finally:
             DEPLOY.time.sleep = original_sleep
-        self.assertEqual(pauses, [])
+        # subprocess с таймаутом сам спит доли секунды — это не пауза сторожа.
+        self.assertEqual([p for p in pauses if p >= 1], [])
 
     def test_main_still_waits_for_other_server_changes(self):
         self._write(self.ROUTING, "models: new\n")
