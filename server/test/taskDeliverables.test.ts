@@ -102,6 +102,7 @@ describe("документ результата в итоге карточки",
     commit("server/test/fixture.md", "# Фикстура\n");
     commit("server/src/a.ts", "export {};\n");
     commit("CLAUDE.md", "# Правила\n");
+    commit("docs/JOURNAL.md", "# Журнал\n");
     commit("docs/existing.md", "# Старый документ\n\nЧужая правка\n");
     expect(importTaskDeliverables(taskId, ownerId)).toEqual([]);
   });
@@ -112,6 +113,13 @@ describe("документ результата в итоге карточки",
     saveRoleResultReport(stepId, report("- Разбор: `docs/existing.md`\n- Чужой: `../secret.md`"), ownerId);
     const results = buildTaskOutcome(taskId).documents.filter((d) => d.kind === "result");
     expect(results.map((d) => d.title)).toEqual(["Старый документ"]);
+  });
+
+  it("общий документ, уже перенесённый другой карточкой, по ссылке не становится результатом этой", () => {
+    git("checkout", "-q", "main");
+    git("branch", "-qD", `roles/${taskId}`);
+    saveRoleResultReport(stepId, report("- Разбор: `docs/existing.md`"), ownerId);
+    expect(buildTaskOutcome(taskId).documents.filter((d) => d.kind === "result")).toEqual([]);
   });
 
   it("сбой git не мешает сдать шаг", () => {

@@ -16,7 +16,9 @@ import { recordTaskDocument } from "./taskOutcome.js";
 
 const TEXT_DOCUMENT = /\.(md|markdown|txt)$/i;
 /** Служебное, а не то, что просил владелец: граф, тесты, инструкции репозитория. */
-const NOT_A_RESULT = /(^|\/)(graft|graphify-out|tests?|__tests__|fixtures|node_modules|\.claude|\.github)\/|(^|\/)(CLAUDE|AGENTS|INDEX|README|CHANGELOG)\.md$/i;
+const NOT_A_RESULT = /(^|\/)(graft|graphify-out|tests?|__tests__|fixtures|node_modules|\.claude|\.github)\//i;
+/** Общие файлы репозитория с именем заглавными буквами: JOURNAL.md, PLAN.md, CLAUDE.md. */
+const SHARED_FILE = /(^|\/)[A-Z][A-Z0-9_-]*\.(md|markdown|txt)$/;
 const MENTIONED_DOCUMENT = /(?<![\w./-])(docs\/[^\s`'"()<>]+\.(?:md|markdown|txt))/gi;
 const MAX_BYTES = 512 * 1024;
 const MAX_DOCUMENTS = 20;
@@ -36,7 +38,10 @@ function mentionedDocuments(taskId: string): string[] {
     const at = search_text?.lastIndexOf("Материалы") ?? -1;
     if (at < 0) continue;
     for (const match of search_text!.slice(at).matchAll(MENTIONED_DOCUMENT)) {
-      if (!match[1].split("/").includes("..")) found.add(match[1]);
+      if (match[1].split("/").includes("..")) continue;
+      // Ссылка на общий документ, уже доставленный другой карточкой, — не её результат.
+      const elsewhere = db.prepare("SELECT 1 FROM task_events WHERE kind='task_deliverable' AND task_id<>? AND substr(to_value,1,?)=? LIMIT 1").get(taskId, match[1].length + 1, match[1] + "@");
+      if (!elsewhere) found.add(match[1]);
     }
   }
   return [...found];
@@ -71,7 +76,7 @@ export function importTaskDeliverables(taskId: string, actorId: string | null, r
   for (const file of mentionedDocuments(taskId)) files.add(file);
 
   const changed: string[] = [];
-  const documents = [...files].filter((file) => TEXT_DOCUMENT.test(file) && !NOT_A_RESULT.test(file)).sort().slice(0, MAX_DOCUMENTS);
+  const documents = [...files].filter((file) => TEXT_DOCUMENT.test(file) && !NOT_A_RESULT.test(file) && !SHARED_FILE.test(file)).sort().slice(0, MAX_DOCUMENTS);
   for (const file of documents) {
     let blob: string;
     let markdown: string;
