@@ -77,7 +77,7 @@ import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { buildInProcessTaskContext } from "./taskContextBridge.js";
 import { buildDependencyContext } from "./dependencyContext.js";
 import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
-import { roleWorkspace } from "./roleWorkspace.js";
+import { projectRepo, roleWorkspace } from "./roleWorkspace.js";
 import { RoleProcessLease } from "./roleProcessLease.js";
 import { ROLE_USER, isolatedLocalOperations, roleIsolationEnabled } from "./localRoleOperations.js";
 import { previousSessionDigest } from "./slotSession.js";
@@ -1037,7 +1037,6 @@ export function planSubtaskPrompt(taskId: string, role: string, subtaskId: strin
 
 // ── Папка проекта, справка, продолжение разговора (этап C3) ──────────────
 
-const PROJECTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-projects.json");
 const RUNS_BASE = process.env.TASKFLOW_RUNS_DIR || path.join(os.homedir(), ".local", "state", "taskflow-runs");
 /**
  * Блок «твоё состояние» для промта роли. Заметки задачи исключаются: срез
@@ -1068,22 +1067,6 @@ function roleSliceBlock(role: string, taskId: string): string | null {
 /** Репозиторий проекта карточки — из того же файла, что читала Система
  *  (прежняя внешняя автоматика).
  *  (scripts/task-context-projects.json); не сопоставлен — репозиторий TaskFlow. */
-function projectRepo(taskId: string): string {
-  const fallback = path.resolve(process.cwd(), "..");
-  // В тестах роль никогда не получает рабочей папкой живой репозиторий.
-  if (process.env.VITEST) return process.env.TASKFLOW_TEST_PROJECT_DIR || os.tmpdir();
-  try {
-    const projectId = (db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(taskId) as
-      | { project_id?: string | null }
-      | undefined)?.project_id;
-    const map = JSON.parse(fs.readFileSync(PROJECTS_CONFIG, "utf8")).projects ?? {};
-    const repo = projectId ? map[projectId] : undefined;
-    return repo && fs.existsSync(repo) ? repo : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 /** Справка для агента: ветка и незакоммиченные файлы — только чтение git. */
 function repoNote(cwd: string): string {
   try {

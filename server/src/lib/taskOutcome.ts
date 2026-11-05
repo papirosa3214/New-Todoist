@@ -19,7 +19,8 @@ export type TaskOutcome = {
   verdict: { verdict: string; findings: string; reviewer_id: string; created_at: string; findings_blocks?: ChatBlock[] | null } | null;
   /** human_title / human_result — то же, что сдала роль, человеческим языком для владельца (lib/stepResults.ts). */
   nodes: Array<{ slot_key: string | null; role: string | null; title: string; result: string | null; done: boolean; human_title: string | null; human_result: string | null; display_result_blocks?: ChatBlock[] | null }>;
-  documents: Array<{ id: string; title: string; updated_at: string | null; is_outcome: boolean }>;
+  /** kind: result — сам документ результата, outcome — сводка «Итог: …», report — отчёт роли о проделанной работе. */
+  documents: Array<{ id: string; title: string; updated_at: string | null; is_outcome: boolean; kind: "result" | "outcome" | "report" }>;
   branch: { name: string; commit: string; subject: string; ahead: number } | null;
 };
 
@@ -50,12 +51,21 @@ function outcomeNoteId(taskId: string): string | null {
 function taskDocuments(taskId: string): TaskOutcome["documents"] {
   const outcome = outcomeNoteId(taskId);
   const rows = db.prepare(
-    `SELECT DISTINCT n.id, n.title, n.updated_at FROM task_events e
+    `SELECT DISTINCT n.id, n.title, n.updated_at,
+            EXISTS(SELECT 1 FROM task_events r WHERE r.task_id = e.task_id AND r.kind = 'role_result_report' AND r.to_value = n.id) AS is_report
+       FROM task_events e
        JOIN user_notes n ON n.id = e.field
       WHERE e.task_id = ? AND e.kind IN ('doc_written', 'outcome_note')
       ORDER BY n.updated_at DESC`,
-  ).all(taskId) as Array<{ id: string; title: string; updated_at: string | null }>;
-  return rows.map((r) => ({ ...r, is_outcome: r.id === outcome }));
+  ).all(taskId) as Array<{ id: string; title: string; updated_at: string | null; is_report: number }>;
+  const rank = { result: 0, outcome: 1, report: 2 } as const;
+  // Первым идёт то, что просил владелец; отчёты о работе — после него.
+  return rows
+    .map(({ is_report, ...r }) => {
+      const kind: keyof typeof rank = r.id === outcome ? "outcome" : is_report ? "report" : "result";
+      return { ...r, is_outcome: r.id === outcome, kind };
+    })
+    .sort((a, b) => rank[a.kind] - rank[b.kind]);
 }
 
 /** Ветка с кодом карточки (runtime/roleWorkspace.ts), если роли там коммитили. */
@@ -122,9 +132,10 @@ export function outcomeMarkdown(title: string, outcome: TaskOutcome): string {
     }
     lines.push("");
   }
-  const docs = outcome.documents.filter((d) => !d.is_outcome);
-  if (docs.length) {
-    lines.push("## Документы", "");
+  for (const [heading, kind] of [["Документы результата", "result"], ["Отчёты о проделанной работе", "report"]] as const) {
+    const docs = outcome.documents.filter((d) => d.kind === kind);
+    if (!docs.length) continue;
+    lines.push(`## ${heading}`, "");
     for (const d of docs) lines.push(`- ${d.title}`);
     lines.push("");
   }

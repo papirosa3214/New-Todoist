@@ -25,6 +25,25 @@ export function liveServerRepo(): string {
   return path.resolve(process.cwd(), "..");
 }
 
+const PROJECTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-projects.json");
+
+/** Репозиторий проекта карточки на этой машине; без настройки — репозиторий сервера. */
+export function projectRepo(taskId: string): string {
+  const fallback = path.resolve(process.cwd(), "..");
+  // В тестах роль никогда не получает рабочей папкой живой репозиторий.
+  if (process.env.VITEST) return process.env.TASKFLOW_TEST_PROJECT_DIR || os.tmpdir();
+  try {
+    const projectId = (db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(taskId) as
+      | { project_id?: string | null }
+      | undefined)?.project_id;
+    const map = JSON.parse(fs.readFileSync(PROJECTS_CONFIG, "utf8")).projects ?? {};
+    const repo = projectId ? map[projectId] : undefined;
+    return repo && fs.existsSync(repo) ? repo : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function worktreesBase(): string {
   return (
     process.env.TASKFLOW_ROLE_WORKTREES ||
