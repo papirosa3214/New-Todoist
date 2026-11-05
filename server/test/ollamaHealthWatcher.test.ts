@@ -257,6 +257,23 @@ describe("сторож локальной модели (Ollama)", () => {
     expect(incidentRows().length).toBe(1);
   });
 
+  it("видеокарту занимает другая модель — эмбеддинг ждёт очереди, тревоги нет", async () => {
+    // Владелец 05.11.2026: Qwen сжимала инструкции, bge-m3 ждал дольше окна,
+    // и сторож завёл карточку «Ollama недоступна» на рабочую видеокарту.
+    mockOllama({
+      embeddings: hangingRequest(),
+      tags: async () => jsonResponse(200, { models: [{ name: MODEL }, { name: "qwen3.8-27b-q4k_m:latest" }] }),
+      ps: async () => jsonResponse(200, { models: [{ name: MODEL }, { name: "qwen3.8-27b-q4k_m:latest" }] }),
+    });
+
+    const { result, raised } = await watcher.runOllamaHealthCheck();
+
+    expect(result.state).toBe("occupied");
+    expect(result.reason).toContain("qwen3.8-27b-q4k_m:latest");
+    expect(raised).toBe(false);
+    expect(incidentRows().length).toBe(0);
+  });
+
   it("модель не грузится несколько проб подряд — тогда тревога поднимается", async () => {
     mockOllama({
       embeddings: hangingRequest(),

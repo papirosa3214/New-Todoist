@@ -82,6 +82,7 @@ let probeWindowOverrideMs: number | null = null;
  *  busy       — очередь запросов исчерпана (503 server busy);
  *  memory     — под модель не хватает памяти (Ollama тоже отвечает 503);
  *  slow       — модель в памяти, но эмбеддинг не пришёл в окно;
+ *  occupied   — эмбеддинг ждёт, пока Ollama занята другой моделью (не поломка);
  *  unavailable— Ollama не отвечает или ответила ошибкой;
  *  invalid    — ответ без массива эмбеддинга. */
 export type OllamaProbeState =
@@ -90,6 +91,7 @@ export type OllamaProbeState =
   | "busy"
   | "memory"
   | "slow"
+  | "occupied"
   | "unavailable"
   | "invalid";
 
@@ -182,6 +184,8 @@ interface OllamaState {
   model_installed: boolean;
   /** Модель сейчас в памяти. */
   model_loaded: boolean;
+  /** Другие модели в памяти Ollama: пока они работают, эмбеддинг ждёт очереди. */
+  other_models: string[];
 }
 
 /** Разбор состояния Ollama после сорванной пробы: чем она кончилась —
@@ -189,16 +193,16 @@ interface OllamaState {
 async function inspectOllamaState(): Promise<OllamaState> {
   const tags = await fetchJson(`${OLLAMA_BASE_URL}/api/tags`, DIAG_TIMEOUT_MS);
   if (!tags.ok) {
-    return { reachable: false, model_installed: false, model_loaded: false };
+    return { reachable: false, model_installed: false, model_loaded: false, other_models: [] };
   }
   const installed = modelNames(tags.body).some((n) =>
     modelMatches(n, DEFAULT_EMBEDDING_MODEL),
   );
   const ps = await fetchJson(`${OLLAMA_BASE_URL}/api/ps`, DIAG_TIMEOUT_MS);
-  const loaded =
-    ps.ok &&
-    modelNames(ps.body).some((n) => modelMatches(n, DEFAULT_EMBEDDING_MODEL));
-  return { reachable: true, model_installed: installed, model_loaded: loaded };
+  const running = ps.ok ? modelNames(ps.body) : [];
+  const loaded = running.some((n) => modelMatches(n, DEFAULT_EMBEDDING_MODEL));
+  const others = running.filter((n) => !modelMatches(n, DEFAULT_EMBEDDING_MODEL));
+  return { reachable: true, model_installed: installed, model_loaded: loaded, other_models: others };
 }
 
 /** Проба сорвалась по времени: разбираем, что это — холодный старт или
@@ -224,6 +228,17 @@ async function diagnoseTimeout(windowMs: number): Promise<CheckResult> {
       ok: false,
       state: "unavailable",
       reason: `Модель ${DEFAULT_EMBEDDING_MODEL} не выкачена в Ollama — приборы не получат эмбеддинг`,
+      details,
+    };
+  }
+  // Владелец 05.11.2026: видеокарту занимала другая модель (Qwen сжимала
+  // инструкции), эмбеддинг ждал своей очереди дольше окна — это рабочая
+  // видеокарта, а не поломка, карточку не заводим.
+  if (state.other_models.length > 0) {
+    return {
+      ok: false,
+      state: "occupied",
+      reason: `Ollama занята моделью ${state.other_models.join(", ")}: эмбеддинг ждёт очереди дольше ${windowMs} мс`,
       details,
     };
   }
@@ -403,6 +418,11 @@ export async function runOllamaHealthCheck(): Promise<{
   const result = await checkOllamaHealth();
   if (result.ok) {
     loadingStreak = 0;
+    return { result, raised: false };
+  }
+  if (result.state === "occupied") {
+    loadingStreak = 0;
+    console.warn(`[ollama-watch] ${result.reason}`);
     return { result, raised: false };
   }
   if (result.state === "loading") {
