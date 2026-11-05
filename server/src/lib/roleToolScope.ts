@@ -9,7 +9,7 @@ const ONLY: Record<string, string[]> = {
   taskflow_review: ["critic_verifier"],
   taskflow_task_daily: ["secretary"],
   taskflow_calendar_events: ["secretary"],
-  taskflow_task_proposal: ["architect", "code_orchestrator", "secretary"],
+  taskflow_task_proposal: ["code_orchestrator", "secretary"],
   taskflow_archive: ["secretary"],
   // Apple Напоминания и Apple Календарь (21.10.2026): данные личные, живут на
   // айфоне, и доступ к ним — только у Помощника владельца. Без этой записи
