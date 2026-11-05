@@ -197,7 +197,7 @@ function checkScope(
     throw new MemoryError("scope: team | role | project");
   if (s === "role") {
     const r = clean(roleKey, 64);
-    if (!r) throw new MemoryError("для памяти роли нужен role_key");
+    if (!r) throw new MemoryError("для памяти роли нужен role_key — роль определяется по учётке; если её нет, пиши scope=team");
     return { scope: s, role_key: r, project_id: null };
   }
   if (s === "project") {

@@ -30,6 +30,11 @@ const CORE_OPERATIONS = new Set([
   "taskflow_comment", "taskflow_topic_send", "taskflow_topic_read",
   "taskflow_chat_send", "taskflow_chat_read",
   "taskflow_doc_read", "taskflow_docs", "taskflow_kb_search", "taskflow_recall",
+  // Запись в память — в ядре рядом с чтением (30.10–02.11.2026): без него
+  // первый вызов в ходе давал «Tool taskflow_remember not found», сервер
+  // писал TOOL_NOT_CONNECTED, а сторож считал три отказа подряд поломкой
+  // и гасил шаг. Инструмент есть у всех ролей (chatTools) и прав не сужает.
+  "taskflow_remember",
   "taskflow_status", "taskflow_agents", "taskflow_rules",
   "taskflow_review", "taskflow_tool_request", "taskflow_work_start",
   "taskflow_ask_user_question",

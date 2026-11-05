@@ -329,12 +329,12 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         return { текст: summary.text };
       }),
     T("taskflow_remember",
-      "Запомнить устойчивое знание для себя и команды. kind: lesson | fact | preference. scope: role (по умолчанию) | team | project. Одна запись — одна мысль; похожая обновится, а не задвоится.",
-      Type.Object({ text: Type.String(), kind: S(), scope: S(), title: S(), project_id: S(), source_ref: S(), task_id: S() }), async (p) => {
+      "Запомнить устойчивое знание для себя и команды. kind: lesson | fact | preference. scope: role (по умолчанию — память твоей роли, ключ сервер подставляет сам) | team | project. Обычной роли role_key указывать не нужно: она пишет в память своей роли, ключ берётся из учётки, в чужую память роли писать нельзя. Оркестратору role_key нужен, только когда он пишет в память конкретной роли. Одна запись — одна мысль; похожая обновится, а не задвоится.",
+      Type.Object({ text: Type.String(), kind: S(), scope: S(), title: S(), project_id: S(), source_ref: S(), task_id: S(), role_key: S("ключ роли для записи в память роли — обычной роли не нужен, оркестратору нужен, когда пишет в память конкретной роли") }), async (p) => {
         const text = String(p.text ?? "").trim();
         if (!text) throw new ToolError("text — что запомнить, одной мыслью");
         const body: Record<string, unknown> = { text };
-        for (const k of ["scope", "kind", "title", "project_id", "source_ref"]) if (p[k]) body[k] = p[k];
+        for (const k of ["scope", "kind", "title", "project_id", "source_ref", "role_key"]) if (p[k]) body[k] = p[k];
         // Разбор отказов 20.10.2026: проект сервер знает и сам — по задаче
         // (task_id или source_ref, если это id задачи).
         if (body.scope === "project" && !body.project_id) {

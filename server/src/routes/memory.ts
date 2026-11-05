@@ -34,13 +34,27 @@ import { extractAttachmentText } from "../lib/attachmentText.js";
 
 const TEXT_LIMIT = 24_000;
 
+/** Ключ роли по учётке: users.role_key, а если он пуст — из id учётки
+ *  (role_<key> и историческое исключение u-secretary). Раньше пустой
+ *  users.role_key давал 400 «для памяти роли нужен role_key», а поле
+ *  role_key в схеме инструмента не было — вызвать нельзя было ни одним
+ *  корректным аргументом (19.10–02.11.2026). */
+function roleKeyOf(userId: string, roleKey: string | null | undefined): string | null {
+  const key = String(roleKey ?? "").trim();
+  if (key) return key;
+  if (userId === "u-secretary") return "secretary";
+  if (userId.startsWith("role_")) return userId.slice("role_".length);
+  return null;
+}
+
 /** Кто пишет: владелец/оркестратор — «owner», ИИ-роль — «role» с её ключом. */
 function authorOf(userId: string): { author: Author; roleKey: string | null } | null {
   const row = db.prepare("SELECT type, role_key FROM users WHERE id = ?").get(userId) as { type?: string; role_key?: string | null } | undefined;
+  const roleKey = roleKeyOf(userId, row?.role_key);
   // Секретарь и роли с правом orchestrate пишут как владелец, но «своя» память у них
   // остаётся памятью их роли — иначе scope=role падает без role_key.
-  if (isOwner(userId) || isOrchestrator(userId)) return { author: { id: userId, kind: "owner" }, roleKey: row?.role_key ?? null };
-  if (row?.type === "ai") return { author: { id: userId, kind: "role" }, roleKey: row.role_key ?? null };
+  if (isOwner(userId) || isOrchestrator(userId)) return { author: { id: userId, kind: "owner" }, roleKey };
+  if (row?.type === "ai") return { author: { id: userId, kind: "role" }, roleKey };
   return null;
 }
 
@@ -135,7 +149,16 @@ export async function registerMemoryRoutes(app: FastifyInstance): Promise<void> 
     const body = { ...(req.body ?? {}) };
     if (who.author.kind === "role") {
       body.scope ??= "role";
-      if (body.scope === "role") body.role_key = who.roleKey;
+      // Роль пишет в память своей роли: ключ берём из учётки. Чужой ключ
+      // из аргументов не принимаем — и не молча затираем, а объясняем:
+      // иначе роль писала бы в чужую память и не поняла бы почему.
+      if (body.scope === "role") {
+        const asked = String(body.role_key ?? "").trim();
+        if (asked && asked !== who.roleKey) {
+          return reply.code(403).send({ error: `роль пишет в память своей роли (${who.roleKey ?? "?"}), не в память роли ${asked}` });
+        }
+        body.role_key = who.roleKey;
+      }
       delete body.pinned;
     } else if (body.scope === "role" && !body.role_key && who.roleKey) {
       body.role_key = who.roleKey;
