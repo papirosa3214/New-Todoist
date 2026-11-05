@@ -38,9 +38,10 @@ class PendingChatDeliveriesTests(unittest.TestCase):
         self.assertEqual(DEPLOY.pending_chat_deliveries(self.db), 0)
 
     def test_pending_and_picked_rows_block_deploy(self):
-        self._row("pending", "2026-10-28 00:00:00")
-        self._row("picked", "2026-10-28 00:00:00")
-        self._row("superseded", "2026-10-28 00:00:00")
+        now = self.db.execute("SELECT datetime('now')").fetchone()[0]
+        self._row("pending", now)
+        self._row("picked", now)
+        self._row("superseded", now)
         self.assertEqual(DEPLOY.pending_chat_deliveries(self.db), 2)
 
     def test_stale_pending_row_does_not_block_deploy(self):
