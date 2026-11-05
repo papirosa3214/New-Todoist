@@ -48,6 +48,16 @@ export function orchestratorTools(role:string,T:Factory):any[]{
  }),
  T("taskflow_assign","Назначить исполнителя карточки. Назначение не запускает работу и не меняет статус.",Type.Object({task_id:id,assignee_id:Type.Union([id,Type.Null()])}),p=>allowed("PATCH","/api/tasks/"+encodeURIComponent(p.task_id),{assignee_id:p.assignee_id})),
  T("taskflow_plan_from_subtasks","Собрать draft-план из уже написанных открытых подзадач карточки: роль каждой подзадачи определяется автоматически, узлы плана ЗАЙМУТ эти строки, а не создадут дубли. Путь, когда список подзадач уже есть, а передать граф нечем. Не запускает. Эндпоинт существовал, но тула на него не было — оркестратор не мог собрать план из своих же подзадач (владелец 12.10.2026).",Type.Object({task_id:id}),p=>allowed("POST","/api/tasks/"+encodeURIComponent(p.task_id)+"/collaboration-plans/suggest-from-subtasks",{})),
+ T("taskflow_mission_contract","Контракт миссии: что считается готовым, записано до работы. Без assertions — прочитать пункты и их состояние. С assertions — записать контракт целиком; запись сбрасывает статусы, поэтому после старта работ не переписывай без причины.",Type.Object({task_id:id,assertions:Type.Optional(Type.Array(Type.Object({
+  assertion_id:Type.String({description:"Устойчивый ключ, например VAL-001"}),
+  title:Type.String({description:"Коротко: что проверяем"}),
+  behavior:Type.String({description:"Что владелец увидит, когда работает"}),
+  tool:Type.Optional(Type.String({description:"Чем проверить"})),
+  area:Type.Optional(Type.String()),
+ }),{description:"Весь контракт: 1–60 пунктов"}))}),p=>{
+  const url="/api/tasks/"+encodeURIComponent(p.task_id)+"/mission-assertions";
+  return p.assertions?allowed("POST",url,{assertions:p.assertions}):allowed("GET",url);
+ }),
  T("taskflow_plan_read","Прочитать планы, версии, граф и снимок ветви перед правкой или утверждением.",task,p=>allowed("GET",base(p))),
  T("taskflow_plan_create","Создать draft с независимыми nodes/edges. Не утверждает и не запускает; сервер валидирует граф.",Type.Object({task_id:id,graph}),p=>allowed("POST",base(p),p.graph)),
  T("taskflow_plan_propose","Предложить серверный draft. Не запускает. После проверь граф и реальные зависимости.",Type.Object({task_id:id,options:Type.Optional(Type.Any())}),p=>allowed("POST",base(p)+"/propose",p.options??{})),

@@ -10,7 +10,7 @@ import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent } from "../ws.js";
 import { startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { closePlanNodeByVerdict } from "../runtime/planSubtaskAdmission.js";
-import { parseAssertionResults, recordAssertionResults, appendMissionEvent, parseFulfills } from "../lib/missionContract.js";
+import { effectiveArtifactContract, parseAssertionResults, recordAssertionResults, appendMissionEvent, parseFulfills } from "../lib/missionContract.js";
 import { saveSlotSnapshot } from "../runtime/slotWorkSnapshot.js";
 import { getFullTask, getSubtaskWithTaskForUser } from "./subtasks.js";
 
@@ -37,9 +37,9 @@ type ArtifactVersion = {
 
 function contractFor(subtaskRow: { collaboration_plan_id: string | null; plan_node_key: string | null }): ArtifactContract | null {
   if (!subtaskRow.collaboration_plan_id || !subtaskRow.plan_node_key) return null;
-  const row = db.prepare("SELECT output_artifact_json FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
-    .get(subtaskRow.collaboration_plan_id, subtaskRow.plan_node_key) as { output_artifact_json: string | null } | undefined;
-  return row?.output_artifact_json ? JSON.parse(row.output_artifact_json) as ArtifactContract : null;
+  const row = db.prepare("SELECT output_artifact_json,fulfills_json FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
+    .get(subtaskRow.collaboration_plan_id, subtaskRow.plan_node_key) as { output_artifact_json: string | null; fulfills_json: string | null } | undefined;
+  return row ? effectiveArtifactContract(row.output_artifact_json, row.fulfills_json) as ArtifactContract | null : null;
 }
 
 function latestArtifact(subtaskId: string): ArtifactVersion | undefined {

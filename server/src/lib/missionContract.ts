@@ -426,3 +426,36 @@ export function missionOutcome(taskId: string): {
     outstanding,
   };
 }
+
+/**
+ * Результат проверки контракта сдаётся только артефактом. Шаг с пунктами контракта без
+ * своего описания артефакта получает это: иначе его было нечем сдать (05.11.2026).
+ */
+export function effectiveArtifactContract(
+  outputArtifactJson: string | null | undefined,
+  fulfillsJson: string | null | undefined,
+): { key: string; type: string; format: "json"; required_fields: string[] } | null {
+  if (outputArtifactJson) return JSON.parse(outputArtifactJson);
+  if (!parseFulfills(fulfillsJson).length) return null;
+  return { key: "assertion_results", type: "result_pack", format: "json", required_fields: ["assertions"] };
+}
+
+/**
+ * Что не даёт оркестратору сдать шаг разбиения: «готово» определяется до работы,
+ * поэтому контракт обязателен (владелец 05.11.2026). null — можно сдавать.
+ */
+export function orchestrateContractError(taskId: string, planId: string): string | null {
+  if (!missionAssertions(taskId).length) {
+    return "Сначала запиши контракт: taskflow_mission_contract с пунктами, которые считаются готовым результатом.";
+  }
+  const critic = db
+    .prepare("SELECT slot_key FROM task_collaboration_plan_nodes WHERE plan_id=? AND role_key='critic_verifier' AND fulfills_json IS NOT NULL AND fulfills_json NOT IN ('','[]') LIMIT 1")
+    .get(planId) as { slot_key: string } | undefined;
+  if (critic) return `Критик сдаёт только вердикт, пункты контракта ему не назначают (шаг ${critic.slot_key}). Перенеси их на шаг qa или исполнителя.`;
+  try {
+    validateAssertionCoverageComplete(planId);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return null;
+}

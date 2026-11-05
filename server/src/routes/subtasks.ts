@@ -13,7 +13,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { ORCHESTRATE_SLOT } from "../runtime/orchestratedPlan.js";
-import { validateAssertionCoverageComplete } from "../lib/missionContract.js";
+import { effectiveArtifactContract, orchestrateContractError } from "../lib/missionContract.js";
 import { planNodeAgentRefusal, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { closeStaleInboxForSubtask } from "../runtime/topicInbox.js";
 import { logStepOutcome } from "../runtime/stepOutcome.js";
@@ -524,20 +524,15 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           // заявлена ровно одной работой. На утверждении плана этого проверить
           // нельзя — там ещё скелет.
           if (subtask.plan_node_key === ORCHESTRATE_SLOT) {
-            try {
-              validateAssertionCoverageComplete(subtask.collaboration_plan_id);
-            } catch (error) {
-              return reply.code(409).send({
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
+            const contractError = orchestrateContractError(subtask.task_id, subtask.collaboration_plan_id);
+            if (contractError) return reply.code(409).send({ error: contractError });
           }
           const actor = db.prepare("SELECT role_key FROM users WHERE id = ?").get(req.userId) as { role_key?: string | null } | undefined;
           const node = actor?.role_key
-            ? db.prepare("SELECT output_artifact_json FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
-                .get(subtask.collaboration_plan_id, subtask.plan_node_key) as { output_artifact_json: string | null } | undefined
+            ? db.prepare("SELECT output_artifact_json,fulfills_json FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
+                .get(subtask.collaboration_plan_id, subtask.plan_node_key) as { output_artifact_json: string | null; fulfills_json: string | null } | undefined
             : undefined;
-          const contractKey = node?.output_artifact_json ? (JSON.parse(node.output_artifact_json) as { key?: unknown }).key : undefined;
+          const contractKey = node ? effectiveArtifactContract(node.output_artifact_json, node.fulfills_json)?.key : undefined;
           if (typeof contractKey === "string" && contractKey && !db.prepare("SELECT 1 FROM subtask_artifact_versions WHERE subtask_id = ?").get(subtask.id)) {
             const key = contractKey;
             return reply.code(409).send({

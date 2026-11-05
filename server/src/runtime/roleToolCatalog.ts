@@ -24,7 +24,7 @@ export const ROLE_TOOL_INSTRUCTION = "Инструменты доступны о
 const CORE_OPERATIONS = new Set([
   "taskflow_routines", "taskflow_routine_read",
   "taskflow_task", "taskflow_task_summary",
-  "taskflow_work_plan", "taskflow_work_item_submit", "taskflow_plan_read", "taskflow_plan_ops", "taskflow_plan_request",
+  "taskflow_work_plan", "taskflow_work_item_submit", "taskflow_plan_read", "taskflow_plan_ops", "taskflow_plan_request", "taskflow_mission_contract",
   "taskflow_subtask_work", "taskflow_subtask_done", "taskflow_subtask_add",
   "taskflow_state", "taskflow_heartbeat", "taskflow_claim", "taskflow_slot_status", "taskflow_slot_snapshot",
   "taskflow_comment", "taskflow_topic_send", "taskflow_topic_read",
