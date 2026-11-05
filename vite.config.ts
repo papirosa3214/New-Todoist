@@ -1,25 +1,17 @@
+import fs from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import basicSsl from "@vitejs/plugin-basic-ssl";
 
-// HTTPS с самоподписанным сертификатом (не Let's Encrypt — под IP локальной
-// сети настоящий сертификат не выпустить) — нужен ради getUserMedia (кнопка
-// микрофона, TaskFormScreen): браузер отдаёт доступ к микрофону ТОЛЬКО в
-// secure context, а исключение из этого правила — строго localhost/127.0.0.1,
-// НЕ вся локальная сеть. На голом http://192.168.1.110:5180 микрофон не
-// заработает ни с одного устройства, кроме самой .110. Браузер один раз
-// покажет предупреждение «соединение не защищено» на каждом устройстве —
-// после подтверждения запоминает. Существующий прокси /api и /ws ниже
-// продолжает работать как есть: он выполняется на сервере (сам vite dev
-// процесс → :3001), браузер их вообще не видит напрямую, так что HTTPS
-// достаточно навесить только здесь.
+// HTTPS на :5180 нужен ради getUserMedia (микрофон): браузер даёт его
+// только в secure context, а IP LAN в это исключение не входит.
+// Сертификат — локальный CA mkcert на 192.168.1.110 + localhost
+// (~/Проекты/Инфраструктура/lan-ca). Корневой CA стоит в связке Mac.
+const lanCertDir = "/home/maksim/Проекты/Инфраструктура/lan-ca";
+
 export default defineConfig({
-  // basicSsl() сам включает server.https — отдельно его выставлять не
-  // нужно (и с этой версией vite даже не типизируется как `true`, только
-  // как объект TLS-опций).
-  plugins: [react(), tailwindcss(), basicSsl()],
+  plugins: [react(), tailwindcss()],
   // @capacitor/local-notifications не установлен (нужен только нативной
   // оболочке), но useTaskActivity.ts импортирует его. Направляем и vite, и
   // vitest на локальную заглушку — иначе `npm test` падает на резолве.
@@ -32,6 +24,10 @@ export default defineConfig({
     },
   },
   server: {
+    https: {
+      cert: fs.readFileSync(path.join(lanCertDir, "lan.pem")),
+      key: fs.readFileSync(path.join(lanCertDir, "lan-key.pem")),
+    },
     proxy: {
       "/api": "http://192.168.1.110:3001",
       "/ws": { target: "ws://192.168.1.110:3001", ws: true },
