@@ -21,6 +21,7 @@ import db from "../db.js";
 import { toFtsQuery } from "./ftsQuery.js";
 export { toFtsQuery } from "./ftsQuery.js";
 import { startObservation, finishObservation, withObservationContext } from "./contextObservability.js";
+import type { ContextItem } from "./contextObservability.js";
 import {
   filterMemoryByJev,
   reviewMemoryWriteByJev,
@@ -729,12 +730,22 @@ export async function recall(args: {
     if (picked.length >= limit) break;
   }
   if (countUsage && picked.length) bumpUse([...new Set(picked.map((p) => p.id))]);
-  finishObservation(memoryObservation,{status:picked.length?"ok":"skipped",reason:picked.length?undefined:"empty",inputCount:items.length,outputCount:picked.length,details:picked.map(p=>p.title??p.id)});
+  finishObservation(memoryObservation,{status:picked.length?"ok":"skipped",reason:picked.length?undefined:"empty",inputCount:items.length,outputCount:picked.length,details:picked.map(p=>p.title??p.id),items:contextItems(picked)});
   return picked;
   } catch(error) {
     finishObservation(memoryObservation,{status:"error",reason:"source_unavailable"});
     throw error;
   }
+}
+
+/** Записи для журнала контекста: откуда каждая и сколько весит. */
+function contextItems(picked: RecallItem[]): ContextItem[] {
+  const scopes = db.prepare("SELECT scope FROM memories WHERE id = ?");
+  return picked.map((item) => {
+    const text = String((item as { text?: unknown }).text ?? "");
+    const scope = (scopes.get(item.id) as { scope?: string } | undefined)?.scope ?? "team";
+    return { title: item.title ?? item.id, source: scope, chars: text.length, excerpt: text.slice(0, 400) };
+  });
 }
 
 function bumpUse(ids: string[]): void {

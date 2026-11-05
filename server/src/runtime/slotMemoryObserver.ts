@@ -1,4 +1,4 @@
-// Наблюдатель слота: после полного снимка done выносит устойчивый урок в
+// Наблюдатель слота: после снимка сдачи с итогом выносит устойчивый урок в
 // memories. Роль вызов не видит. Чип владельцу — memoryObserverChatChip.ts.
 // Модель и порог — из серверных настроек (телефон: Настройки → Наблюдатель памяти).
 import db from "../db.js";
@@ -7,7 +7,7 @@ import { getSetting } from "../lib/serverSettings.js";
 import { remember } from "../lib/memory.js";
 import { recordMemoryObserverEvent } from "../lib/memoryObserverLog.js";
 import { postMemoryUpdateChip } from "./memoryObserverChatChip.js";
-import type { SlotSnapshotRow } from "./slotWorkSnapshot.js";
+import { shouldObserveSlot, type SlotSnapshotRow } from "./slotWorkSnapshot.js";
 
 const SYSTEM = `Ты наблюдатель памяти TaskFlow. По готовому итогу слота реши, есть ли устойчивый урок на будущее.
 Это не отчёт о работе и не пересказ. Нужно правило, приём или факт, который пригодится в другой похожей задаче.
@@ -31,7 +31,7 @@ export async function observeSlotMemory(
     recordMemoryObserverEvent({ ...base, outcome: "disabled" });
     return { wrote: false, reason: "disabled" };
   }
-  if (snapshot.reason !== "done" || snapshot.is_complete !== 1) {
+  if (!shouldObserveSlot(String(snapshot.reason), snapshot.done_summary)) {
     recordMemoryObserverEvent({ ...base, outcome: "not_done", detail: String(snapshot.reason) });
     return { wrote: false, reason: "not_done" };
   }

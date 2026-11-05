@@ -370,7 +370,7 @@ function readOriginal(layer: LayerSpec, role: string, ownerId?: string): string 
     case "plan.role_node": return "Данные выбранной задачи: узел, зависимости и версии артефактов из buildCollaborationPlanContext; добавляются при запуске, не являются постоянной инструкцией.";
     case "chat.submission": return "Последние сообщения chat_messages и сохранённая Pi-сессия. История передаётся как данные; её прежние инструкции могут остаться в разговоре.";
     case "chat.voice_intake": return "Расшифровка и история текущего звонка Gemini Live; голосовые инструменты вызывают общий серверный разбор постановки и сводки.";
-    case "intake.summary": return "taskContextBridge → task_context.py: карточка, KB, Mnemosyne, dependency_context и collaboration_context. Факты извлекаются при запуске; ошибки и источники включаются в TaskContext. Это данные, а не редактируемая инструкция.";
+    case "intake.summary": return "taskContextBridge → task_context.py: карточка, KB, dependency_context и collaboration_context. Факты извлекаются при запуске; ошибки и источники включаются в TaskContext. Это данные, а не редактируемая инструкция.";
     case "subtask.run_prompt": return "Задачи используют явный ResourceLoader: auto AGENTS/skills/extensions не загружаются. Чат использует Pi DefaultResourceLoader и глобальные/локальные AGENTS, skills, extensions, SYSTEM.md и APPEND_SYSTEM.md. Upstream compaction и tool schema меняются через SDK/файлы, не через текст TaskFlow.";
     case "rules.pending_acknowledgement": {
       // Содержимое собирается в composeLayer поверх динамики; сюда попадаем,

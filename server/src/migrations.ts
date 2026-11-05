@@ -5717,6 +5717,17 @@ const migrations: Migration[] = [
   },
 
   {
+    id: "200_context_operation_items",
+    description: "Что именно попало в контекст роли: записи, источник и объём (владелец 05.11.2026)",
+    up: () => {
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='context_operations'").get();
+      if (!table) return;
+      const cols = new Set((db.prepare("PRAGMA table_info(context_operations)").all() as Array<{ name: string }>).map((c) => c.name));
+      if (!cols.has("items")) db.exec("ALTER TABLE context_operations ADD COLUMN items TEXT NOT NULL DEFAULT '[]'");
+    },
+  },
+
+  {
     id: "199_mission_pause_and_usage",
     description: "Пауза плана и расход токенов по карточке для Mission Control (владелец 05.11.2026)",
     up: () => {

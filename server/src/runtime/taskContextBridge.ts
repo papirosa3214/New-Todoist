@@ -82,7 +82,7 @@ export async function buildInProcessTaskContext(
   finishObservation(observationId,{status:"ok",inputCount:value.prompt.length,outputCount:value.prompt.length,details:["Собран стартовый контекст; объём в символах"]});
   if(Array.isArray(value.observations))for(const item of value.observations){
     if(!item||typeof item!=="object")continue;const o=item as any;
-    if(!["kb","mnemosyne","repository","dependencies","collaboration","history"].includes(o.scenario))continue;
+    if(!["kb","repository","dependencies","collaboration","history"].includes(o.scenario))continue;
     finishObservation(startObservation("enricher",o.scenario,observationContext),{...o,status:o.status==="unavailable"?"error":o.status==="empty"?"skipped":o.status,reason:o.reason??(o.status==="unavailable"?"source_unavailable":o.status==="empty"?"empty":undefined)});
   }
   return {

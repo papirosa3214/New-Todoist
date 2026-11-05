@@ -8,7 +8,7 @@ export const OBSERVABILITY_SCHEMA = `
  task_id TEXT, subtask_id TEXT, role TEXT, run_id TEXT, key_id TEXT,
  started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER NOT NULL DEFAULT 0,
  status TEXT NOT NULL DEFAULT 'running', reason TEXT, input_count INTEGER, output_count INTEGER,
- input_tokens INTEGER, output_tokens INTEGER, details TEXT NOT NULL DEFAULT '[]');
+ input_tokens INTEGER, output_tokens INTEGER, details TEXT NOT NULL DEFAULT '[]', items TEXT NOT NULL DEFAULT '[]');
  CREATE INDEX IF NOT EXISTS idx_context_operations_time ON context_operations(started_at);
  CREATE INDEX IF NOT EXISTS idx_context_operations_key ON context_operations(key_id,started_at);
  CREATE TABLE IF NOT EXISTS context_observability_meta (id INTEGER PRIMARY KEY CHECK(id=1), started_at TEXT NOT NULL);
@@ -23,16 +23,18 @@ export function startObservation(kind:string,scenario:string,extra:ObservationCo
  catch{console.warn('context-observability: запись запуска недоступна');return null;}
 }
 const count=(v:unknown):number|null=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0?v:null;
-export type ObservationResult={status:string;reason?:string;inputCount?:number;outputCount?:number;durationMs?:number;details?:string[];usage?:{input_tokens?:number;output_tokens?:number}};
+/** Что именно попало в контекст: запись, откуда она, её объём и начало текста. */
+export type ContextItem={title:string;source:string;chars:number;excerpt:string};
+export type ObservationResult={status:string;reason?:string;inputCount?:number;outputCount?:number;durationMs?:number;details?:string[];items?:ContextItem[];usage?:{input_tokens?:number;output_tokens?:number}};
 export function finishObservation(id:string|null,result:ObservationResult):void {
  if(!id)return;
- try{db.prepare(`UPDATE context_operations SET ended_at=?,duration_ms=COALESCE(?,MAX(0,CAST((julianday(?)-julianday(started_at))*86400000 AS INTEGER))),status=?,reason=?,input_count=?,output_count=?,input_tokens=?,output_tokens=?,details=? WHERE id=?`).run(new Date().toISOString(),count(result.durationMs),new Date().toISOString(),result.status,result.reason??null,count(result.inputCount),count(result.outputCount),count(result.usage?.input_tokens),count(result.usage?.output_tokens),JSON.stringify((result.details??[]).slice(0,30).map(x=>String(x).slice(0,300))),id);}
+ try{db.prepare(`UPDATE context_operations SET ended_at=?,duration_ms=COALESCE(?,MAX(0,CAST((julianday(?)-julianday(started_at))*86400000 AS INTEGER))),status=?,reason=?,input_count=?,output_count=?,input_tokens=?,output_tokens=?,details=?,items=? WHERE id=?`).run(new Date().toISOString(),count(result.durationMs),new Date().toISOString(),result.status,result.reason??null,count(result.inputCount),count(result.outputCount),count(result.usage?.input_tokens),count(result.usage?.output_tokens),JSON.stringify((result.details??[]).slice(0,30).map(x=>String(x).slice(0,300))),JSON.stringify(result.items??[]),id);}
  catch{console.warn('context-observability: запись результата недоступна');}
 }
 export function updateObservation(id:string|null|undefined,result:Partial<ObservationResult>):void {
  if(!id)return;
- try{const row=db.prepare('SELECT status,reason,input_count,output_count,input_tokens,output_tokens,details,duration_ms FROM context_operations WHERE id=?').get(id) as any;if(!row)return;
- finishObservation(id,{status:row.status,reason:row.reason??undefined,inputCount:row.input_count,outputCount:row.output_count,durationMs:row.duration_ms,usage:{input_tokens:row.input_tokens,output_tokens:row.output_tokens},details:JSON.parse(row.details),...result,...(result.details?{details:[...(JSON.parse(row.details) as string[]).filter(x=>x.startsWith("model: ")),...result.details.filter(x=>!x.startsWith("model: "))]}:{})});}catch{console.warn('context-observability: уточнение результата недоступно');}
+ try{const row=db.prepare('SELECT status,reason,input_count,output_count,input_tokens,output_tokens,details,items,duration_ms FROM context_operations WHERE id=?').get(id) as any;if(!row)return;
+ finishObservation(id,{status:row.status,reason:row.reason??undefined,inputCount:row.input_count,outputCount:row.output_count,durationMs:row.duration_ms,usage:{input_tokens:row.input_tokens,output_tokens:row.output_tokens},details:JSON.parse(row.details),items:JSON.parse(row.items),...result,...(result.details?{details:[...(JSON.parse(row.details) as string[]).filter(x=>x.startsWith("model: ")),...result.details.filter(x=>!x.startsWith("model: "))]}:{})});}catch{console.warn('context-observability: уточнение результата недоступно');}
 }
 export function skippedObservation(scenario:string,reason:string,extra:ObservationContext={}):void{finishObservation(startObservation('jev',scenario,extra),{status:'skipped',reason});}
 export function observationSince(window:string,now=Date.now()):string {
@@ -74,9 +76,13 @@ export function readTaskObservability(taskId:string) {
   FROM context_operations o WHERE task_id IN tree GROUP BY kind,scenario ORDER BY kind,scenario`).all(taskId);
  // Голые столбцы рядом с max() в SQLite берутся из той же строки: это и есть последнее срабатывание.
  const rows=db.prepare(`${tree} SELECT subtask_id subtaskId,kind,scenario,count(*) calls,max(started_at) lastAt,status,reason,
-  input_count inputCount,output_count outputCount,details,duration_ms durationMs
+  role,input_count inputCount,output_count outputCount,details,items,duration_ms durationMs
   FROM context_operations WHERE task_id IN tree AND subtask_id IS NOT NULL GROUP BY subtask_id,kind,scenario ORDER BY kind,scenario`).all(taskId) as any[];
  const stages:Record<string,unknown[]>={};
- for(const {subtaskId,details,...row} of rows)(stages[subtaskId]??=[]).push({...row,details:JSON.parse(details)});
- return {trackingSince:startedAt(),models:contextModels(),summary,stages};
+ for(const {subtaskId,details,items,...row} of rows)(stages[subtaskId]??=[]).push({...row,details:JSON.parse(details),items:JSON.parse(items)});
+ // Что получила каждая роль: последнее срабатывание каждого источника и его объём.
+ const byRole=db.prepare(`${tree} SELECT role,kind,scenario,count(*) calls,max(started_at) lastAt,status,reason,items,output_count outputCount
+  FROM context_operations WHERE task_id IN tree AND role IS NOT NULL AND kind<>'embedding' GROUP BY role,kind,scenario ORDER BY role,kind,scenario`).all(taskId) as any[];
+ const roles=byRole.map(({items,...row})=>{const parsed=JSON.parse(items) as ContextItem[];return {...row,items:parsed,chars:parsed.reduce((sum,item)=>sum+item.chars,0)};});
+ return {trackingSince:startedAt(),models:contextModels(),summary,stages,roles};
 }
