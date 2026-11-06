@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import db, { migrate } from "../src/db.js";
 import { runMigrations } from "../src/migrations.js";
-import { acceptTelegramInbound, markTelegramSending, settleTelegramDelivery, telegramOutbox } from "../src/integrations/telegram.js";
+import { acceptTelegramInbound, captureTelegramFinal, captureTelegramProgress, markTelegramSending, settleTelegramDelivery, telegramOutbox } from "../src/integrations/telegram.js";
 
 const owner = "telegram-test-owner";
 const env = () => {
@@ -32,9 +32,25 @@ describe("telegram secretary integration", () => {
     const first = acceptTelegramInbound(input);
     const second = acceptTelegramInbound(input);
     expect(first.duplicate).toBe(false);
-    expect(second).toEqual({ duplicate: true, ledger_id: first.ledger_id, message_id: first.message_id, ack_delivery_id: first.ack_delivery_id });
+    expect(second).toEqual({ duplicate: true, ledger_id: first.ledger_id, message_id: first.message_id, ack_delivery_id: null });
     expect((db.prepare("SELECT COUNT(*) n FROM chat_messages WHERE id=?").get(first.message_id) as any).n).toBe(1);
     expect((db.prepare("SELECT COUNT(*) n FROM chat_message_queue WHERE delivery_id='tg:42:7'").get() as any).n).toBe(1);
+    // Немедленного «Принял.» больше нет: приём не создаёт доставок.
+    expect(telegramOutbox(5).length).toBe(0);
+  });
+
+  it("sends a single status message only after the run gets slow, and skips it once answered", () => {
+    const first = acceptTelegramInbound({ bot_id: "42", update_id: 11, chat_id: 100, user_id: 100, chat_type: "private", message_id: 61, text: "Долгий вопрос" });
+    expect(captureTelegramProgress(first.message_id as string)).toBe(1);
+    expect(telegramOutbox(5).filter((row: any) => row.kind === "progress").length).toBe(1);
+    expect(captureTelegramProgress(first.message_id as string)).toBe(0);
+    const reply = "reply-" + Date.now();
+    db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES(?,?,?,'chat',?,?)").run(reply, "u-secretary", "Ответ", "chat-secretary", first.message_id);
+    expect(captureTelegramProgress(first.message_id as string)).toBe(0);
+    expect(captureTelegramFinal(reply)).toBe(1);
+    const final = db.prepare("SELECT chat_id,payload_json FROM telegram_delivery_outbox WHERE source_message_id=? AND kind='final'").get(reply) as any;
+    expect(JSON.parse(final.payload_json)).toMatchObject({ text: "Ответ", reply_to_message_id: 61 });
+    expect(final.chat_id).toBe("100");
   });
 
   it("rejects non-allowlisted principals before posting", () => {
@@ -44,7 +60,8 @@ describe("telegram secretary integration", () => {
 
   it("moves delivery through retry and delivered without recreating execution", () => {
     const first = acceptTelegramInbound({ bot_id: "42", update_id: 9, chat_id: 100, user_id: 100, chat_type: "private", message_id: 57, text: "Проверка" });
-    const delivery = telegramOutbox(5).find((row: any) => row.delivery_id === first.ack_delivery_id) as any;
+    expect(captureTelegramProgress(first.message_id as string)).toBe(1);
+    const delivery = telegramOutbox(5).find((row: any) => row.kind === "progress") as any;
     expect(markTelegramSending(delivery.delivery_id)).toBe(true);
     settleTelegramDelivery(delivery.delivery_id, { ok: false, error: "timeout" });
     const state = db.prepare("SELECT state,attempts FROM telegram_delivery_outbox WHERE delivery_id=?").get(delivery.delivery_id) as any;

@@ -135,6 +135,42 @@ export function enqueueTelegramDelivery(args: { kind: "ack" | "progress" | "fina
   return id;
 }
 
+// Статус-сообщение в Telegram (владелец 06.11.2026): вместо мгновенного
+// «Принял.» — как в Hermes, одна обновляемая строка, и только если ход реально
+// затянулся. Пузырь один на ход: повторно не шлём, финальный ответ уходит
+// обычной доставкой `final`.
+export function captureTelegramProgress(triggerMessageId: string, tool?: string): number {
+  const links = db.prepare(`SELECT chat_id,message_id FROM telegram_inbound_ledger
+    WHERE taskflow_message_id=? AND state='posted'`).all(triggerMessageId) as Array<{ chat_id: string; message_id: number }>;
+  if (!links.length) return 0;
+  const already = db.prepare("SELECT 1 FROM telegram_delivery_outbox WHERE kind='progress' AND source_message_id=?").get(triggerMessageId);
+  if (already) return 0;
+  const answered = db.prepare("SELECT 1 FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=?").get(triggerMessageId, SECRETARY_USER_ID);
+  if (answered) return 0;
+  const label = tool ? `Работаю: ${tool}` : "Работаю над ответом…";
+  for (const link of links) enqueueTelegramDelivery({ kind: "progress", chatId: link.chat_id, text: label, replyToMessageId: link.message_id, sourceMessageId: triggerMessageId });
+  return links.length;
+}
+
+const PROGRESS_DELAY_MS = 10_000;
+const progressTimers = new Map<string, NodeJS.Timeout>();
+
+/** Заводит единственное статус-сообщение, если ход не уложился в 10 секунд. */
+export function scheduleTelegramProgress(triggerMessageId: string): void {
+  if (progressTimers.has(triggerMessageId)) return;
+  const timer = setTimeout(() => {
+    progressTimers.delete(triggerMessageId);
+    try { captureTelegramProgress(triggerMessageId); } catch { /* статус — не повод ломать ход */ }
+  }, PROGRESS_DELAY_MS);
+  timer.unref?.();
+  progressTimers.set(triggerMessageId, timer);
+}
+
+export function cancelTelegramProgress(triggerMessageId: string): void {
+  const timer = progressTimers.get(triggerMessageId);
+  if (timer) { clearTimeout(timer); progressTimers.delete(triggerMessageId); }
+}
+
 export function acceptTelegramInbound(input: TelegramInbound): { duplicate: boolean; ledger_id: string; message_id: string | null; ack_delivery_id: string | null } {
   const existing = db.prepare("SELECT id,taskflow_message_id,ack_delivery_id FROM telegram_inbound_ledger WHERE bot_id=? AND update_id=?").get(String(input.bot_id), input.update_id) as { id: string; taskflow_message_id: string | null; ack_delivery_id: string | null } | undefined;
   if (existing) return { duplicate: true, ledger_id: existing.id, message_id: existing.taskflow_message_id, ack_delivery_id: existing.ack_delivery_id };
@@ -161,9 +197,10 @@ export function acceptTelegramInbound(input: TelegramInbound): { duplicate: bool
       db.prepare("UPDATE telegram_inbound_ledger SET state='posted',posted_at=datetime('now'),taskflow_message_id=? WHERE id=?").run(messageId, ledgerId);
     })();
     enqueueMessageDelivery({ chatId: SECRETARY_CHAT_ID, roleId: SECRETARY_USER_ID, deliveryId: `tg:${input.bot_id}:${input.update_id}`, messageId, payload: { hop: 0, mode: "work", text } });
-    const ackId = enqueueTelegramDelivery({ kind: "ack", chatId: String(input.chat_id), text: "Принял.", replyToMessageId: input.message_id, sourceMessageId: messageId });
-    db.prepare("UPDATE telegram_inbound_ledger SET ack_delivery_id=? WHERE id=?").run(ackId, ledgerId);
-    return { duplicate: false, ledger_id: ledgerId, message_id: messageId, ack_delivery_id: ackId };
+    // Немедленного «Принял.» нет: Telegram получает статус только если ход
+    // тянется дольше 10 секунд (scheduleTelegramProgress в чат-рантайме).
+    scheduleTelegramProgress(messageId);
+    return { duplicate: false, ledger_id: ledgerId, message_id: messageId, ack_delivery_id: null };
   } catch (error) {
     const code = error instanceof Error ? error.message : "inbound_failed";
     db.prepare("UPDATE telegram_inbound_ledger SET state='rejected',error_code=?,finished_at=datetime('now') WHERE id=?").run(code, ledgerId);

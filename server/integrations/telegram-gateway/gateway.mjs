@@ -9,6 +9,7 @@ const allowedUser = Number(required("TASKFLOW_TELEGRAM_OWNER_USER_ID"));
 const allowedChat = Number(required("TASKFLOW_TELEGRAM_OWNER_CHAT_ID"));
 const api = (process.env.TASKFLOW_API_URL || "http://127.0.0.1:3001").replace(/\/+$/, "");
 const statePath = process.env.TELEGRAM_GATEWAY_STATE || path.join(process.cwd(), "telegram-gateway-state.json");
+const statusPath = process.env.TELEGRAM_GATEWAY_STATUS || path.join(path.dirname(statePath), "status-bubbles.json");
 const tg = `https://api.telegram.org/bot${token}`;
 const maxBytes = 15 * 1024 * 1024;
 let stopped = false;
@@ -67,13 +68,47 @@ async function handleUpdate(update) {
   const transcript = attachments.map((item) => item.transcript).filter(Boolean).join("\n");
   await taskflow("/api/integrations/telegram/inbound", { method: "POST", body: JSON.stringify({ bot_id: botId, update_id: update.update_id, chat_id: message.chat.id, user_id: message.from.id, chat_type: message.chat.type, message_id: message.message_id, text: message.text || transcript || "", caption: message.caption || (meta?.kind === "voice" && !transcript ? "Голосовое не распознано" : ""), attachments }) });
 }
+const statusBubbles = await loadStatusBubbles();
+
+// Одна обновляемая строка статуса на ход, как у Hermes: пока роль думает —
+// шлём/правим «Работаю», финальный ответ заменяет её на месте.
+async function loadStatusBubbles() {
+  try { return JSON.parse(await fs.readFile(statusPath, "utf8")).bubbles || {}; } catch { return {}; }
+}
+async function saveStatusBubbles() {
+  try { await fs.mkdir(path.dirname(statusPath), { recursive: true }); const tmp = `${statusPath}.tmp`; await fs.writeFile(tmp, JSON.stringify({ bubbles: statusBubbles, updated_at: new Date().toISOString() })); await fs.rename(tmp, statusPath); } catch {}
+}
+async function editStatus(chatId, telegramMessageId, text) {
+  try { await telegram("editMessageText", { chat_id: chatId, message_id: telegramMessageId, text: String(text || "").slice(0, 4096) }); return true; }
+  catch { return false; }
+}
 async function sendOutbox() {
   const { deliveries = [] } = await taskflow("/api/integrations/telegram/outbox?limit=20");
   for (const delivery of deliveries) {
     try {
       await taskflow(`/api/integrations/telegram/outbox/${delivery.delivery_id}/claim`, { method: "POST", body: "{}" });
       const payload = JSON.parse(delivery.payload_json);
-      const result = await telegram("sendMessage", { chat_id: Number(delivery.chat_id), text: String(payload.text || "").slice(0, 4096), ...(payload.reply_to_message_id ? { reply_to_message_id: payload.reply_to_message_id } : {}) });
+      const key = payload.reply_to_message_id ? `${delivery.chat_id}:${payload.reply_to_message_id}` : null;
+      const text = String(payload.text || "").slice(0, 4096);
+      if (delivery.kind === "progress") {
+        const existing = key ? statusBubbles[key] : null;
+        const result = existing
+          ? { message_id: (await editStatus(Number(delivery.chat_id), existing, text)) ? existing : null }
+          : await telegram("sendMessage", { chat_id: Number(delivery.chat_id), text, ...(payload.reply_to_message_id ? { reply_to_message_id: payload.reply_to_message_id } : {}) });
+        if (result.message_id && key) { statusBubbles[key] = result.message_id; await saveStatusBubbles(); }
+        await taskflow(`/api/integrations/telegram/outbox/${delivery.delivery_id}/result`, { method: "POST", body: JSON.stringify({ ok: true, telegramMessageId: result.message_id || undefined }) });
+        continue;
+      }
+      if (delivery.kind === "final" && key && statusBubbles[key]) {
+        const bubble = statusBubbles[key];
+        delete statusBubbles[key];
+        await saveStatusBubbles();
+        if (await editStatus(Number(delivery.chat_id), bubble, text)) {
+          await taskflow(`/api/integrations/telegram/outbox/${delivery.delivery_id}/result`, { method: "POST", body: JSON.stringify({ ok: true, telegramMessageId: bubble }) });
+          continue;
+        }
+      }
+      const result = await telegram("sendMessage", { chat_id: Number(delivery.chat_id), text, ...(payload.reply_to_message_id ? { reply_to_message_id: payload.reply_to_message_id } : {}) });
       await taskflow(`/api/integrations/telegram/outbox/${delivery.delivery_id}/result`, { method: "POST", body: JSON.stringify({ ok: true, telegramMessageId: result.message_id }) });
     } catch (error) {
       const status = Number(error.status || 0);
