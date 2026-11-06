@@ -30,6 +30,11 @@ const clients = new Map<string, Set<Socket>>();
 // Ключ — device_id, а не токен: токена в памяти процесса нет и быть не
 // должно (в базе лежит только его sha256).
 const deviceSockets = new Map<string, Set<Socket>>();
+/** Сокеты, открытые токеном устройства. Им нужны только `device_op` и
+ *  проверка связи (`ping`), а не общий поток событий: телефон держит рядом
+ *  обычный сокет сессии и получал бы каждое событие дважды, включая
+ *  посимвольный стрим ответа роли (аудит синхронизации 06.11.2026). */
+const deviceOnlySockets = new WeakSet<Socket>();
 
 /** Закрыть все живые сокеты отозванного устройства кодом 4401.
  *
@@ -95,6 +100,7 @@ export function addClient(userId: string, socket: Socket, deviceId?: string | nu
   if (!clients.has(userId)) clients.set(userId, new Set());
   clients.get(userId)!.add(socket);
   if (deviceId) {
+    deviceOnlySockets.add(socket);
     if (!deviceSockets.has(deviceId)) deviceSockets.set(deviceId, new Set());
     deviceSockets.get(deviceId)!.add(socket);
   }
@@ -160,6 +166,7 @@ export function broadcast(userId: string | null | undefined, event: unknown) {
   if (!set || set.size === 0) return;
   const payload = JSON.stringify(event);
   for (const socket of set) {
+    if (deviceOnlySockets.has(socket)) continue;
     if (socket.readyState === 1) socket.send(payload);
   }
 }
