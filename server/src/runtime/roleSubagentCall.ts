@@ -45,6 +45,7 @@ import {
 import { applyOwnerBoundary } from "./chatOwnerBoundary.js";
 import { bumpChatGeneration, enqueueMessageDelivery, fencePairDeliveries } from "./chatQueue.js";
 import { activeVoiceCallId } from "../lib/voiceCallRegistry.js";
+import { setPlanLink, clearPlanLink } from "./chatPlanLinks.js";
 import { openSubagentRoom, type SubagentRoom } from "./subagentRoom.js";
 import type { Context, Tool } from "./universalTaskflow.js";
 
@@ -292,6 +293,8 @@ export async function pendingSubagentRuns(): Promise<void> {
  */
 async function runSubagentInBackground(input: BackgroundInput): Promise<void> {
   const priorSession = readSession(input.runChatId, input.roleId);
+  const linkRoot = rootChatIdOf(input.runChatId);
+  setPlanLink(linkRoot, input.roleId, { parentRoleId: input.requesterId, questionId: input.questionId ?? null });
   let prompt = subagentPrompt(input.requesterRole, input.role, input.question);
   // Сессия хода: при корректировке она продолжается, а не начинается заново.
   let sessionId: string | null = null;
@@ -361,6 +364,7 @@ async function runSubagentInBackground(input: BackgroundInput): Promise<void> {
     }
     finishSubagentFailed(input, `Лимит уточнений (${SUBAGENT_STEER_LIMIT}) исчерпан`);
   } finally {
+    clearPlanLink(linkRoot, input.roleId);
     restoreSession(input.runChatId, input.roleId, priorSession);
   }
 }

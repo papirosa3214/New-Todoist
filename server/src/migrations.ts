@@ -5616,6 +5616,30 @@ const migrations: Migration[] = [
       db.exec("INSERT INTO memory_chunks_fts(memory_chunks_fts) VALUES('rebuild')");
     },
   },
+  {
+    id: "195_chat_plan_links_hints",
+    description: "chat_work_plans.parent_role_id/question_id (план вызванной роли привязан к плану вызвавшей) и журнал подсказок «сдай пункт» chat_plan_hints",
+    up: () => {
+      const cols = new Set((db.prepare("PRAGMA table_info(chat_work_plans)").all() as Array<{ name: string }>).map((c) => c.name));
+      if (!cols.has("parent_role_id")) db.exec("ALTER TABLE chat_work_plans ADD COLUMN parent_role_id TEXT");
+      if (!cols.has("question_id")) db.exec("ALTER TABLE chat_work_plans ADD COLUMN question_id TEXT");
+      db.exec(`CREATE TABLE IF NOT EXISTS chat_plan_hints (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        role_id TEXT NOT NULL,
+        item_id TEXT,
+        item_title TEXT,
+        kind TEXT NOT NULL,
+        cosine REAL,
+        threshold REAL,
+        hinted_at TEXT NOT NULL,
+        submitted_after INTEGER,
+        submitted_at TEXT,
+        note TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_plan_hints_item ON chat_plan_hints(chat_id, role_id, item_id)`);
+    },
+  },
 
   {
     id: "195_memory_observer_events",

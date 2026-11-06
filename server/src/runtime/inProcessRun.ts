@@ -668,13 +668,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           p.items === undefined ? undefined : {base_revision:p.base_revision,items:p.items,...(!subtaskId && chatContext?.messageId ? {message_id:chatContext.messageId} : {})});
       }),
     T("taskflow_work_item_submit", "Сдать текущий пункт чатового чек-листа: result — 1–2 предложения, что сделано. Сервер отметит пункт и только после этого выдаст следующий. Пункт — законченный результат, а не вызов инструмента; пункт вне очереди не принимается. Пункт заблокирован — outcome blocked и block_type (dependency | needs_input | capability | transient).",
-      Type.Object({item_id:Type.String(),result:Type.Optional(Type.String()),outcome:Type.Optional(Type.Union([Type.Literal("done"),Type.Literal("blocked")])),block_type:Type.Optional(Type.String()),reason:Type.Optional(Type.String())}),
+      Type.Object({item_id:Type.String(),result:Type.Optional(Type.String()),outcome:Type.Optional(Type.Union([Type.Literal("done"),Type.Literal("blocked")])),block_type:Type.Optional(Type.String()),reason:Type.Optional(Type.String()),role:Type.Optional(Type.String({description:"Ключ вызванной тобой роли (taskflow_call_role): сдать или заблокировать пункт её плана по её результату"}))}),
       async (p) => {
         if (!chatContext?.chatId) throw new ToolError("Сдача пункта относится к чатовому ходу: в карточке шаг сдают через taskflow_subtask_done");
         const body: Json = { item_id: p.item_id, outcome: p.outcome ?? "done" };
         if (p.result !== undefined) body.result = p.result;
         if (p.block_type) body.block_type = p.block_type;
         if (p.reason) body.reason = p.reason;
+        if (p.role) body.role = p.role;
         // Ключ идемпотентности и поколение выводит сервер из доставки: модель
         // не придумывает ключи и не может подделать повтор.
         if (chatContext.messageId) body.message_id = chatContext.messageId;

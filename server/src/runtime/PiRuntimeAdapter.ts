@@ -7,6 +7,8 @@ import {supportedThinkingLevels,validateChatThinking,thinkingLevelLabels} from "
 import {safelyCaptureBudgetCases,budgetContinuationPrompt} from "./chatBudgetCases.js";
 import { resolveChatWorkspace } from "../lib/chatWorkspace.js";
 import { MemoryConsultationGuard } from "./memoryConsultationGuard.js";
+import { ensurePlanItemClosed } from "./chatPlanClose.js";
+import { PlanHintGuard, assistantTextOf } from "./chatPlanHints.js";
 import { ChatPreparationDeadline } from "./chatPreparationDeadline.js";
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import {installSteeringBoundary} from "./steeringBoundary.js";
@@ -1713,6 +1715,7 @@ async function startChatRunOnce(
     // минуты), ход держит только общий потолок.
     const thrash = new ThrashGuard();
     const memoryConsultation = new MemoryConsultationGuard();
+    const planHints = new PlanHintGuard(input.chatId, input.roleId);
     const idleMs = resolveChatRunIdle(input.idleMs);
     const runningTools = new Set<string>();
     let lastActivity = Date.now();
@@ -1761,6 +1764,11 @@ async function startChatRunOnce(
       }
       else if (event?.type === "tool_execution_end" && event.toolCallId)
         runningTools.delete(event.toolCallId);
+      // Подсказка «сдай пункт» по смыслу промежуточного сообщения (06.11.2026); ничего не закрывает.
+      if (event?.type === "message_end" && !input.compactOnly && input.mode !== "plan" && chatRuntimeGuidanceEnabled(role)) {
+        const text = assistantTextOf(event);
+        if (text) void planHints.observe(text).then((hint) => { if (hint) return session.steer(hint); }).catch(() => {});
+      }
       if (
         event?.type === "message_update" &&
         event.assistantMessageEvent?.type === "toolcall_start"
@@ -1853,6 +1861,9 @@ async function startChatRunOnce(
           );
         }
       }
+      // Конец хода: текущий пункт плана должен быть сдан; один дожим, затем отметка unclosed.
+      if (!input.compactOnly && input.mode !== "plan" && !run.cancelled)
+        await ensurePlanItemClosed(input.chatId, input.roleId, promptOnce);
       finalText = input.compactOnly
         ? ""
         : stripGoalMark((session.getLastAssistantText?.() ?? "").trim());

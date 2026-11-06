@@ -1,3 +1,4 @@
+import { syncChecklistMarkWithPlan, resolveChecklistItem } from "../lib/chatChecklistPlanSync.js";
 import { observeChatMemory } from "../runtime/chatMemoryObserver.js";
 import {secretaryChatInput} from "../runtime/secretaryChatPrompt.js";
 import {snapshotChatPreferences,messageThinkingLevel,readChatPreferences} from "../lib/chatSessionPreferences.js";
@@ -21,6 +22,7 @@ import {
   clearChatWorkPlan,
   readChatWorkPlan,
   readChatWorkPlans,
+  chatPlanTree,
   saveChatWorkPlan,
   stopChatWorkPlan,
   submitChatWorkItem,
@@ -50,7 +52,7 @@ import {
 } from "../lib/chatArchive.js";
 import { nudgeTaskPlan } from "../runtime/taskNudge.js";
 import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
-import { externalRuntime } from "../roleRouting.js";
+import { externalRuntime, roleUserId as roleUserIdOf } from "../roleRouting.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { listChatCommands, parseSlashInvocation, resolveSlashCommand, type SlashInvocation } from "../runtime/chatCommands.js";
 import { markChatContextCompacted, readChatContext, readChatListContext, resetChatContext } from "../runtime/chatContextUsage.js";
@@ -1094,13 +1096,19 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       const widgetKey=String(req.body?.widget_key??"0").trim()||"0";
       const itemKey=String(req.body?.item_key??req.body?.item_index??"").trim();
       if(!itemKey) return reply.code(400).send({error:"Нужен item_key (id пункта) или item_index (номер пункта)"});
+      let planSync:any={matched:false};
       try{
+        // Один акт: пункт плана роли сдаётся тем же действием, что и галочка; отказ сдачи отменяет отметку.
+        const target=resolveChecklistItem(message.text,widgetKey,itemKey);
+        planSync=syncChecklistMarkWithPlan({chatId:req.params.id,itemKey:target.key,label:target.label,done,userId:req.userId});
         setChecklistItem({messageId:message.id,text:message.text,widgetKey,itemKey,done,userId:req.userId});
       }catch(error){
         if(error instanceof ChecklistItemError) return reply.code(400).send({error:error.message});
+        if(error instanceof ChatItemSubmitError) return reply.code(error.rejection.status).send({error:error.rejection.message,code:error.rejection.code,...(error.rejection.extra??{})});
         throw error;
       }
-      return {checklist_state:checklistStateOfMessage(message.id),message:loadChatMessage(message.id)};
+      if(planSync.matched&&planSync.result) broadcastToUsers(memberIds(req.params.id).concat(ownerIdsForChat(req.params.id)),{type:"chat:work_plan",chat_id:req.params.id,plan:planSync.result.view});
+      return {checklist_state:checklistStateOfMessage(message.id),message:loadChatMessage(message.id),...(planSync.matched?{plan_item:{role_id:planSync.role_id,item_id:planSync.item_id,submitted:!!planSync.result}}:{})};
     });
 
   // Состояние отметок чата — то же, что видит роль, для клиента и отладки.
@@ -1772,12 +1780,14 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
     // Выполненный целиком план закрыт — полоска его не показывает; остановленный
     // остаётся видимым: владелец должен видеть, что работа остановлена и почему.
+    const { flat, tree } = chatPlanTree(req.params.id);
+    const visible = (plan: { items: unknown[]; status: string }) => plan.items.length >= OWNER_VISIBLE_PLAN_MIN_ITEMS && plan.status !== "finished";
     return {
-      plans: readChatWorkPlans(req.params.id)
-        .map((plan) => chatPlanViewOf(plan))
-        // План из одного-двух пунктов владельцу не показываем (26.10.2026):
-        // роль ведёт его у себя, полоска для такой мелочи — шум.
-        .filter((plan) => plan.items.length >= OWNER_VISIBLE_PLAN_MIN_ITEMS && plan.status !== "finished"),
+      // Прежнее поле: плоский список (к каждому плану добавлены parent_role_id, question_id, progress).
+      // План из одного-двух пунктов владельцу не показываем (26.10.2026): роль ведёт его у себя.
+      plans: flat.filter(visible),
+      // Новое поле: план вызвавшей роли и внутри него children — планы вызванных ролей.
+      plan_tree: tree.filter(visible),
     };
   });
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
@@ -1841,6 +1851,9 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       const chatId = req.params.id;
       const roleKey = roleFromUserId(req.userId);
       if (!roleKey) return reply.code(403).send({ error: "Пункт сдаёт роль" });
+      // role — сдача по плану вложенной роли вызвавшей её ролью (проверяет submitChatWorkItem).
+      const targetRaw = typeof req.body?.role === "string" ? req.body.role.trim() : "";
+      const targetId = targetRaw ? (targetRaw.startsWith("role_") ? targetRaw : roleUserIdOf(targetRaw)) : req.userId;
       if (!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(chatId, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
       const itemId = typeof req.body?.item_id === "string" ? req.body.item_id.trim() : "";
@@ -1853,7 +1866,8 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       try {
         const result = submitChatWorkItem({
           chatId,
-          roleId: req.userId,
+          roleId: targetId,
+          markedBy: targetId !== req.userId ? req.userId : null,
           itemId,
           result: typeof req.body?.result === "string" ? req.body.result : null,
           outcome,

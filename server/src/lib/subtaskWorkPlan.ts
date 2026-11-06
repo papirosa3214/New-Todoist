@@ -1,3 +1,4 @@
+import { planLinkOf } from "../runtime/chatPlanLinks.js";
 import db from "../db.js";
 import { currentChatGeneration } from "../runtime/chatQueue.js";
 export type WorkPlanItem = { id: string; title: string; state: "pending" | "in_progress" | "done" };
@@ -42,11 +43,14 @@ export type ChatPlanStatus = "active" | "finished" | "stopped";
 export type ChatPlanStopReason = "owner_stop" | "budget_exhausted" | "session_reset" | "error";
 export type ChatBlockType = "dependency" | "needs_input" | "capability" | "transient";
 /** Что видит клиент и промпт роли по каждому пункту. */
-export type ChatPlanItemState = WorkPlanState | "blocked" | "stopped";
+export type ChatPlanItemState = WorkPlanState | "blocked" | "stopped" | "unclosed";
 
 export type ChatPlanOutcome = {
   /** Итог, который принял сервер. `stale` — запись отклонённой (устаревшей) сдачи. */
-  state: "done" | "blocked";
+  /** `unclosed` — роль закончила ход, не сдав пункт: отметка сервера «не закрыт ролью». */
+  state: "done" | "blocked" | "unclosed";
+  /** Кто отметил, если не сама роль (вызвавшая роль или владелец через виджет). */
+  marked_by?: string | null;
   result: string | null;
   block_type: ChatBlockType | null;
   reason: string | null;
@@ -69,6 +73,9 @@ export type ChatWorkPlan = {
   stopped_at: string | null;
   source_message_id: string | null;
   outcomes: ChatPlanOutcomes;
+  /** Кто позвал роль (taskflow_call_role) и по какому обращению. */
+  parent_role_id: string | null;
+  question_id: string | null;
 };
 export type ChatPlanViewItem = {
   id: string;
@@ -76,6 +83,8 @@ export type ChatPlanViewItem = {
   state: ChatPlanItemState;
   result?: string | null;
   block_reason?: string | null;
+  /** Кто отметил пункт, если не сама роль. */
+  marked_by?: string | null;
 };
 export type ChatPlanView = {
   chat_id: string;
@@ -108,6 +117,8 @@ const chatPlanRow = (row: any): ChatWorkPlan => ({
   stopped_at: row.stopped_at ?? null,
   source_message_id: row.source_message_id ?? null,
   outcomes: parseOutcomes(row.outcomes_json),
+  parent_role_id: row.parent_role_id ?? null,
+  question_id: row.question_id ?? null,
 });
 /** A branch is another room of the same conversation, not a second checklist. */
 function chatPlanRootId(chatId:string):string {
@@ -157,6 +168,7 @@ export function chatPlanViewOf(plan: ChatWorkPlan): ChatPlanView {
     let state: ChatPlanItemState = "pending";
     if (outcome?.state === "done") state = "done";
     else if (outcome?.state === "blocked") state = "blocked";
+    else if (outcome?.state === "unclosed") state = "unclosed";
     else if (status === "stopped" && item.id === pendingCandidate?.id) state = "stopped";
     else if (status === "active" && item.id === currentItemId) state = "in_progress";
     items.push({
@@ -165,6 +177,7 @@ export function chatPlanViewOf(plan: ChatWorkPlan): ChatPlanView {
       state,
       ...(outcome?.state === "done" ? { result: outcome.result ?? null } : {}),
       ...(outcome?.state === "blocked" ? { block_reason: outcome.reason ?? outcome.block_type ?? null } : {}),
+      ...(outcome?.marked_by ? { marked_by: outcome.marked_by } : {}),
     });
   }
   return {
@@ -286,6 +299,8 @@ export function saveChatWorkPlan(
       .run(chatId, roleId, nextRevision, JSON.stringify(nextItems), now, sourceMessageId, outcomes);
     if (!existing || replaceable)
       db.prepare("UPDATE chat_work_plans SET action_budget_json=? WHERE chat_id=? AND role_id=?").run("{}",chatId,roleId);
+    const link = planLinkOf(chatId, roleId);
+    if (link) db.prepare("UPDATE chat_work_plans SET parent_role_id=?,question_id=? WHERE chat_id=? AND role_id=?").run(link.parentRoleId, link.questionId, chatId, roleId);
     return readChatWorkPlan(chatId, roleId)!;
   })();
 }
@@ -342,6 +357,8 @@ export type ChatItemSubmitInput = {
   reason?: string | null;
   /** Сообщение, из которого пришла сдача: по нему находится доставка. */
   messageId?: string | null;
+  /** Кто сдаёт вместо роли: вызвавшая роль (по плану вложенной роли) или владелец через виджет. */
+  markedBy?: string | null;
 };
 export type ChatItemSubmitRejection = {
   code:
@@ -350,6 +367,7 @@ export type ChatItemSubmitRejection = {
     | "item_not_current"
     | "item_already_done"
     | "item_unknown"
+    | "not_caller"
     | "result_required"
     | "block_type_required"
     | "run_stale";
@@ -381,6 +399,9 @@ export function submitChatWorkItem(input: ChatItemSubmitInput): ChatItemSubmitRe
     if (!plan)
       throw new ChatItemSubmitError({ code: "chat_plan_missing", status: 409, message: "Сначала заведи чек-лист: план не найден" });
     const view = chatPlanViewOf(plan);
+    const byOther = !!input.markedBy && input.markedBy !== input.roleId;
+    if (byOther && !input.markedBy!.startsWith("owner:") && plan.parent_role_id !== input.markedBy)
+      throw new ChatItemSubmitError({ code: "not_caller", status: 403, message: "Пункт чужого плана сдаёт только роль, которая позвала эту роль" });
     if (view.status === "stopped")
       throw new ChatItemSubmitError({
         code: "plan_stopped",
@@ -443,7 +464,7 @@ export function submitChatWorkItem(input: ChatItemSubmitInput): ChatItemSubmitRe
         extra: { current_item_id: view.current_item_id },
       });
 
-    const live = delivery?.status === "picked" || delivery?.status === "done";
+    const live = delivery?.status === "picked" || delivery?.status === "done" || byOther || (!delivery && !!planLinkOf(plan.chat_id, input.roleId));
     const currentGeneration = chatSessionGeneration(input.chatId, input.roleId);
     const stale = !live || (generation !== null && currentGeneration > generation);
     const now = new Date().toISOString();
@@ -451,6 +472,7 @@ export function submitChatWorkItem(input: ChatItemSubmitInput): ChatItemSubmitRe
       ...plan.outcomes,
       [input.itemId]: {
         state: input.outcome,
+        ...(byOther ? { marked_by: input.markedBy } : {}),
         result: input.outcome === "done" ? result : null,
         block_type: input.outcome === "blocked" ? (input.blockType ?? null) : null,
         reason: (input.reason ?? null) || null,
@@ -478,6 +500,8 @@ export function submitChatWorkItem(input: ChatItemSubmitInput): ChatItemSubmitRe
     const finished = nextView.status === "finished";
     db.prepare("UPDATE chat_work_plans SET revision=?,outcomes_json=?,updated_at=?,status=?,stopped_at=NULL,stop_reason=NULL WHERE chat_id=? AND role_id=?")
       .run(nextPlan.revision, JSON.stringify(outcomes), now, finished ? "finished" : "active", plan.chat_id, input.roleId);
+    if (input.outcome === "done")
+      db.prepare("UPDATE chat_plan_hints SET submitted_after=1,submitted_at=? WHERE chat_id=? AND role_id=? AND item_id=? AND submitted_after IS NULL").run(now, plan.chat_id, input.roleId, input.itemId);
     const stored = readChatWorkPlan(input.chatId, input.roleId)!;
     const storedView = chatPlanViewOf(stored);
     return {
@@ -595,4 +619,64 @@ export function chatWorkPlanPromptText(view: ChatPlanView | null): string {
 /** Что сервер подкладывает роли в начало чатового хода: текущий пункт её плана. */
 export function chatWorkPlanPrompt(chatId: string, roleId: string): string {
   return chatWorkPlanPromptText(chatPlanView(chatId, roleId));
+}
+
+/** Пункт, который роль обязана сдать: план активен, текущий пункт ни сдан, ни заблокирован, ни помечен. */
+export function openChatPlanItem(chatId: string, roleId: string): ChatPlanViewItem | null {
+  const plan = readChatWorkPlan(chatId, roleId);
+  if (!plan) return null;
+  const view = chatPlanViewOf(plan);
+  if (view.status !== "active" || !view.current_item_id) return null;
+  const item = view.items.find((i) => i.id === view.current_item_id);
+  return item && (item.state === "in_progress" || item.state === "pending") ? item : null;
+}
+
+/** Роль закончила ход, не сдав пункт: сервер ставит отметку «не закрыт ролью». План выполненным не считается. */
+export function markChatItemUnclosed(chatId: string, roleId: string, itemId: string): boolean {
+  return db.transaction(() => {
+    const plan = readChatWorkPlan(chatId, roleId);
+    if (!plan) return false;
+    const view = chatPlanViewOf(plan);
+    if (view.status !== "active" || view.current_item_id !== itemId) return false;
+    const now = new Date().toISOString();
+    const outcomes: ChatPlanOutcomes = {
+      ...plan.outcomes,
+      [itemId]: {
+        state: "unclosed", result: null, block_type: null, reason: "не закрыт ролью",
+        submitted_at: now, submission_id: `server:${itemId}:unclosed:${now}`, session_generation: null,
+        plan_revision: plan.revision + 1, stale: false,
+      },
+    };
+    db.prepare("UPDATE chat_work_plans SET revision=?,outcomes_json=?,updated_at=? WHERE chat_id=? AND role_id=?")
+      .run(plan.revision + 1, JSON.stringify(outcomes), now, plan.chat_id, roleId);
+    return true;
+  })();
+}
+
+export type ChatPlanProgress = { done: number; total: number; blocked: number; unclosed: number };
+export type ChatPlanNode = ChatPlanView & {
+  parent_role_id: string | null;
+  question_id: string | null;
+  progress: ChatPlanProgress;
+  children: ChatPlanNode[];
+};
+const progressOf = (view: ChatPlanView): ChatPlanProgress => ({
+  done: view.items.filter((i) => i.state === "done").length,
+  total: view.items.length,
+  blocked: view.items.filter((i) => i.state === "blocked").length,
+  unclosed: view.items.filter((i) => i.state === "unclosed").length,
+});
+/** Планы чата вложенно: план вызвавшей роли, внутри — планы вызванных ролей (children). */
+export function chatPlanTree(chatId: string): { flat: Array<ChatPlanView & { parent_role_id: string | null; question_id: string | null; progress: ChatPlanProgress }>; tree: ChatPlanNode[] } {
+  const plans = readChatWorkPlans(chatId);
+  const nodes = plans.map((plan) => ({
+    ...chatPlanViewOf(plan), parent_role_id: plan.parent_role_id, question_id: plan.question_id, progress: progressOf(chatPlanViewOf(plan)), children: [] as ChatPlanNode[],
+  }));
+  const byRole = new Map(nodes.map((n) => [n.role_id, n]));
+  const roots: ChatPlanNode[] = [];
+  for (const node of nodes) {
+    const parent = node.parent_role_id ? byRole.get(node.parent_role_id) : undefined;
+    if (parent && parent !== node) parent.children.push(node); else roots.push(node);
+  }
+  return { flat: nodes.map(({ children: _c, ...rest }) => rest), tree: roots };
 }
