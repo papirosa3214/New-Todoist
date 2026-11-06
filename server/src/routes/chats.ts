@@ -3759,6 +3759,13 @@ async function deliverAgentReply(args: {
     // страховка больше не нужна (владелец 31.10.2026).
     markLiveDraftSaved(live.turnId, replyId);
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
+    // Ответ роли в комнате Помощника, пришедший из Telegram, уходит обратно в
+    // Telegram. Раньше captureTelegramFinal вызывался только в POST /messages
+    // (клиент), а живой ход роли пишет сообщение прямо в БД — и владелец не
+    // получал ответа в Telegram вовсе.
+    if (chatId === "chat-secretary") {
+      try { captureTelegramFinal(replyId); } catch (error) { console.warn("[telegram] финал не ушёл:", error); }
+    }
     for(const material of overflow){
       const materialId=uid();
       const card={type:"card",title:material.title,link:{title:"Открыть материал",url:material.ref}};

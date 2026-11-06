@@ -173,9 +173,32 @@ async function handleUpdate(update) {
   const attachments = await downloadAttachment(meta);
   const transcript = attachments.map((item) => item.transcript).filter(Boolean).join("\n");
   await taskflow("/api/integrations/telegram/inbound", { method: "POST", body: JSON.stringify({ bot_id: botId, update_id: update.update_id, chat_id: message.chat.id, user_id: message.from.id, chat_type: message.chat.type, message_id: message.message_id, text: message.text || transcript || "", caption: message.caption || (meta?.kind === "voice" && !transcript ? "Голосовое не распознано" : ""), attachments }) });
+  // Запрос принят — сразу показываем «печатает…», не дожидаясь 10-секундного
+  // статуса и черновика. Останавливается на финале/ошибке в sendOutbox.
+  startTyping(message.chat.id);
 }
 
 const statusBubbles = await loadStatusBubbles();
+
+// «Печатает…» в Telegram (владелец 06.11.2026: без индикатора кажется, что
+// бот не получил сообщение). Telegram гасит статус через ~5 с, поэтому
+// держим его повтором каждые 4 с, пока ход не закончится финалом или ошибкой.
+const typingTimers = new Map();
+const TYPING_INTERVAL_MS = 4_000;
+function startTyping(chatId) {
+  const key = Number(chatId);
+  if (typingTimers.has(key)) return;
+  const tick = () => { telegram("sendChatAction", { chat_id: key, action: "typing" }).catch(() => {}); };
+  tick();
+  const timer = setInterval(tick, TYPING_INTERVAL_MS);
+  timer.unref?.();
+  typingTimers.set(key, timer);
+}
+function stopTyping(chatId) {
+  const key = Number(chatId);
+  const timer = typingTimers.get(key);
+  if (timer) { clearInterval(timer); typingTimers.delete(key); }
+}
 
 // Одна обновляемая строка статуса на ход, как у Hermes: пока роль думает —
 // шлём/правим «Работаю», финальный ответ заменяет её на месте.
@@ -213,6 +236,8 @@ async function sendDelivery(delivery, payload) {
   const method = String(payload.method || "sendMessage");
   const key = payload.reply_to_message_id ? `${delivery.chat_id}:${payload.reply_to_message_id}` : null;
   const text = String(payload.text || "").slice(0, STATUS_TEXT_MAX);
+  // Финал или ошибка закрывают ход — гасим «печатает…».
+  if (delivery.kind === "final" || delivery.kind === "error") stopTyping(delivery.chat_id);
 
   if (method === "setMessageReaction") {
     if (!reactionsEnabled) { await settle(delivery, { ok: true }); return; }
