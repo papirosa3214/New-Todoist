@@ -272,12 +272,23 @@ async function sendOutbox() {
   }
 }
 
-await syncCommands().catch((error) => log("commands_sync_failed", { error: String(error.message || error) }));
+// Меню синхронизируется при старте и дальше раз в 5 минут: сервер может быть
+// ещё на старом коде (недоступный /commands) — тогда следующий заход догонит,
+// а прежнее меню у бота остаётся рабочим.
+const COMMANDS_RESYNC_MS = 5 * 60 * 1000;
+let lastCommandsSync = 0;
+async function resyncCommandsIfDue() {
+  if (Date.now() - lastCommandsSync < COMMANDS_RESYNC_MS) return;
+  lastCommandsSync = Date.now();
+  await syncCommands().catch((error) => log("commands_sync_failed", { error: String(error.message || error) }));
+}
+await resyncCommandsIfDue();
 process.on("SIGTERM", () => { stopped = true; });
 process.on("SIGINT", () => { stopped = true; });
 while (!stopped) {
   try {
     const updates = await telegram("getUpdates", { offset, timeout: 30, limit: 100, allowed_updates: ALLOWED_UPDATES });
+    await resyncCommandsIfDue();
     for (const update of updates) {
       try { await handleUpdate(update); }
       catch (error) { console.error(JSON.stringify({ event: "update_failed", update_id: update.update_id, error: String(error.message || error) })); }
