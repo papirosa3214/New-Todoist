@@ -1,3 +1,4 @@
+import { crossChatNotice } from "../lib/crossChatNotice.js";
 import { isTaskChatRestrictedRole } from "../runtime/taskChatTools.js";
 import { syncChecklistMarkWithPlan, resolveChecklistItem } from "../lib/chatChecklistPlanSync.js";
 import { observeChatMemory } from "../runtime/chatMemoryObserver.js";
@@ -3380,7 +3381,7 @@ async function deliverAgentReply(args: {
   const triggerTask = trigger.task_id ? `\nКонтекст задачи: ${trigger.task_id}` : "";
   const triggerFiles = trigger.attachments ? `\n[вложения: ${trigger.attachments}]` : "";
   const intentGuidance=role!=="secretary" && isOwner(trigger.from_user_id) ? await chatIntentBlockForMessage(trigger.id) : "";
-  const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}${intentGuidance}`;
+  const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}${intentGuidance}${(()=>{const line=crossChatNotice(trigger.id,chatId);return line?"\n"+line:"";})()}`;
 
   const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
   // Обсуждение карточки — изолированная комната: доставки в работу нет.

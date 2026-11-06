@@ -16,6 +16,7 @@ export type RoleRule = {
   channels?: RuleChannel[];
   /** Выключить правило из сборки; по умолчанию включено. */
   enabled?: boolean;
+  disabled_reason?: string;
   /** Для category «из кода»: условие применения, место в коде и данные, которые остаются в шаблоне. */
   condition?: string;
   /** kind=compose: порядок строк шаблона этого места кода (id строк, в том числе общих для нескольких шаблонов). */
