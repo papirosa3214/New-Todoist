@@ -35,7 +35,7 @@ describe("telegram secretary integration", () => {
     const first = await acceptTelegramInbound(input);
     const second = await acceptTelegramInbound(input);
     expect(first.duplicate).toBe(false);
-    expect(second).toEqual({ duplicate: true, ledger_id: first.ledger_id, message_id: first.message_id, ack_delivery_id: null });
+    expect(second).toMatchObject({ duplicate: true, ledger_id: first.ledger_id, message_id: first.message_id, ack_delivery_id: null });
     expect((db.prepare("SELECT COUNT(*) n FROM chat_messages WHERE id=?").get(first.message_id) as any).n).toBe(1);
     expect((db.prepare("SELECT COUNT(*) n FROM chat_message_queue WHERE delivery_id='tg:42:7'").get() as any).n).toBe(1);
     // Немедленного «Принял.» больше нет: приём не создаёт доставок.
@@ -57,7 +57,7 @@ describe("telegram secretary integration", () => {
   });
 
   it("rejects non-allowlisted principals before posting", async () => {
-    await expect(acceptTelegramInbound({ bot_id: "42", update_id: 8, chat_id: 101, user_id: 101, chat_type: "private", message_id: 56, text: "Нет" })).toThrow("principal_not_allowed");
+    await expect(acceptTelegramInbound({ bot_id: "42", update_id: 8, chat_id: 101, user_id: 101, chat_type: "private", message_id: 56, text: "Нет" })).rejects.toThrow("principal_not_allowed");
     expect((db.prepare("SELECT state FROM telegram_inbound_ledger WHERE update_id=8").get() as any).state).toBe("rejected");
   });
 
@@ -104,7 +104,7 @@ describe("telegram secretary integration", () => {
     const reply2 = "reply-reaction2-" + Date.now();
     db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES(?,?,?,'chat',?,?)").run(reply2, "u-secretary", "Готово", "chat-secretary", second.message_id);
     expect(captureTelegramFinal(reply2)).toBe(1);
-    const mark = db.prepare("SELECT kind,payload_json FROM telegram_delivery_outbox WHERE source_message_id=? AND payload_json LIKE '%setMessageReaction%'").get(reply2) as any;
+    const mark = db.prepare("SELECT kind,payload_json FROM telegram_delivery_outbox WHERE kind='final' AND payload_json LIKE '%setMessageReaction%' ORDER BY created_at DESC").get() as any;
     expect(mark.kind).toBe("final");
     expect(JSON.parse(mark.payload_json).reaction).toEqual([{ type: "emoji", emoji: "👍" }]);
     delete process.env.TASKFLOW_TELEGRAM_REACTIONS;
@@ -116,7 +116,7 @@ describe("telegram secretary integration", () => {
     const reply = "reply-failed-" + Date.now();
     db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id,stop_reason) VALUES(?,?,?,'chat',?,?,?)").run(reply, "u-secretary", "Сбой", "chat-secretary", first.message_id, "overflow");
     expect(captureTelegramFinal(reply)).toBe(1);
-    const mark = db.prepare("SELECT kind,payload_json FROM telegram_delivery_outbox WHERE source_message_id=? AND payload_json LIKE '%setMessageReaction%'").get(reply) as any;
+    const mark = db.prepare("SELECT kind,payload_json FROM telegram_delivery_outbox WHERE kind='error' AND payload_json LIKE '%setMessageReaction%' ORDER BY created_at DESC").get() as any;
     expect(mark.kind).toBe("error");
     expect(JSON.parse(mark.payload_json).reaction).toEqual([{ type: "emoji", emoji: "👎" }]);
     delete process.env.TASKFLOW_TELEGRAM_REACTIONS;

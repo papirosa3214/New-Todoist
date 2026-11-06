@@ -307,9 +307,9 @@ export function startTelegramStream(triggerMessageId: string, readText: () => st
   streamTimers.set(triggerMessageId, timer);
 }
 
-export async function acceptTelegramInbound(input: TelegramInbound): Promise<{ duplicate: boolean; ledger_id: string; message_id: string | null; ack_delivery_id: string | null }> {
+export async function acceptTelegramInbound(input: TelegramInbound): Promise<{ duplicate: boolean; ledger_id: string; message_id: string | null; ack_delivery_id: string | null; queue_row_id: string | null; chat_id: string; role_id: string }> {
   const existing = db.prepare("SELECT id,taskflow_message_id,ack_delivery_id FROM telegram_inbound_ledger WHERE bot_id=? AND update_id=?").get(String(input.bot_id), input.update_id) as { id: string; taskflow_message_id: string | null; ack_delivery_id: string | null } | undefined;
-  if (existing) return { duplicate: true, ledger_id: existing.id, message_id: existing.taskflow_message_id, ack_delivery_id: existing.ack_delivery_id };
+  if (existing) return { duplicate: true, ledger_id: existing.id, message_id: existing.taskflow_message_id, ack_delivery_id: existing.ack_delivery_id, queue_row_id: null, chat_id: SECRETARY_CHAT_ID, role_id: SECRETARY_USER_ID };
   const ledgerId = crypto.randomUUID();
   const hash = normalizedHash(input);
   db.prepare(`INSERT INTO telegram_inbound_ledger(id,bot_id,update_id,chat_id,user_id,message_id,payload_hash,state)
@@ -341,14 +341,14 @@ export async function acceptTelegramInbound(input: TelegramInbound): Promise<{ d
       db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(SECRETARY_CHAT_ID);
       db.prepare("UPDATE telegram_inbound_ledger SET state='posted',posted_at=datetime('now'),taskflow_message_id=? WHERE id=?").run(messageId, ledgerId);
     })();
-    enqueueMessageDelivery({ chatId: SECRETARY_CHAT_ID, roleId: SECRETARY_USER_ID, deliveryId: `tg:${input.bot_id}:${input.update_id}`, messageId, payload: { hop: 0, mode: "work", text: roleText } });
+    const durable = enqueueMessageDelivery({ chatId: SECRETARY_CHAT_ID, roleId: SECRETARY_USER_ID, deliveryId: `tg:${input.bot_id}:${input.update_id}`, messageId, payload: { hop: 0, mode: "work", text: roleText } });
     // Немедленного «Принял.» нет: Telegram получает статус только если ход
     // тянется дольше 10 секунд (scheduleTelegramProgress в чат-рантайме).
     // Реакция 👀 — сразу после успешного inbound: владелец видит, что запрос
     // принят, не дожидаясь статуса (выключатель TASKFLOW_TELEGRAM_REACTIONS).
-    enqueueTelegramReaction({ kind: "progress", chatId: String(input.chat_id), messageId: input.message_id, emoji: "👀", sourceMessageId: messageId });
+    enqueueTelegramReaction({ kind: "progress", chatId: String(input.chat_id), messageId: input.message_id, emoji: "👀", sourceMessageId: null });
     scheduleTelegramProgress(messageId);
-    return { duplicate: false, ledger_id: ledgerId, message_id: messageId, ack_delivery_id: null };
+    return { duplicate: false, ledger_id: ledgerId, message_id: messageId, ack_delivery_id: null, queue_row_id: durable.id, chat_id: SECRETARY_CHAT_ID, role_id: SECRETARY_USER_ID };
   } catch (error) {
     const code = error instanceof Error ? error.message : "inbound_failed";
     db.prepare("UPDATE telegram_inbound_ledger SET state='rejected',error_code=?,finished_at=datetime('now') WHERE id=?").run(code, ledgerId);
@@ -398,8 +398,10 @@ export function captureTelegramFinal(messageId: string): number {
     // Финал идёт со звуком: disable_notification не ставим (критерий владельца).
     enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload: { text: reply.text }, replyToMessageId: link.message_id, sourceMessageId: reply.id });
     // Прерванный ход или ошибка — 👎 на сообщении-триггере, успех — 👍.
+    // source_message_id не заполняем: уникальный индекс (source_message_id,kind='final')
+    // принадлежит самой доставке финала, а реакция — отдельное намерение.
     const failed = Boolean(reply.stop_reason) || Boolean(reply.partial);
-    enqueueTelegramReaction({ kind: failed ? "error" : "final", chatId: link.chat_id, messageId: link.message_id, emoji: failed ? "👎" : "👍", sourceMessageId: reply.id });
+    enqueueTelegramReaction({ kind: failed ? "error" : "final", chatId: link.chat_id, messageId: link.message_id, emoji: failed ? "👎" : "👍", sourceMessageId: null });
     count++;
   }
   return count;

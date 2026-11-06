@@ -1,3 +1,4 @@
+import { recoverAgentDelivery } from "./chats.js";
 import type { FastifyInstance } from "fastify";
 import { telegramCommands, TELEGRAM_COMMANDS_ROLE, TELEGRAM_COMMANDS_MODE } from "../lib/telegramCommands.js";
 import {
@@ -35,6 +36,15 @@ export function registerTelegramIntegrationRoutes(app: FastifyInstance) {
   app.post("/api/integrations/telegram/inbound", { preHandler: auth }, async (req: any, reply) => {
     try {
       const result = await acceptTelegramInbound(req.body);
+      // Сообщение из Telegram — обычный ход роли, а не «доставка на потом».
+      // Раньше здесь только писалась строка очереди, и без клиента TaskFlow
+      // её подбирал лишь периодический sweep (раз в 10 минут) — владелец
+      // видел «очередь» вместо ответа. Запускаем тот же путь, что и вопрос
+      // владельца роли: recoverAgentDelivery сам сериализует ход (FIFO).
+      if (!result.duplicate && result.queue_row_id) {
+        void recoverAgentDelivery({ chatId: result.chat_id, roleId: result.role_id, queueRowId: result.queue_row_id })
+          .catch((error) => console.warn("[telegram] ход по входящему не поехал:", error));
+      }
       return reply.code(result.duplicate ? 200 : 202).send(result);
     } catch (error) {
       const code = error instanceof Error ? error.message : "inbound_failed";
