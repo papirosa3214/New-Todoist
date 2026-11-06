@@ -1792,6 +1792,18 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       plan_tree: tree.filter(visible),
     };
   });
+  // Удалить чек-лист роли (владелец 06.11.2026: «по долгому нажатию удалял
+  // чек-листы в чатах»). Только владелец: роль свой план ведёт инструментом.
+  // Удаляется план роли и в самом чате, и в его ветках — как при новой сессии.
+  app.delete<{ Params: { id: string; roleId: string } }>("/api/chats/:id/work-plans/:roleId", { preHandler: authPre }, async (req: any, reply) => {
+    const chatId = req.params.id;
+    if (!db.prepare("SELECT 1 FROM chats WHERE id = ?").get(chatId)) return reply.code(404).send({ error: "Чат не найден" });
+    if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({ error: "Удалить чек-лист может только владелец" });
+    const roleId = req.params.roleId;
+    clearChatWorkPlan(chatId, roleId);
+    broadcastToUsers(memberIds(chatId).concat(ownerIdsForChat(chatId)), { type: "chat:work_plan", chat_id: chatId, plan: { chat_id: chatId, role_id: roleId, revision: 0, items: [] } });
+    return { ok: true };
+  });
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
     return (
