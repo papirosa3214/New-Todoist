@@ -149,6 +149,7 @@ export function registerOwnerSessionRoutes(
       cwd: session.cwd,
       name: session.name,
       parentSession: session.parentSessionPath,
+      relation: session.relation,
     }));
     return { sessions };
   });

@@ -17,6 +17,10 @@ import {
 } from "./spawnChildSessionTool.js";
 
 export type OwnerSessionPromptMode = "prompt" | "steer" | "follow_up";
+export type OwnerSessionRelation = "root" | "fork" | "subagent";
+export type OwnerSessionListItem = SessionInfo & { relation: OwnerSessionRelation };
+
+const SESSION_RELATION_ENTRY = "taskflow.session-relation";
 
 export interface OwnerAgentSession {
   readonly sessionManager: SessionManager;
@@ -37,6 +41,7 @@ export interface OwnerSessionSnapshot {
   cwd: string;
   sessionFile?: string;
   parentSession?: string;
+  relation: OwnerSessionRelation;
   name?: string;
   leafId: string | null;
   isStreaming: boolean;
@@ -139,8 +144,12 @@ export class OwnerSessionRuntime {
     return this.snapshot(this.rootSessionId);
   }
 
-  async list(): Promise<SessionInfo[]> {
-    return SessionManager.list(this.cwd, this.sessionDir);
+  async list(): Promise<OwnerSessionListItem[]> {
+    const sessions = await SessionManager.list(this.cwd, this.sessionDir);
+    return sessions.map(session => ({
+      ...session,
+      relation: this.relation(SessionManager.open(session.path, this.sessionDir, this.cwd)),
+    }));
   }
 
   async open(id: string): Promise<OwnerSessionSnapshot> {
@@ -205,6 +214,7 @@ export class OwnerSessionRuntime {
     const forkFile = forkBuilder.createBranchedSession(entryId);
     if (!forkFile) throw new OwnerSessionBranchError(`Pi did not persist fork for ${id}`);
     const forkManager = SessionManager.open(forkFile, this.sessionDir, this.cwd);
+    forkManager.appendCustomEntry(SESSION_RELATION_ENTRY, { kind: "fork" });
     const fork = await this.install(forkManager);
     return this.snapshot(fork.manager.getSessionId());
   }
@@ -227,11 +237,12 @@ export class OwnerSessionRuntime {
       cwd: handle.manager.getCwd(),
       sessionFile: handle.manager.getSessionFile(),
       parentSession: header?.parentSession,
+      relation: this.relation(handle.manager),
       name: handle.manager.getSessionName(),
       leafId: handle.manager.getLeafId(),
       isStreaming: handle.session.isStreaming,
       isIdle: handle.session.isIdle,
-      entries: handle.manager.getBranch(),
+      entries: handle.manager.getBranch().filter(entry => !this.isRelationEntry(entry)),
       tree: handle.manager.getTree(),
     };
   }
@@ -305,6 +316,7 @@ export class OwnerSessionRuntime {
     }
     const cwd = request.cwd || parent.manager.getCwd();
     const manager = SessionManager.create(cwd, this.sessionDir, { parentSession: parentFile });
+    manager.appendCustomEntry(SESSION_RELATION_ENTRY, { kind: "subagent" });
     const session = await this.createSession(manager, { tools: request.tools, customTools: [] });
     const handle: SessionHandle = { manager, session, listeners: new Set() };
     this.handles.set(manager.getSessionId(), handle);
@@ -314,5 +326,15 @@ export class OwnerSessionRuntime {
       parentSession: parentFile,
       session,
     };
+  }
+
+  private relation(manager: SessionManager): OwnerSessionRelation {
+    if (!manager.getHeader()?.parentSession) return "root";
+    const marker = [...manager.getEntries()].reverse().find(entry => this.isRelationEntry(entry)) as any;
+    return marker?.data?.kind === "subagent" ? "subagent" : "fork";
+  }
+
+  private isRelationEntry(entry: SessionEntry): boolean {
+    return entry.type === "custom" && (entry as any).customType === SESSION_RELATION_ENTRY;
   }
 }

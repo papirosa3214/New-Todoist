@@ -12,6 +12,7 @@ const rootSnapshot: OwnerSessionSnapshot = {
   id: "root-session",
   cwd: "/workspace",
   sessionFile: "/sessions/root.jsonl",
+  relation: "root",
   leafId: "entry-1",
   isStreaming: false,
   isIdle: true,
@@ -29,7 +30,7 @@ class FakeRuntime {
   async openRoot() { return rootSnapshot; }
   async open(id: string) { return this.snapshot(id); }
   async list() {
-    return [{ id: rootSnapshot.id, cwd: rootSnapshot.cwd, name: "Owner assistant", parentSessionPath: undefined }];
+    return [{ id: rootSnapshot.id, cwd: rootSnapshot.cwd, name: "Owner assistant", parentSessionPath: undefined, relation: "root" }];
   }
   async snapshot(id: string) {
     if (id === "missing") throw new OwnerSessionNotFoundError(id);
@@ -46,7 +47,7 @@ class FakeRuntime {
   }
   async fork(id: string, entryId: string) {
     this.forkCalls.push([id, entryId]);
-    return { ...rootSnapshot, id: "fork-session", parentSession: rootSnapshot.sessionFile };
+    return { ...rootSnapshot, id: "fork-session", parentSession: rootSnapshot.sessionFile, relation: "fork" };
   }
   async subscribe(id: string, listener: (event: any) => void) {
     const listeners = this.listeners.get(id) ?? new Set();
@@ -104,7 +105,9 @@ describe("owner session API", () => {
 
     expect(opened.statusCode).toBe(200);
     expect(opened.json()).toEqual({ session: rootSnapshot });
-    expect(listed.json()).toEqual({ sessions: [{ id: "root-session", cwd: "/workspace", name: "Owner assistant" }] });
+    expect(listed.json()).toEqual({
+      sessions: [{ id: "root-session", cwd: "/workspace", name: "Owner assistant", relation: "root" }],
+    });
     expect(snapshot.json()).toEqual({ session: rootSnapshot });
     expect(runtime.listeners.get("root-session")?.size).toBe(1);
   });

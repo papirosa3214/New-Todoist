@@ -98,6 +98,7 @@ describe("OwnerSessionRuntime", () => {
     const reopened = await secondRuntime.openRoot();
 
     expect(reopened.id).toBe(first.id);
+    expect(reopened.relation).toBe("root");
     expect(reopened.entries).toHaveLength(1);
   });
 
@@ -167,8 +168,12 @@ describe("OwnerSessionRuntime", () => {
 
     expect(forked.id).not.toBe(root.id);
     expect(forked.parentSession).toBe(parentBefore.sessionFile);
+    expect(forked.relation).toBe("fork");
     expect(forked.entries.map(entry => entry.id)).toEqual(parentBefore.entries.map(entry => entry.id));
     expect(parentAfter.entries).toEqual(parentBefore.entries);
+
+    const reopened = await new OwnerSessionRuntime(h).open(forked.id);
+    expect(reopened.relation).toBe("fork");
   });
 
   it("moves external listeners exactly once when branch replaces the SDK session", async () => {
