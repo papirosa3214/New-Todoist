@@ -6,6 +6,7 @@ import {
   type AgentSessionEvent,
   type AgentSessionEventListener,
   type SessionEntry,
+  type SessionInfo,
   type SessionTreeNode,
 } from "@earendil-works/pi-coding-agent";
 
@@ -113,6 +114,10 @@ export class OwnerSessionRuntime {
     const handle = await this.install(manager);
     this.rootSessionId = handle.manager.getSessionId();
     return this.snapshot(this.rootSessionId);
+  }
+
+  async list(): Promise<SessionInfo[]> {
+    return SessionManager.list(this.cwd, this.sessionDir);
   }
 
   async open(id: string): Promise<OwnerSessionSnapshot> {
