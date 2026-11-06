@@ -156,8 +156,34 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const refusalEvent={scope:input.taskId?"task":"chat",itemId:input.subtaskId??input.taskId??input.chatId??null};
  // SDK validates native schemas before execute(). Such refusals must not vanish
  // from counters or evade the existing three-mistake stop policy.
+ // Вызов операции, которой нет в активном наборе: сервер подключает её и тут же выполняет
+ // тот же вызов с теми же аргументами (06.11.2026) — без ошибки и без повторного хода.
+ const startArgs=new Map<string,any>();
+ const autoHandled=new Set<string>();
+ const onAgentEvent=async(event:any,signal?:AbortSignal):Promise<void>=>{
+  if(event?.type==="tool_execution_start"){startArgs.set(event.toolCallId,event.args);return;}
+  if(event?.type!=="tool_execution_end")return;
+  const args=startArgs.get(event.toolCallId);startArgs.delete(event.toolCallId);
+  if(!event.isError||args===undefined)return;
+  // Только операции, разрешённые роли и режиму (aliases отфильтрованы operationRestriction);
+  // остальное — прежний отказ. Неверные аргументы тоже идут прежним путём: роль увидит схему.
+  const tool=nativeByName.get(event.toolName);
+  if(!tool||!isToolNotInCatalogText(toolResultText(event.result)))return;
+  if(!Check(tool.parameters,args))return;
+  autoHandled.add(event.toolCallId);
+  rememberOnDemandTool(scope,tool.name);loader.activate([tool.name]);
+  // Отдельное действие учёта: не «invoke», поэтому счётчики ошибок и сторож его не видят.
+  recordToolAudit({...context,...refusalEvent,action:"auto_connect",tool:tool.name,operation:tool.name,outcome:"ok",errorMessage:"auto_connected"});
+  try{
+   const result:any=await tool.execute(event.toolCallId,args,signal);
+   event.result.content=result?.content??[];event.result.details=result?.details;event.isError=false;
+  }catch(error:any){
+   event.result.content=[{type:"text",text:String(error?.message??error)}];
+  }
+ };
  const onToolExecutionEnd=(event:any):boolean=>{
   if(event.type!=="tool_execution_end")return false;
+  if(autoHandled.delete(event.toolCallId)){handledCalls.delete(event.toolCallId);return false;}
   if(handledCalls.delete(event.toolCallId))return false;
   if(!event.isError)return false;
   // Pi не кладёт args в событие — причина отказа живёт в тексте результата.
@@ -200,7 +226,7 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  // Активно ядро и загрузчик: остальные операции ждут подключения по требованию.
  // Реестр сессии при этом полный — подключать можно всё, что роль имеет право.
  const activeNames=[...core.map(tool=>tool.name),loader.tool.name];
- return {activeNames,registeredNames:[...aliases.map(tool=>tool.name),loader.tool.name],customTools:[universal,...aliases,loader.tool],operations,context,scope,loader,onToolExecutionEnd,
+ return {activeNames,registeredNames:[...aliases.map(tool=>tool.name),loader.tool.name],customTools:[universal,...aliases,loader.tool],operations,context,scope,loader,onToolExecutionEnd,onAgentEvent,
   attachSession:(session:any)=>loader.attach(session)};
 }
 
@@ -234,6 +260,15 @@ export function installNativeToolSchemas(session:any,catalog:ReturnType<typeof b
   const next=(await previous?.(payload,model))??payload;
   return model?.api==="anthropic-messages" ? restoreNativeToolSchemas(next,catalog.customTools) : next;
  };
+ // Слушатель агента ждётся ядром Pi: подключение и выполнение идут до того, как
+ // результат станет сообщением. Встаём первыми, чтобы сессионный сторож видел готовый исход.
+ const agent=session.agent;
+ if(typeof agent.subscribe==="function"){
+  const earlier=agent.listeners instanceof Set?[...agent.listeners]:[];
+  if(earlier.length)agent.listeners.clear();
+  agent.subscribe(catalog.onAgentEvent);
+  for(const listener of earlier)agent.listeners.add(listener);
+ }
  session.subscribe((event:any)=>{
   if(catalog.onToolExecutionEnd(event))void session.abort();
  });
