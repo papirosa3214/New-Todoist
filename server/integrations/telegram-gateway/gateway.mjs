@@ -259,8 +259,11 @@ async function sendDelivery(delivery, payload) {
   const method = String(payload.method || "sendMessage");
   const key = payload.reply_to_message_id ? `${delivery.chat_id}:${payload.reply_to_message_id}` : null;
   const text = String(payload.text || "").slice(0, STATUS_TEXT_MAX);
-  // Финал или ошибка закрывают ход — гасим «печатает…».
+  // Финал или ошибка закрывают ход — гасим «печатает…». Любая промежуточная
+  // доставка ход открывает: так статус встаёт и после перезапуска шлюза,
+  // когда inbound уже не придёт.
   if (delivery.kind === "final" || delivery.kind === "error") stopTyping(delivery.chat_id);
+  else startTyping(delivery.chat_id);
 
   if (method === "setMessageReaction") {
     if (!reactionsEnabled) { await settle(delivery, { ok: true }); return; }
