@@ -1,4 +1,5 @@
 // Исходные шаблоны TaskFlow; динамические значения подставляет renderInstruction.
+import { hasRegistrySite, registryConditionOf, registryTextOr } from "../lib/roleRules.js";
 import { newWidgetTypesEnabled } from "../lib/widgetFeatureFlag.js";
 import {
   NEW_WIDGET_STATES,
@@ -643,3 +644,22 @@ unassigned — активные без исполнителя.
   // шаг считается начатым с неполной версией правил.
   "rules.pending_acknowledgement": "Это блок-каркас. Сервер собирает его динамически по `agent_rules_manifests`/`rule_acknowledgements`. Если блок пришёл пустым — все активные правила для роли подтверждены; если непустым — нужно либо подтвердить каждое правило через taskflow_rule_acknowledge, либо мотивировать отказ отдельным taskflow_comment с пометкой «нужна помощь владельца».",
 };
+
+// Правила из реестра (category «из кода»): текст шаблона берётся выборкой по условию, литерал — запасной
+// путь при role_registry_enabled=false. Данные ({history}, {taskId} и т. п.) остаются подстановками.
+const registryOverrides = new Map<string, string>();
+for (const key of Object.keys(INSTRUCTION_DEFAULTS)) {
+  const site = "defaults:" + key;
+  const condition = hasRegistrySite(site) ? registryConditionOf(site) : null;
+  if (!condition) continue;
+  const literal = INSTRUCTION_DEFAULTS[key];
+  const current = () => registryTextOr(condition, site, literal, key.startsWith("secretary.") ? "secretary" : undefined);
+  Object.defineProperty(INSTRUCTION_DEFAULTS, key, {
+    enumerable: true, configurable: true,
+    get: () => (registryOverrides.has(key) ? registryOverrides.get(key)! : current()),
+    // Реестр слоёв пишет обратно то, что прочитал: такое значение не фиксируем, иначе выключатель не сработает.
+    set: (value: string) => { if (value !== literal && value !== current()) registryOverrides.set(key, value); },
+  });
+}
+export const planRoleHelpPolicy = (): string =>
+  registryTextOr("карточка: все шаги", "defaults:PLAN_ROLE_HELP_POLICY", PLAN_ROLE_HELP_POLICY);

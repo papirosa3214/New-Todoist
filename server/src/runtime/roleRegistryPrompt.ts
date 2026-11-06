@@ -2,16 +2,11 @@
 // Выключатель: настройка role_registry_enabled; false — прежний путь (SYSTEM.md + AGENTS.md + behavior).
 import crypto from "node:crypto";
 import db from "../db.js";
-import { getSetting } from "../lib/serverSettings.js";
-import { renderRules, rulesFor, type RuleChannel } from "../lib/roleRules.js";
+import { registryEnabled, renderRules, rulesFor, type RuleChannel } from "../lib/roleRules.js";
 import { genderInstruction } from "./roleBehavior.js";
 import { placeholderValues, roleHome } from "./roleHome.js";
 
-export function registryEnabled(): boolean {
-  // Явное отключение окружением (процесс/тесты прежнего пути) главнее настройки.
-  if (process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED === "false") return false;
-  try { return (getSetting("role_registry_enabled") as boolean) !== false; } catch { return true; }
-}
+export { registryEnabled };
 
 export type RegistryBuild = { text: string; ids: string[]; hash: string };
 /** Правила роли без строки о роде; id ушедших правил пишутся в журнал role_rules_log. */

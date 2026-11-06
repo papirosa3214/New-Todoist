@@ -19,6 +19,7 @@ import {
   installNativeToolCore,
   installNativeToolSchemas,
   ROLE_TOOL_INSTRUCTION,
+  roleToolInstruction,
 } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import { connectRoleMcp } from "./graftMcp.js";
@@ -1537,7 +1538,7 @@ async function startChatRunOnce(
     const chatPlanPrompt = chatWorkPlanPrompt(input.chatId, input.roleId);
     const systemPrompt = chatTurnSystemText(role,
       await preparation.wait(chatSystemPrompt(role,mode,cwd,input.chatId)),
-      [chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)),ROLE_TOOL_INSTRUCTION,chatPlanPrompt??""]);
+      [chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)),roleToolInstruction(),chatPlanPrompt??""]);
     const resourceLoader = await preparation.wait(createTaskResourceLoader(
       role,
       cwd,

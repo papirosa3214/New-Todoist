@@ -8,7 +8,7 @@ import {installSteeringBoundary} from "./steeringBoundary.js";
 import {queueWorkCoordination,markDeliveredToWork,traceCoordination} from "./chatCoordination.js";
 import { reserveReviewRun, assertReviewRunAllowed, finishReviewRun } from "./reviewRunBudget.js";
 import { chatTools } from "./chatTools.js";
-import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION } from "./roleToolCatalog.js";
+import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION, roleToolInstruction } from "./roleToolCatalog.js";
 import { teamReadTools } from "./teamReadTools.js";
 import { allRoles } from "../roleRouting.js";
 import { roleToolAllowed } from "../lib/roleToolScope.js";
@@ -30,7 +30,7 @@ import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import { secretaryAppleTools } from "./secretaryAppleTools.js";
 import { openMidPlanCritic } from "./planSubtaskAdmission.js";
 import { ensureResultVersionForReview } from "../resultVersions.js";
-import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
+import { PLAN_ROLE_HELP_POLICY, planRoleHelpPolicy } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { pickRecipientSlot } from "./roleMessageWait.js";
 import { connectRoleMcp } from "./graftMcp.js";
@@ -1528,9 +1528,9 @@ async function runRoleInProcessUnserialized(input: {
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     teamStructureText(role),
     clockLine(),
-    ROLE_TOOL_INSTRUCTION,
+    roleToolInstruction(),
     (role==="critic_verifier" ? oneShotReviewInstruction(taskId) : null) ?? ROLE_REPORT_INSTRUCTION,
-    ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, SUBMISSION_POLICY] : []),
+    ...(input.subtaskId ? [planRoleHelpPolicy(), SUBMISSION_POLICY] : []),
     // Срез знаний роли (шаг 4 схемы базы знаний, заметка cfa5cdcd): чтобы
     // роль не просыпалась в вакуум. Только заметки с постоянной категорией
     // и без текущей задачи; пустой срез не вставляется.

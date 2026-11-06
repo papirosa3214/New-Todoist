@@ -1,3 +1,4 @@
+import { registryTextOr } from "../lib/roleRules.js";
 /** A mode belongs to one queued turn, including handoffs. */
 export type ChatWorkMode = "work" | "plan" | "deep_research" | "discussion" | "goal";
 export function parseChatWorkMode(value: unknown): ChatWorkMode {
@@ -16,6 +17,9 @@ export const PLANNING_TOOLS = [
   "taskflow_inspect",
 ];
 export function chatModeInstruction(mode: ChatWorkMode): string {
+  return registryTextOr("режим: " + mode, "mode:" + mode, chatModeInstructionLiteral(mode));
+}
+function chatModeInstructionLiteral(mode: ChatWorkMode): string {
   switch (mode) {
     // Владелец 20.10.2026: в обсуждении он так же поручает работу и заводит
     // карточки — полномочия те же, что в режиме «Работа».

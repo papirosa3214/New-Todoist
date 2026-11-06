@@ -1,3 +1,4 @@
+import { registryTextOr } from "../lib/roleRules.js";
 import { CARD_WORK_OPERATIONS, type ChatExecutionMode } from "./chatExecutionMode.js";
 import crypto from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -829,8 +830,10 @@ const СЛУЖЕБНЫЕ = new Set([
   "limit",
 ]);
 
-export const UNIVERSAL_INSTRUCTION =
+const UNIVERSAL_INSTRUCTION_LITERAL =
   "Серверные возможности доступны через один инструмент taskflow. Любая роль может работать с Mac через host: discover taskflow_hosts, затем taskflow_host_read/bash/edit/write/grep/find/ls. Назначение машины этапу и утверждение плана для доступа к host не нужны. При одном проекте машина и проект выбираются автоматически; для другого проекта на машине (например, iOS-репозитория из веб-карточки) передай project_id из taskflow_hosts. Рабочая копия создаётся в песочнице проекта. Сборка, тесты и симулятор — через host bash (долгим командам — timeout в секундах); прямой ssh не используется. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем вызови с operation и arguments (action, version и request_id сервер подставит сам; при осознанном повторе того же действия передай прежний request_id). Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующую без поиска. Каждый отказ несёт поле hint — что делать дальше: читай его и выполняй по шагам, а не перебирай вызовы вслепую.";
+export const UNIVERSAL_INSTRUCTION = UNIVERSAL_INSTRUCTION_LITERAL;
+export const universalInstruction = (): string => registryTextOr("инструменты: всегда", "tools:UNIVERSAL_INSTRUCTION", UNIVERSAL_INSTRUCTION_LITERAL);
 const CALL_CHEATSHEET = `
 Шпаргалка: печатай вызов инструмента taskflow как JSON-объект. Пиши только operation и arguments — остальное сервер подставит сам.
 1. Поиск: {"query":"сводка по задачам"}.
@@ -888,7 +891,7 @@ export function createUniversalTaskflow(
   // ошибок (внутренняя) и учёт вызовов (внешняя).
   const api: Tool = {
     name: "taskflow",
-    description: UNIVERSAL_INSTRUCTION + CALL_CHEATSHEET,
+    description: universalInstruction() + CALL_CHEATSHEET,
     parameters: Type.Object({
       action: Type.Optional(
         Type.Union([

@@ -2,19 +2,26 @@
 // Читается с кешем по mtime: правка файла подхватывается без рестарта.
 import fs from "node:fs";
 import path from "node:path";
+import { getSetting } from "./serverSettings.js";
 
 export type RuleChannel = "chat" | "card" | "voice";
 export type RoleRule = {
   id: string;
   old_id?: string;
   text: string;
-  kind: "rule" | "data" | "character";
+  kind: "rule" | "data" | "character" | "compose";
   category: string;
   roles: "all" | string[];
   where?: string;
   channels?: RuleChannel[];
   /** Выключить правило из сборки; по умолчанию включено. */
   enabled?: boolean;
+  /** Для category «из кода»: условие применения, место в коде и данные, которые остаются в шаблоне. */
+  condition?: string;
+  /** kind=compose: порядок строк шаблона этого места кода (id строк, в том числе общих для нескольких шаблонов). */
+  ids?: string[];
+  site?: string;
+  data_part?: string;
   sources?: Array<{ file: string; line: number; section: string }>;
 };
 export const ALL_CHANNELS: RuleChannel[] = ["chat", "card", "voice"];
@@ -89,4 +96,42 @@ export function renderRules(rules: RoleRule[], subst: Record<string, string> = {
   let result = out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
   for (const [key, value] of Object.entries(subst)) result = result.split("{{" + key + "}}").join(value);
   return result;
+}
+
+// ---- Правила из кода (category «из кода»): выборка по условию вместо литералов в коде ----
+export function registryEnabled(): boolean {
+  // Явное отключение окружением (процесс/тесты прежнего пути) главнее настройки.
+  if (process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED === "false") return false;
+  try { return (getSetting("role_registry_enabled") as boolean) !== false; } catch { return true; }
+}
+export const CODE_CATEGORY = "из кода";
+function codeRows(condition: string, site: string | undefined, role?: string): RoleRule[] {
+  const all = loadRoleRules();
+  const ok = (r: RoleRule) => r.category === CODE_CATEGORY && r.enabled !== false && (r.roles === "all" || !role || r.roles.includes(role));
+  // Место кода со составом (общие блоки в нескольких шаблонах): строки берутся по списку id в порядке шаблона.
+  const compose = site === undefined ? undefined : all.find((r) => r.kind === "compose" && r.site === site && r.condition === condition && ok(r));
+  if (compose?.ids) {
+    const byId = new Map(all.map((r) => [r.id, r]));
+    return compose.ids.map((id) => byId.get(id)).filter((r): r is RoleRule => !!r && r.enabled !== false);
+  }
+  return all.filter((r) => ok(r) && r.kind !== "compose" && r.condition === condition && (site === undefined || r.site === site));
+}
+/** Текст шаблона по условию: строки правил в порядке файла; данные-подстановки ({history} и т. п.) остаются на месте. */
+export function registryText(condition: string, role?: string, site?: string): string {
+  return codeRows(condition, site, role)
+    .map((r) => [r.text, r.data_part].filter((x) => x && x.length).join("\n"))
+    .filter((x) => x.length)
+    .join("\n");
+}
+/** Выборка из реестра; при выключенном реестре, отсутствии файла или правил — прежний текст из кода. */
+export function registryTextOr(condition: string, site: string | undefined, fallback: string, role?: string): string {
+  if (!registryEnabled()) return fallback;
+  try { return registryText(condition, role, site) || fallback; } catch { return fallback; }
+}
+/** Есть ли в реестре строки этого места кода (для привязки при импорте). */
+export function hasRegistrySite(site: string): boolean {
+  try { return loadRoleRules().some((r) => r.category === CODE_CATEGORY && r.site === site); } catch { return false; }
+}
+export function registryConditionOf(site: string): string | null {
+  try { return loadRoleRules().find((r) => r.category === CODE_CATEGORY && r.site === site)?.condition ?? null; } catch { return null; }
 }

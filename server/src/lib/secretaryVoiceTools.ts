@@ -7,13 +7,13 @@ import {chatExecutionMode} from "../runtime/chatExecutionMode.js";
 import db from "../db.js";
 import { isOwner } from "../access.js";
 import { roleTitle } from "../roleRouting.js";
-import { buildRoleToolCatalog, installNativeToolCore, ROLE_TOOL_INSTRUCTION } from "../runtime/roleToolCatalog.js";
+import { buildRoleToolCatalog, installNativeToolCore, roleToolInstruction } from "../runtime/roleToolCatalog.js";
 import { secretaryThings3Tools } from "../runtime/secretaryThings3Tools.js";
 
 /** Обязательная часть инструкции звонка: дописывается к редактируемому характеру,
  *  чтобы правка характера не лишала Помощника владельца знания о своих инструментах. */
 export const VOICE_TOOLS_GUIDE = [
-  ROLE_TOOL_INSTRUCTION,
+  roleToolInstruction(),
   "Тебя слушают: без эмодзи и markdown, технические id вслух не произноси.",
   "Голос и переписка используют одинаковые отдельные инструменты. Старые taskflow, create_task, task_summary, task_details, role_load, send_to_owner_chat в истории — прежние имена: используй текущие схемы, недостающие найди через taskflow_tools.",
   "Просьбу прислать текст или файл в чат выполняй штатным инструментом текущего чата. Не объявляй действие успешным до ответа инструмента.",

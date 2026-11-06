@@ -1,3 +1,4 @@
+import { registryTextOr } from "../lib/roleRules.js";
 import {chatExecutionMode,type ChatExecutionMode} from "./chatExecutionMode.js";
 import {roleHostAccessTools} from "./roleHostAccess.js";
 import {createHostRoleTools} from "./hostRoleTools.js";
@@ -16,7 +17,9 @@ import {createToolLoader,onDemandScopeKey,onDemandTools,rememberOnDemandTool,TOO
 import {createRoleSubagentCallTool,createRoleSubagentSteerTool,isSubagentRun,resetSubagentCallCounters,ROLE_SUBAGENT_CALL_TOOL,ROLE_SUBAGENT_STEER_TOOL} from "./roleSubagentCall.js";
 import {createSecretaryOpenBranchTool} from "./secretaryVoiceBranch.js";
 export {UNIVERSAL_INSTRUCTION};
-export const ROLE_TOOL_INSTRUCTION = "Инструменты доступны отдельными именами с точными JSON Schema. Вызывай нужный инструмент напрямую: параметры передавай ровно по его схеме, без обёртки operation/arguments и без предварительного discover/describe. Не выдумывай поля, имена инструментов и значения-заглушки. Проверка прав, контекста и аргументов выполняется до действия. Если вызов отклонён, прочитай ошибку и исправь указанный параметр; не повторяй прежний неверный вызов. После трёх одинаковых неверных вызовов ход останавливается. Старый taskflow в истории — прежний способ вызова тех же операций; в новом ходе используй показанные нативные инструменты. Нужного инструмента может не быть в списке: тогда вызови taskflow_tools — он покажет индекс операций и подключит нужные; права при этом не расширяются. Возможность не означает разрешение: соблюдай режим чата/карточки и явное поручение владельца.";
+const ROLE_TOOL_INSTRUCTION_LITERAL = "Инструменты доступны отдельными именами с точными JSON Schema. Вызывай нужный инструмент напрямую: параметры передавай ровно по его схеме, без обёртки operation/arguments и без предварительного discover/describe. Не выдумывай поля, имена инструментов и значения-заглушки. Проверка прав, контекста и аргументов выполняется до действия. Если вызов отклонён, прочитай ошибку и исправь указанный параметр; не повторяй прежний неверный вызов. После трёх одинаковых неверных вызовов ход останавливается. Старый taskflow в истории — прежний способ вызова тех же операций; в новом ходе используй показанные нативные инструменты. Нужного инструмента может не быть в списке: тогда вызови taskflow_tools — он покажет индекс операций и подключит нужные; права при этом не расширяются. Возможность не означает разрешение: соблюдай режим чата/карточки и явное поручение владельца.";
+export const roleToolInstruction = (): string => registryTextOr("инструменты: всегда", "tools:ROLE_TOOL_INSTRUCTION", ROLE_TOOL_INSTRUCTION_LITERAL);
+export const ROLE_TOOL_INSTRUCTION = ROLE_TOOL_INSTRUCTION_LITERAL;
 /** Ядро: операции, без которых ход не начинается (сориентироваться, взять
  * слот) и не закрывается (план, комментарий, сдача шага). Отбор — по частоте
  * за 14 дней (role_tool_audit) и по обязательности шага. Остальное подключает

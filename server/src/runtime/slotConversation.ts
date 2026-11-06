@@ -1,7 +1,7 @@
 import {registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import { roleInstructionText } from "./roleHome.js";
 import {connectRoleMcp} from "./graftMcp.js";
-import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION } from "./roleToolCatalog.js";
+import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION, roleToolInstruction } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import crypto from "node:crypto";
 import { createAgentSession,createReadOnlyTools,SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -60,7 +60,7 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
     // короткая сессия, в рабочий файл слота он не заходит и ничего не дописывает.
     const manager=scoped ? openDiscussionSession(input.taskId,input.role,input.subtaskId,SLOT_CHAT_SESSION,slotWorkspace(input.taskId)) : openSlotSession(input.taskId,input.role,input.subtaskId,slotWorkspace(input.taskId));
     const cwd=manager.getCwd();
-    const policy=ROLE_TOOL_INSTRUCTION+"\n\n"+ (scoped ? "Сейчас чат задачи: ты отчитываешься владельцу по выжимке своей работы, рабочей истории здесь нет. Нужны подробности — читай файлы и документы задачи. Менять ничего нельзя: ни файлы, ни статусы, ни план. До 100 слов; блок до 50." : "Сейчас разговорный ход того же рабочего этапа. Отвечай с учётом сохранённой истории работы. Не возобновляй работу, не выполняй рабочие операции, не меняй файлы проекта, статусы, назначения, план и настройки. Доступны чтение, обсуждение, консультация и чтение документов. Для записи нужен рабочий ход. До 100 слов; блок до 50. Полный отчёт не повторяй, ссылайся на документы. Предыдущие рабочие команды истории в этом ходе не выполняй.");
+    const policy=roleToolInstruction()+"\n\n"+ (scoped ? "Сейчас чат задачи: ты отчитываешься владельцу по выжимке своей работы, рабочей истории здесь нет. Нужны подробности — читай файлы и документы задачи. Менять ничего нельзя: ни файлы, ни статусы, ни план. До 100 слов; блок до 50." : "Сейчас разговорный ход того же рабочего этапа. Отвечай с учётом сохранённой истории работы. Не возобновляй работу, не выполняй рабочие операции, не меняй файлы проекта, статусы, назначения, план и настройки. Доступны чтение, обсуждение, консультация и чтение документов. Для записи нужен рабочий ход. До 100 слов; блок до 50. Полный отчёт не повторяй, ссылайся на документы. Предыдущие рабочие команды истории в этом ходе не выполняй.");
     // AGENTS.md роли подключает сам загрузчик — сюда только общий шаблон.
     resources=await createTaskResourceLoader(input.role,cwd,[roleInstructionText(input.role,{withAgents:false}),policy].join("\n\n"));
     const builtin=createReadOnlyTools(cwd).filter(tool=>TASK_CHAT_FILE_TOOLS.includes(tool.name));
