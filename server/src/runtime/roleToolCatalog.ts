@@ -21,31 +21,28 @@ export const ROLE_TOOL_INSTRUCTION = "Инструменты доступны о
  * слот) и не закрывается (план, комментарий, сдача шага). Отбор — по частоте
  * за 14 дней (role_tool_audit) и по обязательности шага. Остальное подключает
  * загрузчик по требованию: весь каталог в каждый запрос не уходит. */
-const CORE_OPERATIONS = new Set([
-  "taskflow_routines", "taskflow_routine_read",
-  "taskflow_task", "taskflow_task_summary",
-  "taskflow_work_plan", "taskflow_work_item_submit", "taskflow_plan_read", "taskflow_plan_ops", "taskflow_plan_request", "taskflow_mission_contract",
-  "taskflow_subtask_work", "taskflow_subtask_done", "taskflow_subtask_add",
-  "taskflow_state", "taskflow_heartbeat", "taskflow_claim", "taskflow_slot_status", "taskflow_slot_snapshot",
-  "taskflow_comment", "taskflow_topic_send", "taskflow_topic_read",
-  "taskflow_chat_send", "taskflow_chat_read",
-  "taskflow_doc_read", "taskflow_docs", "taskflow_kb_search", "taskflow_recall",
-  // Запись в память — в ядре рядом с чтением (30.10–02.11.2026): без него
-  // первый вызов в ходе давал «Tool taskflow_remember not found», сервер
-  // писал TOOL_NOT_CONNECTED, а сторож считал три отказа подряд поломкой
-  // и гасил шаг. Инструмент есть у всех ролей (chatTools) и прав не сужает.
-  "taskflow_remember",
-  "taskflow_status", "taskflow_agents", "taskflow_rules",
-  "taskflow_review", "taskflow_tool_request", "taskflow_work_start",
-  "taskflow_ask_user_question",
-  // Вызов роли как субагентом: активен только у ролей с правом (Помощник,
-  // Оркестратор) — у остальных операции нет вовсе, поэтому в ядре она
-  // безвредна.
-  "taskflow_chat_open_branch",
-  "taskflow_call_role",
-  // Уточнение работающему субагенту — тем же правом, что и сам вызов.
-  "taskflow_call_role_steer",
-]);
+/** Стартовый набор TaskFlow-операций — один для всех ролей и обоих способов (карточка, чат).
+ *  Решение владельца 06.11.2026: по фактическому использованию. Источник: role_tool_audit,
+ *  action=invoke, с 2026-11-01 по 06.11.2026, объединение операций, покрывающих 95% вызовов:
+ *  карточки (subtask_id не пуст) — 15 операций, 459 из 479 вызовов (95,8%);
+ *  чаты — 14 операций taskflow_*, к ним web_*, things_*, composio_*, graft_* (идут своими путями),
+ *  946 из 993 (95,3%). Плюс обязательные по решению владельца: taskflow_work_item_submit,
+ *  taskflow_inspect, taskflow_call_role; загрузчик taskflow_tools добавляется отдельно.
+ *  Остальное подключается через taskflow_tools. В чате карточные операции по-прежнему скрывает
+ *  CARD_WORK_OPERATIONS, в чате задачи — ограничение task_chat. */
+export const STARTER_TOOLS = [
+  // карточки
+  "taskflow_host_bash", "taskflow_work_plan", "taskflow_host_read", "taskflow_doc_read", "taskflow_recall",
+  "taskflow_kb_search", "taskflow_task", "taskflow_host_edit", "taskflow_host_write", "taskflow_subtask_done",
+  "taskflow_remember", "taskflow_subtask_work", "taskflow_chat_send", "taskflow_topic_send", "taskflow_comment",
+  // чаты
+  "taskflow_doc_write", "taskflow_chat_read", "taskflow_plan_read", "taskflow_ask_user_question", "taskflow_slot_status",
+  "taskflow_chat_share_material", "taskflow_agents", "taskflow_topic_read", "taskflow_task_summary", "taskflow_status",
+  "taskflow_plan_ops", "taskflow_chat_reply",
+  // обязательные
+  "taskflow_work_item_submit", "taskflow_inspect", "taskflow_call_role",
+] as const;
+const CORE_OPERATIONS = new Set<string>(STARTER_TOOLS);
 
 /** Текст отказа Pi: args в событие tool_execution_end не кладутся, причина
  *  живёт в тексте результата («Tool X not found», «- /command: Expected string»). */
