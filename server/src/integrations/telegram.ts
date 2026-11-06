@@ -141,6 +141,7 @@ export type TelegramDeliveryKind = "ack" | "progress" | "final" | "error";
 export const TELEGRAM_METHOD_POLICY = {
   sendMessage: { kinds: ["ack", "progress", "final", "error"] },
   editMessageText: { kinds: ["progress", "final"] },
+  editMessageReplyMarkup: { kinds: ["progress"] },
   setMessageReaction: { kinds: ["progress", "final", "error"] },
   sendMessageDraft: { kinds: ["progress"] },
 } as const;
@@ -386,6 +387,103 @@ export function settleTelegramDelivery(id: string, result: { ok: boolean; perman
   db.prepare("UPDATE telegram_delivery_outbox SET state='retry_wait',last_error=?,next_attempt_at=datetime('now',?),updated_at=datetime('now') WHERE delivery_id=?").run(result.error ?? "delivery failed", `+${seconds} seconds`, id);
 }
 
+/**
+ * Вопрос роли → Telegram с inline-кнопками (этап 3 плана note://a2475482).
+ *
+ * Отдельная доставка от финала: у финала свой уникальный индекс
+ * `(source_message_id, kind='final')`, а вопрос — своё сообщение с клавиатурой.
+ * Подпись — `renderQuestionText`, уже готовая для Telegram, плюс строка про
+ * номер/текст: кнопки не единственный путь ответа.
+ */
+export function captureQuestionToTelegram(questionId: string): number {
+  const question = db
+    .prepare("SELECT id,chat_id,message_id,payload_json,created_at FROM chat_questions WHERE id=?")
+    .get(questionId) as { id: string; chat_id: string; message_id: string | null; payload_json: string; created_at: string } | undefined;
+  if (!question || !question.message_id) return 0;
+  let payload: { questions?: Array<{ question?: string; header?: string; options?: Array<{ label?: string; description?: string }> }> } = {};
+  try { payload = JSON.parse(question.payload_json); } catch { return 0; }
+  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  const keyboard = telegramQuestionKeyboard(question.id, { questions: questions.map((q) => ({ options: (q.options ?? []).map((o) => ({ label: String(o.label ?? "") })) })) });
+  if (!keyboard) return 0;
+  const links = db.prepare(`SELECT chat_id,message_id FROM telegram_inbound_ledger
+    WHERE taskflow_message_id=? AND state='posted'`).all(question.message_id) as Array<{ chat_id: string; message_id: number }>;
+  let count = 0;
+  for (const link of links) {
+    enqueueTelegramDelivery({
+      kind: "final",
+      chatId: link.chat_id,
+      payload: { text: renderTelegramQuestionText(questions), reply_markup: keyboard },
+      replyToMessageId: link.message_id,
+      sourceMessageId: question.message_id,
+    });
+    count++;
+  }
+  return count;
+}
+
+/** Текст вопроса для Telegram: нумерованный список вариантов — ответ номером
+ *  работает и тогда, когда кнопки уже погашены по TTL. */
+function renderTelegramQuestionText(questions: Array<{ question?: string; header?: string; options?: Array<{ label?: string; description?: string }> }>): string {
+  const lines: string[] = [];
+  questions.slice(0, TELEGRAM_QUESTION_MAX_ROWS).forEach((question, questionIndex) => {
+    if (questionIndex === 0) lines.push("Нужен ответ на вопрос.");
+    const header = question.header ? `${question.header}: ` : "";
+    lines.push(`${questionIndex + 1}. ${header}${String(question.question ?? "")}`);
+    (question.options ?? []).forEach((option, optionIndex) => {
+      if (optionIndex >= 4) return;
+      lines.push(`   ${questionIndex + 1}.${optionIndex + 1} — ${String(option.label ?? "")}${option.description ? ` (${option.description})` : ""}`);
+    });
+  });
+  lines.push("Нажми кнопку или ответь номером/текстом.");
+  return lines.join("\n").slice(0, 4000);
+}
+
+/** Убрать клавиатуру у сообщения вопроса (отвечен или истёк срок кнопок). */
+export function releaseTelegramQuestionKeyboard(chatId: string, messageId: number): string | null {
+  return enqueueTelegramDelivery({
+    kind: "progress",
+    chatId,
+    payload: { method: "editMessageReplyMarkup", message_id: messageId, reply_markup: { inline_keyboard: [] } },
+    sourceMessageId: null,
+  });
+}
+
+/**
+ * Истёк срок кнопок: у вопросов старше TELEGRAM_QUESTION_TTL_SECONDS и без
+ * клавиатуры снимаем её. Статус вопроса не меняется: ход ждёт ответ 30 мин
+ * (questionWait.QUESTION_WAIT_MS), а текстовый ответ работает всегда.
+ * Вызывается из /api/integrations/telegram/outbox — систему таймеров не заводим.
+ */
+export function expireTelegramQuestionKeyboards(): number {
+  let links: Array<{ chat_id: string; message_id: number; question_id: string }> = [];
+  try {
+    links = db.prepare(`SELECT q.id AS question_id, l.chat_id AS chat_id, l.message_id AS message_id
+        FROM chat_questions q
+        JOIN telegram_inbound_ledger l
+          ON l.taskflow_message_id = q.message_id AND l.state = 'posted'
+       WHERE q.created_at <= datetime('now', ?)
+         AND EXISTS (
+           SELECT 1 FROM telegram_delivery_outbox d
+            WHERE d.source_message_id = q.message_id AND d.kind = 'final'
+              AND d.payload_json LIKE '%inline_keyboard%'
+              AND d.state = 'delivered'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM telegram_delivery_outbox d
+            WHERE d.source_message_id = q.message_id AND d.kind = 'progress'
+              AND d.payload_json LIKE '%editMessageReplyMarkup%'
+         )`).all(`-${TELEGRAM_QUESTION_TTL_SECONDS} seconds`) as Array<{ chat_id: string; message_id: number; question_id: string }>;
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const link of links) {
+    releaseTelegramQuestionKeyboard(link.chat_id, link.message_id);
+    count++;
+  }
+  return count;
+}
+
 export function captureTelegramFinal(messageId: string): number {
   const reply = db.prepare("SELECT id,text,reply_to_message_id,from_user_id,stop_reason,partial FROM chat_messages WHERE id=?").get(messageId) as { id: string; text: string; reply_to_message_id: string | null; from_user_id: string; stop_reason: string | null; partial: number | null } | undefined;
   if (!reply || reply.from_user_id !== SECRETARY_USER_ID || !reply.reply_to_message_id) return 0;
@@ -405,6 +503,59 @@ export function captureTelegramFinal(messageId: string): number {
     count++;
   }
   return count;
+}
+
+/**
+ * Кнопки ответа на вопрос роли (этап 3 плана note://a2475482).
+ *
+ * Числа — из Bot API, а не «на глаз»:
+ *  • `callback_data` — 1–64 байта (core.telegram.org/bots/api#inlinekeyboardbutton),
+ *    поэтому в кнопку идёт `q:<8 hex id>:<индекс варианта>` — 12 байт, а полный
+ *    id вопроса живёт на сервере;
+ *  • `reply_markup.inline_keyboard` — ряды по кнопкам, один ряд на вопрос
+ *    (те же ограничения, что у обычной inline-клавиатуры);
+ *  • TTL кнопок 3600 с — как у Hermes (hermes-agent.nousresearch.com/docs/
+ *    user-guide/messaging/telegram: «buttons expire after an hour»).
+ */
+export const TELEGRAM_QUESTION_TTL_SECONDS = 3600;
+
+/** Сколько вопросов в Telegram-клавиатуре имеет смысл показывать: у пакета
+ *  вопросов максимум 4 (chatQuestions.MAX_QUESTIONS), столько и рядов. */
+const TELEGRAM_QUESTION_MAX_ROWS = 4;
+
+export function telegramQuestionShortId(questionId: string): string {
+  return questionId.replace(/-/g, "").slice(0, 8).toLowerCase();
+}
+
+export function telegramQuestionCallbackData(questionId: string, optionIndex: number): string {
+  return `q:${telegramQuestionShortId(questionId)}:${optionIndex}`;
+}
+
+/** «q:<id8>:<код варианта>» → {short, questionIndex, optionIndex}.
+ *  Код варианта — `questionIndex*10 + optionIndex` (вопросов ≤4, вариантов ≤4):
+ *  так один ряд клавиатуры = один вопрос, а данные остаются в 12 байтах.
+ *  Всё остальное — мусор, не ошибка сервера. */
+export function parseTelegramQuestionCallback(
+  data: unknown,
+): { short: string; questionIndex: number; optionIndex: number } | null {
+  const match = /^q:([0-9a-f]{8}):(\d{1,2})$/.exec(String(data ?? "").trim().toLowerCase());
+  if (!match) return null;
+  const code = Number(match[2]);
+  return { short: match[1], questionIndex: Math.floor(code / 10), optionIndex: code % 10 };
+}
+
+/** Клавиатура вопроса: ряд на вопрос, кнопки — по вариантам ответа. */
+export function telegramQuestionKeyboard(
+  questionId: string,
+  payload: { questions: Array<{ options: Array<{ label: string }> }> },
+): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | null {
+  const rows = payload.questions.slice(0, TELEGRAM_QUESTION_MAX_ROWS).map((question, questionIndex) =>
+    question.options.map((option, optionIndex) => ({
+      text: String(option.label).slice(0, 60),
+      callback_data: telegramQuestionCallbackData(questionId, questionIndex * 10 + optionIndex),
+    })),
+  );
+  return rows.length ? { inline_keyboard: rows } : null;
 }
 
 export function telegramStatus() {

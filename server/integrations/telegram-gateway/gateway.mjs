@@ -152,9 +152,32 @@ async function handleInlineQuery(query) {
 }
 
 async function handleCallbackQuery(query) {
-  // Кнопки вопроса — этап 3; апдейт всё равно забираем, чтобы offset не «съел» его.
-  log("callback_unsupported", { callback_id: query?.id, has_message: Boolean(query?.message) });
-  await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Кнопки ещё не поддерживаются" }).catch(() => {});
+  // Кнопки вопроса — этап 3 (план note://a2475482). `callback_query` не несёт
+  // `chat.type` — только `message.chat`, поэтому allowlist проверяется по
+  // from.id (как в Bot API: callback приходит от пользователя, нажавшего кнопку).
+  const callbackId = query?.id;
+  const chatId = query?.message?.chat?.id;
+  const messageId = query?.message?.message_id;
+  const fromId = query?.from?.id;
+  if (!callbackId || !chatId || !messageId || fromId !== allowedUser || chatId !== allowedChat) {
+    if (callbackId) await telegram("answerCallbackQuery", { callback_query_id: callbackId, text: "Кнопка недоступна" }).catch(() => {});
+    log("callback_rejected", { callback_id: callbackId, has_message: Boolean(query?.message) });
+    return;
+  }
+  let result;
+  try {
+    result = await taskflow("/api/integrations/telegram/callback", {
+      method: "POST",
+      body: JSON.stringify({ callback_id: callbackId, callback_data: query?.data, chat_id: chatId, message_id: messageId }),
+    });
+  } catch (error) {
+    log("callback_failed", { callback_id: callbackId, status: Number(error.status || 0), error: String(error.message || error) });
+    await telegram("answerCallbackQuery", { callback_query_id: callbackId, text: "Не получилось принять ответ" }).catch(() => {});
+    return;
+  }
+  const text = String(result?.answer_text || (result?.status === "answered" ? "Ответ принят" : "Уже отвечено")).slice(0, 200);
+  await telegram("answerCallbackQuery", { callback_query_id: callbackId, text }).catch((error) => log("callback_answer_failed", { callback_id: callbackId, error: String(error.message || error) }));
+  log("callback_settled", { callback_id: callbackId, status: result?.status || null, resumed: result?.resumed === true });
 }
 
 async function handleUpdate(update) {
@@ -208,12 +231,12 @@ async function loadStatusBubbles() {
 async function saveStatusBubbles() {
   try { await fs.mkdir(path.dirname(statusPath), { recursive: true }); const tmp = `${statusPath}.tmp`; await fs.writeFile(tmp, JSON.stringify({ bubbles: statusBubbles, updated_at: new Date().toISOString() })); await fs.rename(tmp, statusPath); } catch {}
 }
-async function editStatus(chatId, telegramMessageId, text, disableNotification) {
-  try { await telegram("editMessageText", { chat_id: chatId, message_id: telegramMessageId, text: String(text || "").slice(0, STATUS_TEXT_MAX), ...(disableNotification === undefined ? {} : { disable_notification: disableNotification }) }); return true; }
+async function editStatus(chatId, telegramMessageId, text, disableNotification, replyMarkup) {
+  try { await telegram("editMessageText", { chat_id: chatId, message_id: telegramMessageId, text: String(text || "").slice(0, STATUS_TEXT_MAX), ...(replyMarkup ? { reply_markup: replyMarkup } : {}), ...(disableNotification === undefined ? {} : { disable_notification: disableNotification }) }); return true; }
   catch { return false; }
 }
 function sendArgs(delivery, payload, text) {
-  return { chat_id: Number(delivery.chat_id), text, ...(payload.reply_to_message_id ? { reply_to_message_id: payload.reply_to_message_id } : {}), ...(payload.disable_notification === true ? { disable_notification: true } : {}) };
+  return { chat_id: Number(delivery.chat_id), text, ...(payload.reply_to_message_id ? { reply_to_message_id: payload.reply_to_message_id } : {}), ...(payload.reply_markup ? { reply_markup: payload.reply_markup } : {}), ...(payload.disable_notification === true ? { disable_notification: true } : {}) };
 }
 /** Черновик живёт ~30 с и эфемерен: финал всё равно приходит отдельным sendMessage. */
 async function sendDraft(delivery, payload, text) {
@@ -264,8 +287,7 @@ async function sendDelivery(delivery, payload) {
     return;
   }
 
-  if (method === "sendMessageDraft") {
-    const draft = await sendDraft(delivery, payload, text);
+  if (method === "sendMessageDraft") {    const draft = await sendDraft(delivery, payload, text);
     if (draft) { await settle(delivery, { ok: true }); return; }
     // Откат: тот же текст уходит правкой статус-пузыря или новым сообщением.
     const existing = key ? statusBubbles[key] : null;
@@ -273,6 +295,21 @@ async function sendDelivery(delivery, payload) {
     const sent = await telegram("sendMessage", sendArgs(delivery, payload, text));
     if (key) { statusBubbles[key] = sent.message_id; await saveStatusBubbles(); }
     await settle(delivery, { ok: true, telegramMessageId: sent.message_id });
+    return;
+  }
+
+  if (method === "editMessageReplyMarkup") {
+    // TTL кнопок вопроса (3600 с, как у Hermes): снять клавиатуру, текст не трогать.
+    const messageId = Number(payload.message_id ?? 0);
+    if (!messageId) { await settle(delivery, { ok: true }); return; }
+    try {
+      await telegram("editMessageReplyMarkup", { chat_id: Number(delivery.chat_id), message_id: messageId, reply_markup: payload.reply_markup || { inline_keyboard: [] } });
+      await settle(delivery, { ok: true, telegramMessageId: messageId });
+    } catch (error) {
+      // Кнопок уже нет / сообщение устарело — это не ошибка доставки.
+      log("markup_release_failed", { delivery_id: delivery.delivery_id, status: Number(error.status || 0), error: String(error.message || error) });
+      await settle(delivery, { ok: true });
+    }
     return;
   }
 
@@ -293,7 +330,7 @@ async function sendDelivery(delivery, payload) {
     await settle(delivery, { ok: true, telegramMessageId: result.message_id || undefined });
     return;
   }
-  if (delivery.kind === "final" && key && statusBubbles[key]) {
+  if (delivery.kind === "final" && key && statusBubbles[key] && !payload.reply_markup) {
     const bubble = statusBubbles[key];
     delete statusBubbles[key];
     await saveStatusBubbles();

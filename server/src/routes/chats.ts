@@ -104,7 +104,9 @@ import {
 import { formatChatMessage, formatChatHistory, loadChatMessage } from "../lib/chatMessages.js";
 import {
   answerQuestionRow,
+  answerQuestionRowIfOpen,
   cancelQuestionsForChat,
+  openQuestionOfChat,
   payloadOf,
   QuestionValidationError,
   questionById,
@@ -223,8 +225,7 @@ function memberIds(chatId: string): string[] {
   ).map((r) => r.member_id).filter((id) => isMember(chatId,id));
 }
 
-function isMember(chatId: string, userId: string): boolean {
-  const chat = db.prepare("SELECT project_id, parent_chat_id, task_id FROM chats WHERE id = ?").get(chatId) as any;
+function isMember(chatId: string, userId: string): boolean {  const chat = db.prepare("SELECT project_id, parent_chat_id, task_id FROM chats WHERE id = ?").get(chatId) as any;
   // Приватный проект (задача 9d583c58…): его чаты не видны никому, кроме
   // владельца трекера — иначе утечка через название группового чата
   // (оно равно имени проекта) и через task_title темы.
@@ -1185,6 +1186,33 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     },
   );
 
+  // Ответ на вопрос роли номером варианта («2» или «1.2») — этап 3 плана
+  // note://a2475482: кнопки и текст не должны расходиться. Понимаем только
+  // короткий номер при ОТКРЫТОМ вопросе у этого же сообщения-вопроса, иначе
+  // обычный текст остаётся обычным текстом.
+  function answerQuestionByNumber(chatId: string, text: string, replyTo: string | null): { answer: AnswerPayload; questionId: string; payload: ReturnType<typeof payloadOf> } | null {
+    const clean = text.trim();
+    const match = /^(?:(\d{1,2})\s*[.)\-]\s*)?(\d{1,2})$/.exec(clean.length <= 6 ? clean : "");
+    if (!match) return null;
+    const replied = replyTo
+      ? (db.prepare("SELECT id FROM chat_questions WHERE chat_id=? AND message_id=? ORDER BY created_at DESC LIMIT 1").get(chatId, replyTo) as { id: string } | undefined)
+      : undefined;
+    const question = (replied ? questionById(replied.id) : undefined) ?? openQuestionOfChat(chatId);
+    if (!question || question.status !== "open") return null;
+    if (replyTo && question.message_id && question.message_id !== replyTo) return null;
+    const payload = payloadOf(question);
+    const questionIndex = match[1] ? Number(match[1]) - 1 : 0;
+    const optionIndex = Number(match[2]) - 1;
+    const item = payload.questions[questionIndex];
+    const option = item?.options[optionIndex];
+    if (!item || !option) return null;
+    try {
+      return { answer: validateAnswerPayload(payload, [{ questionIndex, selected: [option.label] }]), questionId: question.id, payload };
+    } catch {
+      return null;
+    }
+  }
+
   app.post<{
     Params: { id: string };
     Body: { execution_mode?: unknown; text?: string; attachment_ids?: string[]; task_id?: string; kind?: string; reply_to_message_id?: string; subtask_id?: string; recipient_subtask_id?: string; work_mode?: ChatWorkMode; model?: string };
@@ -1425,6 +1453,23 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
         type: "chat:new",
         message,
       });
+
+      // Ответ номером варианта на открытый вопрос роли закрывает вопрос и
+      // уходит в ждущий ход — без нового хода и без ветки (этап 3 плана).
+      if (isOwner(req.userId) && !senderRole) {
+        const numbered = answerQuestionByNumber(chatId, storedText, replyTo);
+        if (numbered && answerQuestionRowIfOpen(numbered.questionId, numbered.answer)) {
+          const resumed = deliverAnswer(numbered.questionId, numbered.answer);
+          if (!resumed) {
+            try {
+              await dispatchRoleReplies({ chatId, messageId: id, fromUserId: req.userId, text: storedText, hop: 0, mode });
+            } catch (error) {
+              console.warn(`[chats] ответ номером не поднял ход роли chat=${chatId}:`, error);
+            }
+          }
+          return { message, question_answer: numbered.questionId, resumed };
+        }
+      }
 
       // Свод ветки в основной чат (22.10.2026): ветка — отдельный поток, но
       // владельцу не нужно заглядывать в каждую. Ответ роли в ветке одной
