@@ -6,6 +6,8 @@ import { DB_PATH } from "../db.js";
 import { SECRETARY_CHAT_ID } from "../lib/secretaryReply.js";
 import { enqueueMessageDelivery } from "../runtime/chatQueue.js";
 import { resolveTelegramCommandText } from "../lib/telegramCommands.js";
+import { normalizeTelegramTables, splitTelegramText, telegramRichHtml, envelopePlainText, TELEGRAM_PART_LIMIT, TELEGRAM_PART_PAUSE_MS, TELEGRAM_MAX_PARTS } from "../lib/telegramRich.js";
+import type { StructuredRoleEnvelopeV1 } from "../lib/roleContractV1.js";
 
 export const TELEGRAM_MAX_BYTES = 15 * 1024 * 1024;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(path.dirname(DB_PATH), "uploads");
@@ -140,6 +142,9 @@ export type TelegramDeliveryKind = "ack" | "progress" | "final" | "error";
 
 export const TELEGRAM_METHOD_POLICY = {
   sendMessage: { kinds: ["ack", "progress", "final", "error"] },
+  // Rich-сообщение (Bot API 10.1, проверено живьём 06.11.2026): текст, разметка
+  // и таблицы одним блоком. Сбой метода — откат на sendMessage в gateway.
+  sendRichMessage: { kinds: ["final"] },
   editMessageText: { kinds: ["progress", "final"] },
   editMessageReplyMarkup: { kinds: ["progress"] },
   setMessageReaction: { kinds: ["progress", "final", "error"] },
@@ -367,7 +372,26 @@ export function markTelegramSending(id: string): boolean {
   return db.prepare("UPDATE telegram_delivery_outbox SET state='sending',attempts=attempts+1,updated_at=datetime('now') WHERE delivery_id=? AND state IN ('pending','retry_wait','ambiguous')").run(id).changes === 1;
 }
 
-export function settleTelegramDelivery(id: string, result: { ok: boolean; permanent?: boolean; ambiguous?: boolean; retryAfterSeconds?: number; telegramMessageId?: number; error?: string }) {
+export function settleTelegramDelivery(id: string, result: { ok?: boolean; permanent?: boolean; ambiguous?: boolean; retryAfterSeconds?: number; telegramMessageId?: number; error?: string; parts?: Array<{ index: number; sent: boolean }> }) {
+  // Части одной доставки: gateway отмечает отправленные, чтобы после сбоя
+  // середины повторялась только она, без дубля первой (DoD этапа 5).
+  // Запись «только прогресс частей» приходит без ok и состояние не меняет.
+  if (Array.isArray(result.parts) && result.parts.length) {
+    try {
+      const row = db.prepare("SELECT payload_json FROM telegram_delivery_outbox WHERE delivery_id=?").get(id) as { payload_json: string } | undefined;
+      if (row) {
+        const payload = JSON.parse(row.payload_json) as { parts?: Array<{ index?: number; sent?: boolean }> };
+        if (Array.isArray(payload.parts)) {
+          for (const part of result.parts) {
+            const target = payload.parts.find((item) => Number(item.index) === Number(part.index));
+            if (target) target.sent = part.sent === true;
+          }
+          db.prepare("UPDATE telegram_delivery_outbox SET payload_json=?,updated_at=datetime('now') WHERE delivery_id=?").run(JSON.stringify(payload), id);
+        }
+      }
+    } catch { /* прогресс частей не должен ломать расчёт исхода доставки */ }
+    if (result.ok === undefined) return;
+  }
   if (result.ok) {
     db.prepare("UPDATE telegram_delivery_outbox SET state='delivered',telegram_message_id=?,delivered_at=datetime('now'),updated_at=datetime('now'),last_error=NULL WHERE delivery_id=?").run(result.telegramMessageId ?? null, id);
     return;
@@ -496,16 +520,29 @@ export function expireTelegramQuestionKeyboards(): number {
 }
 
 export function captureTelegramFinal(messageId: string): number {
-  const reply = db.prepare("SELECT id,text,reply_to_message_id,from_user_id,stop_reason,partial FROM chat_messages WHERE id=?").get(messageId) as { id: string; text: string; reply_to_message_id: string | null; from_user_id: string; stop_reason: string | null; partial: number | null } | undefined;
+  const reply = db.prepare("SELECT id,text,role_envelope_json,reply_to_message_id,from_user_id,stop_reason,partial FROM chat_messages WHERE id=?").get(messageId) as { id: string; text: string; role_envelope_json: string | null; reply_to_message_id: string | null; from_user_id: string; stop_reason: string | null; partial: number | null } | undefined;
   if (!reply || reply.from_user_id !== SECRETARY_USER_ID || !reply.reply_to_message_id) return 0;
   const links = db.prepare(`SELECT l.chat_id,l.message_id FROM telegram_inbound_ledger l
     WHERE l.taskflow_message_id=? AND l.state='posted'`).all(reply.reply_to_message_id) as Array<{ chat_id: string; message_id: number }>;
+  // Конверт ответа роли — источник rich-версии; его plain-текст — основа
+  // обычного текста (в `text` может лежать сам JSON-конверт).
+  const { text, envelope } = telegramFinalBody(reply);
+  const parts = splitTelegramText(text, TELEGRAM_PART_LIMIT).slice(0, TELEGRAM_MAX_PARTS);
+  const hasAttachment = Boolean(db.prepare("SELECT 1 FROM attachments WHERE chat_message_id=? LIMIT 1").get(reply.id));
+  const richHtml = parts.length === 1 && !hasAttachment ? telegramRichHtml(envelope, TELEGRAM_PART_LIMIT) : null;
   let count = 0;
   for (const link of links) {
     const exists = db.prepare("SELECT 1 FROM telegram_delivery_outbox WHERE source_message_id=? AND kind='final'").get(reply.id);
     if (exists) continue;
+    // Одно намерение — один delivery_id: либо rich-сообщение, либо части.
+    // Двух путей доставки одного ответа нет (DoD этапа 6).
+    const payload: Record<string, unknown> = richHtml
+      ? { method: "sendRichMessage", rich_message: { html: richHtml }, plain_text: text, link_preview_options: { is_disabled: true } }
+      : parts.length > 1
+        ? { parts: parts.map((part, index) => ({ index: index + 1, total: parts.length, text: part, sent: false })), part_pause_ms: TELEGRAM_PART_PAUSE_MS }
+        : { text: parts[0] ?? "" };
     // Финал идёт со звуком: disable_notification не ставим (критерий владельца).
-    enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload: { text: reply.text }, replyToMessageId: link.message_id, sourceMessageId: reply.id });
+    enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload, replyToMessageId: link.message_id, sourceMessageId: reply.id });
     // Прерванный ход или ошибка — 👎 на сообщении-триггере, успех — 👍.
     // source_message_id не заполняем: уникальный индекс (source_message_id,kind='final')
     // принадлежит самой доставке финала, а реакция — отдельное намерение.
@@ -514,6 +551,21 @@ export function captureTelegramFinal(messageId: string): number {
     count++;
   }
   return count;
+}
+
+/** Тело финала: plain-текст для Telegram и конверт для rich-версии. */
+function telegramFinalBody(reply: { text: string; role_envelope_json: string | null }): { text: string; envelope: StructuredRoleEnvelopeV1 | null } {
+  let envelope: StructuredRoleEnvelopeV1 | null = null;
+  if (typeof reply.role_envelope_json === "string") {
+    try {
+      const raw = JSON.parse(reply.role_envelope_json) as { schema_version?: unknown; output?: unknown };
+      if (raw && raw.schema_version === 1 && Array.isArray(raw.output)) envelope = raw as StructuredRoleEnvelopeV1;
+    } catch { /* битый конверт — остаётся прежний текст */ }
+  }
+  const fromEnvelope = envelope ? envelopePlainText(envelope).trim() : "";
+  const source = fromEnvelope || String(reply.text ?? "");
+  // Таблицы-«палки» в моноширинный блок: без rich Telegram не рисует таблицу.
+  return { text: normalizeTelegramTables(source), envelope };
 }
 
 /**

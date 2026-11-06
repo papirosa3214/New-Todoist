@@ -30,6 +30,11 @@ const streamMode = (() => {
   const value = String(process.env.TASKFLOW_TELEGRAM_STREAM || "").trim().toLowerCase();
   return ["auto", "draft", "edit", "off"].includes(value) ? value : "auto";
 })();
+/** Rich-сообщения: выключатель остаётся и здесь, а не только на сервере —
+ *  если метод недоступен аккаунту, доставка падает обратно в прежний текст. */
+const richEnabled = !["0", "off", "false", "no"].includes(String(process.env.TASKFLOW_TELEGRAM_RICH || "").trim().toLowerCase());
+/** Пауза между частями одного ответа, мс (диапазон 300–500 из плана этапа 5). */
+const PART_PAUSE_MS = 400;
 let draftSupported = streamMode === "draft" ? true : streamMode === "auto" ? null : false;
 let stopped = false;
 let offset = await loadOffset();
@@ -313,11 +318,44 @@ async function sendDelivery(delivery, payload) {
     return;
   }
 
+  if (method === "sendRichMessage") {
+    await sendRich(delivery, payload, text);
+    return;
+  }
+
   if (method !== "sendMessage") {
     // Неизвестный метод: сервер новее gateway. Не падаем и не теряем ход —
     // помечаем доставку abandoned с причиной в логе.
     log("unknown_method", { delivery_id: delivery.delivery_id, method, kind: delivery.kind });
     await settle(delivery, { ok: false, permanent: true, error: `unknown_method:${method}` });
+    return;
+  }
+
+  // Части одного ответа: строго по порядку, пауза против flood-control, уже
+  // отправленные не повторяются (сервер хранит отметки в payload.parts).
+  if (Array.isArray(payload.parts) && payload.parts.length) {
+    const messageIds = [];
+    let sentAny = 0;
+    for (const part of payload.parts) {
+      if (part.sent) continue;
+      if (sentAny > 0) await sleep(Number(payload.part_pause_ms) || PART_PAUSE_MS);
+      try {
+        const args = { chat_id: Number(delivery.chat_id), text: String(part.text || "").slice(0, STATUS_TEXT_MAX) };
+        // Ответ на сообщение-триггер — у первой части, чтобы цитата не повторялась.
+        if (sentAny === 0 && payload.reply_to_message_id) args.reply_to_message_id = payload.reply_to_message_id;
+        const sent = await telegram("sendMessage", args);
+        part.sent = true;
+        messageIds.push(sent.message_id);
+        sentAny++;
+        // Отметка части сохраняется сразу: после сбоя середины повторяется только она.
+        await settle(delivery, { parts: payload.parts.map((item) => ({ index: item.index, sent: item.sent === true })) });
+      } catch (error) {
+        error.parts = payload.parts.map((item) => ({ index: item.index, sent: item.sent === true }));
+        throw error;
+      }
+    }
+    log("parts_sent", { delivery_id: delivery.delivery_id, total: payload.parts.length });
+    await settle(delivery, { ok: true, telegramMessageId: messageIds[0], parts: payload.parts.map((item) => ({ index: item.index, sent: true })) });
     return;
   }
 
@@ -345,6 +383,35 @@ async function settle(delivery, outcome) {
   await taskflow(`/api/integrations/telegram/outbox/${delivery.delivery_id}/result`, { method: "POST", body: JSON.stringify(outcome) }).catch(() => {});
 }
 
+/**
+ * Rich-сообщение (`sendRichMessage`, Bot API 10.1; живая проба 06.11.2026 —
+ * html-таблица доставляется, шапка разбирается как заголовок). Если метод
+ * отключён флагом или Bot API его отверг — тот же ответ уходит прежним
+ * текстом с нормализованными таблицами: один путь доставки на delivery_id.
+ */
+async function sendRich(delivery, payload, fallbackText) {
+  const html = String(payload.rich_message?.html || "");
+  const plain = String(payload.plain_text || fallbackText || "").slice(0, STATUS_TEXT_MAX);
+  if (!richEnabled || !html) {
+    log("rich_skipped", { delivery_id: delivery.delivery_id, reason: richEnabled ? "empty_html" : "flag_off" });
+  } else {
+    try {
+      const sent = await telegram("sendRichMessage", {
+        chat_id: Number(delivery.chat_id),
+        rich_message: payload.rich_message,
+        ...(payload.link_preview_options ? { link_preview_options: payload.link_preview_options } : {}),
+        ...(payload.disable_notification === true ? { disable_notification: true } : {}),
+      });
+      await settle(delivery, { ok: true, telegramMessageId: sent?.message_id });
+      return;
+    } catch (error) {
+      log("rich_fallback", { delivery_id: delivery.delivery_id, status: Number(error.status || 0), error: String(error.message || error) });
+    }
+  }
+  const sent = await telegram("sendMessage", sendArgs(delivery, payload, plain));
+  await settle(delivery, { ok: true, telegramMessageId: sent.message_id });
+}
+
 async function sendOutbox() {
   const { deliveries = [] } = await taskflow("/api/integrations/telegram/outbox?limit=20");
   for (const delivery of deliveries) {
@@ -355,7 +422,7 @@ async function sendOutbox() {
     } catch (error) {
       const status = Number(error.status || 0);
       const retryAfterSeconds = Number(error.parameters?.retry_after || 0) || undefined;
-      await settle(delivery, { ok: false, permanent: status >= 400 && status < 500 && status !== 429, ambiguous: !status, retryAfterSeconds, error: String(error.message || error).slice(0, 500) });
+      await settle(delivery, { ok: false, permanent: status >= 400 && status < 500 && status !== 429, ambiguous: !status, retryAfterSeconds, error: String(error.message || error).slice(0, 500), ...(Array.isArray(error.parts) ? { parts: error.parts } : {}) });
     }
   }
 }
