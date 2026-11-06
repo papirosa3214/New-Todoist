@@ -79,15 +79,35 @@ function harness() {
   const sessionDir = path.join(root, "sessions");
   fs.mkdirSync(cwd, { recursive: true });
   const sessions: FakeSession[] = [];
-  const createSession = async (manager: SessionManager) => {
+  const createOptions: unknown[] = [];
+  const createSession = async (manager: SessionManager, options?: unknown) => {
+    createOptions.push(options);
     const session = new FakeSession(manager);
     sessions.push(session);
     return session;
   };
-  return { cwd, sessionDir, sessions, createSession };
+  return { cwd, sessionDir, sessions, createOptions, createSession };
 }
 
 describe("OwnerSessionRuntime", () => {
+  it("uses DeepSeek V4.1 Flash from OpenCode Go as the root default only", async () => {
+    const h = harness();
+    const runtime = new OwnerSessionRuntime(h);
+
+    await runtime.openRoot();
+
+    expect(h.createOptions[0]).toMatchObject({
+      modelRef: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+    });
+
+    const root = await runtime.openRoot();
+    await runtime.prompt(root.id, "fork source", "prompt");
+    const entryId = (await runtime.snapshot(root.id)).leafId!;
+    await runtime.fork(root.id, entryId);
+
+    expect(h.createOptions[1]).not.toMatchObject({ modelRef: expect.anything() });
+  });
+
   it("reuses the persisted root session", async () => {
     const h = harness();
     const firstRuntime = new OwnerSessionRuntime(h);

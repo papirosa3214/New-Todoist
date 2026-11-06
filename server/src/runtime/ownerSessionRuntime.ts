@@ -15,12 +15,17 @@ import {
   type ChildSessionSpawnRequest,
   type SpawnedChildSession,
 } from "./spawnChildSessionTool.js";
+import { getModelRuntime } from "./PiRuntimeAdapter.js";
 
 export type OwnerSessionPromptMode = "prompt" | "steer" | "follow_up";
 export type OwnerSessionRelation = "root" | "fork" | "subagent";
 export type OwnerSessionListItem = SessionInfo & { relation: OwnerSessionRelation };
 
 const SESSION_RELATION_ENTRY = "taskflow.session-relation";
+export const OWNER_ROOT_DEFAULT_MODEL = {
+  provider: "opencode-go",
+  id: "deepseek-v4.1-flash",
+} as const;
 
 export interface OwnerAgentSession {
   readonly sessionManager: SessionManager;
@@ -59,6 +64,7 @@ export interface OwnerSessionRuntimeOptions {
 export interface OwnerSessionCreateOptions {
   tools?: readonly string[];
   customTools?: ToolDefinition[];
+  modelRef?: { provider: string; id: string };
 }
 
 export class OwnerSessionNotFoundError extends Error {
@@ -94,10 +100,19 @@ async function createDefaultSession(
   options: OwnerSessionCreateOptions = {},
 ): Promise<OwnerAgentSession> {
   const cwd = manager.getCwd();
+  const modelRuntime = options.modelRef ? await getModelRuntime() : undefined;
+  const model = options.modelRef
+    ? modelRuntime?.getModel(options.modelRef.provider, options.modelRef.id)
+    : undefined;
+  if (options.modelRef && !model) {
+    throw new Error(`Owner session model ${options.modelRef.provider}/${options.modelRef.id} is unavailable`);
+  }
   const { session } = await createAgentSession({
     cwd,
     sessionManager: manager,
     settingsManager: SettingsManager.create(cwd),
+    modelRuntime,
+    model,
     tools: options.tools ? [...options.tools] : undefined,
     customTools: options.customTools,
   });
@@ -270,7 +285,7 @@ export class OwnerSessionRuntime {
     const id = manager.getSessionId();
     const existing = this.handles.get(id);
     if (existing) return existing;
-    const session = await this.createSession(manager);
+    const session = await this.createSession(manager, this.defaultCreateOptions(manager));
     const handle: SessionHandle = { manager, session, listeners: new Set() };
     this.handles.set(id, handle);
     this.attachSdkSubscription(handle);
@@ -282,7 +297,7 @@ export class OwnerSessionRuntime {
     this.detachSdkSubscription(handle);
     handle.session.dispose();
     handle.manager = manager;
-    handle.session = await this.createSession(manager);
+    handle.session = await this.createSession(manager, this.defaultCreateOptions(manager));
     if (hadListeners) this.attachSdkSubscription(handle);
   }
 
@@ -332,6 +347,12 @@ export class OwnerSessionRuntime {
     if (!manager.getHeader()?.parentSession) return "root";
     const marker = [...manager.getEntries()].reverse().find(entry => this.isRelationEntry(entry)) as any;
     return marker?.data?.kind === "subagent" ? "subagent" : "fork";
+  }
+
+  private defaultCreateOptions(manager: SessionManager): OwnerSessionCreateOptions {
+    if (this.relation(manager) !== "root") return {};
+    const hasPersistedModel = manager.getBranch().some(entry => entry.type === "model_change");
+    return hasPersistedModel ? {} : { modelRef: OWNER_ROOT_DEFAULT_MODEL };
   }
 
   private isRelationEntry(entry: SessionEntry): boolean {
