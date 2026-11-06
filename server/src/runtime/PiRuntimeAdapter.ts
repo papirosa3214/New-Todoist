@@ -1,3 +1,4 @@
+import { roleBashKillError } from "./roleBashGuard.js";
 import { TASK_CHAT_FILE_TOOLS, TASK_CHAT_MODE } from "./taskChatTools.js";
 import {chatTurnSystemText,installSecretarySystem,chatUserTurnText,chatRuntimeGuidanceEnabled} from "./secretaryChatPrompt.js";
 import {installProviderDiagnostics, installProxyAwareGlobalFetch, registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
@@ -1582,6 +1583,11 @@ async function startChatRunOnce(
         ...(t.name === "bash"
           ? {
               execute: async (id: string, args: any, signal?: AbortSignal, onUpdate?: any) => {
+                // Bash чатового хода исполняется от пользователя сервера: остановка
+                // по шаблону или kill сервера уронили бы его (06.11.2026, builder:
+                // `pkill -f "dist/index.js"`). Отказ — до запуска команды.
+                const killError = roleBashKillError(args?.command);
+                if (killError) throw new Error(killError);
                 const { result, files } = await captureBash(localCaptureIO(), cwd, () =>
                   t.execute(id, args, signal, onUpdate),
                 );

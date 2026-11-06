@@ -80,6 +80,7 @@ import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { projectRepo, roleWorkspace } from "./roleWorkspace.js";
 import { RoleProcessLease } from "./roleProcessLease.js";
 import { ROLE_USER, isolatedLocalOperations, roleIsolationEnabled } from "./localRoleOperations.js";
+import { withRoleBashKillGuard } from "./roleBashGuard.js";
 import { previousSessionDigest } from "./slotSession.js";
 import { remoteRoleWorkspace } from "./roleWorkspace.js";
 import { resolveRoleHost } from "./roleHost.js";
@@ -1583,7 +1584,7 @@ try {
   // вызывался, поэтому правило не действовало.
   const builtinTools = withHostToolExecution(host, cwd,
     [...createCodingTools(cwd, операции), ...createReadOnlyTools(cwd, операции)]
-  ).map((tool) => withTestCommandGuard(tool, { role, taskId }));
+  ).map((tool) => withRoleBashKillGuard(withTestCommandGuard(tool, { role, taskId })));
   // На удалённой машине встроенные инструменты CLI исполнялись бы на .110, а не там:
   // запуск внешнего агента через хост — отдельный этап (операция agent_spawn в host/).
   if (external && host) throw new Error("внешний агент пока запускается только на .110, не через хост");
