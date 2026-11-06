@@ -185,19 +185,42 @@ const statusBubbles = await loadStatusBubbles();
 // держим его повтором каждые 4 с, пока ход не закончится финалом или ошибкой.
 const typingTimers = new Map();
 const TYPING_INTERVAL_MS = 4_000;
+/** Последняя ошибка sendChatAction на чат: не спамим журналом каждый тик. */
+const typingErrors = new Map();
+async function typeTick(chatId) {
+  try {
+    await telegram("sendChatAction", { chat_id: chatId, action: "typing" });
+    typingErrors.delete(chatId);
+  } catch (error) {
+    const status = Number(error.status || 0);
+    if (status === 429 || status === 400) return; // флуд-контроль и «нет прав» сами пройдут
+    if (typingErrors.get(chatId) !== String(error.message || error)) {
+      typingErrors.set(chatId, String(error.message || error));
+      log("typing_failed", { chat_id: chatId, status, error: String(error.message || error) });
+    }
+  }
+}
 function startTyping(chatId) {
   const key = Number(chatId);
   if (typingTimers.has(key)) return;
-  const tick = () => { telegram("sendChatAction", { chat_id: key, action: "typing" }).catch(() => {}); };
+  const tick = () => { void typeTick(key); };
   tick();
   const timer = setInterval(tick, TYPING_INTERVAL_MS);
   timer.unref?.();
   typingTimers.set(key, timer);
+  log("typing_started", { chat_id: key });
 }
 function stopTyping(chatId) {
   const key = Number(chatId);
   const timer = typingTimers.get(key);
-  if (timer) { clearInterval(timer); typingTimers.delete(key); }
+  if (timer) { clearInterval(timer); typingTimers.delete(key); typingErrors.delete(key); }
+}
+/** Telegram гасит «печатает…», когда в чат приходит сообщение: после любого
+ *  промежуточного отправления статус нужно поднять заново (как у Hermes). */
+function retriggerTyping(chatId) {
+  const key = Number(chatId);
+  if (!typingTimers.has(key)) return;
+  void typeTick(key);
 }
 
 // Одна обновляемая строка статуса на ход, как у Hermes: пока роль думает —
@@ -290,6 +313,7 @@ async function sendDelivery(delivery, payload) {
       ? { message_id: (await editStatus(Number(delivery.chat_id), existing, text, true)) ? existing : null }
       : await telegram("sendMessage", sendArgs(delivery, payload, text));
     if (result.message_id && key) { statusBubbles[key] = result.message_id; await saveStatusBubbles(); }
+    retriggerTyping(delivery.chat_id);
     await settle(delivery, { ok: true, telegramMessageId: result.message_id || undefined });
     return;
   }
