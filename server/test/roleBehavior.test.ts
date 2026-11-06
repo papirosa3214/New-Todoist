@@ -1,6 +1,8 @@
 import {describe,it,expect,beforeEach,afterEach} from 'vitest';
 import crypto from 'node:crypto';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 import {readRoleBehavior,applyRoleBehavior,saveRoleBehaviorTemplate,behaviorInstruction} from '../src/runtime/roleBehavior.js';
+// Эти тесты пинят прежний путь (SYSTEM.md + AGENTS.md + ROLE.md); реестр правил проверяет roleRegistryPrompt.test.ts.
+process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED="false";
 let dir:string;const originalRolesDir=process.env.TASKFLOW_ROLES_DIR;
 beforeEach(async()=>{const db=(await import('../src/db.js')).default;if(db.prepare("SELECT 1 FROM sqlite_master WHERE name='role_context_overrides'").get()){db.prepare('DELETE FROM role_context_overrides_history').run();db.prepare('DELETE FROM role_context_overrides').run();}dir=fs.mkdtempSync(path.join(os.tmpdir(),'behavior-'));process.env.TASKFLOW_ROLES_DIR=dir;});
 afterEach(()=>{process.env.TASKFLOW_ROLES_DIR=originalRolesDir;fs.rmSync(dir,{recursive:true,force:true});});

@@ -8,6 +8,8 @@ import { composeLayer, LAYER_CATALOG, applyOverride } from "../src/lib/roleConte
 import db, { migrate } from "../src/db.js";
 import { runMigrations } from "../src/migrations.js";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+// Эти тесты пинят прежний путь (SYSTEM.md + AGENTS.md + ROLE.md); реестр правил проверяет roleRegistryPrompt.test.ts.
+process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED="false";
 
 migrate(); runMigrations();
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-resources-test-"));

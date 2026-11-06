@@ -1,5 +1,6 @@
 import {hasSingleChatSystem,singleChatSystemPrompt} from "./secretaryChatPrompt.js";
-import {behaviorInstruction} from './roleBehavior.js';
+import {behaviorInstruction,genderInstruction} from './roleBehavior.js';
+import {registryEnabled,buildRegistryRules} from './roleRegistryPrompt.js';
 import { stageSkillNames } from "../lib/collaborationTemplates.js";
 import { PLANNING_TOOLS, chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
 import fs from 'node:fs';
@@ -55,10 +56,11 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  instructionResources(cwd);
  const dir=path.dirname(configPath);const prefix=path.basename(configPath);
  const discovered=await discoverChatResources(role,true);
- const append=discovered.agentsFiles.map(x=>'# '+x.path+'\n'+(composeLayer(role,keyFor(x.path))?.effective ?? fs.readFileSync(x.path,'utf8')));
+ const useRegistry=registryEnabled()&&!hasSingleChatSystem(role);
+ const append=useRegistry?[]:discovered.agentsFiles.map(x=>'# '+x.path+'\n'+(composeLayer(role,keyFor(x.path))?.effective ?? fs.readFileSync(x.path,'utf8')));
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))?.effective ?? fs.readFileSync(source.path,'utf8'));
  // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).
- append.push(behaviorInstruction(role));
+ append.push(useRegistry?genderInstruction(role):behaviorInstruction(role));
  append.push(chatModeInstruction(mode));
  append.push('ПРОМЕЖУТОЧНЫЕ ПОЯСНЕНИЯ: краткость относится к итогу. Чек-лист (taskflow_work_plan) заводится до начала работы; дальше обычный текст идёт по нему — начал этап, одной фразой что делаешь; закрыл этап, одной-двумя фразами что по нему вышло. Внутри этапа по операциям не отчитывайся: одна операция почти ничего не меняет. Вне плана пиши только при смене подхода, значимой находке, содержательной проверке или блоке. Обычный текст должен быть понятен владельцу без открытия инструментов. Не выдумывай прогресс. Не раскрывай внутренние рассуждения. Это правило уточняет запреты пересказа хода работы в старых инструкциях.');
  append.push(roleHomeInstruction(role));
@@ -99,7 +101,7 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  const {buildSystemPrompt}=await import(pathToFileURL(path.join(sdkRoot,'core/system-prompt.js')).href);
  const tools=[createReadToolDefinition,createBashToolDefinition,createEditToolDefinition,createWriteToolDefinition,createGrepToolDefinition,createFindToolDefinition,createLsToolDefinition]
   .map(make=>make(cwd)).filter(t=>mode!=='plan'||PLANNING_TOOLS.includes(t.name));
- const base=custom ? renderSystemPrompt(role,ensureRoleHome(role)) : buildSystemPrompt({
+ const base=useRegistry ? buildRegistryRules(role,'text').text : custom ? renderSystemPrompt(role,ensureRoleHome(role)) : buildSystemPrompt({
   cwd,selectedTools:tools.map(t=>t.name),
   toolSnippets:Object.fromEntries(tools.map(t=>[t.name,t.promptSnippet])),
   promptGuidelines:tools.flatMap(t=>t.promptGuidelines ?? []),
@@ -221,7 +223,7 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
   systemPrompt:systemPrompt+'\n\n'+roleHomeInstruction(role)+stagePrompt+missingPrompt,
   appendSystemPrompt:[],
   skillsOverride:()=>({skills:usedSkills,diagnostics:discovered.diagnostics}),
-  agentsFilesOverride:()=>({agentsFiles:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))?.effective ?? fs.readFileSync(f.path,'utf8')})).filter(f=>!systemPrompt.includes(f.content))}),
+  agentsFilesOverride:()=>({agentsFiles:registryEnabled()?[]:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))?.effective ?? fs.readFileSync(f.path,'utf8')})).filter(f=>!systemPrompt.includes(f.content))}),
  });
  await loader.reload();
  return Object.assign(loader,{disposeResources:()=>{if(snapshotDir)fs.rmSync(snapshotDir,{recursive:true,force:true});}});
@@ -240,7 +242,9 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  const discovered=await discoverChatResources(role,true);
  const custom=discovered.systemPromptSource;
  let base:string;
- if(custom) base=renderSystemPrompt(role,ensureRoleHome(role));
+ const useRegistry=registryEnabled();
+ if(useRegistry) base=buildRegistryRules(role,'text').text;
+ else if(custom) base=renderSystemPrompt(role,ensureRoleHome(role));
  else {
   const sdkRoot=path.dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')));
   const {buildSystemPrompt}=await import(pathToFileURL(path.join(sdkRoot,'core/system-prompt.js')).href);
@@ -252,11 +256,11 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  // AGENTS.md роли и её папка: при переезде чата внутрь процесса (8986da3) эти
  // два слоя выпали из базовой инструкции — роль не знала ни про свою папку, ни
  // про свои навыки. Возвращены оба, файлом и текстом соответственно.
- for(const file of discovered.agentsFiles)append.push('# '+file.path+'\n'+(composeLayer(role,keyFor(file.path))?.effective ?? fs.readFileSync(file.path,'utf8')));
+ for(const file of useRegistry?[]:discovered.agentsFiles)append.push('# '+file.path+'\n'+(composeLayer(role,keyFor(file.path))?.effective ?? fs.readFileSync(file.path,'utf8')));
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))?.effective ?? fs.readFileSync(source.path,'utf8'));
  // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).
  append.push(roleHomeInstruction(role));
- append.push(behaviorInstruction(role));
+ append.push(useRegistry?genderInstruction(role):behaviorInstruction(role));
  append.push(renderPromptAddendum('chat',role,ensureRoleHome(role)));
  append.push(chatModeInstruction(mode));
  append.push('ПРОМЕЖУТОЧНЫЕ ПОЯСНЕНИЯ: краткость относится к итогу. Чек-лист (taskflow_work_plan) заводится до начала работы, где больше одного шага. Дальше обычный текст идёт по чек-листу — начал этап, одной фразой что делаешь; закрыл этап, одной-двумя фразами что по нему вышло. Внутри этапа по операциям не отчитывайся: одна операция почти ничего не меняет, и повторять «делаю то же самое» незачем. Вне плана пиши только когда меняешь подход, нашёл значимое, перед содержательной проверкой или упёрся — одной фразой, что именно. Обычный текст должен быть понятен владельцу без открытия инструментов. Не выдумывай прогресс. Не раскрывай внутренние рассуждения. Это правило уточняет запреты пересказа хода работы в старых инструкциях.');

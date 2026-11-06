@@ -5640,6 +5640,19 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_chat_plan_hints_item ON chat_plan_hints(chat_id, role_id, item_id)`);
     },
   },
+  {
+    id: "196_role_rules_log",
+    description: "role_rules_log: какие правила реестра ушли в инструкцию роли (роль, канал, id, хэш, время)",
+    up: () => {
+      db.exec(`CREATE TABLE IF NOT EXISTS role_rules_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        role TEXT NOT NULL, channel TEXT NOT NULL, hash TEXT NOT NULL,
+        ids_json TEXT NOT NULL, text_len INTEGER NOT NULL,
+        first_at TEXT NOT NULL, last_at TEXT NOT NULL, uses INTEGER NOT NULL DEFAULT 1,
+        UNIQUE(role, channel, hash)
+      )`);
+    },
+  },
 
   {
     id: "195_memory_observer_events",

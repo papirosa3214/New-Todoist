@@ -1,3 +1,5 @@
+import { registryEnabled, registryInstructionText } from "./roleRegistryPrompt.js";
+import type { RuleChannel } from "../lib/roleRules.js";
 import {behaviorInstruction} from './roleBehavior.js';
 import { roleBlockLines } from "../lib/roleContractV1.js";
 import fs from "node:fs";
@@ -173,6 +175,18 @@ export function renderPromptAddendum(
     .split("{{BLOCKS}}").join(roleBlockLines());
 }
 
+/** Значения {{IDENTITY}}, {{FOLDER}}, {{BLOCKS}} — общие для канона и реестра правил. */
+export function placeholderValues(role: string, home: ReturnType<typeof roleHome>): Record<string, string> {
+  const identity = `Ты — ${roleTitle(role)} в трекере TaskFlow (ключ роли: ${role}).`;
+  const folder = [
+    `- папка роли: ${home.dir}`,
+    `- инструкция роли (AGENTS.md): ${home.agents}`,
+    `- навыки: ${home.skills}/<имя-навыка>/SKILL.md, скрипты и файлы навыка — рядом с его SKILL.md`,
+    `- скрипты роли: ${home.scripts} (указывай абсолютный путь)`,
+    `- рабочие файлы чата: ${home.workspace}`,
+  ].join("\n");
+  return { IDENTITY: identity, FOLDER: folder, BLOCKS: roleBlockLines() };
+}
 export function renderSystemPrompt(role: string, home: ReturnType<typeof roleHome>): string {
   const identity = `Ты — ${roleTitle(role)} в трекере TaskFlow (ключ роли: ${role}).`;
   const folder = [
@@ -280,7 +294,8 @@ export async function prepareChatSessionDirectory(role: string, chatId: string, 
  *  scripts/role-system-prompt.md (SYSTEM.md, со списком блоков из схемы) и
  *  AGENTS.md в папке роли. roles.prompt в БД и scripts/role-prompts больше не
  *  читаются. withAgents=false — когда AGENTS.md подключает загрузчик ресурсов. */
-export function roleInstructionText(role: string, options: { withAgents?: boolean } = {}): string {
+export function roleInstructionText(role: string, options: { withAgents?: boolean; channel?: RuleChannel } = {}): string {
+  if (registryEnabled()) return registryInstructionText(role, options.channel ?? "card");
   const home = ensureRoleHome(role, { refreshSystem: true });
   const system = fs.readFileSync(home.system, "utf8").trim();
   if (options.withAgents === false) return [system,behaviorInstruction(role)].join("\n\n");
