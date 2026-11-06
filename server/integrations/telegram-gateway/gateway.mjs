@@ -35,6 +35,10 @@ const streamMode = (() => {
 const richEnabled = !["0", "off", "false", "no"].includes(String(process.env.TASKFLOW_TELEGRAM_RICH || "").trim().toLowerCase());
 /** Пауза между частями одного ответа, мс (диапазон 300–500 из плана этапа 5). */
 const PART_PAUSE_MS = 400;
+/** Топики как рабочие пространства (этап 7). Выключено — прежнее поведение. */
+const topicsEnabled = ["1", "on", "true", "yes"].includes(String(process.env.TASKFLOW_TELEGRAM_TOPICS || "").trim().toLowerCase());
+/** Параллельность между топиками: не больше 8 разных ключей беседы сразу. */
+const CONVERSATION_LIMIT = 8;
 let draftSupported = streamMode === "draft" ? true : streamMode === "auto" ? null : false;
 let stopped = false;
 let offset = await loadOffset();
@@ -200,10 +204,13 @@ async function handleUpdate(update) {
   if (meta === null) { await telegram("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: "Файл больше 15 МБ или подходящего варианта фото нет." }); return; }
   const attachments = await downloadAttachment(meta);
   const transcript = attachments.map((item) => item.transcript).filter(Boolean).join("\n");
-  await taskflow("/api/integrations/telegram/inbound", { method: "POST", body: JSON.stringify({ bot_id: botId, update_id: update.update_id, chat_id: message.chat.id, user_id: message.from.id, chat_type: message.chat.type, message_id: message.message_id, text: message.text || transcript || "", caption: message.caption || (meta?.kind === "voice" && !transcript ? "Голосовое не распознано" : ""), attachments }) });
+  // Тред входящего — часть адреса беседы (этап 7). Выключенные топики его не
+  // передают: сервер не узнает про тред, поведение прежнее.
+  const threadId = topicsEnabled ? (Number(message.message_thread_id || message.reply_to_message?.message_thread_id || 0) || null) : null;
+  await taskflow("/api/integrations/telegram/inbound", { method: "POST", body: JSON.stringify({ bot_id: botId, update_id: update.update_id, chat_id: message.chat.id, user_id: message.from.id, chat_type: message.chat.type, message_id: message.message_id, thread_id: threadId, text: message.text || transcript || "", caption: message.caption || (meta?.kind === "voice" && !transcript ? "Голосовое не распознано" : ""), attachments }) });
   // Запрос принят — сразу показываем «печатает…», не дожидаясь 10-секундного
   // статуса и черновика. Останавливается на финале/ошибке в sendOutbox.
-  startTyping(message.chat.id);
+  startTyping(message.chat.id, threadId);
 }
 
 const statusBubbles = await loadStatusBubbles();
@@ -213,19 +220,24 @@ const statusBubbles = await loadStatusBubbles();
 // держим его повтором каждые 4 с, пока ход не закончится финалом или ошибкой.
 const typingTimers = new Map();
 const TYPING_INTERVAL_MS = 4_000;
-function startTyping(chatId) {
-  const key = Number(chatId);
+function typingKey(chatId, threadId) {
+  return `${Number(chatId)}:${Number(threadId) > 0 ? Number(threadId) : 0}`;
+}
+function startTyping(chatId, threadId) {
+  const key = typingKey(chatId, threadId);
   if (typingTimers.has(key)) return;
-  const tick = () => { telegram("sendChatAction", { chat_id: key, action: "typing" }).catch(() => {}); };
+  // «Печатает…» — в тот же топик, иначе индикатор встаёт в общий.
+  const tick = () => { telegram("sendChatAction", { chat_id: Number(chatId), action: "typing", ...(Number(threadId) > 0 ? { message_thread_id: Number(threadId) } : {}) }).catch(() => {}); };
   tick();
   const timer = setInterval(tick, TYPING_INTERVAL_MS);
   timer.unref?.();
   typingTimers.set(key, timer);
 }
-function stopTyping(chatId) {
-  const key = Number(chatId);
-  const timer = typingTimers.get(key);
-  if (timer) { clearInterval(timer); typingTimers.delete(key); }
+function stopTyping(chatId, threadId) {
+  for (const key of [typingKey(chatId, threadId), typingKey(chatId, 0)]) {
+    const timer = typingTimers.get(key);
+    if (timer) { clearInterval(timer); typingTimers.delete(key); }
+  }
 }
 
 // Одна обновляемая строка статуса на ход, как у Hermes: пока роль думает —
@@ -240,8 +252,16 @@ async function editStatus(chatId, telegramMessageId, text, disableNotification, 
   try { await telegram("editMessageText", { chat_id: chatId, message_id: telegramMessageId, text: String(text || "").slice(0, STATUS_TEXT_MAX), ...(replyMarkup ? { reply_markup: replyMarkup } : {}), ...(disableNotification === undefined ? {} : { disable_notification: disableNotification }) }); return true; }
   catch { return false; }
 }
+/** `message_thread_id` — единственная адресация топика в личном чате (живой
+ *  факт 06.11.2026); `direct_messages_topic_id` там сообщение в топик не кладёт. */
+function threadOf(delivery, payload) {
+  if (!topicsEnabled) return null;
+  const thread = Number(payload.message_thread_id ?? delivery.thread_id ?? 0);
+  return Number.isSafeInteger(thread) && thread > 0 ? thread : null;
+}
 function sendArgs(delivery, payload, text) {
-  return { chat_id: Number(delivery.chat_id), text, ...(payload.reply_to_message_id ? { reply_to_message_id: payload.reply_to_message_id } : {}), ...(payload.reply_markup ? { reply_markup: payload.reply_markup } : {}), ...(payload.disable_notification === true ? { disable_notification: true } : {}) };
+  const thread = threadOf(delivery, payload);
+  return { chat_id: Number(delivery.chat_id), text, ...(thread ? { message_thread_id: thread } : {}), ...(payload.reply_to_message_id ? { reply_to_message_id: payload.reply_to_message_id } : {}), ...(payload.reply_markup ? { reply_markup: payload.reply_markup } : {}), ...(payload.disable_notification === true ? { disable_notification: true } : {}) };
 }
 /** Черновик живёт ~30 с и эфемерен: финал всё равно приходит отдельным sendMessage. */
 async function sendDraft(delivery, payload, text) {
@@ -262,10 +282,16 @@ async function sendDraft(delivery, payload, text) {
 
 async function sendDelivery(delivery, payload) {
   const method = String(payload.method || "sendMessage");
-  const key = payload.reply_to_message_id ? `${delivery.chat_id}:${payload.reply_to_message_id}` : null;
+  // Ключ строки статуса: чат + тред + сообщение. Без треда (выключенные
+  // топики) ключ прежний — старые записи status-bubbles.json продолжают
+  // работать, история пузырей не рвётся.
+  const threadKey = threadOf(delivery, payload);
+  const key = payload.reply_to_message_id
+    ? (threadKey ? `${delivery.chat_id}:${threadKey}:${payload.reply_to_message_id}` : `${delivery.chat_id}:${payload.reply_to_message_id}`)
+    : null;
   const text = String(payload.text || "").slice(0, STATUS_TEXT_MAX);
   // Финал или ошибка закрывают ход — гасим «печатает…».
-  if (delivery.kind === "final" || delivery.kind === "error") stopTyping(delivery.chat_id);
+  if (delivery.kind === "final" || delivery.kind === "error") stopTyping(delivery.chat_id, threadKey);
 
   if (method === "setMessageReaction") {
     if (!reactionsEnabled) { await settle(delivery, { ok: true }); return; }
@@ -323,6 +349,31 @@ async function sendDelivery(delivery, payload) {
     return;
   }
 
+  if (method === "createForumTopic" || method === "editForumTopic") {
+    // Топики (этап 7). Создание возвращает `message_thread_id` — без него
+    // сервер не может привязать топик к комнате, поэтому id уходит обратно
+    // в результате доставки (`thread_id`).
+    if (!topicsEnabled) { log("topic_skipped", { delivery_id: delivery.delivery_id, reason: "flag_off" }); await settle(delivery, { ok: true }); return; }
+    try {
+      if (method === "createForumTopic") {
+        const created = await telegram("createForumTopic", { chat_id: Number(delivery.chat_id), name: String(payload.name || "").slice(0, 128) });
+        log("topic_created", { delivery_id: delivery.delivery_id, thread_id: created?.message_thread_id ?? null });
+        await settle(delivery, { ok: true, threadId: Number(created?.message_thread_id) || undefined });
+        return;
+      }
+      const thread = Number(payload.message_thread_id || 0);
+      await telegram("editForumTopic", { chat_id: Number(delivery.chat_id), message_thread_id: thread, name: String(payload.name || "").slice(0, 128) });
+      await settle(delivery, { ok: true, threadId: thread || undefined });
+      return;
+    } catch (error) {
+      // Режим топиков включается в @BotFather; отказ Bot API — не поломка
+      // доставки. Сервер сам скажет владельцу, что топик не создан.
+      log("topic_failed", { delivery_id: delivery.delivery_id, method, status: Number(error.status || 0), error: String(error.message || error) });
+      await settle(delivery, { ok: false, permanent: Number(error.status || 0) >= 400 && Number(error.status || 0) < 500, error: String(error.message || error).slice(0, 300) });
+      return;
+    }
+  }
+
   if (method !== "sendMessage") {
     // Неизвестный метод: сервер новее gateway. Не падаем и не теряем ход —
     // помечаем доставку abandoned с причиной в логе.
@@ -340,7 +391,8 @@ async function sendDelivery(delivery, payload) {
       if (part.sent) continue;
       if (sentAny > 0) await sleep(Number(payload.part_pause_ms) || PART_PAUSE_MS);
       try {
-        const args = { chat_id: Number(delivery.chat_id), text: String(part.text || "").slice(0, STATUS_TEXT_MAX) };
+        const thread = threadOf(delivery, payload);
+        const args = { chat_id: Number(delivery.chat_id), text: String(part.text || "").slice(0, STATUS_TEXT_MAX), ...(thread ? { message_thread_id: thread } : {}) };
         // Ответ на сообщение-триггер — у первой части, чтобы цитата не повторялась.
         if (sentAny === 0 && payload.reply_to_message_id) args.reply_to_message_id = payload.reply_to_message_id;
         const sent = await telegram("sendMessage", args);
@@ -396,8 +448,10 @@ async function sendRich(delivery, payload, fallbackText) {
     log("rich_skipped", { delivery_id: delivery.delivery_id, reason: richEnabled ? "empty_html" : "flag_off" });
   } else {
     try {
+      const richThread = threadOf(delivery, payload);
       const sent = await telegram("sendRichMessage", {
         chat_id: Number(delivery.chat_id),
+        ...(richThread ? { message_thread_id: richThread } : {}),
         rich_message: payload.rich_message,
         ...(payload.link_preview_options ? { link_preview_options: payload.link_preview_options } : {}),
         ...(payload.disable_notification === true ? { disable_notification: true } : {}),
@@ -412,19 +466,50 @@ async function sendRich(delivery, payload, fallbackText) {
   await settle(delivery, { ok: true, telegramMessageId: sent.message_id });
 }
 
+/**
+ * Ключ беседы для очереди: `{chat}:{thread}`. Внутри ключа доставки идут
+ * строго по порядку (FIFO), разные ключи — параллельно, но не больше
+ * CONVERSATION_LIMIT одновременно (как у Hermes).
+ */
+function conversationKey(delivery, payload) {
+  if (!topicsEnabled) return String(delivery.chat_id);
+  const thread = Number(payload.message_thread_id ?? delivery.thread_id ?? 0);
+  return `${delivery.chat_id}:${Number.isSafeInteger(thread) && thread > 0 ? thread : 0}`;
+}
+
+async function deliverOne(delivery) {
+  try {
+    await taskflow(`/api/integrations/telegram/outbox/${delivery.delivery_id}/claim`, { method: "POST", body: "{}" });
+    const payload = JSON.parse(delivery.payload_json || "{}");
+    await sendDelivery(delivery, payload);
+  } catch (error) {
+    const status = Number(error.status || 0);
+    const retryAfterSeconds = Number(error.parameters?.retry_after || 0) || undefined;
+    await settle(delivery, { ok: false, permanent: status >= 400 && status < 500 && status !== 429, ambiguous: !status, retryAfterSeconds, error: String(error.message || error).slice(0, 500), ...(Array.isArray(error.parts) ? { parts: error.parts } : {}) });
+  }
+}
+
 async function sendOutbox() {
   const { deliveries = [] } = await taskflow("/api/integrations/telegram/outbox?limit=20");
+  // Группировка сохраняет порядок выдачи сервера: внутри ключа части одного
+  // ответа уходят друг за другом, а не наперегонки.
+  const groups = new Map();
   for (const delivery of deliveries) {
-    try {
-      await taskflow(`/api/integrations/telegram/outbox/${delivery.delivery_id}/claim`, { method: "POST", body: "{}" });
-      const payload = JSON.parse(delivery.payload_json || "{}");
-      await sendDelivery(delivery, payload);
-    } catch (error) {
-      const status = Number(error.status || 0);
-      const retryAfterSeconds = Number(error.parameters?.retry_after || 0) || undefined;
-      await settle(delivery, { ok: false, permanent: status >= 400 && status < 500 && status !== 429, ambiguous: !status, retryAfterSeconds, error: String(error.message || error).slice(0, 500), ...(Array.isArray(error.parts) ? { parts: error.parts } : {}) });
-    }
+    let payload = {};
+    try { payload = JSON.parse(delivery.payload_json || "{}"); } catch {}
+    const key = conversationKey(delivery, payload);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(delivery);
   }
+  const queues = [...groups.values()].map((items) => items.slice());
+  const workers = Array.from({ length: Math.min(CONVERSATION_LIMIT, queues.length) }, async () => {
+    for (;;) {
+      const queue = queues.shift();
+      if (!queue) return;
+      for (const delivery of queue) await deliverOne(delivery);
+    }
+  });
+  await Promise.all(workers);
 }
 
 // Меню синхронизируется при старте и дальше раз в 5 минут: сервер может быть

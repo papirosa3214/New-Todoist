@@ -169,6 +169,7 @@ import {
 import {
 } from "../runtime/inProcessRun.js";
 import { cancelTelegramProgress, captureTelegramFinal, startTelegramStream } from "../integrations/telegram.js";
+import { isTelegramRoom } from "../lib/telegramTopics.js";
 import {
   attachmentRow,
   saveUploadedFile,
@@ -3619,7 +3620,7 @@ async function deliverAgentReply(args: {
   let persistedReply=false;
   try {
     typing(true);
-    if (chatId === "chat-secretary") {
+    if (isTelegramRoom(chatId)) {
       try { startTelegramStream(trigger.id, () => live.partialText()); } catch { /* Telegram-поток необязателен */ }
     }
   try {
@@ -3808,7 +3809,7 @@ async function deliverAgentReply(args: {
     // Telegram. Раньше captureTelegramFinal вызывался только в POST /messages
     // (клиент), а живой ход роли пишет сообщение прямо в БД — и владелец не
     // получал ответа в Telegram вовсе.
-    if (chatId === "chat-secretary") {
+    if (isTelegramRoom(chatId)) {
       try { captureTelegramFinal(replyId); } catch (error) { console.warn("[telegram] финал не ушёл:", error); }
     }
     for(const material of overflow){

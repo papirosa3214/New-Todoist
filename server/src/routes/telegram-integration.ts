@@ -131,6 +131,8 @@ export function registerTelegramIntegrationRoutes(app: FastifyInstance) {
   });
 
   app.post<{ Params: { id: string } }>("/api/integrations/telegram/outbox/:id/result", { preHandler: auth }, async (req: any) => {
+    // `thread_id` в ответе gateway — id топика, который вернул createForumTopic
+    // (этап 7): только здесь сервер узнаёт, к какому треду привязывать комнату.
     settleTelegramDelivery(req.params.id, req.body ?? { ok: false });
     return { ok: true };
   });
