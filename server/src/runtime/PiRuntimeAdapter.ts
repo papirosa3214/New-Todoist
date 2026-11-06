@@ -1536,7 +1536,7 @@ async function startChatRunOnce(
     // в голове и не выбирает шаг по ощущению.
     const chatPlanPrompt = chatWorkPlanPrompt(input.chatId, input.roleId);
     const systemPrompt = chatTurnSystemText(role,
-      await preparation.wait(chatSystemPrompt(role,mode,cwd)),
+      await preparation.wait(chatSystemPrompt(role,mode,cwd,input.chatId)),
       [chatExecutionInstruction(chatExecutionMode(input.chatId,input.messageId)),ROLE_TOOL_INSTRUCTION,chatPlanPrompt??""]);
     const resourceLoader = await preparation.wait(createTaskResourceLoader(
       role,

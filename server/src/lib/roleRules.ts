@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export type RuleChannel = "text" | "card" | "voice";
+export type RuleChannel = "chat" | "card" | "voice";
 export type RoleRule = {
   id: string;
   old_id?: string;
@@ -17,7 +17,7 @@ export type RoleRule = {
   enabled?: boolean;
   sources?: Array<{ file: string; line: number; section: string }>;
 };
-export const ALL_CHANNELS: RuleChannel[] = ["text", "card", "voice"];
+export const ALL_CHANNELS: RuleChannel[] = ["chat", "card", "voice"];
 /** Категории, которые идут в инструкцию. «Текст из кода*» код подставляет сам — не задваиваем. */
 export const INCLUDED_CATEGORIES = ["общий шаблон", "личные инструкции", "характер", "новое 06.11.2026"];
 
@@ -31,7 +31,7 @@ export function deriveChannels(where: string | undefined): RuleChannel[] {
   const w = (where ?? "").toLowerCase();
   if (/везд|все роли/.test(w)) return [...ALL_CHANNELS];
   const out: RuleChannel[] = [];
-  if (/текст|чат/.test(w)) out.push("text");
+  if (/текст|чат/.test(w)) out.push("chat");
   if (/карточ|слот|задач/.test(w)) out.push("card");
   if (/голос/.test(w)) out.push("voice");
   return out.length ? out : [...ALL_CHANNELS];
@@ -44,7 +44,8 @@ export function loadRoleRules(): RoleRule[] {
   if (cache && cache.file === file && cache.mtimeMs === st.mtimeMs && cache.size === st.size) return cache.rules;
   const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
   if (!Array.isArray(parsed)) throw new Error("role-rules.json: ожидался массив правил");
-  const rules = (parsed as RoleRule[]).map((r) => ({ ...r, channels: r.channels?.length ? r.channels : deriveChannels(r.where) }));
+  const norm = (list: string[]) => list.map((c) => (c === "text" ? "chat" : c)) as RuleChannel[];
+  const rules = (parsed as RoleRule[]).map((r) => ({ ...r, channels: r.channels?.length ? norm(r.channels) : deriveChannels(r.where) }));
   cache = { file, mtimeMs: st.mtimeMs, size: st.size, rules };
   return rules;
 }

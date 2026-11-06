@@ -1,5 +1,6 @@
 import {hasSingleChatSystem,singleChatSystemPrompt} from "./secretaryChatPrompt.js";
 import {behaviorInstruction,genderInstruction} from './roleBehavior.js';
+import {chatExecutionMode} from './chatExecutionMode.js';
 import {registryEnabled,buildRegistryRules} from './roleRegistryPrompt.js';
 import { stageSkillNames } from "../lib/collaborationTemplates.js";
 import { PLANNING_TOOLS, chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
@@ -52,7 +53,8 @@ export function instructionResources(cwd=process.cwd()) {
  return specs;
 }
 /** Freeze the exact text sources once per chat turn, leave SDK tool schema and extensions intact. */
-export async function chatInstructionArgs(role:string, configPath:string, mode:ChatWorkMode="work", cwd=ensureRoleHome(role).workspace):Promise<string[]> {
+export async function chatInstructionArgs(role:string, configPath:string, mode:ChatWorkMode="work", cwd=ensureRoleHome(role).workspace, chatId?:string):Promise<string[]> {
+ const channel=chatExecutionMode(chatId)==="card"?"card":"chat";
  instructionResources(cwd);
  const dir=path.dirname(configPath);const prefix=path.basename(configPath);
  const discovered=await discoverChatResources(role,true);
@@ -101,7 +103,7 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  const {buildSystemPrompt}=await import(pathToFileURL(path.join(sdkRoot,'core/system-prompt.js')).href);
  const tools=[createReadToolDefinition,createBashToolDefinition,createEditToolDefinition,createWriteToolDefinition,createGrepToolDefinition,createFindToolDefinition,createLsToolDefinition]
   .map(make=>make(cwd)).filter(t=>mode!=='plan'||PLANNING_TOOLS.includes(t.name));
- const base=useRegistry ? buildRegistryRules(role,'text').text : custom ? renderSystemPrompt(role,ensureRoleHome(role)) : buildSystemPrompt({
+ const base=useRegistry ? buildRegistryRules(role,channel).text : custom ? renderSystemPrompt(role,ensureRoleHome(role)) : buildSystemPrompt({
   cwd,selectedTools:tools.map(t=>t.name),
   toolSnippets:Object.fromEntries(tools.map(t=>[t.name,t.promptSnippet])),
   promptGuidelines:tools.flatMap(t=>t.promptGuidelines ?? []),
@@ -236,14 +238,15 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  * SYSTEM.md или штатная Pi), дополнения роли, правила и режим чата.
  * AGENTS.md и навыки подмешивает загрузчик ресурсов (createTaskResourceLoader).
  */
-export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:string):Promise<string> {
+export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:string, chatId?:string):Promise<string> {
+ const channel=chatExecutionMode(chatId)==="card"?"card":"chat";
  if(hasSingleChatSystem(role))return singleChatSystemPrompt(role);
  instructionResources(cwd);
  const discovered=await discoverChatResources(role,true);
  const custom=discovered.systemPromptSource;
  let base:string;
  const useRegistry=registryEnabled();
- if(useRegistry) base=buildRegistryRules(role,'text').text;
+ if(useRegistry) base=buildRegistryRules(role,channel).text;
  else if(custom) base=renderSystemPrompt(role,ensureRoleHome(role));
  else {
   const sdkRoot=path.dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')));

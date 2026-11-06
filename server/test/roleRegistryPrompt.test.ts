@@ -35,10 +35,10 @@ describe("реестр: выбор и рендер", () => {
     const rules = loadRoleRules();
     expect(rules.length).toBeGreaterThan(500);
     expect(rules.every((r) => r.channels && r.channels.length > 0)).toBe(true);
-    expect(deriveChannels("везде, где работает роль")).toEqual(["text", "card", "voice"]);
+    expect(deriveChannels("везде, где работает роль")).toEqual(["chat", "card", "voice"]);
     expect(deriveChannels("только голос")).toEqual(["voice"]);
     expect(deriveChannels("работа по карточке")).toEqual(["card"]);
-    expect(deriveChannels("непонятно")).toEqual(["text", "card", "voice"]);
+    expect(deriveChannels("непонятно")).toEqual(["chat", "card", "voice"]);
   });
   it("в сборку идут только нужные категории; код-тексты и data не попадают", () => {
     const got = rulesFor("builder", "card");
@@ -73,7 +73,7 @@ describe("реестр: подключение", () => {
   it("текстовый чат builder: системный текст = реестр, AGENTS.md второй раз не приходит", async () => {
     const cwd = roleHome("builder").workspace;
     const prompt = await chatSystemPrompt("builder", "work", cwd);
-    const rules = buildRegistryRules("builder", "text").text;
+    const rules = buildRegistryRules("builder", "chat").text;
     expect(prompt.startsWith(rules)).toBe(true);
     expect(prompt).not.toContain(MARKER);
     expect(once(prompt)).toBe(1);
