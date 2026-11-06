@@ -8,6 +8,13 @@ import { ownerMessageText, ownerNamed, taskDocuments } from "../lib/taskChatScop
 
 export const TASK_CHAT_MODE = "task_chat";
 
+/** Роли, которых ограничение чата задачи не касается: у них в чате карточки те же полномочия, что в обычной работе.
+ *  Помощник владельца — прежнее решение; оркестратор — решение владельца 06.11.2026. */
+const TASK_CHAT_UNRESTRICTED_ROLES = new Set(["secretary", "code_orchestrator"]);
+export function isTaskChatRestrictedRole(role: string): boolean {
+  return !TASK_CHAT_UNRESTRICTED_ROLES.has(role);
+}
+
 /** Встроенные инструменты файлов: только чтение кода. */
 export const TASK_CHAT_FILE_TOOLS = ["read", "grep", "find", "ls"];
 

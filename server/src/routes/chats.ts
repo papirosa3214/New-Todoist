@@ -1,3 +1,4 @@
+import { isTaskChatRestrictedRole } from "../runtime/taskChatTools.js";
 import { syncChecklistMarkWithPlan, resolveChecklistItem } from "../lib/chatChecklistPlanSync.js";
 import { observeChatMemory } from "../runtime/chatMemoryObserver.js";
 import {secretaryChatInput} from "../runtime/secretaryChatPrompt.js";
@@ -3511,7 +3512,7 @@ async function deliverAgentReply(args: {
   // Чат задачи: первым блоком — сама задача и место роли в ней (lib/taskChatBrief.ts).
   // Чат задачи только для отчёта (владелец 05.11.2026): карта и выжимка вместо
   // данных проекта, памяти и библиотеки. Память остаётся в рабочем запуске.
-  const taskChatScoped = !!topic && role !== "secretary" && !args.chatOnly;
+  const taskChatScoped = !!topic && isTaskChatRestrictedRole(role) && !args.chatOnly;
   if (topic) { const brief = taskChatBrief(topic.task_id, role, slot?.id ?? null, chatId, fromOwner ? unwrapRoleEnvelope(trigger.text) : null); if (brief) prompt = `${brief}\n\n${prompt}`; }
   // Заблокированный слот: не запрет, а маячок предложить план решения.
   if (slot?.agent_state === "blocked" && fromOwner) prompt = `${prompt}\n\n${RESOLUTION_PLAN_BEACON}`;
@@ -3530,7 +3531,7 @@ async function deliverAgentReply(args: {
   prompt += `\nОтвечаешь на сообщение ${trigger.id}; сервер свяжет итоговый текст с этим вопросом. Не отправляй тот же ответ повторно инструментом. Для отдельного нового вопроса коллеге используй taskflow_chat_send.`;
   prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Материалы сохраняй инструментом doc_write в документах проекта или прикладывай файлом к этому разговору; для этого не нужна карточка задачи. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
   }
-  if(topic && role!=="secretary" && !taskChatScoped) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
+  if(topic && isTaskChatRestrictedRole(role) && role!=="secretary" && !taskChatScoped) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 
 
   const roleName =

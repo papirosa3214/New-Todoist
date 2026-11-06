@@ -6,7 +6,7 @@ import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import crypto from "node:crypto";
 import { createAgentSession,createReadOnlyTools,SettingsManager } from "@earendil-works/pi-coding-agent";
 import { acquireDiscussionSession,acquireSlotSession,openDiscussionSession,openSlotSession,rememberSlotSession,resolveTopicSlot,topicSlots } from "./slotSession.js";
-import { TASK_CHAT_FILE_TOOLS,TASK_CHAT_MODE } from "./taskChatTools.js";
+import { TASK_CHAT_FILE_TOOLS,TASK_CHAT_MODE,isTaskChatRestrictedRole } from "./taskChatTools.js";
 import { deliverTopicToWork,slotWorkspace } from "./inProcessRun.js";
 import { getModelRuntime, resolveThinkingLevel } from "./PiRuntimeAdapter.js";
 import { createTaskResourceLoader } from "./instructionResources.js";
@@ -18,8 +18,8 @@ import db from "../db.js";
 type ConversationInput={taskId:string;subtaskId:string;role:string;chatId:string;messageId:string;prompt:string;onEvent?:(event:unknown)=>void;onStep?:(tool:string)=>void};
 const active=new Map<string,{chatId:string;roleId:string;abort:()=>Promise<void>}>();
 // Помощник владельца остаётся на прежнем пути: его дела нужны в любом разговоре.
-const isScoped=(role:string)=>role!=="secretary";
-const conversationMode=(role:string)=>isScoped(role) ? TASK_CHAT_MODE : "discussion";
+const isScoped=isTaskChatRestrictedRole;
+export const conversationMode=(role:string)=>isScoped(role) ? TASK_CHAT_MODE : "discussion";
 const SLOT_CHAT_SESSION="chat";
 export function slotConversationTools(role:string,model:string,taskId:string,subtaskId:string){
   return buildRoleToolCatalog({role,model,taskId,subtaskId,mode:conversationMode(role),runId:"discussion"}).customTools;
