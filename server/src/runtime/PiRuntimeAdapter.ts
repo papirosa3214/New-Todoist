@@ -32,7 +32,7 @@ import {
   type ChatWorkMode,
 } from "./chatWorkMode.js";
 import { getSetting } from "../lib/serverSettings.js";
-import { filterByZenCatalog, zenModelIds } from "../lib/zenModelCatalog.js";
+import { filterByLiveCatalog, liveGatewayModelIds } from "../lib/liveModelCatalog.js";
 import { reserveChatItemAction, guardChatActions, assertChatBudgetAtTurnEnd } from "./chatActionBudget.js";
 import { chatWorkPlanPrompt, stopChatWorkPlan } from "../lib/subtaskWorkPlan.js";
 import {
@@ -750,10 +750,11 @@ export const piRuntime: RuntimeAdapter = {
           : undefined,
       });
     }
-    // Каталог models.dev держит в провайдере opencode модели, которых шлюз
-    // Zen уже не обслуживает: выбор такой модели даёт 400 «Model is
-    // unavailable». Сверяем с живым каталогом шлюза (кэш 6 часов).
-    return filterByZenCatalog(models, await zenModelIds());
+    // Каталог models.dev держит в шлюзах opencode модели, которые уже не
+    // обслуживаются: выбор такой модели даёт 400 «Model is unavailable» или
+    // 410 «ModelDeprecated» (06.11.2026 — mimo-v2.5 и mimo-v2.5-pro в
+    // opencode-go). Сверяем с живыми каталогами шлюзов (кэш 1 час).
+    return filterByLiveCatalog(models, await liveGatewayModelIds());
   },
 
   async listProviders(): Promise<ProviderConnection[]> {
