@@ -35,7 +35,10 @@ export async function executeRoleHostTool(c:Context,p:any,signal?:AbortSignal,on
  if(!selected)throw new Error("Неизвестная операция хоста: "+String(p.tool));
  const аргументы=p.arguments??{};
  if(!Check(selected.parameters,аргументы))throw new Error("Неверные параметры операции "+String(p.tool)+":"+местаОшибок(selected.parameters,аргументы));
- const taskId=p.task_id??c.taskId;
+ // Пустая строка от модели — не задача. В чате без задачи чужой или несуществующий task_id не блокирует
+ // работу (06.11.2026): инструмент идёт в контексте чата, права роли и машины проверяются как обычно.
+ let taskId:string|undefined=(p.task_id||c.taskId)||undefined;
+ if(taskId&&!c.taskId&&!getTaskForRead(taskId,roleUserId(c.role)))taskId=undefined;
  let projectId=p.project_id;
  if(taskId){
   if(c.taskId && taskId!==c.taskId)throw new Error("Используй текущую задачу");
@@ -60,7 +63,9 @@ export async function executeRoleHostTool(c:Context,p:any,signal?:AbortSignal,on
  if(typeof args.path==="string"){
   const resolved=path.posix.resolve(cwd,args.path);
   const root=["write","edit"].includes(p.tool)?cwd:target.repo;
-  if(resolved!==root && !resolved.startsWith(root+"/"))throw new Error("Путь выходит за разрешённую папку проекта");
+  // Чат без задачи: указанный абсолютный путь допустим внутри разрешённых корней машины (их же проверяет и сам host).
+  const inMachineRoots=!taskId&&(machine.allowed_roots??[]).some((r:string)=>{const base=r.replace(/\/+$/,"");return resolved===base||resolved.startsWith(base+"/");});
+  if(!inMachineRoots && resolved!==root && !resolved.startsWith(root+"/"))throw new Error("Путь выходит за разрешённую папку проекта");
   args.path=resolved;
  }
  const o=hostOperations(machine.id,cwd);
