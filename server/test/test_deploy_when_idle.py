@@ -1,9 +1,11 @@
 import importlib.util
+import json
 import os
 import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "deploy-when-idle.py"
@@ -97,6 +99,71 @@ class _Result:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+class _HTTPResponse:
+    def __init__(self, body, status=200):
+        self.status = status
+        self.body = json.dumps(body).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.body
+
+
+class SessionApiProbeTests(unittest.TestCase):
+    def test_probe_opens_root_snapshot_and_reconnect(self):
+        responses = iter([
+            _HTTPResponse({"token": "jwt", "user": {"id": "owner"}}),
+            _HTTPResponse({"session": {"id": "root", "isIdle": True}}),
+            _HTTPResponse({"session": {"id": "root", "isIdle": True}}),
+            _HTTPResponse({"resetRequired": True, "events": [], "snapshot": {"id": "root"}}),
+        ])
+        requests = []
+
+        def open_request(request, timeout):
+            requests.append((request, timeout))
+            return next(responses)
+
+        with mock.patch.object(DEPLOY.urllib.request, "urlopen", side_effect=open_request):
+            self.assertTrue(DEPLOY.session_api_healthy())
+
+        self.assertEqual([request.get_method() for request, _ in requests], ["POST", "POST", "GET", "GET"])
+        self.assertTrue(requests[0][0].full_url.endswith("/api/auth/lan"))
+        self.assertEqual(requests[0][0].get_header("X-taskflow-client"), "ios-native")
+        self.assertEqual(requests[1][0].get_header("Authorization"), "Bearer jwt")
+        self.assertTrue(requests[3][0].full_url.endswith("/api/sessions/root/events?after=deploy-probe-missing"))
+
+    def test_probe_rejects_mismatched_snapshot(self):
+        responses = iter([
+            _HTTPResponse({"token": "jwt", "user": {"id": "owner"}}),
+            _HTTPResponse({"session": {"id": "root"}}),
+            _HTTPResponse({"session": {"id": "different"}}),
+        ])
+        with mock.patch.object(DEPLOY.urllib.request, "urlopen", side_effect=lambda *_args, **_kwargs: next(responses)):
+            self.assertFalse(DEPLOY.session_api_healthy())
+
+
+class RecheckTests(unittest.TestCase):
+    def test_each_recheck_uses_a_fresh_transient_unit(self):
+        calls = []
+        original_sh = DEPLOY.sh
+        try:
+            setattr(DEPLOY, "sh", lambda *cmd, **_kwargs: calls.append(cmd) or _Result())
+            DEPLOY.recheck()
+            DEPLOY.recheck()
+        finally:
+            setattr(DEPLOY, "sh", original_sh)
+
+        units = [next(part for part in call if part.startswith("--unit=")) for call in calls]
+        self.assertEqual(len(units), 2)
+        self.assertNotEqual(units[0], units[1])
+        self.assertTrue(all(unit.startswith("--unit=taskflow-deploy-recheck-") for unit in units))
 
 
 class SyncFromGithubTests(unittest.TestCase):
