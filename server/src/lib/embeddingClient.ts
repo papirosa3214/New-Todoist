@@ -13,6 +13,7 @@
 // датасетов RAGFlow идёт через другое имя (`bge-m3-gpu@Ollama`) —
 // специально оставлено, чтобы не ломать то, что на нём держится.
 
+import { keepAliveFor } from "./localModels.js";
 import { finishObservation, startObservation } from "./contextObservability.js";
 import { getSetting } from "./serverSettings.js";
 
@@ -60,7 +61,7 @@ async function fetchOne(
     const res = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt }),
+      body: JSON.stringify({ model, prompt, ...keepAliveFor(model) }),
       signal: ctrl.signal,
     });
     if (!res.ok) {

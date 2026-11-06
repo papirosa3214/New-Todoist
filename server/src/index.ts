@@ -1,3 +1,4 @@
+import { LOCAL_DEFAULT_MODEL } from "./lib/localModels.js";
 import { startChatMemoryObserver } from "./runtime/chatMemoryObserver.js";
 import {registerChatSessionPreferenceRoutes} from "./routes/chat-session-preferences.js";
 import {startBudgetCaptureWatcher} from "./runtime/chatBudgetCases.js";
@@ -793,7 +794,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11500"
     ).replace(/\/+$/, "");
     const ollamaModel =
-      process.env.OLLAMA_MODEL || "MiniMax-M3.1-Flash-Preview";
+      process.env.OLLAMA_MODEL || LOCAL_DEFAULT_MODEL;
     try {
       const ollamaRes = await fetch(`${ollamaBaseUrl}/api/tags`, {
         signal: AbortSignal.timeout(1500),

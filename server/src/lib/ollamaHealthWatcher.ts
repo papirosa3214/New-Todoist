@@ -40,6 +40,7 @@
 //     «очередью» — значит уводить разбор не туда: теперь эти состояния
 //     различаются, и подсказка в карточке тревоги соответствует причине.
 
+import { keepAliveFor } from "./localModels.js";
 import db from "../db.js";
 import { raiseIncident, incidentRaisedRecently } from "./incidents.js";
 import { getSetting } from "./serverSettings.js";
@@ -273,7 +274,7 @@ export async function checkOllamaHealth(): Promise<CheckResult> {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: DEFAULT_EMBEDDING_MODEL, prompt: "проверка" }),
+      body: JSON.stringify({ model: DEFAULT_EMBEDDING_MODEL, prompt: "проверка", ...keepAliveFor(DEFAULT_EMBEDDING_MODEL) }),
       signal: controller.signal,
     });
     if (!res.ok) {

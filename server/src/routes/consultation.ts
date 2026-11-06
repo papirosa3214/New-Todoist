@@ -17,6 +17,7 @@
 // Если алиас незнакомый, отдаём в claude как есть: модель может
 // оказаться в длинных алиасах провайдера и вернуться через
 // провайдерский fallback внутри callUnifiedAi.
+import { LOCAL_DEFAULT_MODEL } from "../lib/localModels.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
@@ -41,7 +42,7 @@ const CONSULTANT_MODEL_MAP: Record<
 > = {
   opus: { provider: "claude", aiModel: "claude-opus-4-6-thinking" },
   sonnet: { provider: "claude", aiModel: "claude-sonnet-4-6" },
-  haiku: { provider: "local", localModel: "MiniMax-M3.1-Flash-Preview" },
+  haiku: { provider: "local", localModel: LOCAL_DEFAULT_MODEL },
 };
 
 function resolveConsultant(

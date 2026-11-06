@@ -1,3 +1,4 @@
+import { LOCAL_DEFAULT_MODEL } from "../lib/localModels.js";
 import { weeklySummaryWithBlocks } from "../lib/chatBlocks.js";
 import { NonTaskInputError } from "../lib/taskPreparation.js";
 import { structureTaskDraft } from "../lib/taskStructure.js";
@@ -23,7 +24,7 @@ import { ROLE_NAMES, rolesPromptBlock, type RoleName } from "../roleRouting.js";
 const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11500"
 ).replace(/\/+$/, "");
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "MiniMax-M3.1-Flash-Preview";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || LOCAL_DEFAULT_MODEL;
 
 // Модель «думающая» (reasoning:true) — рассуждения могут занимать десятки
 // секунд ДО того, как пойдёт сам ответ. 23с ушло на тривиальное «привет»

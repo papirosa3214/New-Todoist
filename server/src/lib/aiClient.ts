@@ -1,3 +1,4 @@
+import { LOCAL_DEFAULT_MODEL, keepAliveFor } from "./localModels.js";
 // Общий AI-транспорт; маршруты и подготовка задач используют один клиент.
 const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11500").replace(/\/+$/, "");
 const OLLAMA_TIMEOUT_MS = 120_000;
@@ -113,7 +114,7 @@ export async function callUnifiedAi(opts: {
   // reasoning-класса и по умолчанию отвечает без «думания» (см. think
   // ниже), для Дневника думание включается точечно.
   const targetModel =
-    opts.localModel || process.env.OLLAMA_MODEL || "MiniMax-M3.1-Flash-Preview";
+    opts.localModel || process.env.OLLAMA_MODEL || LOCAL_DEFAULT_MODEL;
   let res: Response;
   try {
   try {
@@ -130,6 +131,7 @@ export async function callUnifiedAi(opts: {
           { role: "user", content: opts.userPrompt },
         ],
         stream: false,
+        ...keepAliveFor(targetModel),
         think: opts.think ?? false,
         options: {
           num_ctx: opts.numCtx ?? 8192,

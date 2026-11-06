@@ -1,3 +1,4 @@
+import { LOCAL_DEFAULT_MODEL, keepAliveFor } from "../lib/localModels.js";
 import { taskLiveTurns } from "../runtime/taskLiveTurn.js";
 // POST /api/tasks/:id/activity — живой поток действий агента.
 //
@@ -516,7 +517,7 @@ const OBSERVER_BASE_URL = (
 // принятая в проекте замена; think:false обязателен, иначе «думающая»
 // модель тратит 60-70с на один ответ вместо ~10с (тот же комментарий).
 const OBSERVER_MODEL =
-  process.env.ACTIVITY_OBSERVER_MODEL || "MiniMax-M3.1-Flash-Preview";
+  process.env.ACTIVITY_OBSERVER_MODEL || LOCAL_DEFAULT_MODEL;
 const OBSERVER_INTERVAL_MS = 5_000;
 const OBSERVER_TIMEOUT_MS = 25_000;
 /** Сколько живёт метка «на задачу смотрят» после последнего GET. Клиент
@@ -612,6 +613,7 @@ async function interpretOnce(): Promise<void> {
           { role: "user", content: userPrompt },
         ],
         stream: false,
+        ...keepAliveFor(OBSERVER_MODEL),
         think: false,
         options: { num_ctx: 4096, num_predict: 64, temperature: 0.2 },
       }),
