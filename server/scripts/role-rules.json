@@ -1294,7 +1294,9 @@
   "channels": [
    "chat",
    "card"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "повтор R018 — 06.11.2026"
  },
  {
   "id": "R062",
@@ -8019,7 +8021,9 @@
   "channels": [
    "chat"
   ],
-  "text_before_shrink": "Постоянная папка роли analyst: `/home/maksim/taskflow/roles/analyst`\nИнструкции роли: `/home/maksim/taskflow/roles/analyst/AGENTS.md`\nНавыки роли: `/home/maksim/taskflow/roles/analyst/skills/<имя-навыка>/SKILL.md`\nСкрипты роли: `/home/maksim/taskflow/roles/analyst/scripts`\nРабочая папка чата: `/home/maksim/taskflow/roles/analyst/workspace`\nВ задаче работай в папке проекта, инструментарий роли — в `/home/maksim/taskflow/roles/analyst`.\nЧужие папки ролей и глобальный Pi — не трогай.\nКлючи, доступы, модель — на сервере, инструкцией не меняются."
+  "text_before_shrink": "Постоянная папка роли analyst: `/home/maksim/taskflow/roles/analyst`\nИнструкции роли: `/home/maksim/taskflow/roles/analyst/AGENTS.md`\nНавыки роли: `/home/maksim/taskflow/roles/analyst/skills/<имя-навыка>/SKILL.md`\nСкрипты роли: `/home/maksim/taskflow/roles/analyst/scripts`\nРабочая папка чата: `/home/maksim/taskflow/roles/analyst/workspace`\nВ задаче работай в папке проекта, инструментарий роли — в `/home/maksim/taskflow/roles/analyst`.\nЧужие папки ролей и глобальный Pi — не трогай.\nКлючи, доступы, модель — на сервере, инструкцией не меняются.",
+  "enabled": false,
+  "disabled_reason": "пути папки роли повторяют {{FOLDER}} (R010); запрет вынесен в R567 — 06.11.2026"
  },
  {
   "id": "R302",
@@ -8065,7 +8069,9 @@
   "merged_from": [],
   "channels": [
    "chat"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "пути папки роли повторяют {{FOLDER}} (R010); запрет вынесен в R567 — 06.11.2026"
  },
  {
   "id": "R304",
@@ -8408,7 +8414,9 @@
   "merged_from": [],
   "channels": [
    "chat"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "пути папки роли повторяют {{FOLDER}} (R010); запрет вынесен в R567 — 06.11.2026"
  },
  {
   "id": "R319",
@@ -9238,7 +9246,9 @@
   "merged_from": [],
   "channels": [
    "chat"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "пути папки роли повторяют {{FOLDER}} (R010); запрет вынесен в R567 — 06.11.2026"
  },
  {
   "id": "R355",
@@ -9372,7 +9382,9 @@
   "merged_from": [],
   "channels": [
    "chat"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "пути папки роли повторяют {{FOLDER}} (R010); запрет вынесен в R567 — 06.11.2026"
  },
  {
   "id": "R361",
@@ -9880,7 +9892,9 @@
   "channels": [
    "chat"
   ],
-  "text_before_shrink": "Постоянная папка роли designer: `/home/maksim/taskflow/roles/designer`\nИнструкции роли: `/home/maksim/taskflow/roles/designer/AGENTS.md`\nНавыки роли: `/home/maksim/taskflow/roles/designer/skills/<имя-навыка>/SKILL.md`\nСкрипты роли: `/home/maksim/taskflow/roles/designer/scripts`\nРабочая папка чата: `/home/maksim/taskflow/roles/designer/workspace`\nВ задаче работай в папке проекта, инструментарий роли — в `/home/maksim/taskflow/roles/designer`.\nЧужие папки ролей и глобальный Pi — не трогай.\nКлючи, доступы, модель — на сервере, инструкцией не меняются."
+  "text_before_shrink": "Постоянная папка роли designer: `/home/maksim/taskflow/roles/designer`\nИнструкции роли: `/home/maksim/taskflow/roles/designer/AGENTS.md`\nНавыки роли: `/home/maksim/taskflow/roles/designer/skills/<имя-навыка>/SKILL.md`\nСкрипты роли: `/home/maksim/taskflow/roles/designer/scripts`\nРабочая папка чата: `/home/maksim/taskflow/roles/designer/workspace`\nВ задаче работай в папке проекта, инструментарий роли — в `/home/maksim/taskflow/roles/designer`.\nЧужие папки ролей и глобальный Pi — не трогай.\nКлючи, доступы, модель — на сервере, инструкцией не меняются.",
+  "enabled": false,
+  "disabled_reason": "пути папки роли повторяют {{FOLDER}} (R010); запрет вынесен в R567 — 06.11.2026"
  },
  {
   "id": "R383",
@@ -10131,7 +10145,9 @@
   "merged_from": [],
   "channels": [
    "chat"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "пути папки роли повторяют {{FOLDER}} (R010); запрет вынесен в R567 — 06.11.2026"
  },
  {
   "id": "R394",
@@ -10295,7 +10311,9 @@
   "merged_from": [],
   "channels": [
    "chat"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "пути папки роли повторяют {{FOLDER}} (R010); запрет вынесен в R567 — 06.11.2026"
  },
  {
   "id": "R401",
@@ -11056,7 +11074,9 @@
   "channels": [
    "chat"
   ],
-  "text_before_shrink": "Постоянная папка роли researcher: `/home/maksim/taskflow/roles/researcher`\nИнструкции роли: `/home/maksim/taskflow/roles/researcher/AGENTS.md`\nНавыки роли: `/home/maksim/taskflow/roles/researcher/skills/<имя-навыка>/SKILL.md`\nСкрипты роли: `/home/maksim/taskflow/roles/researcher/scripts`\nРабочая папка чата: `/home/maksim/taskflow/roles/researcher/workspace`\nВ задаче работай в папке проекта, инструментарий роли — в `/home/maksim/taskflow/roles/researcher`.\nЧужие папки ролей и глобальный Pi — не трогай.\nКлючи, доступы, модель — на сервере, инструкцией не меняются."
+  "text_before_shrink": "Постоянная папка роли researcher: `/home/maksim/taskflow/roles/researcher`\nИнструкции роли: `/home/maksim/taskflow/roles/researcher/AGENTS.md`\nНавыки роли: `/home/maksim/taskflow/roles/researcher/skills/<имя-навыка>/SKILL.md`\nСкрипты роли: `/home/maksim/taskflow/roles/researcher/scripts`\nРабочая папка чата: `/home/maksim/taskflow/roles/researcher/workspace`\nВ задаче работай в папке проекта, инструментарий роли — в `/home/maksim/taskflow/roles/researcher`.\nЧужие папки ролей и глобальный Pi — не трогай.\nКлючи, доступы, модель — на сервере, инструкцией не меняются.",
+  "enabled": false,
+  "disabled_reason": "пути папки роли повторяют {{FOLDER}} (R010); запрет вынесен в R567 — 06.11.2026"
  },
  {
   "id": "R434",
@@ -12959,7 +12979,9 @@
   "channels": [
    "chat",
    "card"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "повтор R394 — 06.11.2026"
  },
  {
   "id": "R515",
@@ -13548,7 +13570,9 @@
    "chat",
    "card",
    "voice"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "шаблон характера из библиотеки, не активный (активный — ROLE.md) — 06.11.2026"
  },
  {
   "id": "R540",
@@ -13639,7 +13663,9 @@
   "channels": [
    "chat",
    "voice"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "шаблон характера, не активный — 06.11.2026"
  },
  {
   "id": "R543",
@@ -13687,7 +13713,9 @@
    "chat",
    "card",
    "voice"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "шаблон характера, не активный — 06.11.2026"
  },
  {
   "id": "R545",
@@ -13734,7 +13762,9 @@
   "channels": [
    "card",
    "voice"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "шаблон характера, не активный — 06.11.2026"
  },
  {
   "id": "R547",
@@ -13782,7 +13812,9 @@
    "chat",
    "card",
    "voice"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "шаблон характера, не активный — 06.11.2026"
  },
  {
   "id": "R549",
@@ -14678,5 +14710,25 @@
     "section": "defaults:secretary.chat > (данные шаблона)"
    }
   ]
+ },
+ {
+  "id": "R567",
+  "text": "Чужие папки ролей и глобальный Pi — не трогай. Ключи, доступы, модель — на сервере, инструкцией не меняются.",
+  "kind": "rule",
+  "category": "личные инструкции",
+  "roles": "all",
+  "where": "везде",
+  "channels": [
+   "chat",
+   "card"
+  ],
+  "sources": [
+   {
+    "file": "/home/maksim/taskflow/roles/builder/AGENTS.md",
+    "line": 3,
+    "section": "Роль builder — рабочее окружение"
+   }
+  ],
+  "note": "общий хвост из 9 строк папок ролей, 06.11.2026"
  }
 ]
