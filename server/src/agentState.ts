@@ -2,6 +2,7 @@
 // "what state can follow what, who's allowed to cause it, and is the lease
 // still alive" lives in this one file — routes/agent-state.ts and
 // routes/tasks.ts only call into it, they never re-derive the rules.
+import { registryTextOr } from "./lib/roleRules.js";
 import { queueOrchestratorEvent } from "./lib/orchestratorWebhook.js";
 import crypto from "crypto";
 import db from "./db.js";
@@ -180,7 +181,7 @@ export function commentRequiredFor(
  *  • «неужели нужно было дублировать информацию из аудита, а не написать,
  *    с какой проблемой мы столкнулись в рамках этой задачи?».
  */
-export const AGENT_RULES = [
+const AGENT_RULES_LITERAL = [
   "РЕЖИМ КАРТОЧКИ. Это правила работы по карточке; в чате они не действуют. Прочитай карточку через taskflow_task. Прежде чем работать — taskflow_claim или taskflow_heartbeat, чтобы не пересечься с другой ролью. В слоте работай молча: инструменты, чек-лист, итог при сдаче. Результат сдаёшь через taskflow_subtask_done (шаг) или taskflow_report.",
   "Статус шага живой: перед началом — in_progress; сделал — закрываешь done сам, с result. Упёрся и нужно решение владельца — blocked с причиной и конкретным вопросом (инструмента вопроса владельцу в карточке нет). Мелочь, которую можешь решить на своём уровне, решай сам или спроси Оркестратора. Ждёшь другую роль, а не владельца — оставайся in_progress.",
   "Упёрся (blocked) — приложи снимок работы к taskflow_subtask_work(state=\"blocked\") или вызови taskflow_slot_snapshot: что сделано (done), что осталось (left), блок (blocker), следующий шаг (next_step), артефакты. Пока работаешь, технический снимок сервер пишет сам. Снимок — запись, а не команда: прав и статусов он не даёт.",
@@ -192,6 +193,19 @@ export const AGENT_RULES = [
   "ИНТЕГРАЦИЯ КОДА (владелец 09–28.10.2026). Ответственный за интеграцию один — тот, кто записан в поле карточки «Ответственный за интеграцию»; другого не выдумывай. Если в поле пусто: оркестратор → архитектор → единственный исполнитель. Работа без правок репозитория — «Не требуется». Интеграция — опубликовать свою правку в main без PR: исключительно точечные локальные проверки → коммит своих файлов → при необходимости локальное слияние ветки в main → прямой push main в GitHub. PR не создавать, CI/автослияние не ждать; владелец не нажимает Merge и не даёт повторное разрешение. Полные и глобальные тестовые прогоны запрещены. Конфликт или падение точечной проверки — исправить только свою правку с сохранением чужой работы. Передача принятой версии после ревью — продолжение того же поручения: проверь ветку, коммиты и проверки, уже влитое повторно не вливай. В отчёте различай: разработано, проверено, опубликовано в main (SHA), выложено. Не создавай второго ответственного, свой шаг интеграции, барьеры сдачи или запрет ревью; не закрывай карточку за владельца.",
   "Создаёшь задачу — обязательно с projectId. Уверен — выбери существующий проект по смыслу. Не уверен — задачу без проекта не создавай: предложи владельцу существующий проект (какой и почему), новый (с названием) или спроси, куда отнести.",
 ];
+/** Правила карточки: текст берётся из реестра (R272), литерал — запасной путь при role_registry_enabled=false.
+ *  Массив вычисляется при каждом обращении, чтобы API и потребители видели правку реестра без рестарта. */
+let agentRulesCache: { text: string; items: string[] } | null = null;
+const liveAgentRules = (): string[] => {
+  const literalText = AGENT_RULES_LITERAL.join("\n");
+  const text = registryTextOr("карточка: все шаги", "agentState:AGENT_RULES", literalText);
+  if (text === literalText) return AGENT_RULES_LITERAL;
+  if (agentRulesCache?.text !== text) agentRulesCache = { text, items: text.split("\n") };
+  return agentRulesCache.items;
+};
+export const AGENT_RULES: string[] = new Proxy(AGENT_RULES_LITERAL, {
+  get: (_target, prop) => { const live = liveAgentRules(); return Reflect.get(live, prop, live); },
+});
 
 /** Предел длины result: «одно-два предложения» — это примерно столько. */
 export const RESULT_MAX = 400;

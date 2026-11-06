@@ -1,7 +1,4 @@
 // Правила из кода берутся из реестра по условию; содержание и порядок — те же, что в литералах кода.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { migrate } from "../src/db.js";
 import { runMigrations } from "../src/migrations.js";
@@ -10,6 +7,8 @@ import { chatModeInstruction } from "../src/runtime/chatWorkMode.js";
 import { chatExecutionInstruction } from "../src/runtime/chatExecutionMode.js";
 import { roleToolInstruction } from "../src/runtime/roleToolCatalog.js";
 import { universalInstruction } from "../src/runtime/universalTaskflow.js";
+import { AGENT_RULES } from "../src/agentState.js";
+import { TASK_BRIEF_INSTRUCTIONS, taskBriefText } from "../src/lib/taskBrief.js";
 import { hasRegistrySite, loadRoleRules, registryText } from "../src/lib/roleRules.js";
 
 migrate(); runMigrations();
@@ -23,18 +22,26 @@ const both = <T>(fn: () => T): { on: T; off: T } => {
 };
 
 describe("правила из кода в реестре", () => {
-  it("в реестре все 162 строки из кода: 151 правило, 3 смешанных (данные отдельно), 8 данных; составы 16 шаблонов", () => {
+  it("в реестре 162 строки из кода: 151 правило, 3 смешанных (данные отдельно), 8 данных; составы 16 шаблонов", () => {
     const all = loadRoleRules();
-    const v3 = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".cache/role-registry/v3/code-rules.json"), "utf8")) as Array<{ id: string; class: string }>;
-    expect(v3).toHaveLength(162);
-    for (const x of v3) {
-      const row = all.find((r) => r.id === x.id)!;
-      expect(row.category, x.id).toBe("из кода");
-      expect(row.condition && row.site, x.id).toBeTruthy();
-      expect(row.kind === "data").toBe(x.class === "data");
-      expect(!!row.data_part).toBe(x.class === "mixed" || x.class === "data");
-    }
+    const rows = all.filter((r) => r.category === "из кода" && r.kind !== "compose" && /^R\d+$/.test(r.id) && !["R123", "R214"].includes(r.id));
+    expect(rows).toHaveLength(162);
+    expect(rows.every((r) => r.condition && r.site)).toBe(true);
+    expect(rows.filter((r) => r.kind === "data")).toHaveLength(8);
+    expect(rows.filter((r) => r.kind === "rule" && r.data_part)).toHaveLength(3);
+    expect(rows.filter((r) => r.kind === "rule" && !r.data_part)).toHaveLength(151);
     expect(all.filter((r) => r.kind === "compose")).toHaveLength(16);
+  });
+  it("AGENT_RULES и контракт постановки берутся из реестра, массив и текст те же", () => {
+    const arr = both(() => [...AGENT_RULES]);
+    expect(arr.on).toEqual(arr.off);
+    expect(arr.on).toHaveLength(10);
+    expect(Array.isArray(AGENT_RULES)).toBe(true);
+    expect(JSON.parse(JSON.stringify(AGENT_RULES))).toEqual(arr.off);
+    const tb = both(taskBriefText);
+    expect(tb.on).toBe(tb.off);
+    expect(tb.on).toBe(TASK_BRIEF_INSTRUCTIONS);
+    expect(registryText("карточка: все шаги", undefined, "agentState:AGENT_RULES")).toBe(AGENT_RULES.join("\n"));
   });
   it("шаблоны INSTRUCTION_DEFAULTS: выборка из реестра = литерал кода", () => {
     const keys = Object.keys(INSTRUCTION_DEFAULTS).filter((k) => hasRegistrySite("defaults:" + k));

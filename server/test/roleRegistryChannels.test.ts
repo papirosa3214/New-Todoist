@@ -78,3 +78,10 @@ it("голос secretary: без правил про git/тесты/код/ка�
   const chat = rulesFor("secretary", "chat").length;
   expect(chat).toBeGreaterThan(voice.length);
 });
+
+it("R321 и R396 (раньше только voice) попадают и в голос, и в чат/карточку своих ролей", () => {
+  delete process.env.TASKFLOW_ROLE_RULES;
+  for (const [id, role] of [["R321", "builder"], ["R396", "infra_engineer"]]) {
+    for (const ch of ["voice", "chat", "card"] as const) expect(rulesFor(role, ch).some((r) => r.id === id), id + "/" + ch).toBe(true);
+  }
+});

@@ -8395,6 +8395,8 @@
   ],
   "merged_from": [],
   "channels": [
+   "chat",
+   "card",
    "voice"
   ]
  },
@@ -10101,6 +10103,8 @@
   ],
   "merged_from": [],
   "channels": [
+   "chat",
+   "card",
    "voice"
   ]
  },
