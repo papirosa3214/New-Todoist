@@ -5,6 +5,7 @@ import db from "../db.js";
 import { DB_PATH } from "../db.js";
 import { SECRETARY_CHAT_ID } from "../lib/secretaryReply.js";
 import { enqueueMessageDelivery } from "../runtime/chatQueue.js";
+import { resolveTelegramCommandText } from "../lib/telegramCommands.js";
 
 export const TELEGRAM_MAX_BYTES = 15 * 1024 * 1024;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(path.dirname(DB_PATH), "uploads");
@@ -27,6 +28,8 @@ export type TelegramInbound = {
   message_id: number;
   text?: string;
   caption?: string;
+  /** Текст для роли: явный вызов команды уже разрешён на сервере (этап 2). */
+  role_text?: string;
   attachments?: AttachmentInput[];
 };
 
@@ -128,11 +131,92 @@ function createAttachment(owner: string, input: AttachmentInput): string {
   return id;
 }
 
-export function enqueueTelegramDelivery(args: { kind: "ack" | "progress" | "final" | "error"; chatId: string; text: string; replyToMessageId?: number | null; sourceMessageId?: string | null }): string {
+// Контракт outbox (этап 0 плана note://a2475482): `kind` — категория политики
+// (что делать при провале), `payload.method` — транспорт Bot API. Смешивать оси
+// без таблицы соответствия нельзя, поэтому она здесь и является единственным
+// источником правды: неизвестный метод gateway помечает `abandoned` с логом,
+// а не падает. Новых колонок нет — `payload_json` свободный JSON (миграции нет).
+export type TelegramDeliveryKind = "ack" | "progress" | "final" | "error";
+
+export const TELEGRAM_METHOD_POLICY = {
+  sendMessage: { kinds: ["ack", "progress", "final", "error"] },
+  editMessageText: { kinds: ["progress", "final"] },
+  setMessageReaction: { kinds: ["progress", "final", "error"] },
+  sendMessageDraft: { kinds: ["progress"] },
+} as const;
+
+export type TelegramMethod = keyof typeof TELEGRAM_METHOD_POLICY;
+export const TELEGRAM_KNOWN_METHODS: string[] = Object.keys(TELEGRAM_METHOD_POLICY);
+
+export function isKnownTelegramMethod(method: unknown): method is TelegramMethod {
+  return typeof method === "string" && TELEGRAM_KNOWN_METHODS.includes(method);
+}
+
+/**
+ * Поставить намерение в outbox.
+ *
+ * `payload` — свободный объект: аргументы Bot API плюс служебные поля
+ * (`reply_to_message_id`, `disable_notification`, `draft`, `reaction`).
+ * Транспорт берётся из `payload.method`; без метода доставка уходит
+ * `sendMessage` — так прежние вызовы (progress/final) сохраняют поведение.
+ */
+export function enqueueTelegramDelivery(args: {
+  kind: TelegramDeliveryKind;
+  chatId: string;
+  payload: Record<string, unknown>;
+  replyToMessageId?: number | null;
+  sourceMessageId?: string | null;
+}): string {
   const id = crypto.randomUUID();
+  const method = isKnownTelegramMethod(args.payload.method) ? args.payload.method : "sendMessage";
+  const payload = {
+    ...args.payload,
+    method,
+    reply_to_message_id: args.replyToMessageId ?? (args.payload.reply_to_message_id as number | null | undefined) ?? null,
+  };
   db.prepare(`INSERT INTO telegram_delivery_outbox(delivery_id,bot_id,chat_id,kind,payload_json,state,next_attempt_at,source_message_id)
-    VALUES(?,?,?,?,?,'pending',datetime('now'),?)`).run(id, telegramConfig().botId, args.chatId, args.kind, JSON.stringify({ text: args.text, reply_to_message_id: args.replyToMessageId ?? null }), args.sourceMessageId ?? null);
+    VALUES(?,?,?,?,?,'pending',datetime('now'),?)`).run(id, telegramConfig().botId, args.chatId, args.kind, JSON.stringify(payload), args.sourceMessageId ?? null);
   return id;
+}
+
+/** Реакции выключены по умолчанию (как `telegram.reactions` у Hermes). */
+export function telegramReactionsEnabled(): boolean {
+  const value = String(process.env.TASKFLOW_TELEGRAM_REACTIONS ?? "").trim().toLowerCase();
+  return value === "1" || value === "on" || value === "true" || value === "yes";
+}
+
+/** Транспорт живого потока: `auto` — черновик с безусловным откатом на правку. */
+export function telegramStreamMode(): "auto" | "draft" | "edit" | "off" {
+  const value = String(process.env.TASKFLOW_TELEGRAM_STREAM ?? "").trim().toLowerCase();
+  return value === "draft" || value === "edit" || value === "off" ? value : "auto";
+}
+
+/** `draft_id` стабилен на ход и не равен нулю — требование Bot API. */
+export function telegramDraftId(triggerMessageId: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < triggerMessageId.length; index++) {
+    hash ^= triggerMessageId.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const value = (hash >>> 0) % 2_000_000_000;
+  return value === 0 ? 1 : value;
+}
+
+/** Одна реакция на сообщение: 👀 в начале, 👍 на финале, 👎 на ошибке. */
+export function enqueueTelegramReaction(args: {
+  kind: TelegramDeliveryKind;
+  chatId: string;
+  messageId: number;
+  emoji: string;
+  sourceMessageId?: string | null;
+}): string | null {
+  if (!telegramReactionsEnabled()) return null;
+  return enqueueTelegramDelivery({
+    kind: args.kind,
+    chatId: args.chatId,
+    payload: { method: "setMessageReaction", message_id: args.messageId, reaction: [{ type: "emoji", emoji: args.emoji }] },
+    sourceMessageId: args.sourceMessageId ?? null,
+  });
 }
 
 // Статус-сообщение в Telegram (владелец 06.11.2026): вместо мгновенного
@@ -148,7 +232,13 @@ export function captureTelegramProgress(triggerMessageId: string, tool?: string)
   const answered = db.prepare("SELECT 1 FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=?").get(triggerMessageId, SECRETARY_USER_ID);
   if (answered) return 0;
   const label = tool ? `Работаю: ${tool}` : "Работаю над ответом…";
-  for (const link of links) enqueueTelegramDelivery({ kind: "progress", chatId: link.chat_id, text: label, replyToMessageId: link.message_id, sourceMessageId: triggerMessageId });
+  // В режиме черновика строку статуса не заводим: черновик и есть статус
+  // (этап 4 плана). При откате gateway на правку пузырь создастся первым тиком.
+  if (telegramStreamMode() === "auto" || telegramStreamMode() === "draft") return 0;
+  for (const link of links) {
+    // Прогресс идёт без звука (владелец 06.11.2026): звенит только финал.
+    enqueueTelegramDelivery({ kind: "progress", chatId: link.chat_id, payload: { text: label, disable_notification: true }, replyToMessageId: link.message_id, sourceMessageId: triggerMessageId });
+  }
   return links.length;
 }
 
@@ -180,6 +270,7 @@ const streamTimers = new Map<string, NodeJS.Timeout>();
 /** Живой поток ответа в Telegram, как у Hermes: та же одна строка статуса
  *  правится и наполняется текстом по мере генерации. Финал заменяет её целиком. */
 export function startTelegramStream(triggerMessageId: string, readText: () => string): void {
+  if (telegramStreamMode() === "off") return;
   let last = "";
   const tick = () => {
     try {
@@ -190,7 +281,20 @@ export function startTelegramStream(triggerMessageId: string, readText: () => st
       last = text;
       const links = db.prepare(`SELECT chat_id,message_id FROM telegram_inbound_ledger
         WHERE taskflow_message_id=? AND state='posted'`).all(triggerMessageId) as Array<{ chat_id: string; message_id: number }>;
-      for (const link of links) enqueueTelegramDelivery({ kind: "progress", chatId: link.chat_id, text, replyToMessageId: link.message_id, sourceMessageId: null });
+      const draft = telegramStreamMode() === "auto" || telegramStreamMode() === "draft"
+        ? { draft_id: telegramDraftId(triggerMessageId) }
+        : null;
+      for (const link of links) {
+        enqueueTelegramDelivery({
+          kind: "progress",
+          chatId: link.chat_id,
+          payload: draft
+            ? { method: "sendMessageDraft", text, draft, disable_notification: true }
+            : { text, disable_notification: true },
+          replyToMessageId: link.message_id,
+          sourceMessageId: null,
+        });
+      }
     } catch { /* поток — не повод ломать ход */ }
   };
   if (streamTimers.has(triggerMessageId)) return;
@@ -199,7 +303,7 @@ export function startTelegramStream(triggerMessageId: string, readText: () => st
   streamTimers.set(triggerMessageId, timer);
 }
 
-export function acceptTelegramInbound(input: TelegramInbound): { duplicate: boolean; ledger_id: string; message_id: string | null; ack_delivery_id: string | null } {
+export async function acceptTelegramInbound(input: TelegramInbound): Promise<{ duplicate: boolean; ledger_id: string; message_id: string | null; ack_delivery_id: string | null }> {
   const existing = db.prepare("SELECT id,taskflow_message_id,ack_delivery_id FROM telegram_inbound_ledger WHERE bot_id=? AND update_id=?").get(String(input.bot_id), input.update_id) as { id: string; taskflow_message_id: string | null; ack_delivery_id: string | null } | undefined;
   if (existing) return { duplicate: true, ledger_id: existing.id, message_id: existing.taskflow_message_id, ack_delivery_id: existing.ack_delivery_id };
   const ledgerId = crypto.randomUUID();
@@ -215,7 +319,16 @@ export function acceptTelegramInbound(input: TelegramInbound): { duplicate: bool
     for (const item of input.attachments ?? []) attachmentIds.push(createAttachment(owner, item));
     const text = [String(input.text ?? "").trim(), String(input.caption ?? "").trim()].filter(Boolean).join("\n").trim() || (attachmentIds.length ? "[Вложение из Telegram]" : "");
     if (!text) throw new Error("empty_message");
+    // Владелец видит в чате то, что написал; роли уходит разрешённый вызов
+    // команды, если сервер его разобрал (иначе тот же текст).
+    let roleText = String(input.role_text ?? "").trim() || text;
     const messageId = crypto.randomUUID();
+    // Выбор команды в меню бота исполняется существующим путём: `/имя` из
+    // реестра переводится в `/skill:имя` или `/mcp:имя` и проверяется тем же
+    // resolveSlashCommand. Неизвестная команда — обычный текст, без догадок.
+    const command = await resolveTelegramCommandText(text).catch(() => null);
+    if (command && !command.ok) throw new Error("unknown_command");
+    if (command?.ok) roleText = command.role_text;
     db.transaction(() => {
       db.prepare(`INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,work_mode,execution_mode)
         VALUES(?,?,?,'chat',?,'work','chat')`).run(messageId, owner, text, SECRETARY_CHAT_ID);
@@ -224,9 +337,12 @@ export function acceptTelegramInbound(input: TelegramInbound): { duplicate: bool
       db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(SECRETARY_CHAT_ID);
       db.prepare("UPDATE telegram_inbound_ledger SET state='posted',posted_at=datetime('now'),taskflow_message_id=? WHERE id=?").run(messageId, ledgerId);
     })();
-    enqueueMessageDelivery({ chatId: SECRETARY_CHAT_ID, roleId: SECRETARY_USER_ID, deliveryId: `tg:${input.bot_id}:${input.update_id}`, messageId, payload: { hop: 0, mode: "work", text } });
+    enqueueMessageDelivery({ chatId: SECRETARY_CHAT_ID, roleId: SECRETARY_USER_ID, deliveryId: `tg:${input.bot_id}:${input.update_id}`, messageId, payload: { hop: 0, mode: "work", text: roleText } });
     // Немедленного «Принял.» нет: Telegram получает статус только если ход
     // тянется дольше 10 секунд (scheduleTelegramProgress в чат-рантайме).
+    // Реакция 👀 — сразу после успешного inbound: владелец видит, что запрос
+    // принят, не дожидаясь статуса (выключатель TASKFLOW_TELEGRAM_REACTIONS).
+    enqueueTelegramReaction({ kind: "progress", chatId: String(input.chat_id), messageId: input.message_id, emoji: "👀", sourceMessageId: messageId });
     scheduleTelegramProgress(messageId);
     return { duplicate: false, ledger_id: ledgerId, message_id: messageId, ack_delivery_id: null };
   } catch (error) {
@@ -267,7 +383,7 @@ export function settleTelegramDelivery(id: string, result: { ok: boolean; perman
 }
 
 export function captureTelegramFinal(messageId: string): number {
-  const reply = db.prepare("SELECT id,text,reply_to_message_id,from_user_id FROM chat_messages WHERE id=?").get(messageId) as { id: string; text: string; reply_to_message_id: string | null; from_user_id: string } | undefined;
+  const reply = db.prepare("SELECT id,text,reply_to_message_id,from_user_id,stop_reason,partial FROM chat_messages WHERE id=?").get(messageId) as { id: string; text: string; reply_to_message_id: string | null; from_user_id: string; stop_reason: string | null; partial: number | null } | undefined;
   if (!reply || reply.from_user_id !== SECRETARY_USER_ID || !reply.reply_to_message_id) return 0;
   const links = db.prepare(`SELECT l.chat_id,l.message_id FROM telegram_inbound_ledger l
     WHERE l.taskflow_message_id=? AND l.state='posted'`).all(reply.reply_to_message_id) as Array<{ chat_id: string; message_id: number }>;
@@ -275,7 +391,11 @@ export function captureTelegramFinal(messageId: string): number {
   for (const link of links) {
     const exists = db.prepare("SELECT 1 FROM telegram_delivery_outbox WHERE source_message_id=? AND kind='final'").get(reply.id);
     if (exists) continue;
-    enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, text: reply.text, replyToMessageId: link.message_id, sourceMessageId: reply.id });
+    // Финал идёт со звуком: disable_notification не ставим (критерий владельца).
+    enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload: { text: reply.text }, replyToMessageId: link.message_id, sourceMessageId: reply.id });
+    // Прерванный ход или ошибка — 👎 на сообщении-триггере, успех — 👍.
+    const failed = Boolean(reply.stop_reason) || Boolean(reply.partial);
+    enqueueTelegramReaction({ kind: failed ? "error" : "final", chatId: link.chat_id, messageId: link.message_id, emoji: failed ? "👎" : "👍", sourceMessageId: reply.id });
     count++;
   }
   return count;

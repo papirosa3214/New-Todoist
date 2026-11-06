@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
+import { telegramCommands, TELEGRAM_COMMANDS_ROLE, TELEGRAM_COMMANDS_MODE } from "../lib/telegramCommands.js";
 import {
   acceptTelegramInbound,
   captureTelegramFinal,
+  isKnownTelegramMethod,
   isLoopback,
   markTelegramSending,
   secureSecretEqual,
@@ -32,7 +34,7 @@ export function registerTelegramIntegrationRoutes(app: FastifyInstance) {
 
   app.post("/api/integrations/telegram/inbound", { preHandler: auth }, async (req: any, reply) => {
     try {
-      const result = acceptTelegramInbound(req.body);
+      const result = await acceptTelegramInbound(req.body);
       return reply.code(result.duplicate ? 200 : 202).send(result);
     } catch (error) {
       const code = error instanceof Error ? error.message : "inbound_failed";
@@ -57,5 +59,25 @@ export function registerTelegramIntegrationRoutes(app: FastifyInstance) {
   });
 
   app.post<{ Params: { messageId: string } }>("/api/integrations/telegram/final/:messageId", { preHandler: auth }, async (req) => ({ created: captureTelegramFinal(req.params.messageId) }));
+  /**
+   * Меню команд и inline-поиск (этап 2 плана note://a2475482). Реестр тот же,
+   * что у чата: второй список команд не заводится. ETag — хеш списка, чтобы
+   * gateway не дёргал реестр каждые пять минут заново.
+   */
+  app.get("/api/integrations/telegram/commands", { preHandler: auth }, async (req: any, reply) => {
+    const { menu, all, version } = await telegramCommands({ force: req.query?.refresh === "1" });
+    const etag = `"${version}"`;
+    reply.header("etag", etag).header("cache-control", "no-cache");
+    if (String(req.headers["if-none-match"] ?? "") === etag) return reply.code(304).send();
+    return { version, role: TELEGRAM_COMMANDS_ROLE, mode: TELEGRAM_COMMANDS_MODE, menu, all };
+  });
+  /**
+   * Проба транспорта для живых проверок этапа 4: сервер только сообщает,
+   * известен ли метод, решения о транспорте не принимает (оно в gateway).
+   */
+  app.get("/api/integrations/telegram/method/:name", { preHandler: auth }, async (req: any, reply) => {
+    const name = String(req.params.name ?? "");
+    return isKnownTelegramMethod(name) ? { name, known: true } : reply.code(404).send({ error: "unknown_method", name });
+  });
   app.get("/api/integrations/telegram/status", { preHandler: auth }, async () => telegramStatus());
 }
