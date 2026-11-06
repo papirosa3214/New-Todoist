@@ -400,13 +400,19 @@ export function captureQuestionToTelegram(questionId: string): number {
     .prepare("SELECT id,chat_id,message_id,payload_json,created_at FROM chat_questions WHERE id=?")
     .get(questionId) as { id: string; chat_id: string; message_id: string | null; payload_json: string; created_at: string } | undefined;
   if (!question || !question.message_id) return 0;
+  // Ledger связывает входящее из Telegram с сообщением чата; вопрос — ответ на
+  // это входящее, поэтому ищем ответ на сообщение-вопрос (как captureTelegramFinal).
+  const questionMessage = db
+    .prepare("SELECT reply_to_message_id FROM chat_messages WHERE id=?")
+    .get(question.message_id) as { reply_to_message_id: string | null } | undefined;
+  if (!questionMessage?.reply_to_message_id) return 0;
   let payload: { questions?: Array<{ question?: string; header?: string; options?: Array<{ label?: string; description?: string }> }> } = {};
   try { payload = JSON.parse(question.payload_json); } catch { return 0; }
   const questions = Array.isArray(payload.questions) ? payload.questions : [];
   const keyboard = telegramQuestionKeyboard(question.id, { questions: questions.map((q) => ({ options: (q.options ?? []).map((o) => ({ label: String(o.label ?? "") })) })) });
   if (!keyboard) return 0;
   const links = db.prepare(`SELECT chat_id,message_id FROM telegram_inbound_ledger
-    WHERE taskflow_message_id=? AND state='posted'`).all(question.message_id) as Array<{ chat_id: string; message_id: number }>;
+    WHERE taskflow_message_id=? AND state='posted'`).all(questionMessage.reply_to_message_id) as Array<{ chat_id: string; message_id: number }>;
   let count = 0;
   for (const link of links) {
     enqueueTelegramDelivery({
@@ -459,8 +465,9 @@ export function expireTelegramQuestionKeyboards(): number {
   try {
     links = db.prepare(`SELECT q.id AS question_id, l.chat_id AS chat_id, l.message_id AS message_id
         FROM chat_questions q
+        JOIN chat_messages m ON m.id = q.message_id
         JOIN telegram_inbound_ledger l
-          ON l.taskflow_message_id = q.message_id AND l.state = 'posted'
+          ON l.taskflow_message_id = m.reply_to_message_id AND l.state = 'posted'
        WHERE q.created_at <= datetime('now', ?)
          AND EXISTS (
            SELECT 1 FROM telegram_delivery_outbox d
