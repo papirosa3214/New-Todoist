@@ -17,7 +17,9 @@ const api = (process.env.TASKFLOW_API_URL || "http://127.0.0.1:3001").replace(/\
 const statePath = process.env.TELEGRAM_GATEWAY_STATE || path.join(process.cwd(), "telegram-gateway-state.json");
 const statusPath = process.env.TELEGRAM_GATEWAY_STATUS || path.join(path.dirname(statePath), "status-bubbles.json");
 const commandsPath = path.join(path.dirname(statePath), "commands-cache.json");
-const tg = `https://api.telegram.org/bot${token}`;
+// База Bot API переопределяема только для живой проверки транспорта на .110
+// (локальная заглушка); в бою значение не задано.
+const tg = `${(process.env.TELEGRAM_API_BASE || "https://api.telegram.org").replace(/\/+$/, "")}/bot${token}`;
 const maxBytes = 15 * 1024 * 1024;
 const STATUS_TEXT_MAX = 4096;
 const ALLOWED_UPDATES = ["message", "callback_query", "inline_query"];
@@ -98,7 +100,7 @@ async function syncCommands() {
   const commands = Array.isArray(data.menu) ? data.menu.filter((item) => item && item.command) : [];
   if (!commands.length) { log("commands_empty", {}); return; }
   try {
-    await telegram("setMyCommands", { commands: commands.map(({ command, description }) => ({ command, description: String(description || command).slice(0, 256) })) });
+    await setCommandsWithFallback(commands);
     const next = data.version ? `"${data.version}"` : response.headers.get("etag");
     await fs.mkdir(path.dirname(commandsPath), { recursive: true });
     await fs.writeFile(commandsPath, JSON.stringify({ etag: next, count: commands.length, updated_at: new Date().toISOString() }));
@@ -106,6 +108,30 @@ async function syncCommands() {
   } catch (error) {
     log("commands_set_failed", { error: String(error.message || error), status: Number(error.status || 0) });
   }
+}
+
+/**
+ * `setMyCommands` с отступлением: у бота есть недокументированный потолок
+ * суммарного размера меню (60 команд × 256 символов → `BOT_COMMANDS_TOO_MUCH`,
+ * замер 06.11.2026). Сервер уже отдаёт короткое меню, но если Telegram всё
+ * равно откажет — сокращаем ещё: меньше команд и короче описание, а не
+ * оставляем бота без меню.
+ */
+async function setCommandsWithFallback(commands) {
+  const attempts = [
+    commands,
+    commands.slice(0, 30).map((item) => ({ ...item, description: String(item.description || item.command).slice(0, 60) })),
+    commands.slice(0, 15).map((item) => ({ ...item, description: String(item.command) })),
+  ];
+  let lastError = null;
+  for (const [index, list] of attempts.entries()) {
+    try {
+      await telegram("setMyCommands", { commands: list.map(({ command, description }) => ({ command, description: String(description || command).slice(0, 256) })) });
+      if (index > 0) log("commands_reduced", { attempt: index + 1, count: list.length });
+      return;
+    } catch (error) { lastError = error; }
+  }
+  throw lastError;
 }
 
 async function handleInlineQuery(query) {
