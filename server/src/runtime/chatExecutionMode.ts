@@ -6,17 +6,21 @@ export function parseChatExecutionMode(value: unknown): ChatExecutionMode {
   throw new Error("Выберите «В чате» или «По карточке»");
 }
 /**
- * Правило владельца (05.11.2026): способ выполнения не выбирается. Чат, привязанный
- * к задаче, работает по карточке; любой другой — в чате. Уже принятое сообщение
- * сохраняет свой способ.
+ * Правило владельца (06.11.2026): переключателя «В чате / По карточке» нет. У чата есть
+ * задача (chats.task_id) — card; задачи нет — chat. Ветка (в т.ч. субагента taskflow_call_role)
+ * наследует задачу корневого чата. Сохранённые execution_mode в сообщениях и чатах — следы
+ * переключателя: колонки остаются, но больше не читаются. messageId оставлен для совместимости.
  */
-export function chatExecutionMode(chatId?: string, messageId?: string): ChatExecutionMode {
-  if (chatId && messageId) {
-    const message = db.prepare("SELECT execution_mode FROM chat_messages WHERE id=? AND chat_id=?").get(messageId,chatId) as any;
-    if (message?.execution_mode) return parseChatExecutionMode(message.execution_mode);
+export function chatExecutionMode(chatId?: string, _messageId?: string): ChatExecutionMode {
+  if (!chatId) return "chat";
+  const chat = db.prepare("SELECT task_id, branch_of_chat_id FROM chats WHERE id=?").get(chatId) as
+    | { task_id: string | null; branch_of_chat_id: string | null } | undefined;
+  if (chat?.task_id) return "card";
+  if (chat?.branch_of_chat_id) {
+    const root = db.prepare("SELECT task_id FROM chats WHERE id=?").get(chat.branch_of_chat_id) as { task_id: string | null } | undefined;
+    if (root?.task_id) return "card";
   }
-  const chat = chatId ? db.prepare("SELECT task_id FROM chats WHERE id=?").get(chatId) as any : null;
-  return chat?.task_id ? "card" : "chat";
+  return "chat";
 }
 export const CARD_WORK_OPERATIONS = new Set([
   "taskflow_create_task", "taskflow_suggest_subtasks", "taskflow_structure_dictation",
