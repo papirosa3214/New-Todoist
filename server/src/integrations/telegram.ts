@@ -415,8 +415,10 @@ export function captureQuestionToTelegram(questionId: string): number {
     WHERE taskflow_message_id=? AND state='posted'`).all(questionMessage.reply_to_message_id) as Array<{ chat_id: string; message_id: number }>;
   let count = 0;
   for (const link of links) {
+    // kind='ack': вопрос — не финал хода. Иначе gateway погасил бы «печатает…»
+    // (для kind='final' он это делает), а ход ещё ждёт ответа.
     enqueueTelegramDelivery({
-      kind: "final",
+      kind: "ack",
       chatId: link.chat_id,
       payload: { text: renderTelegramQuestionText(questions), reply_markup: keyboard },
       replyToMessageId: link.message_id,
@@ -444,13 +446,15 @@ function renderTelegramQuestionText(questions: Array<{ question?: string; header
   return lines.join("\n").slice(0, 4000);
 }
 
-/** Убрать клавиатуру у сообщения вопроса (отвечен или истёк срок кнопок). */
-export function releaseTelegramQuestionKeyboard(chatId: string, messageId: number): string | null {
+/** Убрать клавиатуру у сообщения вопроса (отвечен или истёк срок кнопок).
+ *  `source_message_id` — сообщение вопроса: по нему видно, что клавиатура уже
+ *  снята, и повторная проверка срока не ставит вторую такую доставку. */
+export function releaseTelegramQuestionKeyboard(questionMessageId: string, chatId: string, messageId: number): string | null {
   return enqueueTelegramDelivery({
     kind: "progress",
     chatId,
     payload: { method: "editMessageReplyMarkup", message_id: messageId, reply_markup: { inline_keyboard: [] } },
-    sourceMessageId: null,
+    sourceMessageId: questionMessageId,
   });
 }
 
@@ -461,9 +465,9 @@ export function releaseTelegramQuestionKeyboard(chatId: string, messageId: numbe
  * Вызывается из /api/integrations/telegram/outbox — систему таймеров не заводим.
  */
 export function expireTelegramQuestionKeyboards(): number {
-  let links: Array<{ chat_id: string; message_id: number; question_id: string }> = [];
+  let links: Array<{ chat_id: string; message_id: number; question_id: string; question_message_id: string }> = [];
   try {
-    links = db.prepare(`SELECT q.id AS question_id, l.chat_id AS chat_id, l.message_id AS message_id
+    links = db.prepare(`SELECT q.id AS question_id, q.message_id AS question_message_id, l.chat_id AS chat_id, l.message_id AS message_id
         FROM chat_questions q
         JOIN chat_messages m ON m.id = q.message_id
         JOIN telegram_inbound_ledger l
@@ -471,7 +475,7 @@ export function expireTelegramQuestionKeyboards(): number {
        WHERE q.created_at <= datetime('now', ?)
          AND EXISTS (
            SELECT 1 FROM telegram_delivery_outbox d
-            WHERE d.source_message_id = q.message_id AND d.kind = 'final'
+            WHERE d.source_message_id = q.message_id AND d.kind = 'ack'
               AND d.payload_json LIKE '%inline_keyboard%'
               AND d.state = 'delivered'
          )
@@ -479,13 +483,13 @@ export function expireTelegramQuestionKeyboards(): number {
            SELECT 1 FROM telegram_delivery_outbox d
             WHERE d.source_message_id = q.message_id AND d.kind = 'progress'
               AND d.payload_json LIKE '%editMessageReplyMarkup%'
-         )`).all(`-${TELEGRAM_QUESTION_TTL_SECONDS} seconds`) as Array<{ chat_id: string; message_id: number; question_id: string }>;
+         )`).all(`-${TELEGRAM_QUESTION_TTL_SECONDS} seconds`) as Array<{ chat_id: string; message_id: number; question_id: string; question_message_id: string }>;
   } catch {
     return 0;
   }
   let count = 0;
   for (const link of links) {
-    releaseTelegramQuestionKeyboard(link.chat_id, link.message_id);
+    releaseTelegramQuestionKeyboard(link.question_message_id, link.chat_id, link.message_id);
     count++;
   }
   return count;

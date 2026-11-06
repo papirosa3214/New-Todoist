@@ -164,7 +164,8 @@ function closeTelegramQuestionKeyboard(question: QuestionRow, chatId: unknown, m
   const chat = String(chatId ?? "").trim();
   const message = Number(messageId ?? 0);
   if (!chat || !Number.isSafeInteger(message) || message <= 0) return;
-  try { releaseTelegramQuestionKeyboard(chat, message); } catch (error) { console.warn("[telegram] клавиатура вопроса не погашена:", error); }
+  if (!question.message_id) return;
+  try { releaseTelegramQuestionKeyboard(question.message_id, chat, message); } catch (error) { console.warn("[telegram] клавиатура вопроса не погашена:", error); }
 }
 
 /**
