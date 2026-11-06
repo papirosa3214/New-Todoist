@@ -2,6 +2,7 @@
 // владельца 06.11.2026). Строка команды разбирается здесь, без shell: сервер
 // запускает процессы напрямую, на Mac команда уходит с каждым словом в кавычках.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { Type } from "typebox";
@@ -62,7 +63,6 @@ const SYSTEMCTL_SUB = new Set(["status", "is-active", "show", "list-units"]);
 export function stageDenial(tokens: string[]): string | null {
   const [cmd, ...a] = tokens;
   if (cmd.includes("/")) return "команда должна называться по имени, без пути: " + cmd;
-  if (a.some(x => /environ/.test(x))) return "чтение environ запрещено";
   switch (cmd) {
     case "git": {
       const sub = a[0];
@@ -176,14 +176,205 @@ function curlDenial(a: string[]): string | null {
   return null;
 }
 
-export function parseInspectCommand(command: string): ParsedInspect {
+// ---- Секреты: пути, которые не читает ни одна команда списка (владелец 06.11.2026) ----
+
+/** Причина отказа для пути или null. Проверка по имени и составляющим пути, без обращения к диску. */
+export function secretPathReason(raw: string): string | null {
+  if (!raw) return null;
+  const norm = path.posix.normalize(raw.replace(/^~(?=\/|$)/, os.homedir()));
+  const parts = norm.split("/").filter(Boolean);
+  const base = (parts.at(-1) ?? "").toLowerCase();
+  const lowParts = parts.map(x => x.toLowerCase());
+  for (const dir of [".ssh", ".gnupg", ".aws"]) if (lowParts.includes(dir)) return "каталог с секретами " + dir;
+  const gh = lowParts.indexOf("gh");
+  if (gh > 0 && lowParts[gh - 1] === ".config") return "каталог с секретами .config/gh";
+  if (/^\/proc\/[^/]+\/environ$/.test(norm) || (base === "environ" && lowParts[0] === "proc")) return "окружение процесса (/proc/*/environ)";
+  if (base.startsWith(".env")) return "файл .env*";
+  if (/\.(pem|key|age|p12|pfx)$/.test(base)) return "ключ или сертификат (" + path.posix.extname(base) + ")";
+  if (/^id_(rsa|ed25519|ecdsa|dsa)/.test(base)) return "приватный ключ ssh";
+  if ([".netrc", ".npmrc", ".pypirc", ".git-credentials"].includes(base)) return "файл учётных данных " + base;
+  if (base.startsWith("credentials") || base.startsWith("secrets")) return "файл credentials*/secrets*";
+  if (base.startsWith("age-key") || base.startsWith("vault")) return "хранилище секретов (vault)";
+  if (base.includes("token")) return "файл с token в имени";
+  return null;
+}
+
+/** Исключающие glob для рекурсивного поиска rg/grep: добавляются автоматически. */
+export const SECRET_EXCLUDE_GLOBS = [
+  ".env*", "*.pem", "*.key", "*.age", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*", "id_ecdsa*", "id_dsa*", ".ssh", ".gnupg", ".aws",
+  ".netrc", ".npmrc", ".pypirc", ".git-credentials", "credentials*", "secrets*", "*token*", "age-key*", "vault*",
+];
+
+const GLOB_CHARS = /[*?[]/;
+export const GLOB_LIMIT = 500;
+
+function globSegmentRegex(seg: string): RegExp {
+  let r = "";
+  for (let i = 0; i < seg.length; i++) {
+    const c = seg[i];
+    if (c === "*") r += "[^/]*";
+    else if (c === "?") r += "[^/]";
+    else if (c === "[") {
+      const end = seg.indexOf("]", i + 2);
+      if (end < 0) { r += "\\["; continue; }
+      let cls = seg.slice(i + 1, end);
+      if (cls[0] === "!") cls = "^" + cls.slice(1);
+      r += "[" + cls.replace(/\\/g, "\\\\") + "]"; i = end;
+    } else r += c.replace(/[.+^${}()|\\\]]/g, "\\$&");
+  }
+  return new RegExp("^" + r + "$");
+}
+
+/** Раскрытие *, ?, [..] по файловой системе; сегменты без шаблона не читаются. Больше GLOB_LIMIT — ошибка. */
+export function expandGlob(pattern: string, cwd: string): string[] {
+  const abs = pattern.startsWith("/");
+  const segs = pattern.split("/").filter(x => x !== "");
+  let cur: string[] = [abs ? "/" : ""];
+  for (const seg of segs) {
+    const next: string[] = [];
+    if (!GLOB_CHARS.test(seg)) { for (const c of cur) next.push(c === "" ? seg : path.posix.join(c, seg)); }
+    else {
+      const re = globSegmentRegex(seg);
+      for (const c of cur) {
+        let names: string[] = [];
+        try { names = fs.readdirSync(path.resolve(cwd, c || ".")); } catch { continue; }
+        for (const n of names.sort()) {
+          if (n.startsWith(".") && !seg.startsWith(".")) continue;
+          if (re.test(n)) { next.push(c === "" ? n : path.posix.join(c, n)); if (next.length > GLOB_LIMIT) throw new Error("шаблон " + pattern + " даёт больше " + GLOB_LIMIT + " совпадений; сузь его"); }
+        }
+      }
+    }
+    cur = next;
+    if (!cur.length) return [];
+  }
+  return cur.filter(c => { try { fs.lstatSync(path.resolve(cwd, c)); return true; } catch { return false; } });
+}
+
+const VALUE_FLAGS = new Set(["-g", "--glob", "--iglob", "-t", "-T", "--type", "--type-not", "-m", "--max-count", "-A", "-B", "-C", "-j", "-M", "--max-columns", "-E", "--encoding", "--max-depth", "-d", "--sort", "--sortr", "-r", "--replace", "--color", "--context-separator", "--include", "--exclude", "--exclude-dir", "--label", "-D", "--threads", "--max-filesize", "--regexp", "-e"]);
+const SHORT_VALUE_FLAGS = new Set(["-d", "-t", "-n", "-c", "-f", "-k", "-s", "-w", "-m", "-N", "-B", "-e", "-o"]);
+
+/** Индексы аргументов, которые команда читает как пути (значения шаблонов и программ сюда не входят). */
+export function pathArgIndexes(cmd: string, a: string[], cwd?: string): number[] {
+  const out: number[] = [];
+  const exists = (t: string) => { if (!cwd) return false; try { fs.lstatSync(path.resolve(cwd, t)); return true; } catch { return false; } };
+  switch (cmd) {
+    case "rg": case "grep": {
+      let patternSeen = a.some(x => x === "-e" || x === "--regexp" || x.startsWith("--regexp=") || x === "-f" || x === "--file" || x.startsWith("--file="));
+      for (let i = 0; i < a.length; i++) {
+        const t = a[i];
+        if (t === "--") { for (let k = i + 1; k < a.length; k++) { if (!patternSeen) patternSeen = true; else out.push(k); } break; }
+        if (t === "-f" || t === "--file" || t === "--ignore-file") { if (a[i + 1] !== undefined) out.push(i + 1); i++; continue; }
+        if (t.startsWith("--file=") || t.startsWith("--ignore-file=")) { out.push(i); continue; }
+        if (t.startsWith("-")) { if (VALUE_FLAGS.has(t)) i++; continue; }
+        if (!patternSeen) { patternSeen = true; continue; }
+        out.push(i);
+      }
+      return out;
+    }
+    case "find": for (let i = 0; i < a.length; i++) { if (a[i].startsWith("-") || a[i] === "(" || a[i] === "!") break; out.push(i); } return out;
+    case "git": {
+      const sub = a[0];
+      if (sub === "branch" || sub === "remote" || sub === "rev-parse") return out;
+      const dd = a.indexOf("--");
+      a.forEach((t, i) => { if (i === 0 || t.startsWith("-")) return; if ((dd >= 0 && i > dd) || t.includes(":") || t.includes("/") || t.startsWith(".") || exists(t)) out.push(i); });
+      if (dd >= 0) a.forEach((_, i) => { if (i > dd && !out.includes(i)) out.push(i); });
+      return out;
+    }
+    case "jq": {
+      let prog = false;
+      for (let i = 0; i < a.length; i++) {
+        const t = a[i];
+        if (t === "--arg" || t === "--argjson") { i += 2; continue; }
+        if (t === "--slurpfile" || t === "--rawfile") { if (a[i + 2] !== undefined) out.push(i + 2); i += 2; continue; }
+        if (t === "-f" || t === "--from-file") { if (a[i + 1] !== undefined) out.push(i + 1); prog = true; i++; continue; }
+        if (t.startsWith("-")) continue;
+        if (!prog) { prog = true; continue; }
+        out.push(i);
+      }
+      return out;
+    }
+    case "sqlite3": {
+      for (let i = 0; i < a.length; i++) {
+        if (["-separator", "-newline", "-nullvalue", "-vfs", "-mmap", "-key"].includes(a[i])) { i++; continue; }
+        if (a[i].startsWith("-")) continue;
+        out.push(i); break;
+      }
+      return out;
+    }
+    case "cat": case "head": case "tail": case "wc": case "sort": case "uniq": case "cut": case "stat": case "file": case "du": case "df": case "ls":
+      a.forEach((t, i) => { if (t.startsWith("-")) return; if (SHORT_VALUE_FLAGS.has(a[i - 1] ?? "")) return; out.push(i); });
+      return out;
+    default: return out;
+  }
+}
+
+function realOrSelf(abs: string): string | null {
+  try { return fs.realpathSync(abs); } catch { return null; }
+}
+
+/** Проверка одного пути: лексически, с ~, и по realpath (обход через симлинк). */
+export function pathDenial(token: string, cwd?: string): string | null {
+  if (/^file:/i.test(token)) return "URL file:// запрещён";
+  const lex = secretPathReason(token);
+  if (lex) return lex + ": " + token;
+  if (cwd) {
+    const abs = path.resolve(cwd, token.replace(/^~(?=\/|$)/, os.homedir()));
+    const abl = secretPathReason(abs);
+    if (abl) return abl + ": " + token;
+    const real = realOrSelf(abs);
+    if (real && real !== abs) { const r = secretPathReason(real); if (r) return r + " (через симлинк " + token + " → " + real + ")"; }
+  }
+  return null;
+}
+
+export type ParseOptions = { cwd?: string; expand?: boolean };
+
+/** Добавить исключающие glob секретов в rg/grep (до «--», если он есть). */
+function withExcludes(cmd: string, a: string[]): string[] {
+  const extra: string[] = [];
+  if (cmd === "rg") for (const g of SECRET_EXCLUDE_GLOBS) extra.push("--glob", "!" + g);
+  else for (const g of SECRET_EXCLUDE_GLOBS) extra.push("--exclude=" + g, "--exclude-dir=" + g);
+  const dd = a.indexOf("--");
+  return dd < 0 ? [...a, ...extra] : [...a.slice(0, dd), ...extra, ...a.slice(dd)];
+}
+
+export function parseInspectCommand(command: string, opts: ParseOptions = {}): ParsedInspect {
   const tk = tokenizePipeline(command);
   if (!tk.ok) return deny(tk.reason);
+  const { cwd, expand } = opts;
+  if (cwd) { const c = pathDenial(cwd, cwd); if (c) return deny("рабочая папка: " + c); }
+  const stages: string[][] = [];
   for (const stage of tk.stages) {
     const why = stageDenial(stage);
     if (why) return deny(why);
+    const [cmd, ...orig] = stage;
+    if ((cmd === "rg" && orig.some(x => x === "-L" || x === "--follow")) ) return deny("rg --follow запрещён: симлинки могут вести к секретам");
+    if (cmd === "grep" && orig.some(x => x === "-R" || x === "--dereference-recursive")) return deny("grep -R запрещён: симлинки могут вести к секретам");
+    if (orig.some(x => /^file:/i.test(x))) return deny("URL file:// запрещён");
+    let args = orig;
+    const idx = pathArgIndexes(cmd, args, cwd);
+    const rebuilt: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (!idx.includes(i)) { rebuilt.push(args[i]); continue; }
+      let t = args[i];
+      const flagEq = /^(--[a-z-]+)=(.*)$/.exec(t);
+      const value = flagEq ? flagEq[2] : t;
+      let list = [value];
+      if (expand && cwd && GLOB_CHARS.test(value)) {
+        let m: string[];
+        try { m = expandGlob(value, cwd); } catch (e: any) { return deny(e.message); }
+        if (m.length) list = m;
+      }
+      for (const v of list) { const d = pathDenial(v, cwd); if (d) return deny("путь с секретами: " + d); }
+      if (flagEq) rebuilt.push(t); else rebuilt.push(...list);
+    }
+    // git: токен «ревизия:путь» проверяется по части после двоеточия
+    if (cmd === "git") for (const t of rebuilt) if (!t.startsWith("-") && t.includes(":")) { const d = pathDenial(t.slice(t.indexOf(":") + 1), cwd); if (d) return deny("путь с секретами: " + d); }
+    args = rebuilt;
+    if (cmd === "rg" || cmd === "grep") args = withExcludes(cmd, args);
+    stages.push([cmd, ...args]);
   }
-  return { ok: true, stages: tk.stages };
+  return { ok: true, stages };
 }
 
 /** Голова + хвост; полный вывод остаётся в файле. */
@@ -223,10 +414,19 @@ export function runStagesLocal(stages: string[][], cwd: string, timeoutMs = INSP
   });
 }
 
-function pickMac(): string {
-  const m = listMachines().filter(x => !x.revoked_at && isMachineOnline(x.id));
-  if (!m.length) throw new Error("Mac (host) сейчас офлайн. Повтори позже или используй target=server");
-  return m[0].id;
+/** Машина для target=mac. Признака «основной» у машин нет, поэтому без host работает только единственная онлайн-машина; иначе ошибка со списком. */
+export function pickMac(host?: string): string {
+  const all = listMachines().filter(x => !x.revoked_at);
+  const online = all.filter(x => isMachineOnline(x.id));
+  if (host) {
+    const m = all.find(x => x.id === host || x.name.toLowerCase() === host.toLowerCase());
+    if (!m) throw new Error("Машина «" + host + "» не найдена. Доступные: " + (all.map(x => x.name).join(", ") || "нет"));
+    if (!isMachineOnline(m.id)) throw new Error("Машина «" + m.name + "» офлайн. Онлайн: " + (online.map(x => x.name).join(", ") || "нет"));
+    return m.id;
+  }
+  if (online.length === 1) return online[0].id;
+  if (!online.length) throw new Error("Нет ни одной онлайн-машины. Повтори позже или используй target=server");
+  throw new Error("Онлайн несколько машин: " + online.map(x => x.name).join(", ") + ". Укажи параметр host");
 }
 
 export function createInspectTool(role: string): Tool {
@@ -239,27 +439,28 @@ export function createInspectTool(role: string): Tool {
     parameters: Type.Object({
       command: Type.String({ description: "Команда или конвейер из команд чтения" }),
       target: Type.Optional(Type.Union([Type.Literal("server"), Type.Literal("mac")], { description: "server (.110) или mac" })),
+      host: Type.Optional(Type.String({ description: "Имя машины для target=mac (из taskflow_hosts); можно опустить, если онлайн одна машина" })),
       cwd: Type.Optional(Type.String({ description: "Рабочая папка (абсолютный путь)" })),
       max_lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000, description: "Сколько строк вернуть, по умолчанию 80" })),
     }),
-    execute: async (_id: string, p: { command: string; target?: "server" | "mac"; cwd?: string; max_lines?: number }, signal?: AbortSignal) => {
-      const parsed = parseInspectCommand(p.command);
-      if (!parsed.ok) throw new Error("команда не входит в список чтения: " + parsed.reason);
+    execute: async (_id: string, p: { command: string; target?: "server" | "mac"; host?: string; cwd?: string; max_lines?: number }, signal?: AbortSignal) => {
       const maxLines = p.max_lines ?? INSPECT_DEFAULT_LINES;
       const target = p.target ?? "server";
       const workspace = roleHome(role).workspace;
       fs.mkdirSync(workspace, { recursive: true });
+      const serverCwd = p.cwd ?? workspace;
+      if (target === "server" && !path.isAbsolute(serverCwd)) throw new Error("cwd должен быть абсолютным путём");
+      const parsed = parseInspectCommand(p.command, target === "server" ? { cwd: serverCwd, expand: true } : { cwd: p.cwd });
+      if (!parsed.ok) throw new Error("команда не входит в список чтения: " + parsed.reason);
       let output: string, status: string;
       if (target === "mac") {
-        const machine = pickMac();
+        const machine = pickMac(p.host);
         const cmd = parsed.stages.map(s => s.map(shq).join(" ")).join(" | ");
         const r = (await runOperation(machine, "bash", { command: cmd, ...(p.cwd ? { cwd: p.cwd } : {}), timeoutMs: INSPECT_TIMEOUT_MS }, { signal, timeoutMs: INSPECT_TIMEOUT_MS + 10_000 })) as any;
         output = [r?.stdout, r?.stderr, r?.ok === false ? r?.error : ""].filter(Boolean).join("");
         status = r?.ok === false && !r?.stdout ? "ошибка host" : "код " + (r?.exitCode ?? 0);
       } else {
-        const cwd = p.cwd ?? workspace;
-        if (!path.isAbsolute(cwd)) throw new Error("cwd должен быть абсолютным путём");
-        const r = await runStagesLocal(parsed.stages, cwd);
+        const r = await runStagesLocal(parsed.stages, serverCwd);
         output = r.output;
         status = r.timedOut ? "таймаут 60 с" : "код " + r.code;
       }

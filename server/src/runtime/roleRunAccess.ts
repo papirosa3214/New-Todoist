@@ -53,7 +53,7 @@ function roleTools(role: string): string {
  *  работе: запись «где остановились» (владелец 04.10.2026) не должна зависеть
  *  от того, успел ли кто-то дописать профиль новой роли. Снимок ничего не
  *  решает — он только пишет факты о работе, — поэтому лишним он не будет. */
-const CHAT_TOOLS = ["taskflow_weather", "taskflow_plan_request", "taskflow_consult", "taskflow_remember", "taskflow_recall", "taskflow_slot_snapshot"];
+const CHAT_TOOLS = ["taskflow_weather", "taskflow_plan_request", "taskflow_consult", "taskflow_remember", "taskflow_recall", "taskflow_slot_snapshot", "taskflow_inspect"];
 
 function withChatTools(list: string): string {
   const names = list.split(",").map((n) => n.trim()).filter(Boolean);

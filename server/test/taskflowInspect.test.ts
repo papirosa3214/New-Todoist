@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseInspectCommand, truncateOutput, runStagesLocal, createInspectTool } from "../src/runtime/taskflowInspect.js";
+import { parseInspectCommand, truncateOutput, runStagesLocal, createInspectTool, secretPathReason, pickMac, SECRET_EXCLUDE_GLOBS } from "../src/runtime/taskflowInspect.js";
+import { migrate } from "../src/db.js";
+import { runMigrations } from "../src/migrations.js";
+
+migrate(); runMigrations();
 
 const ok = (c: string) => expect(parseInspectCommand(c), c).toMatchObject({ ok: true });
 const no = (c: string, why?: RegExp) => {
@@ -86,5 +90,69 @@ describe("taskflow_inspect: вывод и выполнение", () => {
       const file = /полный вывод \(300 строк\): ([^\]\s]+)/.exec(text)![1];
       expect(fs.readFileSync(file, "utf8")).toContain("row150");
     } finally { if (prev === undefined) delete process.env.TASKFLOW_ROLES_DIR; else process.env.TASKFLOW_ROLES_DIR = prev; fs.rmSync(roles, { recursive: true, force: true }); }
+  });
+});
+
+describe("taskflow_inspect: секреты, глобы, симлинки", () => {
+  const mk = () => fs.mkdtempSync(path.join(os.tmpdir(), "inspect-sec-"));
+  it("имена секретов", () => {
+    for (const p of [".env", ".env.local", "a/b.pem", "x.key", "id_rsa", "id_ed25519.pub", "/home/u/.ssh/config", "~/.gnupg/x", ".netrc", ".npmrc", ".pypirc", ".git-credentials",
+      "/home/u/.aws/credentials", "/home/u/.config/gh/hosts.yml", "credentials.json", "secrets.yaml", "my-token.txt", "/proc/123/environ", "/home/u/.claude/age-key.txt", "/home/u/.claude/vault-run.py", "/home/u/.claude/memory/secrets.age"])
+      expect(secretPathReason(p), p).not.toBeNull();
+    for (const p of ["src/a.ts", "README.md", "environment.md", "a/b/c.txt"]) expect(secretPathReason(p), p).toBeNull();
+  });
+  it("любая команда списка не читает секреты, включая cwd и rev:путь", () => {
+    const dir = mk();
+    try {
+      for (const c of ["cat .env", "head -n 3 .env.local", "tail -n 2 id_rsa", "rg foo .env", "grep x credentials.json", "find .ssh -type f", "jq . secrets.json", "sqlite3 -readonly my-token.db .tables",
+        "stat server.pem", "file a.key", "git show HEAD:.env", "git log -- .env", "cat /proc/1/environ", "cat ~/.ssh/id_rsa", "curl file:///etc/passwd", "ls ~/.aws"])
+        expect(parseInspectCommand(c, { cwd: dir, expand: true }).ok, c).toBe(false);
+      const r = parseInspectCommand("ls", { cwd: path.join(dir, ".ssh") });
+      expect(r.ok).toBe(false); if (!r.ok) expect(r.reason).toMatch(/рабочая папка/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("шаблон поиска, похожий на секрет, не путь", () => {
+    expect(parseInspectCommand("rg token src", { cwd: os.tmpdir(), expand: true }).ok).toBe(true);
+    expect(parseInspectCommand("rg '.env' src", { cwd: os.tmpdir(), expand: true }).ok).toBe(true);
+    expect(parseInspectCommand("git log --grep token", { cwd: os.tmpdir() }).ok).toBe(true);
+  });
+  it("rg и grep получают исключающие glob, а не отказ", () => {
+    const rg: any = parseInspectCommand("rg foo", { cwd: os.tmpdir() });
+    expect(rg.ok).toBe(true);
+    const a: string[] = rg.stages[0];
+    for (const g of SECRET_EXCLUDE_GLOBS) expect(a).toContain("!" + g);
+    const gr: any = parseInspectCommand("grep -r foo . -- x", { cwd: os.tmpdir() });
+    expect(gr.stages[0]).toContain("--exclude=.env*"); expect(gr.stages[0]).toContain("--exclude-dir=.ssh");
+    expect(gr.stages[0].indexOf("--exclude=.env*")).toBeLessThan(gr.stages[0].indexOf("--"));
+    expect(parseInspectCommand("rg -L foo", { cwd: os.tmpdir() }).ok).toBe(false);
+  });
+  it("обход через симлинк закрыт по realpath", () => {
+    const dir = mk();
+    try {
+      fs.writeFileSync(path.join(dir, ".env"), "A=1");
+      fs.symlinkSync(path.join(dir, ".env"), path.join(dir, "link.txt"));
+      const r = parseInspectCommand("cat link.txt", { cwd: dir, expand: true });
+      expect(r.ok).toBe(false); if (!r.ok) expect(r.reason).toMatch(/симлинк/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("глобы раскрываются сами, секреты внутри раскрытия отклоняются, лимит 500", async () => {
+    const dir = mk();
+    try {
+      fs.writeFileSync(path.join(dir, "a.txt"), "1\n"); fs.writeFileSync(path.join(dir, "b.txt"), "2\n"); fs.writeFileSync(path.join(dir, "c.log"), "x\n");
+      const r: any = parseInspectCommand("cat *.txt", { cwd: dir, expand: true });
+      expect(r.stages[0]).toEqual(["cat", "a.txt", "b.txt"]);
+      expect(parseInspectCommand("cat [ab].txt", { cwd: dir, expand: true })).toMatchObject({ ok: true, stages: [["cat", "a.txt", "b.txt"]] });
+      expect((await runStagesLocal(r.stages, dir)).output).toBe("1\n2\n");
+      expect((parseInspectCommand("cat nomatch*", { cwd: dir, expand: true }) as any).stages[0]).toEqual(["cat", "nomatch*"]);
+      fs.writeFileSync(path.join(dir, "my-token.txt"), "s");
+      expect(parseInspectCommand("cat *token*", { cwd: dir, expand: true }).ok).toBe(false);
+      for (let i = 0; i < 501; i++) fs.writeFileSync(path.join(dir, "f" + i + ".dat"), "");
+      const big = parseInspectCommand("ls *.dat", { cwd: dir, expand: true });
+      expect(big.ok).toBe(false); if (!big.ok) expect(big.reason).toMatch(/500/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("mac: без host нет «первой попавшейся» машины", () => {
+    expect(() => pickMac()).toThrow(/онлайн|Онлайн/);
+    expect(() => pickMac("no-such-machine")).toThrow(/не найдена/);
   });
 });

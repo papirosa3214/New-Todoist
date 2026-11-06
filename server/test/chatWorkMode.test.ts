@@ -49,6 +49,21 @@ describe('chat planning permissions',()=>{
    expect(await guard({toolName:'taskflow_host_edit'})).toMatchObject({block:true});
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
  });
+ it('plan: taskflow_host_bash, bash, edit, write are blocked at every layer; inspect stays on the MCP path',async()=>{
+  const {operationRestriction}=await import('../src/runtime/universalTaskflow.js');
+  const ctx:any={actor:'u',role:'builder',mode:'plan',runId:'r'};
+  for(const n of ['taskflow_host_bash','taskflow_host_edit','taskflow_host_write','bash','edit','write']) expect(operationRestriction(n,ctx),n).toMatchObject({code:'MODE_RESTRICTED'});
+  for(const n of ['taskflow_inspect','taskflow_host_read']) expect(operationRestriction(n,ctx),n).toBeUndefined();
+  setRoleTokenSigner(()=> 'test-token');
+  const plan=prepareRoleRunAccess('mode-plan-inspect','builder','plan')!;
+  const work=prepareRoleRunAccess('mode-work-inspect','builder','work')!;
+  try {
+   const names=(file:string)=>JSON.parse(fs.readFileSync(file,'utf8')).mcpServers.taskflow.env.TASKFLOW_MCP_TOOLS.split(',');
+   expect(names(plan)).toContain('taskflow_inspect');
+   expect(names(work)).toContain('taskflow_inspect');
+   for(const n of ['taskflow_host_bash','bash','edit','write','taskflow_host_edit']) expect(names(plan)).not.toContain(n);
+  } finally {releaseRoleRunAccess('mode-plan-inspect');releaseRoleRunAccess('mode-work-inspect');}
+ });
  it('filters the actual MCP allowlist in planning and restores work permissions',()=>{
   setRoleTokenSigner(()=> 'test-token');
   const plan=prepareRoleRunAccess('mode-plan-test','builder','plan')!;
