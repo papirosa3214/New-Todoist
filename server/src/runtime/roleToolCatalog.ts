@@ -160,8 +160,15 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  // тот же вызов с теми же аргументами (06.11.2026) — без ошибки и без повторного хода.
  const startArgs=new Map<string,any>();
  const autoHandled=new Set<string>();
+ // toolCallId вызовов, которые выполнило автоподключение: у их результата признак ошибки снимается везде.
+ const autoConnected=new Set<string>();
  const onAgentEvent=async(event:any,signal?:AbortSignal):Promise<void>=>{
   if(event?.type==="tool_execution_start"){startArgs.set(event.toolCallId,event.args);return;}
+  // Сообщение с результатом ещё не сохранено в сессии и не ушло провайдеру: правим его здесь,
+  // тогда и запрос, и файл сессии (resume) получают его без признака ошибки.
+  if((event?.type==="message_start"||event?.type==="message_end")&&event.message?.role==="toolResult"&&autoConnected.has(event.message.toolCallId)){
+   fixAutoConnectedMessage(event.message);return;
+  }
   if(event?.type!=="tool_execution_end")return;
   const args=startArgs.get(event.toolCallId);startArgs.delete(event.toolCallId);
   if(!event.isError||args===undefined)return;
@@ -170,7 +177,7 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
   const tool=nativeByName.get(event.toolName);
   if(!tool||!isToolNotInCatalogText(toolResultText(event.result)))return;
   if(!Check(tool.parameters,args))return;
-  autoHandled.add(event.toolCallId);
+  autoHandled.add(event.toolCallId);autoConnected.add(event.toolCallId);
   rememberOnDemandTool(scope,tool.name);loader.activate([tool.name]);
   // Отдельное действие учёта: не «invoke», поэтому счётчики ошибок и сторож его не видят.
   recordToolAudit({...context,...refusalEvent,action:"auto_connect",tool:tool.name,operation:tool.name,outcome:"ok",errorMessage:"auto_connected"});
@@ -226,7 +233,7 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  // Активно ядро и загрузчик: остальные операции ждут подключения по требованию.
  // Реестр сессии при этом полный — подключать можно всё, что роль имеет право.
  const activeNames=[...core.map(tool=>tool.name),loader.tool.name];
- return {activeNames,registeredNames:[...aliases.map(tool=>tool.name),loader.tool.name],customTools:[universal,...aliases,loader.tool],operations,context,scope,loader,onToolExecutionEnd,onAgentEvent,
+ return {activeNames,registeredNames:[...aliases.map(tool=>tool.name),loader.tool.name],customTools:[universal,...aliases,loader.tool],operations,context,scope,loader,onToolExecutionEnd,onAgentEvent,autoConnected,
   attachSession:(session:any)=>loader.attach(session)};
 }
 
@@ -253,12 +260,55 @@ export function installNativeToolCore(session:any,catalog:ReturnType<typeof buil
  catalog.attachSession(session);
 }
 
+const NOT_FOUND_TEXT=/^Tool "?[\w.:-]+"? not found$/;
+const dropNotFound=(blocks:any[]):any[]=>blocks.filter(b=>!(b?.type==="text"&&typeof b.text==="string"&&NOT_FOUND_TEXT.test(b.text.trim())));
+/** Сообщение toolResult автоподключённого вызова — без признака ошибки и без «Tool X not found». */
+export function fixAutoConnectedMessage(message:any):void{
+ message.isError=false;
+ if(Array.isArray(message.content)){const kept=dropNotFound(message.content);if(kept.length)message.content=kept;}
+}
+/** Запрос провайдеру: снять признак ошибки у результатов автоподключённых вызовов в формате провайдера.
+ *  Anthropic — is_error; Google — response.error → output; Bedrock — status; Mistral — префикс «[tool error]»;
+ *  OpenAI Chat Completions и Responses признака ошибки не имеют — убираем только остаток «Tool X not found». */
+export function clearAutoConnectedErrorFlags(payload:any,ids:ReadonlySet<string>):any{
+ if(!payload||!ids.size)return payload;
+ const clean=(text:any)=>typeof text==="string"&&NOT_FOUND_TEXT.test(text.trim())?"":text;
+ for(const msg of payload.messages??[]){
+  // Anthropic: content[] с type tool_result
+  if(Array.isArray(msg?.content))for(const block of msg.content){
+   if(block?.type==="tool_result"&&ids.has(block.tool_use_id)){
+    if("is_error" in block)block.is_error=false;
+    if(Array.isArray(block.content))block.content=dropNotFound(block.content);else block.content=clean(block.content);
+   }
+   // Bedrock: toolResult { toolUseId, status }
+   if(block?.toolResult&&ids.has(block.toolResult.toolUseId)){
+    if(block.toolResult.status==="error")block.toolResult.status="success";
+    if(Array.isArray(block.toolResult.content))block.toolResult.content=block.toolResult.content.filter((c:any)=>!(typeof c?.text==="string"&&NOT_FOUND_TEXT.test(c.text.trim())));
+   }
+  }
+  // OpenAI Chat Completions и Mistral: role tool
+  if(msg?.role==="tool"&&ids.has(msg.tool_call_id)){
+   if(typeof msg.content==="string")msg.content=clean(msg.content.replace(/^\[tool error\] /,""));
+   else if(Array.isArray(msg.content))msg.content=msg.content.map((c:any)=>typeof c?.text==="string"?{...c,text:clean(c.text.replace(/^\[tool error\] /,""))}:c);
+  }
+ }
+ // OpenAI Responses: input[] с function_call_output
+ for(const item of payload.input??[])if(item?.type==="function_call_output"&&ids.has(item.call_id)&&typeof item.output==="string")item.output=clean(item.output);
+ // Google: contents[].parts[].functionResponse
+ for(const content of payload.contents??[])for(const part of content?.parts??[]){
+  const fr=part?.functionResponse;
+  if(fr&&ids.has(fr.id)&&fr.response&&"error" in fr.response){const {error,...rest}=fr.response;fr.response={...rest,output:clean(error)};}
+ }
+ return payload;
+}
+
 export function installNativeToolSchemas(session:any,catalog:ReturnType<typeof buildRoleToolCatalog>):void {
  if(!session?.agent)return; // External CLI runtime owns its own transport.
  const previous=session.agent.onPayload;
  session.agent.onPayload=async(payload:any,model:any)=>{
   const next=(await previous?.(payload,model))??payload;
-  return model?.api==="anthropic-messages" ? restoreNativeToolSchemas(next,catalog.customTools) : next;
+  const cleaned=clearAutoConnectedErrorFlags(next,catalog.autoConnected);
+  return model?.api==="anthropic-messages" ? restoreNativeToolSchemas(cleaned,catalog.customTools) : cleaned;
  };
  // Слушатель агента ждётся ядром Pi: подключение и выполнение идут до того, как
  // результат станет сообщением. Встаём первыми, чтобы сессионный сторож видел готовый исход.
