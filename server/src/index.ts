@@ -89,6 +89,7 @@ import { registerMergeMarkerRoutes } from "./routes/merge-marker.js";
 import { registerCodeChangesRoutes } from "./routes/code-changes.js";
 import { registerChatWorkspaceRoutes } from "./routes/chat-workspace.js";
 import { registerOwnerControlRoutes } from "./routes/owner-controls.js";
+import { registerOwnerSessionRoutes } from "./routes/owner-sessions.js";
 import { reloadServerSettings } from "./lib/serverSettings.js";
 import { registerOwnerCommandRoutes } from "./routes/owner-commands.js";
 import { registerAdminServerSettingsRoutes } from "./routes/admin-server-settings.js";
@@ -610,6 +611,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerChatWorkspaceRoutes(app);
   registerChatSessionPreferenceRoutes(app);
   registerOwnerControlRoutes(app);
+  registerOwnerSessionRoutes(app);
   registerAdminServerSettingsRoutes(app);
   registerSecretsRoutes(app);
   registerJevRoutes(app);
