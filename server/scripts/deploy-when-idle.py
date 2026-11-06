@@ -24,7 +24,7 @@
 Состояние: ~/.local/state/taskflow-deploy/ (deployed — выложенный коммит).
 Реестр: docs/watchers.md, раздел «Отложенная выкладка сервера».
 """
-import os, re, sqlite3, subprocess, time, urllib.request, uuid
+import json, os, re, sqlite3, subprocess, time, urllib.request, uuid
 from datetime import datetime
 
 REPO = os.path.expanduser("~/Проекты/New-Todoist")
@@ -210,6 +210,58 @@ def healthy(wait=90):
     return False
 
 
+def session_api_healthy(timeout=15):
+    """Проверить не только процесс, а безопасный owner-session сценарий.
+
+    LAN-вход с нативной меткой выдаёт короткоживущий JWT; проба открывает
+    постоянный root, читает тот же snapshot и заставляет reconnect вернуть
+    авторитетный snapshot по заведомо отсутствующему курсору. Prompt не
+    отправляется, поэтому модель и инструменты не запускаются.
+    """
+    base = HEALTH.removesuffix("/api/health")
+
+    def call(method, path, token=None):
+        headers = {
+            "Accept": "application/json",
+            "X-TaskFlow-Client": "ios-native",
+        }
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        data = b"{}" if method == "POST" else None
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            if response.status != 200:
+                raise RuntimeError(f"{path}: HTTP {response.status}")
+            return json.loads(response.read())
+
+    try:
+        auth = call("POST", "/api/auth/lan")
+        token = auth.get("token")
+        if not isinstance(token, str) or not token:
+            return False
+        opened = call("POST", "/api/sessions/root", token)
+        root_id = opened.get("session", {}).get("id")
+        if not isinstance(root_id, str) or not root_id:
+            return False
+        snapshot = call("GET", f"/api/sessions/{root_id}", token)
+        if snapshot.get("session", {}).get("id") != root_id:
+            return False
+        reconnect = call(
+            "GET",
+            f"/api/sessions/{root_id}/events?after=deploy-probe-missing",
+            token,
+        )
+        return (
+            reconnect.get("resetRequired") is True
+            and reconnect.get("snapshot", {}).get("id") == root_id
+        )
+    except Exception as error:
+        log(f"owner-session probe не прошла: {str(error)[:200]}")
+        return False
+
+
 def prune_backups(keep=10):
     """Убрать старые копии БД, оставив последние `keep` выкладок.
 
@@ -349,7 +401,7 @@ def main():
         wal_mb = os.path.getsize(wal) / 1024 / 1024 if os.path.exists(wal) else 0
         log(f"WAL усечён, размер: {wal_mb:.1f} МБ")
     sh("systemctl", "--user", "restart", "taskflow-server", timeout=120)
-    if healthy():
+    if healthy() and session_api_healthy():
         state("deployed", head)
         state("pending_since", "")
         log(f"выложено {head[:8]}")
@@ -362,8 +414,8 @@ def main():
         notify(f"TaskFlow: выложено {head[:8]} ({len(subject)} серверн. коммит(ов)), сервер отвечает.\n" + "\n".join("• " + s for s in subject[:6]))
     else:
         state("failed", head)
-        log("после перезапуска /api/health не отвечает")
-        msg = f"⚠️ TaskFlow: после выкладки {head[:8]} сервер НЕ отвечает. Резервная копия базы: {backup}"
+        log("после перезапуска health или owner-session probe не отвечает")
+        msg = f"⚠️ TaskFlow: после выкладки {head[:8]} health или owner-session API не прошли. Резервная копия базы: {backup}"
         notify(msg)
         telegram(msg)
 
