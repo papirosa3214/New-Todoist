@@ -263,11 +263,34 @@ export function splitAwkArgs(a: string[]): Split {
 
 export function awkProgramDenial(program: string): string | null {
   if (/\bsystem\s*\(/.test(program)) return "awk: system() запрещена";
-  if (/\bgetline\b/.test(program)) return "awk: getline запрещён (чтение команд и файлов)";
   if (/\bENVIRON\b/.test(program)) return "awk: ENVIRON запрещён";
-  if (/\bfflush\b|\bclose\s*\(/.test(program) && /[>|]/.test(program)) return "awk: перенаправление запрещено";
-  if (/>/.test(program)) return "awk: символ > запрещён (перенаправление в файл; сравнение пиши через <)";
-  if (/\|/.test(program)) return "awk: символ | запрещён (конвейер команд)";
+  if (/\|\s*getline\b/.test(program) || /\bgetline\b[^;}\n]*</.test(program)) return "awk: getline из команды или файла запрещён";
+  // Перенаправление — только > / >> / | в операторе print/printf на нулевой скобочной глубине: сравнения ($3 > 100) проходят.
+  const n = program.length; let i = 0;
+  const skipString = (q: string) => { i++; while (i < n && program[i] !== q) { if (program[i] === "\\") i++; i++; } i++; };
+  while (i < n) {
+    const c = program[i];
+    if (c === '"') { skipString('"'); continue; }
+    if (c === "/" && /[(,;{!~=\s]|^/.test(program[i - 1] ?? "") ) { // регулярное выражение
+      i++; while (i < n && program[i] !== "/" && program[i] !== "\n") { if (program[i] === "\\") i++; i++; } i++; continue;
+    }
+    if (c === "#") { while (i < n && program[i] !== "\n") i++; continue; }
+    const m = /^(print|printf)\b/.exec(program.slice(i));
+    if (m && !/[\w$]/.test(program[i - 1] ?? "")) {
+      i += m[0].length; let depth = 0;
+      while (i < n) {
+        const d = program[i];
+        if (d === '"') { skipString('"'); continue; }
+        if (d === "(" || d === "[") depth++;
+        else if (d === ")" || d === "]") depth--;
+        else if (depth <= 0 && (d === ";" || d === "}" || d === "\n")) break;
+        else if (depth <= 0 && (d === ">" || d === "|")) return "awk: перенаправление вывода после print/printf запрещено";
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
   return null;
 }
 
@@ -500,6 +523,8 @@ export function parseInspectCommand(command: string, opts: ParseOptions = {}): P
     if (cmd === "rg" || cmd === "grep") args = withExcludes(cmd, args);
     // GNU sed на сервере: --sandbox вторым рубежом отклоняет e/w/r (на Mac sed BSD, там опции нет).
     if (cmd === "sed" && expand) args = ["--sandbox", ...args];
+    // gawk на сервере: --sandbox сам запрещает system, перенаправления и getline из файлов и команд.
+    if (cmd === "gawk" && expand) args = ["--sandbox", ...args];
     stages.push([cmd, ...args]);
   }
   return { ok: true, stages };

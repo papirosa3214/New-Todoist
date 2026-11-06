@@ -25,7 +25,7 @@ describe("taskflow_inspect: белый список", () => {
       "systemctl --user status taskflow-server.service", "systemctl is-active x", "systemctl show x -p MainPID", "systemctl list-units --type=service",
       "journalctl --user -u taskflow-server -n 50 --no-pager", "sqlite3 -readonly db.sqlite 'select count(*) from tasks'", "sqlite3 -readonly db .tables",
       "curl -s http://127.0.0.1:3001/api/health", "curl -X GET http://x", "curl -sXGET http://x", "xcodebuild -list", "xcodebuild -showBuildSettings -scheme A",
-      "ss -ltn", "ip addr", "sed -n '1,50p' file", "sed -E 's/a+/b/g' file", "sed -n '/foo/p' file | head -3", "sed '2d' a.txt", "sed -n -e '1p' -e '$p' a.txt", "awk '{print $1}' file", "awk -F, '{print $2}' file", "awk '$3 < 5 {print}' file", "ip -br addr show", "ping -c 3 127.0.0.1",
+      "ss -ltn", "ip addr", "sed -n '1,50p' file", "sed -E 's/a+/b/g' file", "sed -n '/foo/p' file | head -3", "sed '2d' a.txt", "sed -n -e '1p' -e '$p' a.txt", "awk '{print $1}' file", "awk -F, '{print $2}' file", "awk '$3 < 5 {print}' file", "awk '$3 > 100 {print $1}' file", "awk '$3 >= 100 && $2 != 0 {print $1, ($3 > 7)}' file", "awk '{ if ($1 > $2) print $1; else print $2 }' file", "awk '/a>b/ {print}' file", "ip -br addr show", "ping -c 3 127.0.0.1",
       "git log --oneline | head -5", "rg foo | sort | uniq -c | sort -rn | head", 'rg "a;b" src',
     ]) ok(c);
   });
