@@ -169,6 +169,34 @@ export function scheduleTelegramProgress(triggerMessageId: string): void {
 export function cancelTelegramProgress(triggerMessageId: string): void {
   const timer = progressTimers.get(triggerMessageId);
   if (timer) { clearTimeout(timer); progressTimers.delete(triggerMessageId); }
+  const stream = streamTimers.get(triggerMessageId);
+  if (stream) { clearInterval(stream); streamTimers.delete(triggerMessageId); }
+}
+
+const STREAM_INTERVAL_MS = 2_000;
+const STREAM_MAX = 3_800;
+const streamTimers = new Map<string, NodeJS.Timeout>();
+
+/** Живой поток ответа в Telegram, как у Hermes: та же одна строка статуса
+ *  правится и наполняется текстом по мере генерации. Финал заменяет её целиком. */
+export function startTelegramStream(triggerMessageId: string, readText: () => string): void {
+  let last = "";
+  const tick = () => {
+    try {
+      let text = String(readText() || "").trim();
+      if (!text) return;
+      if (text.length > STREAM_MAX) text = "…" + text.slice(-STREAM_MAX);
+      if (text === last) return;
+      last = text;
+      const links = db.prepare(`SELECT chat_id,message_id FROM telegram_inbound_ledger
+        WHERE taskflow_message_id=? AND state='posted'`).all(triggerMessageId) as Array<{ chat_id: string; message_id: number }>;
+      for (const link of links) enqueueTelegramDelivery({ kind: "progress", chatId: link.chat_id, text, replyToMessageId: link.message_id, sourceMessageId: null });
+    } catch { /* поток — не повод ломать ход */ }
+  };
+  if (streamTimers.has(triggerMessageId)) return;
+  const timer = setInterval(tick, STREAM_INTERVAL_MS);
+  timer.unref?.();
+  streamTimers.set(triggerMessageId, timer);
 }
 
 export function acceptTelegramInbound(input: TelegramInbound): { duplicate: boolean; ledger_id: string; message_id: string | null; ack_delivery_id: string | null } {

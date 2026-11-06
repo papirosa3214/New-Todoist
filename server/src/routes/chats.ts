@@ -166,7 +166,7 @@ import {
 } from "../lib/roleContextResolver.js";
 import {
 } from "../runtime/inProcessRun.js";
-import { captureTelegramFinal, cancelTelegramProgress } from "../integrations/telegram.js";
+import { cancelTelegramProgress, captureTelegramFinal, startTelegramStream } from "../integrations/telegram.js";
 import {
   attachmentRow,
   saveUploadedFile,
@@ -3574,6 +3574,9 @@ async function deliverAgentReply(args: {
   let persistedReply=false;
   try {
     typing(true);
+    if (chatId === "chat-secretary") {
+      try { startTelegramStream(trigger.id, () => live.partialText()); } catch { /* Telegram-поток необязателен */ }
+    }
   try {
     reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:(event)=>{observeDeliveryActivity(chatId,roleUserId,event);live.onEvent(event);}}) : await startChatRun({
       mode: roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
