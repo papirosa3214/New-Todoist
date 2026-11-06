@@ -149,6 +149,23 @@ class SessionApiProbeTests(unittest.TestCase):
             self.assertFalse(DEPLOY.session_api_healthy())
 
 
+class RecheckTests(unittest.TestCase):
+    def test_each_recheck_uses_a_fresh_transient_unit(self):
+        calls = []
+        original_sh = DEPLOY.sh
+        try:
+            setattr(DEPLOY, "sh", lambda *cmd, **_kwargs: calls.append(cmd) or _Result())
+            DEPLOY.recheck()
+            DEPLOY.recheck()
+        finally:
+            setattr(DEPLOY, "sh", original_sh)
+
+        units = [next(part for part in call if part.startswith("--unit=")) for call in calls]
+        self.assertEqual(len(units), 2)
+        self.assertNotEqual(units[0], units[1])
+        self.assertTrue(all(unit.startswith("--unit=taskflow-deploy-recheck-") for unit in units))
+
+
 class SyncFromGithubTests(unittest.TestCase):
     """Синхронизация main с GitHub (источник правды, AGENTS.md 05.10.2026).
 

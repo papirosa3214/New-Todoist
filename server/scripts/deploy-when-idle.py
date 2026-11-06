@@ -163,9 +163,10 @@ def recheck():
     Сторож будит пуш (taskflow-deploy-idle.path). Повтор назначается только
     пока есть что выкладывать, поэтому без работы сторож вообще не просыпается.
     """
+    unit = f"taskflow-deploy-recheck-{uuid.uuid4().hex[:8]}"
     result = sh(
         "systemd-run", "--user", "--collect", f"--on-active={RECHECK_SEC}",
-        "--unit=taskflow-deploy-recheck",
+        f"--unit={unit}",
         "systemctl", "--user", "start", "taskflow-deploy-idle.service",
     )
     # Повтор уже назначен — это норма; иное значит, что выкладка может зависнуть.
