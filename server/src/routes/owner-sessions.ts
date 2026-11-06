@@ -15,7 +15,9 @@ import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
 
 type RuntimeContract = Pick<OwnerSessionRuntime,
   "openRoot" | "open" | "list" | "snapshot" | "prompt" | "abort" | "branch" | "fork" | "subscribe"
->;
+> & {
+  subscribeAll?: OwnerSessionRuntime["subscribeAll"];
+};
 
 type Authorize = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
 
@@ -88,6 +90,16 @@ export function registerOwnerSessionRoutes(
   };
 
   const ensureForwarding = async (sessionId: string, ownerId: string) => {
+    if (runtime.subscribeAll) {
+      const globalKey = `${ownerId}:*`;
+      if (subscriptions.has(globalKey)) return;
+      const unsubscribe = runtime.subscribeAll((eventSessionId, event) => {
+        const normalized = events.push(eventSessionId, event);
+        broadcast(ownerId, { type: "session:event", event: normalized });
+      });
+      subscriptions.set(globalKey, unsubscribe);
+      return;
+    }
     const key = `${ownerId}:${sessionId}`;
     if (subscriptions.has(key)) return;
     const unsubscribe = await runtime.subscribe(sessionId, event => {

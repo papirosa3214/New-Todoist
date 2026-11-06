@@ -8,7 +8,13 @@ import {
   type SessionEntry,
   type SessionInfo,
   type SessionTreeNode,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import {
+  createSpawnChildSessionTool,
+  type ChildSessionSpawnRequest,
+  type SpawnedChildSession,
+} from "./spawnChildSessionTool.js";
 
 export type OwnerSessionPromptMode = "prompt" | "steer" | "follow_up";
 
@@ -42,7 +48,12 @@ export interface OwnerSessionSnapshot {
 export interface OwnerSessionRuntimeOptions {
   cwd: string;
   sessionDir: string;
-  createSession?: (manager: SessionManager) => Promise<OwnerAgentSession>;
+  createSession?: (manager: SessionManager, options?: OwnerSessionCreateOptions) => Promise<OwnerAgentSession>;
+}
+
+export interface OwnerSessionCreateOptions {
+  tools?: readonly string[];
+  customTools?: ToolDefinition[];
 }
 
 export class OwnerSessionNotFoundError extends Error {
@@ -73,12 +84,17 @@ type SessionHandle = {
   unsubscribeSdk?: () => void;
 };
 
-async function createDefaultSession(manager: SessionManager): Promise<OwnerAgentSession> {
+async function createDefaultSession(
+  manager: SessionManager,
+  options: OwnerSessionCreateOptions = {},
+): Promise<OwnerAgentSession> {
   const cwd = manager.getCwd();
   const { session } = await createAgentSession({
     cwd,
     sessionManager: manager,
     settingsManager: SettingsManager.create(cwd),
+    tools: options.tools ? [...options.tools] : undefined,
+    customTools: options.customTools,
   });
   return session;
 }
@@ -93,14 +109,21 @@ async function createDefaultSession(manager: SessionManager): Promise<OwnerAgent
 export class OwnerSessionRuntime {
   private readonly cwd: string;
   private readonly sessionDir: string;
-  private readonly createSession: (manager: SessionManager) => Promise<OwnerAgentSession>;
+  private readonly createSession: (
+    manager: SessionManager,
+    options?: OwnerSessionCreateOptions,
+  ) => Promise<OwnerAgentSession>;
   private readonly handles = new Map<string, SessionHandle>();
+  private readonly globalListeners = new Set<(sessionId: string, event: AgentSessionEvent) => void>();
   private rootSessionId?: string;
 
   constructor(options: OwnerSessionRuntimeOptions) {
     this.cwd = options.cwd;
     this.sessionDir = options.sessionDir;
-    this.createSession = options.createSession ?? createDefaultSession;
+    this.createSession = options.createSession ?? ((manager, createOptions = {}) => createDefaultSession(manager, {
+      ...createOptions,
+      customTools: createOptions.customTools ?? [this.childToolFor(manager)],
+    }));
     fs.mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });
   }
 
@@ -213,6 +236,17 @@ export class OwnerSessionRuntime {
     };
   }
 
+  subscribeAll(listener: (sessionId: string, event: AgentSessionEvent) => void): () => void {
+    this.globalListeners.add(listener);
+    for (const handle of this.handles.values()) this.attachSdkSubscription(handle);
+    return () => {
+      this.globalListeners.delete(listener);
+      for (const handle of this.handles.values()) {
+        if (handle.listeners.size === 0) this.detachSdkSubscription(handle);
+      }
+    };
+  }
+
   private async ensureHandle(id: string): Promise<SessionHandle> {
     const current = this.handles.get(id);
     if (current) return current;
@@ -228,11 +262,12 @@ export class OwnerSessionRuntime {
     const session = await this.createSession(manager);
     const handle: SessionHandle = { manager, session, listeners: new Set() };
     this.handles.set(id, handle);
+    this.attachSdkSubscription(handle);
     return handle;
   }
 
   private async replace(handle: SessionHandle, manager: SessionManager): Promise<void> {
-    const hadListeners = handle.listeners.size > 0;
+    const hadListeners = handle.listeners.size > 0 || this.globalListeners.size > 0;
     this.detachSdkSubscription(handle);
     handle.session.dispose();
     handle.manager = manager;
@@ -241,14 +276,43 @@ export class OwnerSessionRuntime {
   }
 
   private attachSdkSubscription(handle: SessionHandle): void {
-    if (handle.unsubscribeSdk || handle.listeners.size === 0) return;
+    if (handle.unsubscribeSdk || (handle.listeners.size === 0 && this.globalListeners.size === 0)) return;
     handle.unsubscribeSdk = handle.session.subscribe(event => {
       for (const listener of handle.listeners) listener(event);
+      const id = handle.manager.getSessionId();
+      for (const listener of this.globalListeners) listener(id, event);
     });
   }
 
   private detachSdkSubscription(handle: SessionHandle): void {
     handle.unsubscribeSdk?.();
     handle.unsubscribeSdk = undefined;
+  }
+
+  private childToolFor(parentManager: SessionManager): ToolDefinition {
+    return createSpawnChildSessionTool({
+      parentSessionId: parentManager.getSessionId(),
+      get parentSessionFile() { return parentManager.getSessionFile() ?? ""; },
+      spawn: request => this.spawnChild(request),
+    });
+  }
+
+  private async spawnChild(request: ChildSessionSpawnRequest): Promise<SpawnedChildSession> {
+    const parent = await this.ensureHandle(request.parentSessionId);
+    const parentFile = parent.manager.getSessionFile();
+    if (!parentFile || parentFile !== request.parentSessionFile) {
+      throw new OwnerSessionBranchError(`Parent session ${request.parentSessionId} is not persisted`);
+    }
+    const cwd = request.cwd || parent.manager.getCwd();
+    const manager = SessionManager.create(cwd, this.sessionDir, { parentSession: parentFile });
+    const session = await this.createSession(manager, { tools: request.tools, customTools: [] });
+    const handle: SessionHandle = { manager, session, listeners: new Set() };
+    this.handles.set(manager.getSessionId(), handle);
+    this.attachSdkSubscription(handle);
+    return {
+      id: manager.getSessionId(),
+      parentSession: parentFile,
+      session,
+    };
   }
 }
