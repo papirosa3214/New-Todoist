@@ -125,6 +125,18 @@ export function stageDenial(tokens: string[]): string | null {
       return null;
     }
     case "curl": return curlDenial(a);
+    case "sed": {
+      const sp = splitSedArgs(a);
+      if (sp.error) return sp.error;
+      for (const prog of sp.programs) { const why = sedScriptDenial(prog); if (why) return why; }
+      return null;
+    }
+    case "awk": case "gawk": {
+      const sp = splitAwkArgs(a);
+      if (sp.error) return sp.error;
+      for (const prog of sp.programs) { const why = awkProgramDenial(prog); if (why) return why; }
+      return null;
+    }
     case "xcodebuild": {
       if (!has(a, ["-list", "-showBuildSettings"])) return "xcodebuild только с -list или -showBuildSettings";
       const actions = ["build", "test", "clean", "archive", "install", "installsrc", "analyze", "build-for-testing", "test-without-building", "docbuild", "exportArchive", "-exportArchive", "-resolvePackageDependencies"];
@@ -145,6 +157,118 @@ export function stageDenial(tokens: string[]): string | null {
     }
     default: return "команда «" + cmd + "» не в белом списке";
   }
+}
+
+
+// ---- sed и awk только на чтение ----
+type Split = { programs: string[]; fileIdx: number[]; error?: string };
+const SED_LONG = /^--(quiet|silent|regexp-extended|separate|null-data|unbuffered|posix|debug|sandbox|follow-symlinks|binary)$/;
+
+/** Разбор аргументов sed: тексты скриптов и индексы файлов. */
+export function splitSedArgs(a: string[]): Split {
+  const programs: string[] = []; const fileIdx: number[] = []; let hasE = false; let scriptTaken = false;
+  const bad = (m: string): Split => ({ programs, fileIdx, error: m });
+  for (let i = 0; i < a.length; i++) {
+    const t = a[i];
+    if (t === "--") { for (let k = i + 1; k < a.length; k++) { if (!hasE && !scriptTaken) { programs.push(a[k]); scriptTaken = true; } else fileIdx.push(k); } break; }
+    if (t.startsWith("--")) {
+      if (/^--in-place/.test(t)) return bad("sed --in-place пишет в файл");
+      if (t === "--expression" || t.startsWith("--expression=")) { hasE = true; const v = t.includes("=") ? t.slice(t.indexOf("=") + 1) : a[++i]; if (v === undefined) return bad("sed: нет скрипта"); programs.push(v); continue; }
+      if (/^--line-length(=|$)/.test(t)) { if (!t.includes("=")) i++; continue; }
+      if (/^--file/.test(t)) return bad("sed -f/--file: скрипт из файла не проверить");
+      if (!SED_LONG.test(t)) return bad("sed: параметр не входит в список чтения: " + t);
+      continue;
+    }
+    if (t.startsWith("-") && t.length > 1) {
+      for (let j = 1; j < t.length; j++) {
+        const c = t[j];
+        if (c === "i") return bad("sed -i (в любой форме) пишет в файл");
+        if (c === "f") return bad("sed -f: скрипт из файла не проверить");
+        if (c === "e") { hasE = true; const rest = t.slice(j + 1); const v = rest || a[++i]; if (v === undefined) return bad("sed: нет скрипта"); programs.push(v); break; }
+        if (c === "l") { if (j === t.length - 1) i++; break; }
+        if (!"nErszub".includes(c)) return bad("sed: параметр -" + c + " не входит в список чтения");
+      }
+      continue;
+    }
+    if (!hasE && !scriptTaken) { programs.push(t); scriptTaken = true; } else fileIdx.push(i);
+  }
+  if (!programs.length) return bad("sed: нет скрипта");
+  return { programs, fileIdx };
+}
+
+/** Проверка скрипта sed: запрещены w/W (запись), e (выполнение), r/R (чтение файла мимо проверки секретов), флаги s///w и s///e. */
+export function sedScriptDenial(script: string): string | null {
+  let i = 0; const n = script.length;
+  const readDelimited = (d: string): boolean => { // до неэкранированного d
+    while (i < n) { const c = script[i++]; if (c === "\\") { i++; continue; } if (c === d) return true; }
+    return false;
+  };
+  while (i < n) {
+    const c = script[i];
+    if (/[\s;{}!]/.test(c)) { i++; continue; }
+    // адрес
+    if (/[0-9$+~,]/.test(c)) { i++; continue; }
+    if (c === "/" || c === "\\") {
+      let d = "/"; i++; if (c === "\\") d = script[i++] ?? "/";
+      if (!readDelimited(d)) return "sed: незакрытый адрес";
+      while (i < n && /[IM]/.test(script[i])) i++;
+      continue;
+    }
+    i++;
+    if (c === "#") { while (i < n && script[i] !== "\n") i++; continue; }
+    if (c === "s") {
+      const d = script[i++]; if (!d || d === "\n" || d === "\\") return "sed: некорректная команда s";
+      if (!readDelimited(d) || !readDelimited(d)) return "sed: незакрытая команда s";
+      let flags = "";
+      while (i < n && !/[\s;}]/.test(script[i])) flags += script[i++];
+      if (/[we]/i.test(flags.replace(/[0-9gpiImM]/g, "").replace(/[IM]/g, "")) || /[we]/.test(flags)) return "sed: флаг w/e в команде s (запись или выполнение)";
+      continue;
+    }
+    if (c === "y") { const d = script[i++]; if (!d || !readDelimited(d) || !readDelimited(d)) return "sed: некорректная команда y"; continue; }
+    if ("wWeErR".includes(c)) return "sed: команда «" + c + "» пишет в файл, читает файл или выполняет команду";
+    if ("aic".includes(c)) { while (i < n && script[i] !== "\n") i++; continue; }
+    if (":btT".includes(c)) { while (i < n && !/[;\n}]/.test(script[i])) i++; continue; }
+    if ("lLqQ".includes(c)) { while (i < n && /[0-9\s]/.test(script[i])) i++; continue; }
+    if ("pdDnNgGhHxP=zF".includes(c)) continue;
+    return "sed: команда «" + c + "» не входит в список чтения";
+  }
+  return null;
+}
+
+/** Разбор аргументов awk: тексты программы и индексы файлов. */
+export function splitAwkArgs(a: string[]): Split {
+  const programs: string[] = []; const fileIdx: number[] = []; let hasE = false; let taken = false;
+  const bad = (m: string): Split => ({ programs, fileIdx, error: m });
+  for (let i = 0; i < a.length; i++) {
+    const t = a[i];
+    if (t === "--") { for (let k = i + 1; k < a.length; k++) { if (!hasE && !taken) { programs.push(a[k]); taken = true; } else fileIdx.push(k); } break; }
+    if (t.startsWith("--")) {
+      if (/^--source(=|$)/.test(t)) { hasE = true; const v = t.includes("=") ? t.slice(t.indexOf("=") + 1) : a[++i]; if (v === undefined) return bad("awk: нет программы"); programs.push(v); continue; }
+      if (/^--(field-separator|assign)(=|$)/.test(t)) { if (!t.includes("=")) i++; continue; }
+      if (/^--(posix|traditional|re-interval|characters-as-bytes)$/.test(t)) continue;
+      return bad("awk: параметр не входит в список чтения: " + t);
+    }
+    if (t.startsWith("-") && t.length > 1) {
+      const c = t[1];
+      if (c === "F" || c === "v") { if (t.length === 2) i++; continue; }
+      if (c === "e") { hasE = true; const v = t.length > 2 ? t.slice(2) : a[++i]; if (v === undefined) return bad("awk: нет программы"); programs.push(v); continue; }
+      if (c === "b" || c === "c" || c === "P" || c === "r") { if (t.length === 2) continue; }
+      return bad("awk: параметр " + t + " не входит в список чтения (запрещены -f, -i, -l, -E)");
+    }
+    if (!hasE && !taken) { programs.push(t); taken = true; } else fileIdx.push(i);
+  }
+  if (!programs.length) return bad("awk: нет программы");
+  return { programs, fileIdx };
+}
+
+export function awkProgramDenial(program: string): string | null {
+  if (/\bsystem\s*\(/.test(program)) return "awk: system() запрещена";
+  if (/\bgetline\b/.test(program)) return "awk: getline запрещён (чтение команд и файлов)";
+  if (/\bENVIRON\b/.test(program)) return "awk: ENVIRON запрещён";
+  if (/\bfflush\b|\bclose\s*\(/.test(program) && /[>|]/.test(program)) return "awk: перенаправление запрещено";
+  if (/>/.test(program)) return "awk: символ > запрещён (перенаправление в файл; сравнение пиши через <)";
+  if (/\|/.test(program)) return "awk: символ | запрещён (конвейер команд)";
+  return null;
 }
 
 function curlDenial(a: string[]): string | null {
@@ -301,6 +425,8 @@ export function pathArgIndexes(cmd: string, a: string[], cwd?: string): number[]
       }
       return out;
     }
+    case "sed": return splitSedArgs(a).fileIdx;
+    case "awk": case "gawk": return splitAwkArgs(a).fileIdx;
     case "cat": case "head": case "tail": case "wc": case "sort": case "uniq": case "cut": case "stat": case "file": case "du": case "df": case "ls":
       a.forEach((t, i) => { if (t.startsWith("-")) return; if (SHORT_VALUE_FLAGS.has(a[i - 1] ?? "")) return; out.push(i); });
       return out;
@@ -372,6 +498,8 @@ export function parseInspectCommand(command: string, opts: ParseOptions = {}): P
     if (cmd === "git") for (const t of rebuilt) if (!t.startsWith("-") && t.includes(":")) { const d = pathDenial(t.slice(t.indexOf(":") + 1), cwd); if (d) return deny("путь с секретами: " + d); }
     args = rebuilt;
     if (cmd === "rg" || cmd === "grep") args = withExcludes(cmd, args);
+    // GNU sed на сервере: --sandbox вторым рубежом отклоняет e/w/r (на Mac sed BSD, там опции нет).
+    if (cmd === "sed" && expand) args = ["--sandbox", ...args];
     stages.push([cmd, ...args]);
   }
   return { ok: true, stages };
@@ -433,7 +561,7 @@ export function createInspectTool(role: string): Tool {
   return {
     name: "taskflow_inspect",
     description:
-      "Запустить команду ТОЛЬКО НА ЧТЕНИЕ (белый список: git status/log/diff/show/branch/rev-parse/ls-files/blame/remote -v, rg, grep, find, ls, cat, head, tail, wc, sort, uniq, cut, jq, stat, file, du, df, ps, pgrep, uptime, free, nvidia-smi, systemctl status/is-active/show/list-units, journalctl, sqlite3 -readonly, curl GET, xcodebuild -list/-showBuildSettings, ss, ip addr, ping -c N). " +
+      "Запустить команду ТОЛЬКО НА ЧТЕНИЕ (белый список: git status/log/diff/show/branch/rev-parse/ls-files/blame/remote -v, rg, grep, find, ls, cat, head, tail, wc, sort, uniq, cut, jq, stat, file, du, df, ps, pgrep, uptime, free, nvidia-smi, systemctl status/is-active/show/list-units, journalctl, sqlite3 -readonly, curl GET, xcodebuild -list/-showBuildSettings, ss, ip addr, ping -c N, sed и awk только на чтение). " +
       "Допустим конвейер «|» между такими командами; нет shell: ; && || > < `...` $() и подстановки не работают. Вывод обрезается до max_lines (голова+хвост), полный — в файле, путь в ответе. Таймаут 60 с. " +
       "target: server (.110, по умолчанию) или mac.",
     parameters: Type.Object({

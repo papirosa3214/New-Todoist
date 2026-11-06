@@ -25,7 +25,7 @@ describe("taskflow_inspect: белый список", () => {
       "systemctl --user status taskflow-server.service", "systemctl is-active x", "systemctl show x -p MainPID", "systemctl list-units --type=service",
       "journalctl --user -u taskflow-server -n 50 --no-pager", "sqlite3 -readonly db.sqlite 'select count(*) from tasks'", "sqlite3 -readonly db .tables",
       "curl -s http://127.0.0.1:3001/api/health", "curl -X GET http://x", "curl -sXGET http://x", "xcodebuild -list", "xcodebuild -showBuildSettings -scheme A",
-      "ss -ltn", "ip addr", "ip -br addr show", "ping -c 3 127.0.0.1",
+      "ss -ltn", "ip addr", "sed -n '1,50p' file", "sed -E 's/a+/b/g' file", "sed -n '/foo/p' file | head -3", "sed '2d' a.txt", "sed -n -e '1p' -e '$p' a.txt", "awk '{print $1}' file", "awk -F, '{print $2}' file", "awk '$3 < 5 {print}' file", "ip -br addr show", "ping -c 3 127.0.0.1",
       "git log --oneline | head -5", "rg foo | sort | uniq -c | sort -rn | head", 'rg "a;b" src',
     ]) ok(c);
   });
@@ -40,6 +40,8 @@ describe("taskflow_inspect: белый список", () => {
       "sqlite3 db 'select 1'", "sqlite3 -readonly db '.shell ls'", "sqlite3 -readonly db '.output f'", "sqlite3 -readonly db '.import a b'", "sqlite3 -readonly db 'attach \"x\" as y'", "sqlite3 -readonly db 'vacuum into \"f\"'", "sqlite3 -readonly db '.backup f'",
       "curl -X POST http://x", "curl -d a http://x", "curl --data-raw a http://x", "curl -F a=b http://x", "curl -T f http://x", "curl -o f http://x", "curl -O http://x", "curl --upload-file f http://x", "curl -sd a http://x", "curl --request=DELETE http://x",
       "xcodebuild build", "xcodebuild -scheme A test", "ip addr add 1.2.3.4 dev eth0", "ip link set x down", "ping 127.0.0.1", "ping -c 100 x", "ping -f -c 1 x",
+      "sed -i 's/a/b/' file", "sed -i.bak 's/a/b/' file", "sed -ni '1p' file", "sed --in-place 's/a/b/' file", "sed -n -i '1p' file", "sed 's/a/b/w out' file", "sed 's/a/b/gw out' file", "sed -n 'w out' file", "sed 'e ls' file", "sed 's/a/b/e' file", "sed 'r .env' file", "sed -f script.sed file", "sed -s -n 'w x' a b",
+      "awk 'BEGIN{system(\"ls\")}' file", "awk '{print > \"out\"}' file", "awk '{print >> \"out\"}' file", "awk '{print | \"sh\"}' file", "awk 'BEGIN{\"ls\" | getline x}' file", "awk -f prog.awk file", "awk '{getline < \".env\"}' file", "sed -n '1p' .env", "awk '{print}' .env",
       "nvidia-smi -pm 1", "ss -K", "uniq a b", "jq env x", "ps auxe", "cat /proc/1/environ",
     ]) no(c);
   });
