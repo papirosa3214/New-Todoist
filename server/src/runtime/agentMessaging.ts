@@ -13,6 +13,31 @@ import { asRole, asText, ToolError, listActiveInProcessRuns } from "./inProcessR
 const ownerAccountId = () => (db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY id LIMIT 1").get() as {id:string}|undefined)?.id;
 
 type Context = { taskId?: string; subtaskId?: string; chatId?: string; messageId?:string };
+
+/**
+ * Сообщение коллеге — обычный текст, а не JSON-конверт ответа роли.
+ *
+ * Владелец 06.11.2026: в чат приходил сырой конверт
+ * (`{"schema_version":1,"ok":true,"output":[{"type":"report"…`) — роль клала
+ * свой финальный отчёт в taskflow_chat_send/taskflow_chat_reply, а там, в
+ * отличие от финального ответа хода, валидатора не было. Инструмент отказывает,
+ * и модель переписывает сообщение.
+ *
+ * Конвертом считается текст, который (после снятия блока кода) начинается с
+ * `{` и несёт ключи конверта: `schema_version`, либо `ok` вместе с `output`.
+ * Скобки внутри обычной фразы не мешают.
+ */
+export function roleEnvelopeMessageError(text: unknown): string | null {
+  if (typeof text !== "string") return null;
+  const body = text.trim().replace(/^```[a-zA-Z]*\s*/, "");
+  if (!body.startsWith("{")) return null;
+  const hasVersion = /"schema_version"\s*:/.test(body);
+  const hasOkOutput = /"ok"\s*:/.test(body) && /"output"\s*:/.test(body);
+  if (!hasVersion && !hasOkOutput) return null;
+  return "Сообщение коллеге отправляется обычным текстом, а не JSON-конвертом ответа (schema_version/ok/output). " +
+    "Перепиши суть своими словами — кратко, как написал бы человеку, — и отправь снова. " +
+    "Финальный отчёт в JSON-конверте — только в финальном ответе хода.";
+}
 const optional = (description: string) => Type.Optional(Type.String({ description }));
 
 /** One messenger for both working and conversational roles; all writes use the ordinary chat route. */
@@ -23,7 +48,12 @@ export function agentMessagingTools(role: string, context: Context = {}) {
     const key = "tool.runtime." + name;
     registerInstructionBlock({key,title:name,group:"Возможности",scope:"command",modes:["work","resume","reply","review","subtask"],sourceKind:"code",originRef:"agentMessaging.ts:"+name,readOnly:false},description);
     return defineTool({name,label:name,description:composeLayer(role,key)?.effective ?? description,parameters,
-      execute:async (_id: string,p: any) => asText(await execute(p))} as any);
+      execute:async (_id: string,p: any) => {
+        // До любой доставки: и в чат, и прямо в сессию работающего коллеги.
+        const envelopeError = roleEnvelopeMessageError(p?.text);
+        if (envelopeError) throw new ToolError(envelopeError);
+        return asText(await execute(p));
+      }} as any);
   };
   const write = async (chatId: string, body: Record<string, unknown>) => {
     if (sentCount >= 4) throw new ToolError("Лимит 4 сообщений за ход исчерпан; продолжи работу или зафиксируй препятствие");
