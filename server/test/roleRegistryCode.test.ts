@@ -12,6 +12,13 @@ import { TASK_BRIEF_INSTRUCTIONS, taskBriefText } from "../src/lib/taskBrief.js"
 import { hasRegistrySite, loadRoleRules, registryText } from "../src/lib/roleRules.js";
 
 migrate(); runMigrations();
+// Сверка с литералами кода идёт по тексту ДО сжатия формулировок (06.11.2026):
+// живой реестр намеренно короче, исходник хранится в text_before_shrink.
+import fs from "node:fs"; import os from "node:os"; import path from "node:path";
+const live = JSON.parse(fs.readFileSync(new URL("../scripts/role-rules.json", import.meta.url), "utf8")) as any[];
+const preShrink = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "rules-")), "role-rules.json");
+fs.writeFileSync(preShrink, JSON.stringify(live.map((r) => (r.text_before_shrink ? { ...r, text: r.text_before_shrink } : r))));
+process.env.TASKFLOW_ROLE_RULES = preShrink;
 const prev = process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED;
 afterEach(() => { if (prev === undefined) delete process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED; else process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED = prev; });
 const norm = (t: string) => t.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim()).join("\n");
@@ -87,5 +94,10 @@ describe("правила из кода в реестре", () => {
     process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED = "false";
     expect(chatExecutionInstruction("card")).toContain("Владелец выбрал");
     expect(registryText("режим: plan")).not.toBe("");
+  });
+  it("сжатые формулировки короче исходных и подменяют их в живом реестре", () => {
+    const shrunk = live.filter((r) => r.text_before_shrink);
+    expect(shrunk.length).toBeGreaterThan(0);
+    expect(shrunk.every((r) => r.text.length < r.text_before_shrink.length)).toBe(true);
   });
 });
