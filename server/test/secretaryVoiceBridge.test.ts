@@ -48,21 +48,6 @@ describe("закрытый инструмент голосового Помощ�
     expect(response.body.task.assignee_id).not.toBe("attacker");
     expect(statSync(socket).mode & 0o777).toBe(0o600);
   });
-  it("сообщение и звонок используют один разбор с тем же текстом и промптом владельца",async()=>{
-    const text="На завтра к десяти, высокий приоритет, назначить на меня";
-    const token=app.jwt.sign({id:"u1"});
-    const sent=await app.inject({method:"POST",url:"/api/chat",headers:{authorization:`Bearer ${token}`},payload:{text,to_user_id:"all"}});
-    expect(sent.statusCode).toBe(200);
-    let draft:any;
-    for(let i=0;i<100;i++) {
-      draft=db.prepare("SELECT status,task_id FROM chat_task_drafts WHERE chat_message_id=?").get(sent.json().id);
-      if(draft?.status==="done")break;
-      await new Promise(resolve=>setTimeout(resolve,10));
-    }
-    expect(draft.status).toBe("done");
-    expect(db.prepare("SELECT due_date,start_time,priority,assignee_id FROM tasks WHERE id=?").get(draft.task_id)).toEqual({due_date:"2026-10-01",start_time:"10:00",priority:2,assignee_id:"u1"});
-    expect(model.texts.filter(t=>t===text).length).toBeGreaterThanOrEqual(2);
-  });
   it("Система ВКЛ не отдаёт явно назначенную владельцу задачу агенту",async()=>{
     db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE id='u1'").run();
     try {

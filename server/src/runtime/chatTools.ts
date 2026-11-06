@@ -151,15 +151,6 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           в_чате: resp?.chat_message_id,
         };
       }),
-    T("taskflow_chat_typing",
-      "Зажечь в чате отметку «печатает…» — ПЕРЕД тем, как сочинять ответ. Одного вызова хватает на весь ответ. state='stop' — передумал отвечать.",
-      Type.Object({ state: S("stop — снять отметку") }), async (p) => {
-        const resp = await asRole(role, "POST", "/api/chat/typing", p.state === "stop" ? { state: "stop" } : {});
-        return {
-          печатает: resp?.["печатает"],
-          "гаснет через": resp?.["печатает"] ? `${Math.floor((resp?.["гаснет_через_мс"] ?? 0) / 1000)} с` : "—",
-        };
-      }),
     ...(ownerContext ? [T("taskflow_chat_share_material",
       "Отправить владельцу документ Библиотеки/базы знаний для чтения ВНУТРИ TaskFlow, без системного просмотрщика iPhone. note_id — существующая заметка (taskflow_doc_write/taskflow_kb_search/taskflow_docs). Сначала сохрани готовый материал через taskflow_doc_write, если заметки ещё нет. Инструмент проверит документ; в активном ходе сервер сохранит ссылку для итогового отчёта без отдельной карточки. Вне активного хода отправит карточку «Открыть в TaskFlow». Не копирует заметку и не прикладывает файл. Для скачивания отдельного файла используй taskflow_chat_attach_file. В итоговом artifacts/sections.materials используй возвращённый material целиком; не подставляй пути сервера или голый ID вместо ссылки.",
       Type.Object({note_id:Type.String(),caption:S("краткое пояснение к материалу")}),
