@@ -200,10 +200,18 @@ async function typeTick(chatId) {
     }
   }
 }
+/** Предел удержания статуса: ход, не приславший ни финала, ни ошибки
+ *  (прерван перезапуском сервера, брошен в очереди), иначе показывал бы
+ *  «печатает…» вечно. Через TYPING_MAX_MS статус гаснет сам. */
+const TYPING_MAX_MS = 15 * 60 * 1000;
 function startTyping(chatId) {
   const key = Number(chatId);
   if (typingTimers.has(key)) return;
-  const tick = () => { void typeTick(key); };
+  const startedAt = Date.now();
+  const tick = () => {
+    if (Date.now() - startedAt > TYPING_MAX_MS) { log("typing_timeout", { chat_id: key }); stopTyping(key); return; }
+    void typeTick(key);
+  };
   tick();
   const timer = setInterval(tick, TYPING_INTERVAL_MS);
   timer.unref?.();
