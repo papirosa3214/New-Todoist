@@ -231,7 +231,7 @@ export class OwnerSessionRuntime {
       leafId: handle.manager.getLeafId(),
       isStreaming: handle.session.isStreaming,
       isIdle: handle.session.isIdle,
-      entries: handle.manager.getEntries(),
+      entries: handle.manager.getBranch(),
       tree: handle.manager.getTree(),
     };
   }

@@ -147,7 +147,11 @@ describe("OwnerSessionRuntime", () => {
     const snapshot = await runtime.snapshot(root.id);
 
     expect(snapshot.id).toBe(root.id);
-    expect(snapshot.entries).toHaveLength(3);
+    expect(snapshot.entries).toHaveLength(2);
+    expect(snapshot.entries.map(entry => (entry as any).message?.content)).toEqual([
+      "root",
+      "new path",
+    ]);
     expect(snapshot.tree[0].children).toHaveLength(2);
   });
 
