@@ -114,6 +114,7 @@ export function isReadOperation(name: string) {
   return (
     [
       "taskflow_hosts",
+      "taskflow_inspect",
       "taskflow_host_read",
       "taskflow_host_ls",
       "taskflow_host_grep",

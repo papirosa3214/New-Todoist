@@ -9,6 +9,7 @@ import { hostRepoPath, roleBranch } from "./roleWorkspace.js";
 import { roleUserId } from "../roleRouting.js";
 import type { Tool } from "./universalTaskflow.js";
 import db from "../db.js";
+import { createInspectTool } from "./taskflowInspect.js";
 
 const MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
@@ -50,6 +51,7 @@ export function createHostRoleTools(role: string, taskId?: string, subtaskId?: s
     subtask_id: Type.Optional(Type.String({ description: "ID своего активного слота, если у слотов разные машины" })),
   };
   return [
+    createInspectTool(role),
     {
       name: "taskflow_host_push",
       description:

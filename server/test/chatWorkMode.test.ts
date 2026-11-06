@@ -26,7 +26,27 @@ describe('chat planning permissions',()=>{
    }
    expect(await guard({toolName:'read'})).toBeUndefined();
    expect(await guard({toolName:'taskflow_task'})).toBeUndefined();
-   expect(fs.readFileSync(args[args.indexOf('--append-system-prompt')+1],'utf8')).toContain('Планирование');
+   expect(fs.readFileSync(args[args.indexOf('--append-system-prompt')+1],'utf8')).toContain('Режим этого хода: План.');
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+ });
+ it('plan: read tools and taskflow_inspect allowed, bash/host write tools hidden',async()=>{
+  const {PLANNING_TOOLS,chatModeInstruction}=await import('../src/runtime/chatWorkMode.js');
+  for(const n of ['read','grep','find','ls','taskflow_host_read','taskflow_host_find','taskflow_host_grep','taskflow_host_ls','taskflow_inspect']) expect(PLANNING_TOOLS).toContain(n);
+  for(const n of ['bash','edit','write','taskflow_host_bash','taskflow_host_edit','taskflow_host_write','taskflow_host_push','taskflow_host_attach','taskflow_doc_write','taskflow_state']) expect(PLANNING_TOOLS).not.toContain(n);
+  const {isReadOperation}=await import('../src/runtime/universalTaskflow.js');
+  expect(isReadOperation('taskflow_inspect')).toBe(true);
+  expect(isReadOperation('taskflow_host_bash')).toBe(false);
+  expect(chatModeInstruction('plan')).toContain('taskflow_inspect');
+  expect(chatModeInstruction('plan')).toContain('Режим этого хода: План.');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tf-plan2-'));
+  try {
+   const args=await chatInstructionArgs('builder',path.join(dir,'run.json'),'plan');
+   const extension=await import('file://'+args[args.indexOf('--extension')+1]);
+   let guard:any;extension.default({registerTool:()=>{},on:(n:string,h:any)=>{if(n==='tool_call')guard=h;}});
+   expect(await guard({toolName:'taskflow_inspect'})).toBeUndefined();
+   expect(await guard({toolName:'taskflow_host_read'})).toBeUndefined();
+   expect(await guard({toolName:'taskflow_host_bash'})).toMatchObject({block:true});
+   expect(await guard({toolName:'taskflow_host_edit'})).toMatchObject({block:true});
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
  });
  it('filters the actual MCP allowlist in planning and restores work permissions',()=>{

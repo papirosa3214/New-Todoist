@@ -397,7 +397,7 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     await vi.waitFor(() => expect(fakeClients).toHaveLength(1));
     await vi.waitFor(() => expect(fakeClients[0].stop).toHaveBeenCalled());
     expect(fakeClients[0].options.args).toContain("--tools");
-    expect(fakeClients[0].promptAndWait.mock.calls[0][0]).toContain("Режим этого хода: Планирование");
+    expect(fakeClients[0].promptAndWait.mock.calls[0][0]).toContain("Режим этого хода: План.");
     await app.inject({method: "POST",url: `/api/chats/${chatId}/messages`,headers: ownerAuth,
       payload: {text: "Теперь выполни", work_mode: "work"}});
     await vi.waitFor(() => expect(fakeClients).toHaveLength(2));
