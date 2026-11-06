@@ -734,6 +734,17 @@ export async function buildApp(): Promise<FastifyInstance> {
   //
   // Отдаём то, по чему видно живость и свежесть, а не диагностический дамп:
   // сколько работает, на каком коде, велика ли база, включена ли «Система».
+  // Журнал телефона (владелец 06.11.2026): приложение присылает строки о
+  // том, что получило по сокету и как показало, — они ложатся рядом с
+  // [ws-out] сервера, и обрыв видно по одному журналу.
+  app.post("/api/client-log", { preHandler: authOrApiToken }, async (req: any) => {
+    const lines = Array.isArray(req.body?.lines) ? req.body.lines.slice(0, 200) : [];
+    for (const line of lines) {
+      if (typeof line === "string") console.log(`[ios] user=${req.userId} ${line.slice(0, 500).replace(/\n/g, " ")}`);
+    }
+    return { ok: true };
+  });
+
   app.get("/api/server-status", { preHandler: authOrApiToken }, async () => {
     const uptime = Math.round(process.uptime());
     let commit: string | null = null;

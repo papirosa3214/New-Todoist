@@ -754,13 +754,57 @@ function partialStructuredText(text: string): string | null {
   while (/\s/.test(text[cursor] ?? "")) cursor += 1;
   if (text[cursor] === '"') return decodeJSONStringPrefix(text, cursor);
   if (text[cursor] !== "[") return null;
-  const tail = text.slice(cursor);
-  const type = /"type"\s*:\s*"text"/.exec(tail);
-  if (!type) return null;
-  const field = /"text"\s*:\s*"/.exec(tail.slice(type.index + type[0].length));
-  if (!field) return null;
-  const quoteAt = cursor + type.index + type[0].length + field.index + field[0].length - 1;
-  return decodeJSONStringPrefix(text, quoteAt);
+  // Весь массив блоков потоком (владелец 06.11.2026: ответ в конверте
+  // «прилетает за раз»). Готовый блок — целиком, как в сохранённом ответе
+  // (таблица, виджет, код встают на своё место); недописанный текст или
+  // заголовок — по мере поступления; недописанный блок другого вида ждёт.
+  const parts: string[] = [];
+  let i = cursor + 1;
+  while (i < text.length) {
+    while (i < text.length && /[\s,]/.test(text[i])) i += 1;
+    if (text[i] !== "{") break;
+    const close = matchingBrace(text, i);
+    if (close < 0) {
+      const partial = text.slice(i);
+      const type = /"type"\s*:\s*"(text|heading)"/.exec(partial);
+      const field = /"text"\s*:\s*"/.exec(partial);
+      if (type && field) {
+        const prefix = decodeJSONStringPrefix(text, i + field.index + field[0].length - 1);
+        if (prefix) {
+          const level = Number(/"level"\s*:\s*(\d)/.exec(partial)?.[1] ?? 2);
+          parts.push(type[1] === "heading" ? "#".repeat(level) + " " + prefix : prefix);
+        }
+      }
+      break;
+    }
+    try {
+      const block = JSON.parse(text.slice(i, close + 1));
+      const rendered = structuredOutputText([block]);
+      if (rendered) parts.push(rendered);
+    } catch {
+      break;
+    }
+    i = close + 1;
+  }
+  return parts.length ? parts.join("\n\n") : null;
+}
+
+/** Закрывающая скобка объекта с учётом строк; -1 — объект не дописан. */
+function matchingBrace(text: string, open: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i += 1;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") { depth -= 1; if (depth === 0) return i; }
+  }
+  return -1;
 }
 
 /** Текст для показа владельцу: конверт снят, обычный ответ не тронут. */
