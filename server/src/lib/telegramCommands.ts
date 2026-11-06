@@ -19,6 +19,14 @@ export const TELEGRAM_CHAT_ID = "chat-secretary";
 export const TELEGRAM_COMMAND_CAP = 60;
 export const TELEGRAM_COMMAND_MAX_LENGTH = 32;
 export const TELEGRAM_COMMAND_DESCRIPTION_MAX = 256;
+/**
+ * Живой замер 06.11.2026 (@ckor22_bot): 60 команд с описанием 256 символов
+ * отвергаются `BOT_COMMANDS_TOO_MUCH`, хотя 100 команд с коротким описанием
+ * проходят. Документированный лимит 1–256 не описывает сумму по меню, поэтому
+ * само меню обрезается до проверенного значения, а полные описания остаются в
+ * inline-поиске (там их сервер Telegram не ограничивает).
+ */
+export const TELEGRAM_MENU_DESCRIPTION_MAX = 80;
 
 export type TelegramBotCommand = { command: string; description: string };
 
@@ -36,6 +44,13 @@ export function telegramCommandName(title: string): string | null {
   const short = normalized.replace(/^taskflow_/, "");
   const candidate = (short || normalized).slice(0, TELEGRAM_COMMAND_MAX_LENGTH).replace(/_+$/, "");
   return candidate.length >= 1 && /^[a-z0-9_]+$/.test(candidate) ? candidate : null;
+}
+
+function menuOf(all: TelegramCommandEntry[]): TelegramCommandEntry[] {
+  return all.slice(0, TELEGRAM_COMMAND_CAP).map((item) => ({
+    ...item,
+    description: item.description.slice(0, TELEGRAM_MENU_DESCRIPTION_MAX).trim(),
+  }));
 }
 
 export type TelegramCommandEntry = TelegramBotCommand & {
@@ -85,11 +100,11 @@ export async function telegramCommands(options: { force?: boolean } = {}): Promi
   version: string;
 }> {
   if (!options.force && cache && Date.now() - cache.builtAt < CACHE_TTL_MS) {
-    return { menu: cache.all.slice(0, TELEGRAM_COMMAND_CAP), all: cache.all, version: cache.version };
+    return { menu: menuOf(cache.all), all: cache.all, version: cache.version };
   }
   const built = await buildTelegramCommands();
   cache = { ...built, builtAt: Date.now() };
-  return { menu: built.all.slice(0, TELEGRAM_COMMAND_CAP), all: built.all, version: built.version };
+  return { menu: menuOf(built.all), all: built.all, version: built.version };
 }
 
 /** Только для проверок: сбросить кэш реестра. */

@@ -168,7 +168,11 @@ export function enqueueTelegramDelivery(args: {
   sourceMessageId?: string | null;
 }): string {
   const id = crypto.randomUUID();
-  const method = isKnownTelegramMethod(args.payload.method) ? args.payload.method : "sendMessage";
+  // Метод сохраняем как есть: неизвестный транспорт — забота gateway (он
+  // помечает доставку abandoned с логом). Подставляем sendMessage только когда
+  // метода нет вовсе — так прежние вызовы (progress/final) не меняют поведение.
+  const rawMethod = args.payload.method;
+  const method = typeof rawMethod === "string" && rawMethod.trim() ? rawMethod.trim() : "sendMessage";
   const payload = {
     ...args.payload,
     method,
