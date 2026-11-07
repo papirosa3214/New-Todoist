@@ -4,6 +4,7 @@ import {roleHostAccessTools} from "./roleHostAccess.js";
 import {createHostRoleTools} from "./hostRoleTools.js";
 import {isToolNotInCatalogText,serviceRefusalCodeOf,TOOL_NOT_CONNECTED} from "./toolRefusalCodes.js";
 import {Check,Errors} from "typebox/value";
+import {Type} from "typebox";
 import {createHash} from "node:crypto";
 import {taskflowTools} from "./inProcessRun.js";
 import {roleToolAllowed} from "../lib/roleToolScope.js";
@@ -17,7 +18,7 @@ import {createToolLoader,onDemandScopeKey,onDemandTools,rememberOnDemandTool,TOO
 import {createRoleSubagentCallTool,createRoleSubagentSteerTool,isSubagentRun,resetSubagentCallCounters,ROLE_SUBAGENT_CALL_TOOL,ROLE_SUBAGENT_STEER_TOOL} from "./roleSubagentCall.js";
 import {createSecretaryOpenBranchTool} from "./secretaryVoiceBranch.js";
 export {UNIVERSAL_INSTRUCTION};
-const ROLE_TOOL_INSTRUCTION_LITERAL = "Инструменты доступны отдельными именами с точными JSON Schema. Вызывай нужный инструмент напрямую: параметры передавай ровно по его схеме, без обёртки operation/arguments и без предварительного discover/describe. Не выдумывай поля, имена инструментов и значения-заглушки. Проверка прав, контекста и аргументов выполняется до действия. Если вызов отклонён, прочитай ошибку и исправь указанный параметр; не повторяй прежний неверный вызов. После трёх одинаковых неверных вызовов ход останавливается. Старый taskflow в истории — прежний способ вызова тех же операций; в новом ходе используй показанные нативные инструменты. Нужного инструмента может не быть в списке: тогда вызови taskflow_tools — он покажет индекс операций и подключит нужные; права при этом не расширяются. Возможность не означает разрешение: соблюдай режим чата/карточки и явное поручение владельца.";
+const ROLE_TOOL_INSTRUCTION_LITERAL = "Инструменты TaskFlow сгруппированы по объектам: taskflow_tasks, taskflow_step, taskflow_plans, taskflow_slot, taskflow_chats, taskflow_knowledge, taskflow_memory, taskflow_mail, taskflow_team. Вызов: {\"action\": \"<действие>\", \"args\": {поля действия}}; действия и их поля перечислены в описании группы, поле с «?» необязательно. Несколько операций за один раунд — taskflow_batch. Отдельными именами: taskflow_work_plan, taskflow_ask_user_question, taskflow_consult. Не выдумывай поля, имена и значения-заглушки. Если вызов отклонён, исправь указанный параметр; тот же неверный вызов не повторяй. После трёх одинаковых неверных вызовов ход останавливается. Прежние отдельные имена (taskflow_recall и т. п.) тоже принимаются.";
 export const roleToolInstruction = (): string => registryTextOr("инструменты: всегда", "tools:ROLE_TOOL_INSTRUCTION", ROLE_TOOL_INSTRUCTION_LITERAL);
 export const ROLE_TOOL_INSTRUCTION = ROLE_TOOL_INSTRUCTION_LITERAL;
 /** Ядро: операции, без которых ход не начинается (сориентироваться, взять
@@ -67,8 +68,7 @@ function parseSchemaIssue(text:string):{field?:string;expected?:string}|undefine
 export type CatalogContext={onErrorLoop?:()=>void;role:string;model?:string|null;mode:string;runId:string;taskId?:string;subtaskId?:string;chatId?:string;messageId?:string;executionMode?:ChatExecutionMode};
 export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const context:Context={...input,executionMode:input.taskId ? "card" : input.executionMode ?? (input.chatId ? chatExecutionMode(input.chatId,input.messageId) : undefined),actor:roleUserId(input.role),authorize:(name)=>
-  roleToolAllowed(input.role,name) && (!input.subtaskId || name!=="taskflow_claim") &&
-  (input.role!=="critic_verifier" || name!=="taskflow_subtask_done")};
+  roleToolAllowed(input.role,name) && (!input.subtaskId || name!=="taskflow_claim")};
  const taskflowOperations=taskflowTools(input.role,input.model??null,input.taskId,input.subtaskId,true,{chatId:input.chatId??"",messageId:input.messageId??""});
  const adapterNames=new Set(adapters.map(tool=>tool.name));
  const hostTools=createHostRoleTools(input.role,input.taskId,input.subtaskId);
@@ -86,7 +86,8 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  if(subagentCallTools.length)resetSubagentCallCounters(input.role,input.chatId??"");
  const allOperations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...hostTools,...openBranchTools,...subagentCallTools,...subagentSteerTools,...adapters];
  // Чат задачи: чужую карточку, документ и коллегу пускает только слово владельца.
- const operations=input.mode===TASK_CHAT_MODE ? scopeTaskChatOperations(allOperations,{taskId:input.taskId,messageId:input.messageId,role:input.role}) : allOperations;
+ // Один набор во всех режимах (владелец 07.11.2026): чат задачи больше не урезается.
+ const operations=allOperations;
  const universal=createUniversalTaskflow(operations,context,toolRequestStore);
  const handledCalls=new Set<string>();
  const sdkMistakes=new Map<string,number>();
@@ -97,7 +98,7 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  // request_id, тренер ошибок) совпал по времени с ростом сбоев шагов.
  // Права проверяются и здесь, каждый вызов пишется в журнал аудита.
  const requestScope=JSON.stringify({taskId:context.taskId??null,subtaskId:context.subtaskId??null,chatId:context.chatId??null});
- const aliases=operations.filter(t=>!operationRestriction(t.name,context)).map(tool=>({...tool,execute:async(id:string,args:any,signal?:AbortSignal,onUpdate?:any)=>{
+ const aliases=operations.map(tool=>({...tool,execute:async(id:string,args:any,signal?:AbortSignal,onUpdate?:any)=>{
   handledCalls.add(id);
   // A1: на каждое действие роли — событие с областью, элементом, инструментом,
   // исходом, кодом отказа, повтором и длительностью. Пишется и на успех, и на
@@ -105,8 +106,6 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
   const startedAt=Date.now();
   const actionEvent={scope:input.taskId?"task":"chat",itemId:input.subtaskId??input.taskId??input.chatId??null};
   const audit=(outcome:"ok"|"error",errorCode?:string,errorMessage?:string)=>recordToolAudit({...context,...actionEvent,action:"invoke",tool:tool.name,operation:tool.name,outcome,errorCode,errorMessage,durationMs:Date.now()-startedAt});
-  const restriction=operationRestriction(tool.name,context);
-  if(restriction){audit("error",restriction.code,restriction.message);throw new Error(restriction.message);}
   // request_id — служебное поле прежнего шлюза, в схему операции не входит.
   const {request_id:_requestId,...own}=(args??{}) as Record<string,unknown>;
   // Страховка на случай вызова в обход проверки SDK: неверные аргументы не доходят до записи.
@@ -232,11 +231,16 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
   void stopRoleOnErrorLoop({taskId:input.taskId,subtaskId:input.subtaskId,role:input.role,operation:tool.name,attempts,reason}).catch(error=>console.warn("[native-tools] error-loop stop failed:",error));
   return true;
  };
- const core=aliases.filter(tool=>CORE_OPERATIONS.has(tool.name));
- // Активно ядро и загрузчик: остальные операции ждут подключения по требованию.
- // Реестр сессии при этом полный — подключать можно всё, что роль имеет право.
- const activeNames=[...core.map(tool=>tool.name),loader.tool.name];
- return {activeNames,registeredNames:[...aliases.map(tool=>tool.name),loader.tool.name],customTools:[universal,...aliases,loader.tool],operations,context,scope,loader,onToolExecutionEnd,onAgentEvent,autoConnected,
+ // Набор роли (владелец 07.11.2026): у всех ролей один полный набор, сгруппированный
+ // по объектам (taskflow_tasks, taskflow_step, …), действие — параметром action.
+ // Отдельные операции остаются в реестре сессии: вызов прежнего имени подключается
+ // автоматически (onAgentEvent), поэтому история и старые привычки ролей не ломаются.
+ const grouped=buildToolGroups(aliases);
+ const batch=createBatchTool(aliases);
+ const hidden=new Set<string>([...grouped.members,...RETIRED_OPERATIONS]);
+ const standalone=aliases.filter(tool=>!hidden.has(tool.name));
+ const activeNames=[...standalone.map(tool=>tool.name),...grouped.tools.map(tool=>tool.name),batch.name];
+ return {activeNames,registeredNames:[...aliases.map(tool=>tool.name),...grouped.tools.map(tool=>tool.name),batch.name,loader.tool.name],customTools:[universal,...aliases,...grouped.tools,batch,loader.tool],operations,context,scope,loader,onToolExecutionEnd,onAgentEvent,autoConnected,
   attachSession:(session:any)=>loader.attach(session)};
 }
 
@@ -325,4 +329,93 @@ export function installNativeToolSchemas(session:any,catalog:ReturnType<typeof b
  session.subscribe((event:any)=>{
   if(catalog.onToolExecutionEnd(event))void session.abort();
  });
+}
+
+/** Группы операций TaskFlow (владелец 07.11.2026): ~90 отдельных схем → инструмент
+ *  на объект. Имя действия — имя операции без префикса taskflow_. */
+export const TOOL_GROUPS:Record<string,{title:string;ops:string[]}>={
+ taskflow_tasks:{title:"Задачи и проекты",ops:["task","my_tasks","project_tasks","projects","create_project","create_task","children","dependencies","labels","set_task_labels","archive","task_summary","task_daily","task_proposal","structure_dictation","suggest_subtasks"]},
+ taskflow_step:{title:"Работа над шагом карточки",ops:["claim","state","comment","subtask_add","subtask_work","subtask_done","work_item_submit","work_start","review","report"]},
+ taskflow_plans:{title:"План совместной работы",ops:["plan_read","plan_create","plan_edit","plan_ops","plan_propose","plan_approve","plan_proposal_decide","plan_from_subtasks","plan_request","node_run","assign","mission_contract"]},
+ taskflow_slot:{title:"Слоты плана",ops:["slot_status","slot_reset","slot_restart","slot_cancel","slot_snapshot"]},
+ taskflow_chats:{title:"Чаты и темы",ops:["chat_read","chat_reply","chat_send","chat_archive","chat_close","chats_cleanup","chats_cleanup_preview","topic_read","topic_reply","topic_send","chat_attach_file","chat_share_material","checklist_state"]},
+ taskflow_knowledge:{title:"Документы и база знаний",ops:["docs","doc_read","doc_write","library","kb_search","kb_categorize"]},
+ taskflow_memory:{title:"Память роли",ops:["recall","remember"]},
+ taskflow_mail:{title:"Почта",ops:["mail_accounts","mail_list","mail_read","mail_attachment","mail_draft","mail_archive","mail_spam","mail_trusted","mail_send_to_owner"]},
+ taskflow_team:{title:"Команда и состояние",ops:["agents","team_read","status","my_stats","runtime","weather","calendar_events"]},
+};
+/** Операции, которые роли больше не вызывают сами: пульс ставит сервер, правила — в
+ *  инструкции, набор полный (подгружать и просить нечего). Имена остаются в реестре. */
+export const RETIRED_OPERATIONS=new Set<string>(["taskflow_heartbeat","taskflow_rules","taskflow_rule_acknowledge","taskflow_rule_publish","taskflow_tool_request","taskflow_tools"]);
+export const BATCH_TOOL_NAME="taskflow_batch";
+
+const shortName=(name:string)=>name.replace(/^taskflow_/,"");
+function firstSentence(text:string):string{
+ const t=String(text??"").replace(/\s+/g," ").trim();
+ const m=/^(.{1,160}?[.!?])(\s|$)/.exec(t);
+ return m?m[1]:t.slice(0,160);
+}
+function fieldsOf(schema:any):string{
+ const props=schema?.properties??{};
+ const required=new Set<string>(schema?.required??[]);
+ const names=Object.keys(props);
+ return names.length?names.map(n=>required.has(n)?n:n+"?").join(", "):"без полей";
+}
+const ArgsSchema=Type.Optional(Type.Object({},{additionalProperties:true,description:"поля действия"}));
+
+/** Инструмент на объект: action выбирает операцию, args — её поля (можно и рядом с action).
+ *  Исполняет ту же операцию из aliases — права, аудит и идемпотентность прежние. */
+export function buildToolGroups(aliases:Tool[]):{tools:Tool[];members:Set<string>}{
+ const byName=new Map(aliases.map(tool=>[tool.name,tool]));
+ const tools:Tool[]=[];
+ const members=new Set<string>();
+ for(const [group,spec] of Object.entries(TOOL_GROUPS)){
+  if(byName.has(group))continue; // имя занято операцией — группу не строим, конфликта имён нет
+  const ops=spec.ops.map(op=>byName.get("taskflow_"+op)).filter((tool):tool is Tool=>!!tool);
+  if(!ops.length)continue;
+  const own=new Set(ops.map(op=>op.name));
+  for(const name of own)members.add(name);
+  const actions=ops.map(op=>shortName(op.name));
+  const lines=ops.map(op=>`- ${shortName(op.name)} — ${firstSentence(op.description)} Поля: ${fieldsOf(op.parameters)}.`);
+  tools.push({
+   name:group,
+   description:`${spec.title}. Выбери действие в action, его поля передай в args. Поле с «?» необязательно.\n${lines.join("\n")}`,
+   parameters:Type.Object({action:Type.Union(actions.map(a=>Type.Literal(a)),{description:"действие"}),args:ArgsSchema},{additionalProperties:true}),
+   execute:async(id:string,raw:any,signal?:AbortSignal,onUpdate?:any)=>{
+    const {action,args,...rest}=(raw??{}) as Record<string,any>;
+    const name="taskflow_"+shortName(String(action??""));
+    const tool=own.has(name)?byName.get(name):undefined;
+    if(!tool)throw new Error(`Неизвестное действие «${action}» в ${group}. Доступны: ${actions.join(", ")}.`);
+    return tool.execute(id,{...rest,...(args&&typeof args==="object"?args:{})},signal,onUpdate);
+   },
+  });
+ }
+ return {tools,members};
+}
+
+/** Несколько операций одним вызовом, по порядку; ошибка одной не останавливает остальные. */
+export function createBatchTool(aliases:Tool[]):Tool{
+ const byName=new Map(aliases.map(tool=>[tool.name,tool]));
+ return {
+  name:BATCH_TOOL_NAME,
+  description:"Несколько операций TaskFlow одним вызовом, по порядку: например, прочитать карточку, план и память за один раунд. ops — до 10 элементов {action, args}; action — действие любой группы (recall, task, plan_read …) или полное имя операции. Ошибка одной операции не останавливает остальные — у каждой свой ответ.",
+  parameters:Type.Object({ops:Type.Array(Type.Object({action:Type.String({description:"действие или имя операции"}),args:ArgsSchema}),{minItems:1,maxItems:10})}),
+  execute:async(id:string,raw:any,signal?:AbortSignal,onUpdate?:any)=>{
+   const ops:any[]=Array.isArray(raw?.ops)?raw.ops.slice(0,10):[];
+   const content:any[]=[];
+   for(const [index,op] of ops.entries()){
+    const action=String(op?.action??"");
+    const name=byName.has(action)?action:"taskflow_"+shortName(action);
+    const tool=RETIRED_OPERATIONS.has(name)?undefined:byName.get(name);
+    let text:string;
+    if(!tool)text=`Нет операции «${action}».`;
+    else try{
+     const result:any=await tool.execute(`${id}:${index}`,op?.args&&typeof op.args==="object"?op.args:{},signal,onUpdate);
+     text=(result?.content??[]).map((part:any)=>typeof part?.text==="string"?part.text:"").join("\n");
+    }catch(error){text="Ошибка: "+String((error as Error)?.message??error).slice(0,500);}
+    content.push({type:"text",text:`## ${index+1}. ${action}\n${text}`});
+   }
+   return {content,details:{operation:BATCH_TOOL_NAME,count:ops.length}};
+  },
+ };
 }

@@ -921,7 +921,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  const chatOperations = chatTools(role, chatContext);
+  const chatOperations = chatTools(role, chatContext, taskId);
   // Один и тот же инструмент может прийти из обоих наборов: перезапуск слота
   // есть и в чате (chatTools), и среди инструментов управления планом
   // (orchestratorTools — только при orchestrate). Дубль ломает ход целиком:
@@ -933,7 +933,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   const managementOperations = orchestratorTools(role, T).filter((tool) => !chatOperationNames.has(tool.name));
   const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? [...secretaryMailTools(T), ...secretaryThings3Tools({role,subtaskId}), ...secretaryAppleTools({role,subtaskId})] : [])];
   if (unscoped) return all;
-  return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
+  return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim"));
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];

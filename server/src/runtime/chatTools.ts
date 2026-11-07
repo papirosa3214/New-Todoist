@@ -46,7 +46,9 @@ function asTasks(payload: any): any[] {
 
 /** Набор инструментов чата для роли. Описания — из реестра инструкций
  *  (`tool.runtime.<имя>`), владелец правит их на экране «Команда». */
-export function chatTools(role: string, ownerContext?: {chatId:string;messageId:string}) {
+export function chatTools(role: string, ownerContext?: {chatId:string;messageId:string}, taskId?: string) {
+  // Вопрос владельцу есть у роли везде (владелец 07.11.2026): в карточке он идёт в чат задачи.
+  const askContext: {chatId:string;messageId:string|null}|undefined = ownerContext ?? taskQuestionContext(taskId);
   const T = (name: string, description: string, parameters: any, run: (p: any, signal?: AbortSignal) => Promise<unknown>) => {
     const key = "tool.runtime." + name;
     registerInstructionBlock({
@@ -365,7 +367,7 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
     // в чате, в поток хода уходит chats:live:interrupt, ответ владельца
     // возвращается результатом этого же вызова. Ход оборван или пауза вышла
     // по таймауту — ответ поднимет новый ход роли, как раньше.
-    ...(ownerContext ? [T("taskflow_ask_user_question",
+    ...(askContext ? [T("taskflow_ask_user_question",
       "Задать владельцу уточняющий вопрос с вариантами ответа. Вопросов — от одного до четырёх, у каждого от двух до четырёх вариантов с коротким пояснением (description). header — короткая метка до 16 символов, label варианта — до 60. Свои варианты не называй «Other», «Type something.», «Next» — свой ответ владелец вводит сам. multiSelect — можно ли выбрать несколько вариантов. Инструмент показывает вопрос владельцу и ждёт его ответа: результат вызова — выбранные варианты, после него продолжай работу с того же места. Вопрос не повторяй. Если в результате статус «open» — владелец не ответил вовремя: заверши ход, ответ придёт отдельным сообщением и сервер поднимет новый ход роли.",
       Type.Object({
         questions: Type.Array(Type.Object({
@@ -387,21 +389,21 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           throw error;
         }
         const roleId = roleUserId(role);
-        const вопрос = createQuestionRow({ chatId: ownerContext.chatId, roleId, payload });
+        const вопрос = createQuestionRow({ chatId: askContext.chatId, roleId, payload });
         const messageId = crypto.randomUUID();
         db.prepare(
           `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id)
            VALUES (?, ?, ?, 'chat', ?, ?)`,
-        ).run(messageId, roleId, renderQuestionText(payload), ownerContext.chatId, ownerContext.messageId);
+        ).run(messageId, roleId, renderQuestionText(payload), askContext.chatId, askContext.messageId);
         db.prepare("UPDATE chat_questions SET message_id = ? WHERE id = ?").run(messageId, вопрос.id);
-        db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(ownerContext.chatId);
-        const участники = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(ownerContext.chatId) as Array<{ member_id: string }>)
+        db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(askContext.chatId);
+        const участники = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(askContext.chatId) as Array<{ member_id: string }>)
           .map((row) => row.member_id);
         broadcastToUsers(участники, { type: "chat:new", message: loadChatMessage(messageId) });
         const ждём = waitForAnswer(вопрос.id, { signal });
-        broadcastToUsers(участники, liveInterruptEvent({ chatId: ownerContext.chatId, userId: roleId, questionId: вопрос.id, messageId, payload }));
+        broadcastToUsers(участники, liveInterruptEvent({ chatId: askContext.chatId, userId: roleId, questionId: вопрос.id, messageId, payload }));
         const ответ = await ждём;
-        broadcastToUsers(участники, liveResumeEvent({ chatId: ownerContext.chatId, userId: roleId, questionId: вопрос.id, outcome: ответ ? "answered" : "expired" }));
+        broadcastToUsers(участники, liveResumeEvent({ chatId: askContext.chatId, userId: roleId, questionId: вопрос.id, outcome: ответ ? "answered" : "expired" }));
         if (ответ) {
           return {
             вопрос: вопрос.id,
@@ -430,4 +432,13 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         };
       }),
   ];
+}
+
+/** Чат задачи для вопроса владельцу из карточки: открытая тема задачи или её чат. */
+function taskQuestionContext(taskId?: string): {chatId:string;messageId:string|null}|undefined {
+  if (!taskId) return undefined;
+  const row = db.prepare(
+    "SELECT id FROM chats WHERE task_id = ? AND closed_at IS NULL ORDER BY (parent_chat_id IS NULL), updated_at DESC LIMIT 1",
+  ).get(taskId) as {id:string}|undefined;
+  return row ? { chatId: row.id, messageId: null } : undefined;
 }

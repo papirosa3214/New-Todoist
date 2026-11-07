@@ -90,7 +90,8 @@ export function prepareRoleRunAccess(runId: string, role: string, mode: ChatWork
           TASKFLOW_TOKEN: token,
           TASKFLOW_MCP_ROLE: role,
           TASKFLOW_INSTRUCTION_SNAPSHOT: snapshot,
-          TASKFLOW_MCP_TOOLS: mode === "plan" ? roleTools(role).split(",").filter(t => PLANNING_TOOLS.includes(t)).join(",") : roleTools(role),
+          // Пустой список — полный набор (владелец 07.11.2026: без урезания по роли и режиму).
+          TASKFLOW_MCP_TOOLS: "",
         },
         directTools: true,
       },

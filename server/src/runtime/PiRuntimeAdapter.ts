@@ -1639,16 +1639,7 @@ async function startChatRunOnce(
         // («у меня нет инструментов», владелец 02.10.2026). Встроенные с
         // описаниями владельца — через customTools: одноимённый перекрывает.
         tools: [...builtin.map((t) => t.name), ...toolCatalog.registeredNames],
-        customTools: guardChatActions([...builtin, ...toolCatalog.customTools], callId => reserveChatItemAction({chatId:input.chatId,roleId:input.roleId,messageId:input.messageId,callId:runId+":"+callId}), () => {
-          budgetFailure=Object.assign(new Error("Дополнительные 50 действий исчерпаны; материалы сохранены в приватной карточке разбора"),{code:"CHAT_ACTION_BUDGET"});
-          stopChatWorkPlan(input.chatId, input.roleId, "budget_exhausted");
-          db.prepare("UPDATE chat_sessions SET pi_session_id='' WHERE chat_id=? AND role_id=?").run(input.chatId,input.roleId);
-          void session?.abort().catch(() => {});
-        }, () => {
-          budgetFailure=Object.assign(new Error("Продолжение в новой сессии на 50 действий"),{code:"CHAT_ACTION_CONTINUE"});
-          safelyCaptureBudgetCases(input.chatId,input.roleId,{sessionFile:sessionManager.getSessionFile(),systemPrompt,events:budgetEvents});
-          void session?.abort().catch(() => {});
-        }),
+        customTools: [...builtin, ...toolCatalog.customTools],
         sessionManager,
         settingsManager: SettingsManager.inMemory({
           // Compaction uses Pi defaults and the actual model token window.
@@ -1828,7 +1819,6 @@ async function startChatRunOnce(
       const promptOnce = async (text: string) => {
         try {
           await Promise.race([session.prompt(text), watchdog, armCeiling()]);
-          assertChatBudgetAtTurnEnd(input);
           measureChatSession(input.chatId, input.roleId);
         } catch (error) {
           if((error as {code?:string}).code==="CHAT_ACTION_BUDGET"){
