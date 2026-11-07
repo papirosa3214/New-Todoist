@@ -39,4 +39,19 @@ describe("task live stream", () => {
     fresh.finish();
     expect(taskLiveTurns("replacement")[0].turn.items).toEqual([expect.objectContaining({ kind: "text", text: "Новый" })]);
   });
+  it("готовит серверные блоки в дельте снимка", async () => {
+    const publish = vi.fn();
+    const run = beginTaskLiveTurn({ taskId: "blocks", subtaskId: "b", runId: "r", userId: "role_builder", name: "Разработчик", publish });
+    run.onEvent(text("Проверяю архив."));
+    await new Promise(resolve => setTimeout(resolve, 170));
+    const item = publish.mock.calls.at(-1)?.[0].turn.items.find((it: { kind: string }) => it.kind === "text");
+    expect(item?.blocks).toEqual(expect.arrayContaining([expect.objectContaining({ source: expect.stringContaining("Проверяю архив.") })]));
+  });
+  it("готовит серверные блоки и в REST-снимке", () => {
+    const live = beginTaskLiveTurn({ taskId: "restblocks", subtaskId: null, runId: "r", userId: "role_builder", name: "Разработчик", publish: () => {} });
+    live.onEvent(text("Блоки для карточки."));
+    live.finish();
+    const textItem = taskLiveTurns("restblocks")[0].turn.items.find((it: { kind: string }) => it.kind === "text");
+    expect(textItem?.blocks).toEqual(expect.arrayContaining([expect.objectContaining({ source: expect.stringContaining("Блоки для карточки.") })]));
+  });
 });

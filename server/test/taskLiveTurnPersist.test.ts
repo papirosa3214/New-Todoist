@@ -55,6 +55,19 @@ describe("живой ход по задаче", () => {
     expect(snapshots[0].turn.items.length).toBeGreaterThan(0);
     expect(snapshots[0].turn.items[0].kind).toBe("step");
   });
+  it("в сохраняемый снимок блоки не входят", () => {
+    const taskId = "live-turn-no-blocks";
+    const live = beginTaskLiveTurn({ taskId, subtaskId: null, runId: "r-nb", userId: "u1", name: "Разработчик", publish: () => {} });
+    live.onEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Текст без блоков в журнале." } });
+    live.finish();
+    const row = db.prepare(
+      "SELECT payload_json FROM task_live_turn_snapshots WHERE task_id = ?",
+    ).get(taskId) as { payload_json: string };
+    const textItem = (JSON.parse(row.payload_json) as { turn: { items: Array<{ kind: string; blocks?: unknown[] }> } })
+      .turn.items.find((it) => it.kind === "text");
+    expect(textItem).toBeTruthy();
+    expect(textItem!.blocks).toBeUndefined();
+  });
 
   it("живой ход в памяти свежее журнала", () => {
     const taskId = "live-turn-task-2";
