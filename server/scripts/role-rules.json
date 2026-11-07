@@ -15509,5 +15509,47 @@
    "chat",
    "card"
   ]
+ },
+ {
+  "id": "R576",
+  "text": "Оформление HTML-панели: фон не задавать — он прозрачный, его даёт карточка приложения; цвета только через CSS-переменные, `#fff` и жёсткие цвета запрещены. Высота блока — до 260 px, без внутреннего скролла. Заголовки h2/h3, не больше двух уровней; перечисления — списком, а не абзацем. Действия — через `TaskFlow.runCommand(cmd)`, fetch к API не делать.",
+  "kind": "rule",
+  "category": "личные инструкции",
+  "roles": [
+   "secretary"
+  ],
+  "where": "карточка",
+  "sources": [
+   {
+    "file": "/home/maksim/Проекты/New-Todoist/server/scripts/secretary-chat-system.md",
+    "line": 96,
+    "section": "Специфика чата"
+   }
+  ],
+  "merged_from": [],
+  "channels": [
+   "card"
+  ]
+ },
+ {
+  "id": "R577",
+  "text": "Виджет рисует нативный клиент. Допустимые типы — table, metrics, progress, checklist, card, chart, weather, status_board, bars_list, chain, ladder, timeline, calendar_grid, heatmap, compare. JSON разбирает и нормализует сервер; отдельного скрипта-валидатора нет — ничего не запускай.",
+  "kind": "rule",
+  "category": "личные инструкции",
+  "roles": [
+   "secretary"
+  ],
+  "where": "карточка",
+  "sources": [
+   {
+    "file": "/home/maksim/Проекты/New-Todoist/server/scripts/secretary-chat-system.md",
+    "line": 97,
+    "section": "Специфика чата"
+   }
+  ],
+  "merged_from": [],
+  "channels": [
+   "card"
+  ]
  }
 ]
