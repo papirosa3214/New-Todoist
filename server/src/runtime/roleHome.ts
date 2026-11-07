@@ -44,6 +44,7 @@ export function roleHomeInstruction(role: string): string {
     ...(role === "infra_engineer"
       ? ["Для инфраструктуры это обязательно: каждая починенная поломка, похожая на прошлую, становится навыком «признаки → причина → как чинить → как проверить»."]
       : []),
+    ...roleScriptsList(home.scripts),
     `Общие скрипты этой роли храни в ${home.scripts}. Указывай абсолютный путь, когда работаешь из проекта задачи.`,
     `Рабочие файлы чата храни в ${home.workspace}. В задаче работай в указанной папке проекта; инструментарий роли остаётся в ${home.dir}.`,
     "Не создавай инструментарий роли в исходниках API или в глобальной папке Pi. Доступ к TaskFlow и выбор модели настраивает сервер.",
@@ -321,4 +322,13 @@ export function writeRoleAgents(role: string, text: string, author: string): voi
     if (error) return;
     execFile("git", ["-C", root, "commit", "-q", "-m", `${role}: правка инструкции из приложения (${author})`, "--", rel], () => {});
   });
+}
+
+/** Скрипты роли — строкой в инструкцию: сверка перед работой без обхода папок (владелец 07.11.2026). */
+function roleScriptsList(dir: string): string[] {
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir).filter((n) => n !== "mcp_server.py" && !n.includes(".bak") && !n.startsWith(".")).sort();
+  } catch { return []; }
+  return names.length ? [`Готовые скрипты роли (${dir}): ${names.join(", ")}. Подходящий — запускай, а не делай руками.`] : [];
 }
