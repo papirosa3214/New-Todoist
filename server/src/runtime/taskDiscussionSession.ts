@@ -15,7 +15,7 @@ import {registerProviderSession, observeProviderRetries} from "./providerDiagnos
 // владельца) и один выход (текст ответа в комнате обсуждения).
 
 import crypto from "node:crypto";
-import { createAgentSession, createReadOnlyTools, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, createCodingTools, createReadOnlyTools, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { roleInstructionText } from "./roleHome.js";
 import { connectRoleMcp } from "./graftMcp.js";
 import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas } from "./roleToolCatalog.js";
@@ -101,7 +101,8 @@ async function runDiscussionTurnInternal(input: DiscussionTurnInput): Promise<Di
       roleInstructionText(input.role, { withAgents: false }),
       policy,
     ].join("\n\n"));
-    const builtin = createReadOnlyTools(cwd).filter((tool) => ["read", "grep", "find", "ls"].includes(tool.name));
+    // Тот же полный набор, что в работе (владелец 07.11.2026).
+    const builtin = [...new Map([...createCodingTools(cwd), ...createReadOnlyTools(cwd)].map((tool) => [tool.name, tool])).values()];
     infra = await connectRoleMcp(input.role, cwd).catch(() => ({ tools: [], close: async () => {} }));
     let errorLoop = false;
     const catalog = buildRoleToolCatalog(

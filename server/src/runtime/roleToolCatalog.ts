@@ -335,7 +335,7 @@ export function installNativeToolSchemas(session:any,catalog:ReturnType<typeof b
  *  на объект. Имя действия — имя операции без префикса taskflow_. */
 export const TOOL_GROUPS:Record<string,{title:string;ops:string[]}>={
  taskflow_tasks:{title:"Задачи и проекты",ops:["task","my_tasks","project_tasks","projects","create_project","create_task","children","dependencies","labels","set_task_labels","archive","task_summary","task_daily","task_proposal","structure_dictation","suggest_subtasks"]},
- taskflow_step:{title:"Работа над шагом карточки",ops:["claim","state","comment","subtask_add","subtask_work","subtask_done","work_item_submit","work_start","review","report"]},
+ taskflow_step:{title:"Работа над шагом карточки",ops:["claim","state","comment","subtask_add","subtask_work","subtask_done","work_start","review","report"]},
  taskflow_plans:{title:"План совместной работы",ops:["plan_read","plan_create","plan_edit","plan_ops","plan_propose","plan_approve","plan_proposal_decide","plan_from_subtasks","plan_request","node_run","assign","mission_contract"]},
  taskflow_slot:{title:"Слоты плана",ops:["slot_status","slot_reset","slot_restart","slot_cancel","slot_snapshot"]},
  taskflow_chats:{title:"Чаты и темы",ops:["chat_read","chat_reply","chat_send","chat_archive","chat_close","chats_cleanup","chats_cleanup_preview","topic_read","topic_reply","topic_send","chat_attach_file","chat_share_material","checklist_state"]},
@@ -344,17 +344,14 @@ export const TOOL_GROUPS:Record<string,{title:string;ops:string[]}>={
  taskflow_mail:{title:"Почта",ops:["mail_accounts","mail_list","mail_read","mail_attachment","mail_draft","mail_archive","mail_spam","mail_trusted","mail_send_to_owner"]},
  taskflow_team:{title:"Команда и состояние",ops:["agents","team_read","status","my_stats","runtime","weather","calendar_events"]},
 };
-/** Операции, которые роли больше не вызывают сами: пульс ставит сервер, правила — в
- *  инструкции, набор полный (подгружать и просить нечего). Имена остаются в реестре. */
-export const RETIRED_OPERATIONS=new Set<string>(["taskflow_heartbeat","taskflow_rules","taskflow_rule_acknowledge","taskflow_rule_publish","taskflow_tool_request","taskflow_tools"]);
+/** Операции, которые роли больше не вызывают сами: пульс ставит сервер, набор полный
+ *  (подгружать и просить нечего). Имена остаются в реестре. Протокол правил
+ *  (rule_publish/rule_acknowledge), переписка ролей и Mission Control — остаются
+ *  (владелец 07.11.2026). */
+export const RETIRED_OPERATIONS=new Set<string>(["taskflow_heartbeat","taskflow_tool_request","taskflow_tools"]);
 export const BATCH_TOOL_NAME="taskflow_batch";
 
 const shortName=(name:string)=>name.replace(/^taskflow_/,"");
-function firstSentence(text:string):string{
- const t=String(text??"").replace(/\s+/g," ").trim();
- const m=/^(.{1,160}?[.!?])(\s|$)/.exec(t);
- return m?m[1]:t.slice(0,160);
-}
 function fieldsOf(schema:any):string{
  const props=schema?.properties??{};
  const required=new Set<string>(schema?.required??[]);
@@ -376,10 +373,11 @@ export function buildToolGroups(aliases:Tool[]):{tools:Tool[];members:Set<string
   const own=new Set(ops.map(op=>op.name));
   for(const name of own)members.add(name);
   const actions=ops.map(op=>shortName(op.name));
-  const lines=ops.map(op=>`- ${shortName(op.name)} — ${firstSentence(op.description)} Поля: ${fieldsOf(op.parameters)}.`);
+  // Описание операции целиком: в нём обязательные правила (отчёт при сдаче, формат вердикта).
+  const lines=ops.map(op=>`### ${shortName(op.name)}\nПоля: ${fieldsOf(op.parameters)}.\n${String(op.description??"").trim()}`);
   tools.push({
    name:group,
-   description:`${spec.title}. Выбери действие в action, его поля передай в args. Поле с «?» необязательно.\n${lines.join("\n")}`,
+   description:`${spec.title}. Выбери действие в action, его поля передай в args. Поле с «?» необязательно.\n\n${lines.join("\n\n")}`,
    parameters:Type.Object({action:Type.Union(actions.map(a=>Type.Literal(a)),{description:"действие"}),args:ArgsSchema},{additionalProperties:true}),
    execute:async(id:string,raw:any,signal?:AbortSignal,onUpdate?:any)=>{
     const {action,args,...rest}=(raw??{}) as Record<string,any>;

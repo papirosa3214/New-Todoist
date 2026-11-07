@@ -1554,16 +1554,9 @@ async function startChatRunOnce(
         return { tools: [] as any[], close: async () => {} };
       },
     ), resource => resource.close());
-    // «Обсуждение» — как «Работа» (владелец 20.10.2026); ограничен только «План».
-    const allowed = (name: string) =>
-      input.taskChatTaskId ? TASK_CHAT_FILE_TOOLS.includes(name) :
-      mode !== "plan" ||
-      PLANNING_TOOLS.includes(name) ||
-      [
-        "COMPOSIO_SEARCH_TOOLS",
-        "COMPOSIO_MULTI_EXECUTE_TOOL",
-        "COMPOSIO_GET_TOOL_SCHEMAS",
-      ].some((n) => name.endsWith(n));
+    // Один набор во всех режимах чата (владелец 07.11.2026): ни «План», ни чат задачи
+    // встроенные инструменты не урезают.
+    const allowed = (_name: string) => true;
     const builtin = [
       ...new Map(
         [...createCodingTools(cwd), ...createReadOnlyTools(cwd)].map((t) => [
