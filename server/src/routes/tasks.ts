@@ -1344,7 +1344,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         .all(task.id);
 
       return {
-        ...withAgentStale(full, subtasks, children),
+        ...taskTextWithBlocks(withAgentStale(full, subtasks, children)),
         // Снимок промпта (десятки КБ) карточке не нужен: клиенты его не
         // показывают, а телефон перекачивал его при каждом событии
         // (владелец 20.10.2026: карточка тормозила на 422 КБ). В базе остаётся.

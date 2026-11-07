@@ -112,3 +112,12 @@ describe("батч карточек по id", () => {
     expect((res.json() as { tasks: any[] }).tasks).toEqual([]);
   });
 });
+
+it("single task GET returns server-prepared reading and editor documents", async () => {
+  const response = await app.inject({ method: "GET", url: "/api/tasks/batch-live", headers: auth() });
+  expect(response.statusCode).toBe(200);
+  const task = response.json();
+  expect(task.title_document?.type).toBe("doc");
+  expect(task.description_document?.type).toBe("doc");
+  expect(task.description_blocks).toEqual([]);
+});
