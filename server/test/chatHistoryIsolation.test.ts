@@ -67,6 +67,20 @@ describe("История для модели не содержит отобра�
       }),
     });
     insertMessage({ id: "iso-marker", from: "role_builder", text: "метка сессии", sessionMarker: 1 });
+    // Чип памяти и уведомление «срок истёк» — тоже карточки интерфейса.
+    insertMessage({
+      id: "iso-memory",
+      from: "taskflow_system",
+      text: "Память обновлена · Сборка",
+      messageType: "system",
+      steps: JSON.stringify({ duration_ms: 0, items: [], memory_update: { title: "Сборка", kind: "note" } }),
+    });
+    insertMessage({
+      id: "iso-timeout",
+      from: "taskflow_system",
+      text: "@builder срок истёк: ответа нет",
+      messageType: "system",
+    });
     insertMessage({ id: "iso-answer", from: "role_builder", text: "Собрал, всё зелёное" });
     insertMessage({ id: "iso-trigger", from: owner, text: "Спасибо, дальше" });
   });
@@ -83,10 +97,12 @@ describe("История для модели не содержит отобра�
     expect(ids).toEqual(["iso-1", "iso-answer"]);
   });
 
-  it("карточка обращения не попадает и в продолжение сессии", () => {
+  it("карточка обращения, чип памяти и уведомление не попадают и в продолжение сессии", () => {
     const rows = historySince(CHAT, "iso-trigger", "role_builder", 50) as Array<{ id: string }>;
-    expect(rows.map((row) => row.id)).not.toContain("iso-card");
-    expect(rows.map((row) => row.id)).not.toContain("iso-marker");
+    const ids = rows.map((row) => row.id);
+    for (const card of ["iso-card", "iso-marker", "iso-memory", "iso-timeout"]) {
+      expect(ids).not.toContain(card);
+    }
   });
 
   it("условие отбора работает и как SQL-предикат", () => {

@@ -20,11 +20,19 @@ export const HISTORY_SELECT = `SELECT m.task_id, m.id, m.from_user_id, m.text, m
    FROM chat_messages m
    LEFT JOIN users f ON f.id = m.from_user_id`;
 
-/** Условие «это строка для модели, а не отображаемая карточка». */
+/**
+ * Условие «это строка для модели, а не отображаемая карточка».
+ *
+ * Служебные сообщения (`message_type='system'`) — это карточки и уведомления
+ * интерфейса: обращение роли к коллеге, чип «Память обновлена», «срок истёк».
+ * Выжимка (`chatCheckpoint`) такие строки не берёт с самого начала; история
+ * теперь по тому же правилу. Проверка координации по `steps` оставлена как
+ * страховка на случай карточки, записанной без служебного типа.
+ */
 export function modelHistorySql(alias = "m"): string {
   const p = alias ? `${alias}.` : "";
   const coordination = `(CASE WHEN json_valid(${p}steps) THEN COALESCE(json_type(${p}steps, '$.coordination'), '') ELSE '' END)`;
-  return `COALESCE(${p}is_session_marker, 0) = 0 AND ${coordination} <> 'object'`;
+  return `COALESCE(${p}is_session_marker, 0) = 0 AND COALESCE(${p}message_type, '') != 'system' AND ${coordination} <> 'object'`;
 }
 
 /** Что нового после последнего хода роли — продолжение сессии. */
