@@ -141,3 +141,18 @@ it("subtask editor receives its title document from the server", async () => {
   expect(subtask.title_document?.type).toBe("doc");
   expect(subtask.title_document?.content?.[0]?.content?.[0]?.marks).toEqual([{ type: "bold" }]);
 });
+
+it("note toolbar marks survive server conversion and Markdown export", async () => {
+  const source = "<u>Underlined</u> ==Highlighted== ***Both*** **<u>Nested</u>**";
+  const converted = await app.inject({ method: "POST", url: "/api/notes/markdown-to-doc", headers: auth(), payload: { markdown: source } });
+  expect(converted.statusCode).toBe(200);
+  const nodes = converted.json().doc.content[0].content;
+  expect(nodes.find((node: any) => node.text === "Underlined")?.marks).toContainEqual({ type: "underline" });
+  expect(nodes.find((node: any) => node.text === "Nested")?.marks).toEqual(expect.arrayContaining([{ type: "underline" }, { type: "bold" }]));
+  expect(nodes.find((node: any) => node.text === "Highlighted")?.marks).toContainEqual({ type: "highlight" });
+  expect(nodes.find((node: any) => node.text === "Both")?.marks).toEqual(expect.arrayContaining([{ type: "bold" }, { type: "italic" }]));
+  const { tiptapToMarkdown } = await import("../src/lib/tiptapToMarkdown.js");
+  const exported = tiptapToMarkdown(JSON.stringify(converted.json().doc));
+  expect(exported).toContain("<u>Underlined</u>");
+  expect(exported).toContain("==Highlighted==");
+});
