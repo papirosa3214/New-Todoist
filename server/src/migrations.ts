@@ -6057,6 +6057,63 @@ const migrations: Migration[] = [
     },
   },
 
+  // 08.11.2026 (спецификация `docs/2026-11-08-role-slot-chat-branches-spec.md`,
+  // §6): номер слота закрепляется за слотом и НЕ выводится из текущего
+  // порядкового места. Раньше «Разработчик 1 / 2» считались по `position` и
+  // `rowid` в момент чтения: добавили слот раньше — и подписи в старых
+  // сообщениях поехали, а упоминание «@Разработчик 2» стало указывать на
+  // другой слот.
+  {
+    id: "204_subtask_slot_number",
+    description:
+      "subtasks.slot_number — постоянный номер слота внутри роли (назначается при " +
+      "первом появлении, дальше не меняется); триггер выдачи номера и заполнение старых строк",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(subtasks)").all() as Array<{ name: string }>).map((c) => c.name),
+      );
+      if (!cols.has("slot_number")) db.exec("ALTER TABLE subtasks ADD COLUMN slot_number INTEGER");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_subtasks_slot_number ON subtasks(task_id, slot_number)");
+      // Заполнение уже существующих слотов: один раз, по текущему порядку
+      // плана. Дальше номера живут своей жизнью и не пересчитываются.
+      const rows = db
+        .prepare(
+          `SELECT s.id, s.task_id, COALESCE(n.role_key, '') AS role_key
+             FROM subtasks s
+             LEFT JOIN task_collaboration_plan_nodes n
+               ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+            WHERE s.slot_number IS NULL
+            ORDER BY s.task_id, role_key, s.position, s.rowid`,
+        )
+        .all() as Array<{ id: string; task_id: string; role_key: string }>;
+      const counters = new Map<string, number>();
+      const assign = db.prepare("UPDATE subtasks SET slot_number = ? WHERE id = ?");
+      for (const row of rows) {
+        const key = `${row.task_id}|${row.role_key}`;
+        const next = (counters.get(key) ?? 0) + 1;
+        counters.set(key, next);
+        assign.run(next, row.id);
+      }
+      // Новый слот получает следующий свободный номер своей роли и задачи.
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS subtask_slot_number_insert
+        AFTER INSERT ON subtasks
+        WHEN NEW.slot_number IS NULL AND NEW.collaboration_plan_id IS NOT NULL AND NEW.plan_node_key IS NOT NULL
+        BEGIN
+          UPDATE subtasks SET slot_number = COALESCE((
+            SELECT MAX(s.slot_number) FROM subtasks s
+              JOIN task_collaboration_plan_nodes n2
+                ON n2.plan_id = s.collaboration_plan_id AND n2.slot_key = s.plan_node_key
+             WHERE s.task_id = NEW.task_id
+               AND n2.role_key = (SELECT role_key FROM task_collaboration_plan_nodes
+                                   WHERE plan_id = NEW.collaboration_plan_id AND slot_key = NEW.plan_node_key)
+          ), 0) + 1
+          WHERE id = NEW.id;
+        END;
+      `);
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.
