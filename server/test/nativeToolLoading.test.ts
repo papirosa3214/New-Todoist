@@ -22,7 +22,9 @@ it("в модель уходят группы по объектам и отде�
   const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"loading"});
   for(const name of ["taskflow_tasks","taskflow_step","taskflow_memory","taskflow_batch","taskflow_work_plan"])expect(catalog.activeNames).toContain(name);
   // Члены групп и выведенные операции не активны отдельными схемами.
-  for(const name of ["taskflow","taskflow_task","taskflow_recall",TOOL_LOADER_NAME,"taskflow_heartbeat"])expect(catalog.activeNames).not.toContain(name);
+  for(const name of ["taskflow","taskflow_task","taskflow_recall","taskflow_heartbeat"])expect(catalog.activeNames).not.toContain(name);
+  // загрузчик подключения по требованию активен (07.11.2026)
+  expect(catalog.activeNames).toContain(TOOL_LOADER_NAME);
   expect(catalog.activeNames.length).toBeLessThan(catalog.registeredNames.length);
   // Прежние имена остаются в реестре сессии и подключаются автоматически.
   expect(catalog.registeredNames).toContain("taskflow_recall");

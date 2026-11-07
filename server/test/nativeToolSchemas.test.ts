@@ -16,7 +16,7 @@ it("offers the operation itself with its exact schema",()=>{
   // Операция доступна с точной схемой: адаптер не входит в группы — активен сам.
   expect(catalog.registeredNames).toContain(tool.name);
   expect(catalog.activeNames).toContain(tool.name);
-  expect(catalog.activeNames).not.toContain("taskflow_tools");
+  expect(catalog.activeNames).toContain("taskflow_tools");
  expect(catalog.activeNames).not.toContain("taskflow");
  expect(tool.parameters).toEqual(parameters);
  expect(tool.parameters.properties.query.type).toBe("string");
