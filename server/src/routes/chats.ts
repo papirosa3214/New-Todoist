@@ -44,6 +44,7 @@ import { runDiscussionTurn } from "../runtime/taskDiscussionSession.js";
 import { deliverTopicToWork, deliverChatToWork, slotWorkspace } from "../runtime/inProcessRun.js";
 import { topicContext, taskRoomClosedAt, ensureTaskRoom, roomsOfPersonalChat } from "../lib/projectTopics.js";
 import { assignmentsOf } from "../lib/chatChildren.js";
+import { HISTORY_SELECT, historyBefore, historySince } from "../lib/chatHistoryModel.js";
 import {
   archiveChat,
   archiveRight,
@@ -3330,11 +3331,6 @@ interface HistoryRow {
   task_id: string | null;
 }
 
-const HISTORY_SELECT = `SELECT m.task_id, m.id, m.from_user_id, m.text, m.created_at, m.recipient_subtask_id, m.subtask_id, f.name as from_name,
-        (SELECT group_concat(a.file_name, ', ') FROM attachments a
-          WHERE a.chat_message_id = m.id) as attachments
-   FROM chat_messages m
-   LEFT JOIN users f ON f.id = m.from_user_id`;
 
 function historyLine(row: HistoryRow): string {
   const who = row.from_name || row.from_user_id;
@@ -3483,23 +3479,7 @@ async function deliverAgentReply(args: {
     });
   }
   else if (previousSessionId) {
-    const since = db
-      .prepare(
-        `${HISTORY_SELECT}
-          WHERE m.chat_id = ? AND m.id != ? AND COALESCE(m.is_session_marker, 0) = 0
-            AND m.rowid > COALESCE(
-              (SELECT MAX(rowid) FROM chat_messages WHERE chat_id = ? AND from_user_id = ?), 0)
-            AND m.rowid < (SELECT rowid FROM chat_messages WHERE id = ?)
-          ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
-      )
-      .all(
-        chatId,
-        trigger.id,
-        chatId,
-        roleUserId,
-        trigger.id,
-        CHAT_AGENT_FOLLOWUP_MESSAGES,
-      ) as HistoryRow[];
+    const since = historySince(chatId, trigger.id, roleUserId, CHAT_AGENT_FOLLOWUP_MESSAGES) as HistoryRow[];
     since.reverse();
     prompt = renderChatInput("chat.followup",{
       roleTitle,
@@ -3508,14 +3488,7 @@ async function deliverAgentReply(args: {
       userText,
     });
   } else {
-    const history = db
-      .prepare(
-        `${HISTORY_SELECT}
-          WHERE m.chat_id = ? AND m.id != ? AND COALESCE(m.is_session_marker, 0) = 0
-            AND m.rowid < (SELECT rowid FROM chat_messages WHERE id = ?)
-          ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
-      )
-      .all(chatId, trigger.id, trigger.id, CHAT_AGENT_CONTEXT_MESSAGES) as HistoryRow[];
+    const history = historyBefore(chatId, trigger.id, CHAT_AGENT_CONTEXT_MESSAGES) as HistoryRow[];
     history.reverse();
     // Состав команды (14.10.2026) — в первый ход сессии, дальше сессия помнит.
     // Инструкция роли (общий шаблон + AGENTS.md) уже в системном промпте чата
