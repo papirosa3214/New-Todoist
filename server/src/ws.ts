@@ -187,8 +187,13 @@ export function broadcast(userId: string | null | undefined, event: unknown) {
   }
   const payload = JSON.stringify(event);
   const outcome = { ...base, sockets: set.size };
+  // Сокет устройства нужен, только когда рядом есть сокет сессии: иначе
+  // телефон, у которого открыт один сокет устройства, не получает ничего
+  // (журнал 06.11.2026: sockets=1 sent=0 device_skipped=1, затем
+  // user_sockets=0 — приложение выглядит как «нет связи»).
+  const hasSessionSocket = [...set].some(socket => !deviceOnlySockets.has(socket));
   for (const socket of set) {
-    if (deviceOnlySockets.has(socket)) { outcome.deviceSkipped += 1; continue; }
+    if (hasSessionSocket && deviceOnlySockets.has(socket)) { outcome.deviceSkipped += 1; continue; }
     if (socket.readyState === 1) {
       try {
         socket.send(payload);
