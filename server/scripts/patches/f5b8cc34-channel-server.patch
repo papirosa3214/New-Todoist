@@ -1,0 +1,50 @@
+--- /tmp/orig.ts	2026-08-29 13:21:59.463604689 +0300
++++ /tmp/fixed.ts	2026-08-29 13:21:59.497177849 +0300
+@@ -70,6 +70,38 @@
+ 
+ type Participant = { id: string; name: string; type: string }
+ 
++// Строки created_at из БД — UTC (datetime(now) без зоны), читаются как
++// MSK они на три часа позже факта. Без явного перевода в meta.ts агент видит
++// 23:50 там, где владелец сказал «02:50» (29.08.2026, f5b8cc34). Хранение
++// в UTC не трогаем — это только про отдачу в канал. Тот же формат, что у
++// formatAbsoluteTime в src/lib/date.ts.
++const MSK_TZ = 'Europe/Moscow'
++const MONTHS_SHORT = [
++  'янв', 'фев', 'мар', 'апр', 'мая', 'июн',
++  'июл', 'авг', 'сен', 'окт', 'ноя', 'дек',
++]
++function formatMsk(sqliteDatetime: string): string {
++  if (!sqliteDatetime) return ''
++  const d = new Date(sqliteDatetime.replace(' ', 'T') + 'Z')
++  if (isNaN(d.getTime())) return sqliteDatetime
++  const parts = new Intl.DateTimeFormat('ru-RU', {
++    timeZone: MSK_TZ,
++    year: 'numeric', month: '2-digit', day: '2-digit',
++    hour: '2-digit', minute: '2-digit', hour12: false,
++  }).formatToParts(d)
++  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00'
++  const hh = get('hour'); const mi = get('minute')
++  const thatMsk = new Date(get('year') + '-' + get('month') + '-' + get('day') + 'T00:00:00Z')
++  const todayMsk = new Date(
++    new Date().toLocaleDateString('en-CA', { timeZone: MSK_TZ }) + 'T00:00:00Z',
++  )
++  const dayDiff = Math.round((todayMsk.getTime() - thatMsk.getTime()) / 86_400_000)
++  if (dayDiff <= 0) return hh + ':' + mi
++  const day = thatMsk.getUTCDate()
++  const month = MONTHS_SHORT[thatMsk.getUTCMonth()]
++  return day + ' ' + month + ', ' + hh + ':' + mi
++}
++
+ async function resolveUser(who: string | undefined): Promise<string | undefined> {
+   if (!who || !who.trim()) return undefined
+   const needle = who.trim().toLowerCase()
+@@ -231,7 +263,7 @@
+ 
+       const meta: Record<string, string> = {
+         from: m.from_user_name ?? m.from_user_id ?? '?',
+-        ts: m.created_at ?? '',
++        ts: m.created_at ? formatMsk(m.created_at) : '',
+       }
+       if (m.kind) meta.kind = m.kind
+       if (m.task_id) meta.task_id = m.task_id

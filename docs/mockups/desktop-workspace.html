@@ -1,0 +1,2379 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>TaskFlow — рабочий стол (итоговый макет v2)</title>
+    <style>
+      /* Модуль 8px. Колонки: 264 / 1fr / 360. Красный — только бренд и тревоги; «в работе» — синий.
+   Навигация — дерево слева (до трёх уровней); внутри страниц вкладок-разделов нет. */
+      :root {
+        --bg: #171717;
+        --panel: #1d1d1d;
+        --card: #242424;
+        --raised: #2b2b2b;
+        --line: rgba(255, 255, 255, 0.09);
+        --text: #f5f5f5;
+        --sub: #a6a6a6;
+        --mute: #6f6f6f;
+        --red: #ff6b6b;
+        --green: #35b8a3;
+        --blue: #4a9fd8;
+        --orange: #ff9a14;
+        --r: 8px;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font:
+          14px/20px -apple-system,
+          "SF Pro Text",
+          Inter,
+          system-ui,
+          sans-serif;
+        overflow: hidden;
+      }
+      button {
+        font: inherit;
+        color: inherit;
+        background: none;
+        border: 0;
+        cursor: pointer;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 264px 1fr;
+        height: 100vh;
+      }
+      .app.with-right {
+        grid-template-columns: 264px 1fr 360px;
+      }
+      .right {
+        display: none;
+      }
+      .app.with-right .right {
+        display: flex;
+      }
+      .ico {
+        width: 16px;
+        height: 16px;
+        flex: none;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 1.6;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      /* ===== Дерево ===== */
+      .left {
+        background: var(--panel);
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        padding: 16px 12px;
+        min-height: 0;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 8px;
+        height: 32px;
+        font-weight: 700;
+        font-size: 17px;
+      }
+      .brand i {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        background: var(--red);
+        display: grid;
+        place-items: center;
+        font-style: normal;
+        font-size: 13px;
+      }
+      .search {
+        margin: 16px 0 8px;
+        height: 32px;
+        border-radius: var(--r);
+        background: var(--card);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 8px;
+        color: var(--mute);
+        font-size: 13px;
+      }
+      .kbd {
+        margin-left: auto;
+        font: 11px/16px inherit;
+        color: var(--mute);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 4px;
+      }
+      .tree {
+        flex: 1;
+        overflow: auto;
+        margin: 0 -4px;
+        padding: 0 4px;
+      }
+      .item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        height: 32px;
+        padding: 0 8px;
+        border-radius: var(--r);
+        color: var(--sub);
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+      }
+      .item:hover {
+        background: var(--card);
+        color: var(--text);
+      }
+      .item.on {
+        background: var(--raised);
+        color: var(--text);
+      }
+      .item .lbl {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .item b {
+        margin-left: auto;
+        font-weight: 400;
+        font-size: 12px;
+        color: var(--mute);
+        font-variant-numeric: tabular-nums;
+      }
+      .item b.alarm {
+        color: var(--red);
+      }
+      .chev {
+        width: 12px;
+        height: 12px;
+        stroke: var(--mute);
+        fill: none;
+        stroke-width: 1.6;
+        transition: transform 0.15s;
+        flex: none;
+      }
+      .item b + .chev {
+        margin-left: 0;
+      }
+      .item .lbl + .chev {
+        margin-left: auto;
+      }
+      .grp.open > .item .chev {
+        transform: rotate(90deg);
+      }
+      .kids {
+        display: none;
+        margin: 2px 0 6px 20px;
+        padding-left: 8px;
+        border-left: 1px solid var(--line);
+      }
+      .grp.open > .kids {
+        display: block;
+      }
+      .kids .item {
+        height: 28px;
+        font-size: 13px;
+        gap: 8px;
+      }
+      .lvl0 > .item {
+        font-weight: 500;
+      }
+      .kids .grp > .item {
+        color: var(--text);
+      }
+      .kids .kids {
+        margin-left: 8px;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        flex: none;
+      }
+      .asst-btn {
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 40px;
+        padding: 0 12px;
+        border-radius: var(--r);
+        background: var(--card);
+        border: 1px solid var(--line);
+        font-size: 13px;
+      }
+      .asst-btn:hover {
+        background: var(--raised);
+      }
+      .me {
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px;
+      }
+      .ava {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--raised);
+        display: grid;
+        place-items: center;
+        font-weight: 600;
+        font-size: 12px;
+        flex: none;
+        position: relative;
+      }
+      .ava.s {
+        width: 24px;
+        height: 24px;
+        font-size: 10px;
+      }
+      .ava .st {
+        position: absolute;
+        right: -1px;
+        bottom: -1px;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        border: 2px solid var(--panel);
+      }
+      .me small {
+        display: block;
+        color: var(--mute);
+        font-size: 12px;
+        line-height: 16px;
+      }
+
+      /* ===== Центр ===== */
+      .center {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+      }
+      .view {
+        display: none;
+        flex: 1;
+        overflow: auto;
+        padding: 24px 32px;
+        min-height: 0;
+      }
+      .view.on {
+        display: block;
+      }
+      .view.task.on {
+        display: flex;
+        flex-direction: column;
+        padding: 0;
+        overflow: hidden;
+      }
+      .vtitle {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 24px;
+        min-height: 32px;
+      }
+      .vtitle h2 {
+        font-size: 20px;
+        line-height: 28px;
+        font-weight: 650;
+      }
+      .vtitle .tools {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .crumb {
+        font-size: 12px;
+        color: var(--mute);
+        margin-bottom: 4px;
+      }
+      .btn {
+        height: 32px;
+        padding: 0 12px;
+        border-radius: var(--r);
+        background: var(--card);
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .btn:hover {
+        background: var(--raised);
+      }
+      .btn.pri {
+        background: var(--text);
+        color: #111;
+        font-weight: 600;
+      }
+      .seg {
+        display: inline-flex;
+        background: var(--card);
+        border-radius: var(--r);
+        padding: 2px;
+      }
+      .seg button {
+        height: 28px;
+        padding: 0 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        color: var(--sub);
+      }
+      .seg button.on {
+        background: var(--raised);
+        color: var(--text);
+      }
+      .chip {
+        height: 24px;
+        padding: 0 8px;
+        border-radius: 6px;
+        background: var(--card);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--sub);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .chip:hover,
+      .chip.on {
+        background: var(--raised);
+        color: var(--text);
+      }
+      .chip .d {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+      }
+      .card {
+        background: var(--card);
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .card h4 {
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+      }
+      .card h4 span {
+        font-weight: 400;
+        font-size: 12px;
+        color: var(--mute);
+      }
+      .big {
+        font-size: 28px;
+        line-height: 32px;
+        font-weight: 650;
+        font-variant-numeric: tabular-nums;
+        margin-top: 4px;
+      }
+      .sub {
+        color: var(--sub);
+        font-size: 12px;
+      }
+      .grid {
+        display: grid;
+        gap: 16px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 8px;
+        border-bottom: 1px solid var(--line);
+        cursor: pointer;
+      }
+      .row:hover {
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .row .t {
+        flex: 1;
+        min-width: 0;
+      }
+      .row .t b {
+        display: block;
+        font-weight: 500;
+        font-size: 13px;
+      }
+      .row .t small {
+        display: block;
+        font-size: 12px;
+        color: var(--mute);
+      }
+      .tag {
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .cb {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 1.5px solid var(--mute);
+        flex: none;
+      }
+      .cb.p1 {
+        border-color: var(--red);
+      }
+      .cb.p2 {
+        border-color: var(--orange);
+      }
+      .cb.p3 {
+        border-color: var(--blue);
+      }
+      .cols {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+      }
+      .col h5 {
+        font-size: 12px;
+        color: var(--mute);
+        font-weight: 500;
+        margin-bottom: 8px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .kc {
+        background: var(--card);
+        border-radius: var(--r);
+        padding: 12px;
+        margin-bottom: 8px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .kc:hover {
+        background: var(--raised);
+      }
+      .kc small {
+        display: block;
+        color: var(--mute);
+        font-size: 11px;
+        margin-top: 4px;
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: 112px 1fr;
+        gap: 8px 12px;
+        font-size: 13px;
+      }
+      .kv span {
+        color: var(--mute);
+      }
+      .alert {
+        border-left: 2px solid var(--red);
+      }
+
+      /* Сегодня */
+      .today {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 24px;
+        align-items: start;
+      }
+      .cal-mini {
+        cursor: pointer;
+      }
+      .cal-mini:hover {
+        background: var(--raised);
+      }
+      .ev {
+        display: grid;
+        grid-template-columns: 48px 1fr;
+        gap: 8px;
+        font-size: 13px;
+        padding: 6px 0;
+      }
+      .ev span {
+        color: var(--mute);
+        font-variant-numeric: tabular-nums;
+      }
+      .ev i {
+        font-style: normal;
+        border-left: 2px solid var(--blue);
+        padding-left: 8px;
+      }
+      .tl-h {
+        display: grid;
+        grid-template-columns: 56px 1fr 1fr;
+        font-size: 12px;
+        color: var(--mute);
+        padding: 0 0 8px;
+      }
+      .tl {
+        position: relative;
+        display: grid;
+        grid-template-columns: 56px 1fr 1fr;
+        border-top: 1px solid var(--line);
+      }
+      .tl-hours div {
+        height: 56px;
+        font-size: 11px;
+        color: var(--mute);
+        border-bottom: 1px solid var(--line);
+        padding-top: 2px;
+        font-variant-numeric: tabular-nums;
+      }
+      .tl-lane {
+        position: relative;
+        border-left: 1px solid var(--line);
+        background: repeating-linear-gradient(
+          to bottom,
+          transparent 0 55px,
+          var(--line) 55px 56px
+        );
+      }
+      .blk {
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        border-radius: 6px;
+        padding: 6px 8px;
+        font-size: 12px;
+        line-height: 16px;
+        overflow: hidden;
+      }
+      .blk small {
+        display: block;
+        color: var(--sub);
+        font-size: 11px;
+      }
+      .blk.tk {
+        background: rgba(255, 255, 255, 0.06);
+        border-left: 2px solid var(--orange);
+      }
+      .blk.ce {
+        background: rgba(74, 159, 216, 0.14);
+        border-left: 2px solid var(--blue);
+      }
+      .blk.ag {
+        background: rgba(53, 184, 163, 0.12);
+        border-left: 2px solid var(--green);
+      }
+      .now {
+        position: absolute;
+        left: 56px;
+        right: 0;
+        height: 0;
+        border-top: 1.5px solid var(--red);
+        z-index: 2;
+      }
+      .now:before {
+        content: "";
+        position: absolute;
+        left: -4px;
+        top: -4.5px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--red);
+      }
+      .month {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .month div {
+        background: var(--bg);
+        min-height: 96px;
+        padding: 8px;
+        font-size: 12px;
+        color: var(--sub);
+      }
+      .month div.h {
+        min-height: auto;
+        color: var(--mute);
+        background: var(--panel);
+      }
+      .month div.o {
+        opacity: 0.4;
+      }
+      .month div.td > b {
+        background: var(--red);
+        color: #fff;
+        border-radius: 50%;
+        width: 22px;
+        height: 22px;
+        display: inline-grid;
+        place-items: center;
+      }
+      .month em {
+        display: block;
+        font-style: normal;
+        margin-top: 4px;
+        font-size: 11px;
+        border-left: 2px solid var(--blue);
+        padding-left: 4px;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .month em.t {
+        border-color: var(--orange);
+      }
+
+      /* Дашборд */
+      .kpi {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      .kpi small {
+        display: block;
+        font-size: 12px;
+        color: var(--mute);
+        margin-top: 4px;
+      }
+      .heat {
+        display: grid;
+        grid-template-rows: repeat(7, 1fr);
+        grid-auto-flow: column;
+        grid-auto-columns: 1fr;
+        gap: 3px;
+      }
+      .heat i {
+        aspect-ratio: 1;
+        border-radius: 2px;
+        background: var(--raised);
+      }
+      .legend {
+        display: flex;
+        gap: 16px;
+      }
+      .legend i {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        margin-right: 6px;
+      }
+      .agrid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 8px;
+      }
+      .ag-c {
+        background: var(--raised);
+        border-radius: var(--r);
+        padding: 12px 4px;
+        text-align: center;
+        font-size: 12px;
+        line-height: 16px;
+      }
+      .ag-c .ava {
+        margin: 0 auto 8px;
+        border: 2px solid transparent;
+      }
+      .ag-c.run .ava {
+        border-color: var(--blue);
+      }
+      .ag-c small {
+        display: block;
+        color: var(--mute);
+        font-size: 11px;
+      }
+      .ag-c.run small {
+        color: var(--blue);
+      }
+      .lheat {
+        display: grid;
+        grid-template-columns: 96px repeat(24, 1fr);
+        gap: 2px;
+        font-size: 11px;
+        color: var(--mute);
+        align-items: center;
+      }
+      .lheat i {
+        aspect-ratio: 1;
+        border-radius: 2px;
+      }
+      .stub {
+        border: 1px dashed var(--line);
+        border-radius: 12px;
+        padding: 32px;
+        color: var(--mute);
+        font-size: 13px;
+        line-height: 22px;
+      }
+      .stub b {
+        color: var(--sub);
+        font-weight: 500;
+      }
+
+      /* Задача */
+      .head {
+        height: 64px;
+        padding: 0 32px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        border-bottom: 1px solid var(--line);
+        flex: none;
+      }
+      .head h1 {
+        font-size: 18px;
+        line-height: 24px;
+        font-weight: 650;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .meta {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .head .tools {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+      }
+      .family {
+        padding: 8px 32px;
+        border-bottom: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--mute);
+        flex: none;
+      }
+      .family a {
+        color: var(--sub);
+        cursor: pointer;
+      }
+      .feed {
+        flex: 1;
+        overflow: auto;
+        padding: 24px 32px;
+      }
+      .feed-in {
+        max-width: 760px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+      .day {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        color: var(--mute);
+        font-size: 12px;
+      }
+      .day:before,
+      .day:after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: var(--line);
+      }
+      .msg {
+        display: grid;
+        grid-template-columns: 32px 1fr;
+        gap: 12px;
+      }
+      .msg .who {
+        font-weight: 600;
+        font-size: 13px;
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+      }
+      .msg .who span {
+        font-weight: 400;
+        color: var(--mute);
+        font-size: 12px;
+      }
+      .msg .who em {
+        font-style: normal;
+        font-weight: 400;
+        font-size: 12px;
+        color: var(--green);
+      }
+      .msg p {
+        margin-top: 4px;
+        color: #dcdcdc;
+      }
+      .bubble {
+        margin-top: 8px;
+        background: var(--card);
+        border-radius: 12px;
+        padding: 12px 16px;
+      }
+      .plan {
+        margin-top: 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .plan-h {
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .plan-h small {
+        color: var(--sub);
+        font-size: 13px;
+      }
+      .checks {
+        display: flex;
+        gap: 24px;
+        font-size: 13px;
+        color: var(--sub);
+      }
+      .checks span:before {
+        content: "✓ ";
+        color: var(--green);
+      }
+      .plan-f {
+        border-top: 1px solid var(--line);
+        padding: 8px 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 12px;
+        color: var(--mute);
+      }
+      .work {
+        padding-left: 44px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .work div {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--sub);
+      }
+      .work div b {
+        color: var(--text);
+        font-weight: 500;
+      }
+      .work div i {
+        margin-left: auto;
+        font-style: normal;
+        color: var(--blue);
+        font-size: 12px;
+      }
+      .att {
+        display: inline-flex;
+        margin-top: 8px;
+        height: 32px;
+        align-items: center;
+        padding: 0 12px;
+        border-radius: var(--r);
+        border: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--sub);
+      }
+      .composer {
+        padding: 16px 32px 24px;
+        flex: none;
+      }
+      .box {
+        max-width: 760px;
+        margin: 0 auto;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px 16px;
+      }
+      .box .ph {
+        color: var(--mute);
+        min-height: 40px;
+      }
+      .box-b {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .box-b .chip {
+        background: var(--raised);
+      }
+      .icob {
+        width: 32px;
+        height: 32px;
+        border-radius: var(--r);
+        display: grid;
+        place-items: center;
+        color: var(--sub);
+      }
+      .icob:hover {
+        background: var(--raised);
+      }
+      .send {
+        width: 32px;
+        height: 32px;
+        border-radius: var(--r);
+        background: var(--red);
+        display: grid;
+        place-items: center;
+        color: #fff;
+      }
+
+      /* Правая панель */
+      .right {
+        background: var(--panel);
+        border-left: 1px solid var(--line);
+        flex-direction: column;
+        min-width: 0;
+      }
+      .tabs {
+        height: 64px;
+        display: flex;
+        align-items: flex-end;
+        gap: 16px;
+        padding: 0 24px;
+        border-bottom: 1px solid var(--line);
+        flex: none;
+      }
+      .tabs button {
+        height: 40px;
+        color: var(--sub);
+        font-size: 13px;
+        border-bottom: 2px solid transparent;
+      }
+      .tabs button.on {
+        color: var(--text);
+        border-color: var(--text);
+      }
+      .tabs button b {
+        font-weight: 400;
+        color: var(--mute);
+        margin-left: 4px;
+        font-size: 12px;
+      }
+      .pane {
+        flex: 1;
+        overflow: auto;
+        padding: 24px;
+        display: none;
+      }
+      .pane.on {
+        display: block;
+      }
+      .ctl {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 24px;
+      }
+      .ctl .btn {
+        flex: 1;
+        justify-content: center;
+        font-size: 12px;
+      }
+      .dag {
+        position: relative;
+        height: 352px;
+        width: 312px;
+        margin: 0 auto;
+      }
+      .dag svg {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 312px;
+        height: 360px;
+      }
+      .node {
+        position: absolute;
+        transform: translateX(-50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        width: 120px;
+      }
+      .node .ava {
+        width: 40px;
+        height: 40px;
+        font-size: 13px;
+        border: 2px solid var(--line);
+      }
+      .node.done .ava {
+        border-color: var(--green);
+      }
+      .node.run .ava {
+        border-color: var(--blue);
+      }
+      .node b {
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .node small {
+        font-size: 11px;
+        line-height: 14px;
+        color: var(--mute);
+        white-space: nowrap;
+      }
+      .node.done small {
+        color: var(--green);
+      }
+      .node.run small {
+        color: var(--blue);
+      }
+      .h3 {
+        font-size: 12px;
+        color: var(--mute);
+        margin: 24px 0 8px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .ladder {
+        display: flex;
+        gap: 4px;
+      }
+      .ladder i {
+        flex: 1;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--raised);
+      }
+      .ladder i.f {
+        background: var(--blue);
+      }
+      .log {
+        font:
+          12px/20px "SF Mono",
+          ui-monospace,
+          Menlo,
+          monospace;
+        color: var(--sub);
+      }
+      .log div {
+        display: grid;
+        grid-template-columns: 64px 88px 1fr;
+        gap: 8px;
+        padding: 4px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .log span:first-child {
+        color: var(--mute);
+      }
+      .log .k {
+        color: var(--blue);
+      }
+      .log .k.w {
+        color: var(--orange);
+      }
+      .log .k.ok {
+        color: var(--green);
+      }
+
+      /* Секретарь */
+      .asst {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        display: none;
+        align-items: flex-end;
+        justify-content: center;
+        padding-bottom: 48px;
+        z-index: 10;
+      }
+      .asst.on {
+        display: flex;
+      }
+      .asst-card {
+        width: 560px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+      }
+      .asst-top {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .asst-orb {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: var(--red);
+        display: grid;
+        place-items: center;
+        color: #fff;
+        box-shadow:
+          0 0 0 8px rgba(255, 107, 107, 0.12),
+          0 0 0 16px rgba(255, 107, 107, 0.06);
+      }
+      .asst-orb .ico {
+        width: 24px;
+        height: 24px;
+      }
+      .wave {
+        display: flex;
+        gap: 3px;
+        align-items: center;
+        height: 24px;
+        margin-left: auto;
+      }
+      .wave i {
+        width: 3px;
+        border-radius: 2px;
+        background: var(--sub);
+      }
+      .asst-said {
+        margin-top: 16px;
+        font-size: 16px;
+        line-height: 24px;
+      }
+      .asst-draft {
+        margin-top: 16px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 8px 16px;
+      }
+      .asst-draft .row:last-child {
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app" id="app">
+      <aside class="left">
+        <div class="brand"><i>✓</i>TaskFlow</div>
+        <div class="search">
+          <svg class="ico" viewBox="0 0 16 16">
+            <circle cx="7" cy="7" r="4.5" />
+            <path d="M10.5 10.5 14 14" /></svg
+          >Поиск<span class="kbd">⌘K</span>
+        </div>
+        <nav class="tree" id="tree"></nav>
+        <button class="asst-btn" onclick="asst(true)">
+          <svg class="ico" viewBox="0 0 16 16">
+            <rect x="6" y="2" width="4" height="8" rx="2" />
+            <path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14" /></svg
+          >Секретарь<span class="kbd">⌥ Space</span>
+        </button>
+        <div class="me">
+          <div class="ava">
+            М<span class="st" style="background: var(--green)"></span>
+          </div>
+          <div>
+            <b style="font-weight: 600">Максим</b
+            ><small>Личное пространство</small>
+          </div>
+        </div>
+      </aside>
+
+      <main class="center">
+        <!-- Обзор → Дашборд -->
+        <section class="view" id="v-overview">
+          <div class="vtitle">
+            <h2>Обзор</h2>
+            <span class="sub">понедельник, 19 октября</span>
+            <div class="tools">
+              <div class="seg">
+                <button>День</button><button class="on">Неделя</button
+                ><button>Месяц</button>
+              </div>
+            </div>
+          </div>
+          <div class="kpi">
+            <div class="card">
+              <div class="sub">В работе</div>
+              <div class="big">6</div>
+              <small>из них у команды — 4</small>
+            </div>
+            <div class="card">
+              <div class="sub">Агентов занято</div>
+              <div class="big">3 / 5</div>
+              <small>свободны: Архитектор, Claude Code</small>
+            </div>
+            <div class="card">
+              <div class="sub">Среднее время выполнения</div>
+              <div class="big">2 ч 40 м</div>
+              <small>за неделю · было 3 ч 15 м</small>
+            </div>
+            <div class="card">
+              <div class="sub">Выполнено за неделю</div>
+              <div class="big">31</div>
+              <small>просрочено: 2</small>
+            </div>
+          </div>
+          <div
+            class="grid"
+            style="grid-template-columns: 3fr 2fr; margin-bottom: 16px"
+          >
+            <div class="card">
+              <h4>
+                Продуктивность<span class="legend"
+                  ><span><i style="background: var(--green)"></i>Выполнено</span
+                  ><span><i style="background: var(--blue)"></i>В работе</span
+                  ><span
+                    ><i style="background: var(--red)"></i>Просрочено</span
+                  ></span
+                >
+              </h4>
+              <svg
+                id="prod"
+                viewBox="0 0 700 168"
+                style="width: 100%; height: 168px"
+              ></svg>
+            </div>
+            <div class="card">
+              <h4>Команда сейчас<span>3 работают</span></h4>
+              <div class="agrid" id="agrid"></div>
+            </div>
+          </div>
+          <div class="grid" style="grid-template-columns: 3fr 2fr">
+            <div class="card">
+              <h4>Выполнено за год<span>412 задач · серия 9 дней</span></h4>
+              <div class="heat" id="yheat"></div>
+            </div>
+            <div class="card">
+              <h4>В работе сейчас<span>все →</span></h4>
+              <div class="row" data-open="task">
+                <span class="cb p2"></span>
+                <div class="t">
+                  <b>Архив задач и проектов</b
+                  ><small>TaskFlow · 5 участников</small>
+                </div>
+                <span class="tag" style="color: var(--blue)">● 2 шага</span>
+              </div>
+              <div class="row" data-open="task">
+                <span class="cb p3"></span>
+                <div class="t">
+                  <b>Импорт выписок</b><small>BG-CRM · Разработчик 1</small>
+                </div>
+                <span class="tag" style="color: var(--blue)">●</span>
+              </div>
+              <div class="row" style="border: 0" data-open="task">
+                <span class="cb"></span>
+                <div class="t"><b>Воронка продаж</b><small>BG-CRM</small></div>
+                <span class="tag" style="color: var(--orange)"
+                  >ждёт приёмки</span
+                >
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Задачи → Сегодня -->
+        <section class="view" id="v-today">
+          <div class="crumb">Задачи</div>
+          <div class="vtitle">
+            <h2>Сегодня</h2>
+            <span class="sub">понедельник, 19 октября</span>
+            <div class="tools">
+              <div class="seg" id="todaySeg">
+                <button class="on" data-m="list">Список</button
+                ><button data-m="tl">Таймлайн</button
+                ><button data-m="cal">Календарь</button>
+              </div>
+              <button class="btn pri">+ Задача</button>
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; margin-bottom: 16px">
+            <span class="chip on">Все проекты</span
+            ><span class="chip">TaskFlow</span><span class="chip">BG-CRM</span
+            ><span class="chip">Инфраструктура .110</span
+            ><span class="chip">Личное</span>
+          </div>
+          <div class="today" id="t-list">
+            <div>
+              <div class="row" data-open="task">
+                <span class="cb p1"></span>
+                <div class="t">
+                  <b>Сдать отчёт по гарантиям</b><small>BG-CRM · 12:00</small>
+                </div>
+              </div>
+              <div class="row" data-open="task">
+                <span class="cb p2"></span>
+                <div class="t">
+                  <b>Архив задач и проектов</b
+                  ><small>TaskFlow · у команды</small>
+                </div>
+                <span class="tag" style="color: var(--blue)">● в работе</span>
+              </div>
+              <div class="row" data-open="task">
+                <span class="cb p3"></span>
+                <div class="t">
+                  <b>Обновить сторожа синхронизации</b
+                  ><small>Инфраструктура .110</small>
+                </div>
+              </div>
+              <div class="row" data-open="task">
+                <span class="cb"></span>
+                <div class="t">
+                  <b>Позвонить в банк</b><small>Личное · 16:30</small>
+                </div>
+              </div>
+              <div class="row" data-open="task">
+                <span class="cb"></span>
+                <div class="t"><b>Купить подарок</b><small>Личное</small></div>
+              </div>
+            </div>
+            <div class="card cal-mini" id="calMini" title="Открыть календарь">
+              <h4>Календарь<span>19 окт · открыть →</span></h4>
+              <div class="ev"><span>10:00</span><i>Созвон с банком</i></div>
+              <div class="ev">
+                <span>12:00</span
+                ><i style="border-color: var(--orange)"
+                  >Срок: отчёт по гарантиям</i
+                >
+              </div>
+              <div class="ev"><span>14:00</span><i>Обед</i></div>
+              <div class="ev">
+                <span>16:30</span
+                ><i style="border-color: var(--orange)">Позвонить в банк</i>
+              </div>
+              <div class="ev"><span>18:30</span><i>Спорт</i></div>
+            </div>
+          </div>
+          <div id="t-tl" style="display: none">
+            <div class="tl-h">
+              <span></span
+              ><span style="padding-left: 12px">Мои задачи и календарь</span
+              ><span style="padding-left: 12px">Работа команды</span>
+            </div>
+            <div class="tl" id="tl"></div>
+          </div>
+          <div id="t-cal" style="display: none">
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                margin-bottom: 12px;
+              "
+            >
+              <b>Октябрь 2026</b
+              ><button class="btn" style="height: 28px">‹</button
+              ><button class="btn" style="height: 28px">›</button
+              ><span class="sub" style="margin-left: auto"
+                ><span style="color: var(--blue)">●</span> события календаря ·
+                <span style="color: var(--orange)">●</span> сроки задач</span
+              >
+            </div>
+            <div class="month" id="month"></div>
+          </div>
+        </section>
+
+        <section class="view" id="v-inbox">
+          <div class="crumb">Задачи</div>
+          <div class="vtitle">
+            <h2>Входящие</h2>
+            <div class="tools">
+              <button class="btn">Задачи из текста</button
+              ><button class="btn pri">+ Задача</button>
+            </div>
+          </div>
+          <div class="row" data-open="task">
+            <span class="cb"></span>
+            <div class="t">
+              <b>Разобрать заметку с диктовки</b
+              ><small>Секретарь · 09:12</small>
+            </div>
+          </div>
+          <div class="row" data-open="task">
+            <span class="cb"></span>
+            <div class="t">
+              <b>Импорт из Linear: 4 задачи</b><small>Интеграция · вчера</small>
+            </div>
+          </div>
+          <div class="row" data-open="task">
+            <span class="cb"></span>
+            <div class="t">
+              <b>Идея: светлая тема рабочего стола</b><small>вчера</small>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="v-upcoming">
+          <div class="crumb">Задачи</div>
+          <div class="vtitle">
+            <h2>Предстоящее</h2>
+            <div class="tools">
+              <div class="seg">
+                <button>Список</button><button class="on">Неделя</button
+                ><button>Месяц</button>
+              </div>
+            </div>
+          </div>
+          <div class="cols" style="grid-template-columns: repeat(7, 1fr)">
+            <div class="col">
+              <h5>Пн 19</h5>
+              <div class="kc" data-open="task">Отчёт<small>BG-CRM</small></div>
+            </div>
+            <div class="col">
+              <h5>Вт 20</h5>
+              <div class="kc" data-open="task">
+                Ревью архива<small>TaskFlow</small>
+              </div>
+            </div>
+            <div class="col"><h5>Ср 21</h5></div>
+            <div class="col">
+              <h5>Чт 22</h5>
+              <div class="kc" data-open="task">
+                Бэкап NAS<small>.110</small>
+              </div>
+            </div>
+            <div class="col">
+              <h5>Пт 23</h5>
+              <div class="kc" data-open="task">
+                Срок: архив<small>TaskFlow</small>
+              </div>
+            </div>
+            <div class="col"><h5>Сб 24</h5></div>
+            <div class="col"><h5>Вс 25</h5></div>
+          </div>
+        </section>
+
+        <section class="view" id="v-project">
+          <div class="crumb">Проекты</div>
+          <div class="vtitle">
+            <h2 id="pname">TaskFlow</h2>
+            <span class="sub" id="pmeta"></span>
+            <div class="tools">
+              <div class="seg">
+                <button>Лента</button><button class="on">Доска</button
+                ><button>Гант</button>
+              </div>
+              <button class="btn">Темы</button
+              ><button class="btn">Заметки</button
+              ><button class="btn pri">+ Задача</button>
+            </div>
+          </div>
+          <div class="cols">
+            <div class="col">
+              <h5>Бэклог<span>2</span></h5>
+              <div class="kc" data-open="task">
+                Скоринг контрагента<small>P2 · без срока</small>
+              </div>
+              <div class="kc" data-open="task">
+                Шаблон гарантии<small>P3</small>
+              </div>
+            </div>
+            <div class="col">
+              <h5>В работе<span>2</span></h5>
+              <div class="kc" data-open="task">
+                Архив задач и проектов<small style="color: var(--blue)"
+                  >● команда · 2 шага</small
+                >
+              </div>
+              <div class="kc" data-open="task">
+                Карточка сделки<small style="color: var(--blue)"
+                  >● Дизайнер</small
+                >
+              </div>
+            </div>
+            <div class="col">
+              <h5>На проверке<span>1</span></h5>
+              <div class="kc" data-open="task">
+                Воронка продаж<small style="color: var(--orange)"
+                  >● ждёт вашей приёмки</small
+                >
+              </div>
+            </div>
+            <div class="col">
+              <h5>Готово<span>1</span></h5>
+              <div class="kc" data-open="task">
+                Справочник банков<small>вчера</small>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="v-load">
+          <div class="crumb">Агенты</div>
+          <div class="vtitle">
+            <h2>Загрузка</h2>
+            <div class="tools">
+              <div class="seg">
+                <button class="on">Тепловая карта</button><button>Гант</button>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <h4>Загрузка ролей · 24 часа</h4>
+            <div class="lheat" id="lheat"></div>
+          </div>
+        </section>
+
+        <section class="view" id="v-team">
+          <div class="crumb">Агенты</div>
+          <div class="vtitle">
+            <h2>Команда</h2>
+            <div class="tools">
+              <button class="btn">Найти агентов</button
+              ><button class="btn pri">+ Роль</button>
+            </div>
+          </div>
+          <div
+            style="display: grid; grid-template-columns: 320px 1fr; gap: 24px"
+          >
+            <div>
+              <div
+                class="row"
+                style="background: var(--card); border-radius: var(--r)"
+              >
+                <span class="ava s">О</span>
+                <div class="t">
+                  <b>Оркестратор</b><small>Opus · 2 задачи</small>
+                </div>
+                <span class="tag" style="color: var(--blue)">●</span>
+              </div>
+              <div class="row">
+                <span class="ava s">А</span>
+                <div class="t">
+                  <b>Архитектор</b><small>Opus · свободен</small>
+                </div>
+              </div>
+              <div class="row">
+                <span class="ava s">Р</span>
+                <div class="t">
+                  <b>Разработчик</b><small>Sonnet · 2 задачи</small>
+                </div>
+                <span class="tag" style="color: var(--blue)">●</span>
+              </div>
+              <div class="row">
+                <span class="ava s">C</span>
+                <div class="t">
+                  <b>Claude Code</b><small>внешний · свободен</small>
+                </div>
+              </div>
+            </div>
+            <div
+              class="grid"
+              style="grid-template-columns: 1fr 1fr; align-content: start"
+            >
+              <div class="card">
+                <h4>Оркестратор</h4>
+                <div class="kv">
+                  <span>Модель</span
+                  >claude-opus-5-5<span>Запасная</span>sonnet-5-5<span>Инструменты</span>12<span>Память</span>34
+                  записи
+                </div>
+              </div>
+              <div class="card">
+                <h4>Связи</h4>
+                <p class="sub">
+                  Архитектор, Разработчик ×2, Тестировщик, Критик
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="v-alerts">
+          <div class="crumb">Состояние системы</div>
+          <div class="vtitle"><h2>Уведомления</h2></div>
+          <div class="card alert" style="margin-bottom: 8px">
+            <h4 style="color: var(--red)">Сторож синхронизации Linear</h4>
+            <p class="sub">
+              Пробный импорт не проходит 2 часа. Новые задачи из Linear не
+              появятся. Проверьте токен: Настройки → Общие → Интеграции.
+            </p>
+          </div>
+          <div class="card">
+            <h4>Квота Anthropic — 62%</h4>
+            <p class="sub">Обычный расход, до сброса 3 дня.</p>
+          </div>
+        </section>
+
+        <section class="view" id="v-stub">
+          <div class="crumb" id="stubCrumb"></div>
+          <div class="vtitle"><h2 id="stubTitle"></h2></div>
+          <div class="stub" id="stubText"></div>
+        </section>
+
+        <section class="view task" id="v-task">
+          <header class="head">
+            <h1>Архив задач и проектов</h1>
+            <div class="meta">
+              <span class="chip"
+                ><span class="d" style="background: var(--blue)"></span>В
+                работе</span
+              ><span class="chip">Приоритет 2</span
+              ><span class="chip">Срок · пт, 23 окт</span
+              ><span class="chip">5 участников</span>
+            </div>
+            <div class="tools">
+              <button class="btn">Поля</button
+              ><button class="btn pri">+ Задача</button>
+            </div>
+          </header>
+          <div class="family">
+            <a onclick="show('p:TaskFlow')">TaskFlow</a> /
+            <a>Хранение и восстановление</a> /
+            <b style="color: var(--text); font-weight: 500"
+              >Архив задач и проектов</b
+            >
+            · дочерних: 3
+          </div>
+          <div class="feed">
+            <div class="feed-in">
+              <div class="day">Сегодня, 19 октября</div>
+              <div class="msg">
+                <div class="ava">М</div>
+                <div>
+                  <div class="who">Вы <span>10:24</span></div>
+                  <div class="bubble">
+                    Давайте сделаем отдельный архив. Задачи и проекты можно
+                    только архивировать. Удаление навсегда — уже из архива.
+                  </div>
+                </div>
+              </div>
+              <div class="msg">
+                <div class="ava" style="background: #2d3b46">А</div>
+                <div>
+                  <div class="who">
+                    Архитектор <span>10:28</span><em>План принят</em>
+                  </div>
+                  <p>
+                    Разделил работу на сервер и интерфейс. Они идут параллельно,
+                    после этого — общая проверка и приёмка.
+                  </p>
+                  <div class="plan">
+                    <div class="plan-h">
+                      <b>Один архив для всего пространства</b
+                      ><small
+                        >Сохраняем задачи, проекты и их связи. Восстановление
+                        возвращает всю структуру на прежнее место.</small
+                      >
+                      <div class="checks">
+                        <span>Архивирование</span><span>Восстановление</span
+                        ><span>Удаление из архива</span>
+                      </div>
+                    </div>
+                    <div class="plan-f">
+                      <button class="btn" style="height: 28px">
+                        Открыть план</button
+                      >2 параллельных шага · 5 исполнителей
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="work">
+                <div>
+                  <span class="ava s">Р1</span><b>Разработчик 1</b>· проверяет
+                  восстановление связей<i>сейчас</i>
+                </div>
+                <div>
+                  <span class="ava s">Р2</span><b>Разработчик 2</b>· добавляет
+                  действия в меню задач<i>сейчас</i>
+                </div>
+              </div>
+              <div class="msg">
+                <div class="ava" style="background: #2b3a35">Р1</div>
+                <div>
+                  <div class="who">Разработчик 1 <span>10:42</span></div>
+                  <p>
+                    Архивирование готово. Задача уходит в архив вместе с
+                    дочерними, а текущая карточка показывает, откуда её
+                    восстановить.
+                  </p>
+                  <span class="att">▤ Как работает архив.md · черновик</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="composer">
+            <div class="box">
+              <div class="ph">Напишите команде или выберите @агента…</div>
+              <div class="box-b">
+                <button class="icob">＋</button
+                ><span class="chip">Вся команда ▾</span
+                ><span class="chip">Sonnet 4.6 ▾</span
+                ><span class="chip">Знания: 2</span>
+                <button class="icob" style="margin-left: auto">
+                  <svg class="ico" viewBox="0 0 16 16">
+                    <rect x="6" y="2" width="4" height="8" rx="2" />
+                    <path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14" />
+                  </svg></button
+                ><button class="send">↑</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <aside class="right">
+        <div class="tabs" id="tabs">
+          <button class="on" data-p="run">Ход</button
+          ><button data-p="res">Результаты<b>2</b></button
+          ><button data-p="log">Лог</button
+          ><button data-p="ctx">Контекст</button>
+        </div>
+        <div class="pane on" id="p-run">
+          <div class="ctl">
+            <button class="btn">Пауза</button
+            ><button class="btn">Сменить</button
+            ><button class="btn" style="color: var(--red)">Стоп</button>
+          </div>
+          <div class="dag">
+            <svg viewBox="0 0 312 360">
+              <path
+                d="M156 88 V100 H64 V112 M156 100 H248 V112"
+                stroke="rgba(53,184,163,.6)"
+                fill="none"
+              />
+              <path
+                d="M64 194 V208 H248 V194 M156 208 V224"
+                stroke="rgba(74,159,216,.6)"
+                stroke-dasharray="4 4"
+                fill="none"
+              />
+            </svg>
+            <div class="node done" style="left: 156px; top: 0">
+              <div class="ava">А</div>
+              <b>Архитектор</b><small>Готово</small>
+            </div>
+            <div class="node run" style="left: 64px; top: 112px">
+              <div class="ava">Р1</div>
+              <b>Разработчик 1</b><small>В работе · 12 мин</small>
+            </div>
+            <div class="node run" style="left: 248px; top: 112px">
+              <div class="ava">Р2</div>
+              <b>Разработчик 2</b><small>В работе · 9 мин</small>
+            </div>
+            <div class="node" style="left: 156px; top: 224px">
+              <div class="ava">Т</div>
+              <b>Тестировщик</b><small>Ждёт обоих</small>
+            </div>
+            <div
+              class="node"
+              style="
+                left: 156px;
+                top: 320px;
+                flex-direction: row;
+                width: auto;
+                gap: 8px;
+              "
+            >
+              <div class="ava s">К</div>
+              <small>Критик · после проверки</small>
+            </div>
+          </div>
+          <div class="h3">
+            <span>Попытки шага «Сервер»</span><span>2 из 4</span>
+          </div>
+          <div class="ladder">
+            <i class="f"></i><i class="f"></i><i></i><i></i>
+          </div>
+          <div class="h3"><span>Дочерние задачи</span><span>1 из 3</span></div>
+          <div class="row">
+            <span
+              class="cb"
+              style="border-color: var(--green); background: var(--green)"
+            ></span>
+            <div class="t"><b>Серверная часть архива</b></div>
+          </div>
+          <div class="row">
+            <span class="cb"></span>
+            <div class="t"><b>Действия в меню задач</b></div>
+            <span class="tag" style="color: var(--blue)">в работе</span>
+          </div>
+          <div class="row" style="border: 0">
+            <span class="cb"></span>
+            <div class="t"><b>Экран архива</b></div>
+          </div>
+        </div>
+        <div class="pane" id="p-res">
+          <div class="row">
+            <div class="t">
+              <b>План реализации</b><small>Архитектор · 10:28</small>
+            </div>
+            <span class="tag" style="color: var(--green)">Принят</span>
+          </div>
+          <div class="row">
+            <div class="t">
+              <b>Как работает архив</b><small>Разработчик 1 · 10:42</small>
+            </div>
+            <span class="tag sub">Черновик</span>
+          </div>
+          <div class="h3"><span>Квитанции сдачи</span></div>
+          <div class="row">
+            <div class="t">
+              <b>Шаг «Архитектура»</b
+              ><small>коммит a1c9e2f · тесты 14/14</small>
+            </div>
+            <span class="tag" style="color: var(--green)">✓</span>
+          </div>
+        </div>
+        <div class="pane" id="p-log">
+          <div class="log">
+            <div>
+              <span>10:28:02</span><span class="k ok">plan.accept</span
+              ><span>архитектор → 2 шага</span>
+            </div>
+            <div>
+              <span>10:28:05</span><span class="k">slot.claim</span
+              ><span>разработчик-1 · server</span>
+            </div>
+            <div>
+              <span>10:28:06</span><span class="k">slot.claim</span
+              ><span>разработчик-2 · web</span>
+            </div>
+            <div>
+              <span>10:34:12</span><span class="k w">retry</span
+              ><span>server · попытка 2/4</span>
+            </div>
+            <div>
+              <span>10:42:01</span><span class="k ok">artifact</span
+              ><span>Как работает архив.md</span>
+            </div>
+          </div>
+        </div>
+        <div class="pane" id="p-ctx">
+          <div class="kv">
+            <span>Роль</span>Разработчик
+            1<span>Модель</span>claude-sonnet-5-5<span>Запасная</span>gpt-5 →
+            локальная<span>Рабочее дерево</span
+            >roles/archive-srv<span>Знания</span>2 урока, 1 заметка
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div
+      class="asst"
+      id="asst"
+      onclick="if (event.target === this) asst(false);"
+    >
+      <div class="asst-card">
+        <div class="asst-top">
+          <div class="asst-orb">
+            <svg class="ico" viewBox="0 0 16 16">
+              <rect x="6" y="2" width="4" height="8" rx="2" />
+              <path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14" />
+            </svg>
+          </div>
+          <div>
+            <b>Секретарь</b>
+            <div class="sub">Слушаю · голос Алиса</div>
+          </div>
+          <div class="wave" id="wave"></div>
+        </div>
+        <div class="asst-said">
+          «Поставь Разработчику задачу проверить восстановление архива к пятнице
+          и напомни мне в четверг»
+        </div>
+        <div class="sub" style="margin-top: 8px" id="asstCtx"></div>
+        <div class="asst-draft">
+          <div class="row">
+            <span class="cb p2"></span>
+            <div class="t">
+              <b>Проверить восстановление архива</b
+              ><small>TaskFlow · Разработчик · срок пт, 23 окт</small>
+            </div>
+          </div>
+          <div class="row">
+            <span class="cb"></span>
+            <div class="t">
+              <b>Напоминание: архив</b><small>Личное · чт, 22 окт, 10:00</small>
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 16px">
+          <button class="btn pri">Создать</button
+          ><button class="btn">Поправить</button
+          ><button class="btn" style="margin-left: auto" onclick="asst(false)">
+            Закрыть · Esc
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const ICO = {
+        overview:
+          '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>',
+        tasks: '<circle cx="8" cy="8" r="6"/><path d="M5.5 8l2 2 3-4"/>',
+        projects: '<path d="M2 4.5h4l1.5 1.5H14v7H2z"/>',
+        chats: '<path d="M3 3h10v7H7l-3 3v-3H3z"/>',
+        know: '<path d="M4 2h6l3 3v9H4z"/><path d="M10 2v3h3"/>',
+        agents:
+          '<circle cx="8" cy="5.5" r="2.5"/><path d="M3 14c.5-3 2.5-4.5 5-4.5s4.5 1.5 5 4.5"/>',
+        system: '<path d="M1.5 8h3l1.5-4 3 8 1.5-4h4"/>',
+        archive:
+          '<rect x="2" y="3" width="12" height="3" rx="1"/><path d="M3 6v7h10V6M6.5 9h3"/>',
+        settings:
+          '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>',
+      };
+      // Узел дерева: {id, n: название, ic: иконка (только верхний уровень), c: счётчик ('!N' — тревога), col: цвет точки, k: дети}
+      // Узел с детьми — раскрывающаяся группа; без детей — экран. Настройки повторяют группировку iOS (SettingsScreen).
+      const TREE = [
+        {
+          id: "g-overview",
+          n: "Обзор",
+          ic: "overview",
+          open: 1,
+          k: [
+            { id: "overview", n: "Дашборд" },
+            { id: "stats", n: "Статистика" },
+          ],
+        },
+        {
+          id: "g-tasks",
+          n: "Задачи",
+          ic: "tasks",
+          c: 10,
+          open: 1,
+          k: [
+            { id: "inbox", n: "Входящие", c: 3 },
+            { id: "today", n: "Сегодня", c: 7 },
+            { id: "upcoming", n: "Предстоящее" },
+            { id: "labels", n: "Метки" },
+          ],
+        },
+        {
+          id: "g-projects",
+          n: "Проекты",
+          ic: "projects",
+          open: 1,
+          k: [
+            { id: "p:TaskFlow", n: "TaskFlow", c: 12, col: "var(--red)" },
+            { id: "p:BG-CRM", n: "BG-CRM", c: 8, col: "var(--blue)" },
+            {
+              id: "p:Инфраструктура .110",
+              n: "Инфраструктура .110",
+              c: 4,
+              col: "var(--green)",
+            },
+            { id: "p:Личное", n: "Личное", c: 9, col: "var(--orange)" },
+          ],
+        },
+        {
+          id: "g-chats",
+          n: "Чаты",
+          ic: "chats",
+          c: 2,
+          k: [
+            { id: "chats-all", n: "Все чаты", c: 2 },
+            { id: "chats-roles", n: "С ролями" },
+            { id: "chats-topics", n: "Темы проектов" },
+          ],
+        },
+        {
+          id: "g-know",
+          n: "Знания",
+          ic: "know",
+          k: [
+            { id: "notes", n: "Заметки" },
+            { id: "kb", n: "База знаний" },
+            { id: "memory", n: "Память ролей" },
+            { id: "library", n: "Библиотека" },
+          ],
+        },
+        {
+          id: "g-agents",
+          n: "Агенты",
+          ic: "agents",
+          c: 5,
+          k: [
+            { id: "team", n: "Команда" },
+            { id: "agentwork", n: "Работа", c: 3 },
+            { id: "load", n: "Загрузка" },
+            { id: "runs", n: "Заходы ролей" },
+            { id: "coord", n: "Координация" },
+          ],
+        },
+        {
+          id: "g-system",
+          n: "Состояние системы",
+          ic: "system",
+          c: "!1",
+          k: [
+            { id: "alerts", n: "Уведомления", c: "!1" },
+            { id: "runtime", n: "Исполнение" },
+            { id: "quota", n: "Квоты провайдеров" },
+            { id: "diag", n: "Диагностика" },
+          ],
+        },
+        {
+          id: "g-archive",
+          n: "Архив",
+          ic: "archive",
+          k: [
+            { id: "arch-tasks", n: "Задачи" },
+            { id: "arch-projects", n: "Проекты" },
+          ],
+        },
+        {
+          id: "g-settings",
+          n: "Настройки",
+          ic: "settings",
+          k: [
+            { id: "s-account", n: "Аккаунт" },
+            {
+              id: "g-s-user",
+              n: "Пользовательские",
+              k: [
+                { id: "s-theme", n: "Тема" },
+                { id: "s-hints", n: "Подсказки" },
+                { id: "s-icon", n: "Иконка" },
+                { id: "s-esc", n: "Напоминания о просрочке" },
+              ],
+            },
+            {
+              id: "g-s-ai",
+              n: "Искусственный интеллект",
+              open: 1,
+              k: [
+                { id: "s-prov", n: "Модели и провайдеры" },
+                { id: "s-jev", n: "Оценщик JEV" },
+                { id: "s-voice", n: "Голос и речь" },
+                { id: "s-svoice", n: "Голос Секретаря" },
+              ],
+            },
+            {
+              id: "g-s-gen",
+              n: "Общие",
+              k: [
+                { id: "s-tpl", n: "Шаблоны задач" },
+                { id: "s-int", n: "Интеграции" },
+                { id: "s-composio", n: "Composio" },
+                { id: "s-linear", n: "Импорт из Linear" },
+                { id: "s-hooks", n: "Вебхуки" },
+              ],
+            },
+            {
+              id: "g-s-srv",
+              n: "Сервер",
+              k: [
+                { id: "s-params", n: "Параметры" },
+                { id: "s-control", n: "Управление" },
+                { id: "s-mcp", n: "Сервер MCP и учётки" },
+                { id: "s-machines", n: "Удалённые машины" },
+              ],
+            },
+          ],
+        },
+      ];
+      const STUB = {
+        // что живёт в экране — по iOS
+        stats:
+          "ActivityScreen — фильтры по проекту, метке, исполнителю и периоду; график продуктивности с переходом в столбец; список выполненных с возвратом в работу.",
+        labels: "LabelsScreen / LabelTasksScreen — метки и задачи по метке.",
+        "chats-all": "ChatScreen — общий чат и чаты задач.",
+        "chats-roles": "RoleChatsScreen — личные чаты с ролями.",
+        "chats-topics":
+          "ProjectTopicsScreen — темы проекта, новая тема из задачи.",
+        notes: "NotesScreen / NoteEditorScreen — блочный редактор заметок.",
+        kb: "KnowledgeScreen — база знаний, разбор уроков.",
+        memory: "MemoryScreen — память ролей.",
+        library: "Библиотека файлов (веб: LibraryScreen).",
+        agentwork: "AgentWorkScreen — кто над чем работает сейчас.",
+        runs: "RoleRunJobsScreen — заходы ролей: время, модель, итог.",
+        coord: "CoordinationScreen — координация и эскалации между ролями.",
+        runtime: "RuntimeStatusScreen — очередь, слоты, исполнители.",
+        quota: "Квоты провайдеров — остаток, сброс, расход.",
+        diag: "AppDiagnosticsScreen.",
+        "arch-tasks": "TaskArchiveScreen — восстановление и удаление навсегда.",
+        "arch-projects": "Архив проектов.",
+        "s-account": "Аккаунт: имя, аватар, выход.",
+        "s-theme": "Тёмная / светлая тема.",
+        "s-hints": "Подсказки интерфейса.",
+        "s-icon": "Иконка приложения.",
+        "s-esc": "EscalationSettingsScreen — напоминания о просрочке.",
+        "s-prov":
+          "RuntimeProvidersScreen / ProviderDetailScreen — модели и провайдеры агентов.",
+        "s-jev": "JevSettingsScreen — оценщик результатов.",
+        "s-voice":
+          "VoiceModelsScreen — распознавание и синтез, телефон и сервер.",
+        "s-svoice": "SecretaryVoicePickerScreen — голос Секретаря.",
+        "s-tpl": "TemplatesScreen — шаблоны задач.",
+        "s-int": "IntegrationsScreen — подключённые сервисы.",
+        "s-composio": "ComposioIntegrationsScreen.",
+        "s-linear": "LinearImportScreen — импорт задач.",
+        "s-hooks": "WebhooksScreen.",
+        "s-params": "ServerSettingsScreen — параметры сервера.",
+        "s-control": "Управление сервером и статус.",
+        "s-mcp": "ServiceAccountsScreen — сервер MCP и сервисные учётки.",
+        "s-machines": "RemoteMachinesScreen — удалённые машины.",
+      };
+      const tree = document.getElementById("tree"),
+        app = document.getElementById("app");
+      const chev =
+        '<svg class="chev" viewBox="0 0 12 12"><path d="M4.5 3l3 3-3 3"/></svg>';
+      const cnt = (c) =>
+        c == null
+          ? ""
+          : String(c)[0] === "!"
+            ? `<b class="alarm">${String(c).slice(1)}</b>`
+            : `<b>${c}</b>`;
+      const PATH = {}; // id → [предки] для хлебных крошек
+      function render(nodes, lvl, path) {
+        return nodes
+          .map((nd) => {
+            PATH[nd.id] = path;
+            const head =
+              (nd.ic
+                ? `<svg class="ico" viewBox="0 0 16 16">${ICO[nd.ic]}</svg>`
+                : "") +
+              (nd.col
+                ? `<span class="dot" style="background:${nd.col}"></span>`
+                : "") +
+              `<span class="lbl">${nd.n}</span>` +
+              cnt(nd.c);
+            if (!nd.k)
+              return `<div class="item" data-v="${nd.id}">${head}</div>`;
+            return `<div class="grp lvl${lvl}${nd.open ? " open" : ""}"><div class="item" data-toggle>${head}${chev}</div><div class="kids">${render(nd.k, lvl + 1, [...path, nd.n])}</div></div>`;
+          })
+          .join("");
+      }
+      tree.innerHTML = render(TREE, 0, []);
+
+      function show(v) {
+        let view = v;
+        const link =
+          v === "task"
+            ? tree.querySelector('[data-v="p:TaskFlow"]')
+            : tree.querySelector(`[data-v="${CSS.escape(v)}"]`);
+        const name = link?.querySelector(".lbl").textContent;
+        if (v.startsWith("p:")) {
+          view = "project";
+          document.getElementById("pname").textContent = name;
+          document.getElementById("pmeta").textContent =
+            (link.querySelector("b")?.textContent || 0) + " задач";
+        } else if (v !== "task" && !document.getElementById("v-" + v)) {
+          view = "stub";
+          document.getElementById("stubCrumb").textContent = (
+            PATH[v] || []
+          ).join(" / ");
+          document.getElementById("stubTitle").textContent = name;
+          document.getElementById("stubText").innerHTML =
+            "<b>Экран макета без детальной отрисовки.</b><br>В iOS: " +
+            (STUB[v] || "—");
+        }
+        tree
+          .querySelectorAll(".item")
+          .forEach((i) => i.classList.toggle("on", i === link));
+        for (
+          let g = link?.closest(".grp");
+          g;
+          g = g.parentElement.closest(".grp")
+        )
+          g.classList.add("open");
+        document
+          .querySelectorAll(".view")
+          .forEach((s) => s.classList.toggle("on", s.id === "v-" + view));
+        app.classList.toggle("with-right", view === "task");
+      }
+      tree.addEventListener("click", (e) => {
+        const t = e.target.closest("[data-toggle]");
+        if (t) {
+          t.parentElement.classList.toggle("open");
+          return;
+        }
+        const i = e.target.closest("[data-v]");
+        if (i) show(i.dataset.v);
+      });
+      document.addEventListener("click", (e) => {
+        const o = e.target.closest("[data-open]");
+        if (o) show(o.dataset.open);
+      });
+      document.querySelectorAll("#tabs button").forEach(
+        (b) =>
+          (b.onclick = () => {
+            document
+              .querySelectorAll("#tabs button")
+              .forEach((x) => x.classList.toggle("on", x === b));
+            document
+              .querySelectorAll(".pane")
+              .forEach((p) =>
+                p.classList.toggle("on", p.id === "p-" + b.dataset.p),
+              );
+          }),
+      );
+      document
+        .querySelectorAll(".seg")
+        .forEach((s) =>
+          s
+            .querySelectorAll("button")
+            .forEach((b) =>
+              b.addEventListener("click", () =>
+                s
+                  .querySelectorAll("button")
+                  .forEach((x) => x.classList.toggle("on", x === b)),
+              ),
+            ),
+        );
+
+      // Сегодня: Список / Таймлайн / Календарь; клик по карточке календаря открывает месяц
+      function todayMode(m) {
+        ["list", "tl", "cal"].forEach(
+          (k) =>
+            (document.getElementById("t-" + k).style.display =
+              k === m ? (k === "list" ? "grid" : "block") : "none"),
+        );
+        document
+          .querySelectorAll("#todaySeg button")
+          .forEach((b) => b.classList.toggle("on", b.dataset.m === m));
+      }
+      document
+        .querySelectorAll("#todaySeg button")
+        .forEach((b) =>
+          b.addEventListener("click", () => todayMode(b.dataset.m)),
+        );
+      document.getElementById("calMini").onclick = () => todayMode("cal");
+
+      // Таймлайн 08–20: мои задачи и события | работа команды (те же данные, что «Загрузка»)
+      (() => {
+        const H0 = 8,
+          H1 = 20,
+          PX = 56,
+          h = (H1 - H0) * PX;
+        const blk = (cls, s, d, t, sub) =>
+          `<div class="blk ${cls}" style="top:${(s - H0) * PX + 2}px;height:${d * PX - 4}px">${t}<small>${sub}</small></div>`;
+        document.getElementById("tl").innerHTML =
+          `<div class="tl-hours">${Array.from({ length: H1 - H0 }, (_, i) => `<div>${String(H0 + i).padStart(2, "0")}:00</div>`).join("")}</div>` +
+          `<div class="tl-lane" style="height:${h}px">${blk("ce", 10, 1, "Созвон с банком", "календарь")}${blk("tk", 11, 1, "Отчёт по гарантиям", "BG-CRM · срок 12:00")}${blk("ce", 14, 1, "Обед", "календарь")}${blk("tk", 16.5, 0.75, "Позвонить в банк", "Личное")}${blk("ce", 18.5, 1, "Спорт", "календарь")}</div>` +
+          `<div class="tl-lane" style="height:${h}px">${blk("ag", 10, 0.5, "Архитектор · план", "готово")}${blk("ag", 10.5, 4.5, "Разработчик 1 · сервер архива", "в работе")}${blk("ag", 15, 1.5, "Тестировщик · проверка", "по плану")}${blk("ag", 16.5, 0.75, "Критик", "по плану")}</div>` +
+          `<div class="now" style="top:${(13.3 - H0) * PX}px"></div>`;
+      })();
+      // Месяц (1 октября 2026 — четверг)
+      (() => {
+        const ev = {
+          5: ["Бэкап NAS"],
+          12: ["Созвон"],
+          19: ["Созвон с банком", "t:Отчёт по гарантиям", "Спорт"],
+          20: ["t:Ревью архива"],
+          22: ["t:Бэкап NAS"],
+          23: ["t:Срок: архив"],
+          27: ["Врач"],
+        };
+        let h = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+          .map((d) => `<div class="h">${d}</div>`)
+          .join("");
+        for (let i = 0; i < 35; i++) {
+          const d = i - 2,
+            inM = d >= 1 && d <= 31,
+            dd = inM ? d : d < 1 ? 30 + d : d - 31;
+          h += `<div class="${inM ? "" : "o"}${d === 19 ? " td" : ""}"><b>${dd}</b>${((inM && ev[d]) || []).map((e) => (e.startsWith("t:") ? `<em class="t">${e.slice(2)}</em>` : `<em>${e}</em>`)).join("")}</div>`;
+        }
+        document.getElementById("month").innerHTML = h;
+      })();
+      // Продуктивность за 14 дней
+      (() => {
+        const W = 700,
+          H = 168,
+          n = 14,
+          bw = 24,
+          gap = (W - n * bw) / (n - 1);
+        let out = "";
+        for (let i = 0; i < n; i++) {
+          const x = i * (bw + gap);
+          let y = H - 16;
+          [
+            [2 + Math.round(3 + 2.5 * Math.sin(i / 1.8)), "var(--green)"],
+            [1 + (i % 3), "var(--blue)"],
+            [i % 5 === 3 ? 1 : 0, "var(--red)"],
+          ].forEach(([v, c]) => {
+            const hh = v * 12;
+            if (hh) {
+              y -= hh;
+              out += `<rect x="${x}" y="${y}" width="${bw}" height="${hh - 2}" rx="3" fill="${c}" opacity=".85"/>`;
+            }
+          });
+          if (i % 2 === 0)
+            out += `<text x="${x + bw / 2}" y="${H - 2}" fill="#6f6f6f" font-size="10" text-anchor="middle">${6 + i}.10</text>`;
+        }
+        document.getElementById("prod").innerHTML = out;
+      })();
+      document.getElementById("agrid").innerHTML = [
+        ["О", "Оркестратор", 1, "2 задачи"],
+        ["А", "Архитектор", 0, "свободен"],
+        ["Р1", "Разработчик 1", 1, "архив"],
+        ["Р2", "Разработчик 2", 1, "меню"],
+        ["C", "Claude Code", 0, "свободен"],
+      ]
+        .map(
+          ([a, n, r, s]) =>
+            `<div class="ag-c${r ? " run" : ""}"><div class="ava">${a}</div>${n}<small>${s}</small></div>`,
+        )
+        .join("");
+      (() => {
+        let h = "";
+        for (let i = 0; i < 7 * 52; i++) {
+          const w = Math.floor(i / 7),
+            v = Math.max(
+              0,
+              Math.sin(w / 4) * 0.5 +
+                Math.sin(i * 1.7) * 0.4 +
+                (w > 40 ? 0.3 : 0),
+            );
+          h += `<i style="background:${v < 0.1 ? "var(--raised)" : `rgba(53,184,163,${(0.2 + v * 0.7).toFixed(2)})`}"></i>`;
+        }
+        document.getElementById("yheat").innerHTML = h;
+      })();
+      (() => {
+        let h = "";
+        ["Оркестратор", "Архитектор", "Разработчик", "Тестировщик"].forEach(
+          (r, ri) => {
+            h += `<span>${r}</span>`;
+            for (let x = 0; x < 24; x++) {
+              const v = Math.max(
+                0,
+                Math.sin((x + ri * 3) / 3.2) * 0.9 - (x < 7 ? 0.6 : 0),
+              );
+              h += `<i style="background:rgba(74,159,216,${(0.08 + v * 0.8).toFixed(2)})"></i>`;
+            }
+          },
+        );
+        document.getElementById("lheat").innerHTML = h;
+      })();
+
+      document.getElementById("wave").innerHTML = [
+        6, 12, 20, 14, 8, 18, 24, 10, 16, 6, 12, 8,
+      ]
+        .map((h) => `<i style="height:${h}px"></i>`)
+        .join("");
+      function asst(on) {
+        const t = document.querySelector(".view.on h2, .view.on h1");
+        document.getElementById("asstCtx").textContent =
+          "Видит: " +
+          (t ? t.textContent : "текущий экран") +
+          " — команды выполняет в его контексте";
+        document.getElementById("asst").classList.toggle("on", on);
+      }
+      document.addEventListener("keydown", (e) => {
+        if (e.altKey && e.code === "Space") {
+          e.preventDefault();
+          asst(true);
+        }
+        if (e.key === "Escape") asst(false);
+      });
+
+      show("overview");
+    </script>
+  </body>
+</html>

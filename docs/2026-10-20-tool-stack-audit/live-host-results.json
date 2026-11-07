@@ -1,0 +1,102 @@
+{
+  "at": "2026-10-20T08:09:46.322Z",
+  "dir": ".tool-stack-audit-1792483785669",
+  "results": [
+    {
+      "name": "bash/create fixtures",
+      "tool": "bash",
+      "status": "PASS",
+      "http": 200,
+      "ms": 155,
+      "text": "/Users/max/Проекты/TaskFlowNativeBuild/.worktrees/host-15e71899539c4d162f26a75da5a81b0f\n"
+    },
+    {
+      "name": "read/text",
+      "tool": "read",
+      "status": "PASS",
+      "http": 200,
+      "ms": 53,
+      "text": "audit_alpha\naudit_beta\n"
+    },
+    {
+      "name": "edit/existing",
+      "tool": "edit",
+      "status": "PASS",
+      "http": 200,
+      "ms": 77,
+      "text": "Successfully replaced 1 block(s) in /Users/max/Проекты/TaskFlowNativeBuild/.worktrees/host-15e71899539c4d162f26a75da5a81b0f/.tool-stack-audit-1792483785669/alpha.txt."
+    },
+    {
+      "name": "read/verify edit",
+      "tool": "read",
+      "status": "PASS",
+      "http": 200,
+      "ms": 50,
+      "text": "audit_gamma\naudit_beta\n"
+    },
+    {
+      "name": "write/new file",
+      "tool": "write",
+      "status": "FAIL",
+      "http": 409,
+      "ms": 17,
+      "text": "{\"error\":\"mkdir: EISDIR: illegal operation on a directory, rename '/Users/max/Проекты/TaskFlowNativeBuild/.worktrees/host-15e71899539c4d162f26a75da5a81b0f/..tool-stack-audit-1792483785669.taskflow-35256.tmp' -> '/Users/max/Проекты/TaskFlowNativeBuild/.worktrees/host-15e71899539c4d162f26a75da5a81b0f/.tool-stack-audit-1792483785669' (internal)\"}"
+    },
+    {
+      "name": "ls/files and directory",
+      "tool": "ls",
+      "status": "FAIL",
+      "http": 200,
+      "ms": 41,
+      "text": "child/"
+    },
+    {
+      "name": "grep/directory",
+      "tool": "grep",
+      "status": "FAIL",
+      "http": 409,
+      "ms": 79,
+      "text": "{\"error\":\"rg: /Users/max/Проекты/TaskFlowNativeBuild/.worktrees/host-15e71899539c4d162f26a75da5a81b0f/.tool-stack-audit-1792483785669: No such file or directory (os error 2)\"}"
+    },
+    {
+      "name": "grep/single file",
+      "tool": "grep",
+      "status": "FAIL",
+      "http": 409,
+      "ms": 32,
+      "text": "{\"error\":\"Path not found: /Users/max/Проекты/TaskFlowNativeBuild/.worktrees/host-15e71899539c4d162f26a75da5a81b0f/.tool-stack-audit-1792483785669/alpha.txt\"}"
+    },
+    {
+      "name": "find/glob",
+      "tool": "find",
+      "status": "FAIL",
+      "http": 409,
+      "ms": 24,
+      "text": "{\"error\":\"resultPath.endsWith is not a function\"}"
+    },
+    {
+      "name": "path/outside write rejected",
+      "tool": "write",
+      "status": "PASS",
+      "http": 409,
+      "ms": 11,
+      "text": "{\"error\":\"Путь выходит за разрешённую папку проекта\"}"
+    },
+    {
+      "name": "read/missing file rejected",
+      "tool": "read",
+      "status": "PASS",
+      "http": 409,
+      "ms": 48,
+      "text": "{\"error\":\"нет доступа к файлу (чтение): /Users/max/Проекты/TaskFlowNativeBuild/.worktrees/host-15e71899539c4d162f26a75da5a81b0f/.tool-stack-audit-1792483785669/missing.txt\"}"
+    },
+    {
+      "name": "cleanup/own fixtures",
+      "tool": "bash",
+      "status": "PASS",
+      "http": 200,
+      "ms": 61,
+      "text": "cleanup_ok"
+    }
+  ]
+}

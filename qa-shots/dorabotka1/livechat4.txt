@@ -1,0 +1,6 @@
+event: message
+data: {"ok": true, "answer": "Дежурный инженер инфраструктуры домашнего сервера .110.", "plan": [], "provider": "minimax", "error": ""}
+
+event: done
+data: {}
+

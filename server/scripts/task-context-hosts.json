@@ -1,0 +1,18 @@
+{
+  "_comment": "Путь репозитория проекта НА КАЖДОЙ МАШИНЕ: projects → machineId → путь. Читает roleWorkspace.hostRepoPath. Отдельный файл, потому что task-context-projects.json хранит строки (project_id → путь на .110), и вложенный объект там дал бы «нет такого пути» молча.",
+  "projects": {
+    "c24ec665-d3e3-4265-8a94-412dc39c4ed9": {
+      "2c7802f0-7a12-4adf-87db-bbea5c29e520": "/Users/max/Проекты/TaskFlowNativeBuild"
+    }
+  },
+  "roleDefaults": {
+    "_comment": "Роль -> машина по умолчанию, если шагу машина не назначена явно. Действует только для проектов, у которых на этой машине есть путь в projects; иначе роль работает на .110.",
+    "builder": "c24ec665-d3e3-4265-8a94-412dc39c4ed9",
+    "qa": "c24ec665-d3e3-4265-8a94-412dc39c4ed9",
+    "designer": "c24ec665-d3e3-4265-8a94-412dc39c4ed9"
+  },
+  "machineDefaults": {
+    "_comment": "Репозиторий машины по умолчанию: берётся, когда шагу машина назначена ЯВНО (host_id), а у проекта карточки на этой машине пути нет. Для roleDefaults не действует.",
+    "c24ec665-d3e3-4265-8a94-412dc39c4ed9": "/Users/max/Проекты/TaskFlowNativeBuild"
+  }
+}

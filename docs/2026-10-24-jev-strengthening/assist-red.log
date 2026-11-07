@@ -1,0 +1,173 @@
+
+> taskflow-server@0.1.0 pretest
+> node -e "if (parseInt(process.versions.node) < 22) { console.error('Нужен Node 22+ (nvm use 22, см. .nvmrc); текущий ' + process.versions.node); process.exit(1); }"
+
+
+> taskflow-server@0.1.0 test
+> vitest run test/jevAssist.test.ts --maxWorkers=1
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/maksim/Проекты/New-Todoist/server[39m
+
+[90mstdout[2m | test/jevAssist.test.ts
+[22m[39m[042_pipeline_head] backfill: kept=0 moved=0 cleared=0
+
+ [31m❯[39m test/jevAssist.test.ts [2m([22m[2m9 tests[22m[2m | [22m[31m8 failed[39m[2m)[22m[33m 383[2mms[22m[39m
+   [32m✓[39m exposes independent controls for the two advisory scenarios[32m 2[2mms[22m[39m
+[31m   [31m×[31m question guidance preserves the original request and asks for a verbal answer[39m[32m 2[2mms[22m[39m
+[31m   [31m×[31m falls back on uncertain intent[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m keeps mixed requests distinct from a pure question[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m does not call the provider when the scenario is disabled[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m passes advisory intent into an active turn without breaking its receipt[39m[32m 2[2mms[22m[39m
+[31m   [31m×[31m gives the critic specific concerns and does not create a verdict[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m loads the current task result for pre-review without leaking another task[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m returns no invented pre-review when no report exists[39m[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 8 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m test/jevAssist.test.ts[2m > [22mquestion guidance preserves the original request and asks for a verbal answer
+[31m[1mAssertionError[22m: expected undefined to be 'question' // Object.is equality[39m
+
+[32m- Expected:[39m
+"question"
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m test/jevAssist.test.ts:[2m25:25[22m[39m
+    [90m 23|[39m it("question guidance preserves the original request and asks for a ve…
+    [90m 24|[39m  intent("question");const result=await assist.classifyChatIntent?.({me…
+    [90m 25|[39m  expect(result?.intent).toBe("question");const block=assist.chatIntent…
+    [90m   |[39m                         [31m^[39m
+    [90m 26|[39m  expect(block).toContain("ответ словами");expect(block).toContain("не …
+    [90m 27|[39m  const sent=JSON.parse(String((fetch as any).mock.calls[0][1].body));e…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevAssist.test.ts[2m > [22mfalls back on uncertain intent
+[31m[1mAssertionError[22m: expected undefined to be null[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m test/jevAssist.test.ts:[2m30:85[22m[39m
+    [90m 28|[39m })[33m;[39m
+    [90m 29|[39m [34mit[39m([32m"falls back on uncertain intent"[39m[33m,[39m[35masync[39m()[33m=>[39m{
+    [90m 30|[39m  intent("execute",0.4);expect(await assist.classifyChatIntent?.({messa…
+    [90m   |[39m                                                                                     [31m^[39m
+    [90m 31|[39m })[33m;[39m
+    [90m 32|[39m [34mit[39m([32m"keeps mixed requests distinct from a pure question"[39m[33m,[39m[35masync[39m()[33m=>[39m{
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevAssist.test.ts[2m > [22mkeeps mixed requests distinct from a pure question
+[31m[1mAssertionError[22m: expected undefined to be 'mixed' // Object.is equality[39m
+
+[32m- Expected:[39m
+"mixed"
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m test/jevAssist.test.ts:[2m34:25[22m[39m
+    [90m 32|[39m [34mit[39m([32m"keeps mixed requests distinct from a pure question"[39m[33m,[39m[35masync[39m()[33m=>[39m{
+    [90m 33|[39m  intent("mixed");const result=await assist.classifyChatIntent?.({messa…
+    [90m 34|[39m  expect(result?.intent).toBe("mixed");expect(assist.chatIntentGuidance…
+    [90m   |[39m                         [31m^[39m
+    [90m 35|[39m })[33m;[39m
+    [90m 36|[39m it("does not call the provider when the scenario is disabled",async()=…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevAssist.test.ts[2m > [22mdoes not call the provider when the scenario is disabled
+[31m[1mAssertionError[22m: expected undefined to be null[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m test/jevAssist.test.ts:[2m38:70[22m[39m
+    [90m 36|[39m it("does not call the provider when the scenario is disabled",async()=…
+    [90m 37|[39m  saveJevSettings({chatIntentEnabled:false});const network=vi.fn();vi.s…
+    [90m 38|[39m  expect(await assist.classifyChatIntent?.({message:"Что сделано?"})).t…
+    [90m   |[39m                                                                      [31m^[39m
+    [90m 39|[39m })[33m;[39m
+    [90m 40|[39m it("passes advisory intent into an active turn without breaking its re…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevAssist.test.ts[2m > [22mpasses advisory intent into an active turn without breaking its receipt
+[31m[1mAssertionError[22m: expected 'Сообщение в ход (сообщение intent-ste…' to contain 'ответ словами'[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- ответ словами[39m
+[31m+ Сообщение в ход (сообщение intent-steer):[39m
+[31m+ от Owner из чата «Chat»:[39m
+[31m+ Почему так?[39m
+
+[36m [2m❯[22m test/jevAssist.test.ts:[2m45:35[22m[39m
+    [90m 43|[39m  [35mtry[39m{
+    [90m 44|[39m  const receipt=await offerChatSteering("jev-chat","fixture-role",id,{f…
+    [90m 45|[39m  expect(steer.mock.calls[0]?.[0]).toContain("ответ словами");expect(re…
+    [90m   |[39m                                   [31m^[39m
+    [90m 46|[39m  run.observe({type:"message_start",message:{role:"user",content:steer.…
+    [90m 47|[39m  }[35mfinally[39m{run[33m.[39m[34mclose[39m()[33m;[39m}
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevAssist.test.ts[2m > [22mgives the critic specific concerns and does not create a verdict
+[31m[1mAssertionError[22m: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string[39m
+[36m [2m❯[22m test/jevAssist.test.ts:[2m53:16[22m[39m
+    [90m 51|[39m  [34mresponse[39m(answers)[33m;[39m
+    [90m 52|[39m  const block=await assist.reviewReportByJev?.({task:{title:"Fix chat"}…
+    [90m 53|[39m  expect(block).toContain("Проверки и доказательства");expect(block).to…
+    [90m   |[39m                [31m^[39m
+    [90m 54|[39m  expect(db.prepare("SELECT count(*) n FROM reviews").get()).toEqual({n…
+    [90m 55|[39m })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevAssist.test.ts[2m > [22mloads the current task result for pre-review without leaking another task
+[31m[1mAssertionError[22m: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string[39m
+[36m [2m❯[22m test/jevAssist.test.ts:[2m59:80[22m[39m
+    [90m 57|[39m  createResultVersion({taskId:"jev-task",createdBy:"jev-owner",result:"…
+    [90m 58|[39m  response(Object.fromEntries(["alignment","evidence","limitations"].ma…
+    [90m 59|[39m  const block=await assist.reportReviewBlockForTask?.("jev-task");expec…
+    [90m   |[39m                                                                                [31m^[39m
+    [90m 60|[39m  const sent=JSON.parse(String((fetch as any).mock.calls[0][1].body));e…
+    [90m 61|[39m })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m test/jevAssist.test.ts[2m > [22mreturns no invented pre-review when no report exists
+[31m[1mAssertionError[22m: expected undefined to be '' // Object.is equality[39m
+
+[32m- Expected:[39m
+""
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m test/jevAssist.test.ts:[2m64:116[22m[39m
+    [90m 62|[39m [34mit[39m([32m"returns no invented pre-review when no report exists"[39m[33m,[39m[35masync[39m()[33m=>[39m{
+    [90m 63|[39m  db.prepare("INSERT INTO tasks(id,title,creator_id) VALUES('jev-empty'…
+    [90m 64|[39m  const network=vi.fn();vi.stubGlobal("fetch",network);expect(await ass…
+    [90m   |[39m                                                                                                                    [31m^[39m
+    [90m 65|[39m })[33m;[39m
+    [90m 66|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/8]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m8 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (9)[39m
+[2m   Start at [22m 04:22:50
+[2m   Duration [22m 2.31s[2m (transform 825ms, setup 23ms, import 1.75s, tests 383ms, environment 0ms)[22m
+

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Маршрут задачи в TaskFlow</title>
+  <style>
+    :root { color-scheme: dark; --bg:#171717; --card:#242424; --stroke:rgba(255,255,255,.09); --text:#fff; --sub:#a6a6a6; --red:#e44332; --blue:#4a9fd8; }
+    * { box-sizing:border-box; } body { margin:0; padding:32px; background:var(--bg); color:var(--text); font:15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1120px; margin:auto; } .eyebrow,.number { margin:0; color:var(--sub); font:12px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.08em; }
+    h1 { margin:8px 0; font-size:28px; } .lead { max-width:720px; margin:0 0 28px; color:var(--sub); line-height:1.5; }
+    ol { display:grid; grid-template-columns:repeat(5,minmax(180px,1fr)); gap:12px; list-style:none; margin:0; padding:0; } li { position:relative; min-height:176px; padding:16px; border:1px solid var(--stroke); border-radius:16px; background:var(--card); }
+    li:not(:last-child)::after { content:"→"; position:absolute; right:-10px; top:76px; z-index:1; color:var(--blue); font-size:20px; } h2 { margin:14px 0 8px; font-size:17px; } p { margin:0; color:var(--sub); font-size:13px; line-height:1.45; }
+    .current { margin-top:28px; padding:16px; border-left:4px solid var(--red); border-radius:12px; background:var(--card); } a { color:var(--text); text-decoration-color:var(--blue); text-underline-offset:3px; }
+    @media (max-width:900px) { ol { grid-template-columns:1fr; } li:not(:last-child)::after { right:auto; left:24px; top:auto; bottom:-18px; transform:rotate(90deg); } }
+  </style>
+</head>
+<body><main>
+  <p class="eyebrow">TASKFLOW · STABLE ROUTE</p>
+  <h1>Маршрут задачи</h1>
+  <p class="lead">Это неизменная схема жизненного цикла. Она не показывает текущую очередь: её состав меняется и выводится в отдельном статусном графе.</p>
+  <ol aria-label="Пять этапов задачи">
+    <li><p class="number">01</p><h2>Постановка</h2><p>Владелец создаёт карточку или утверждает черновик из чата.</p></li>
+    <li><p class="number">02</p><h2>Контекст</h2><p>Карточка получает описание, шаги и нужные знания проекта.</p></li>
+    <li><p class="number">03</p><h2>Назначение</h2><p>Владелец выбирает роль или делает задачу готовой к захвату.</p></li>
+    <li><p class="number">04</p><h2>Работа</h2><p>Исполнитель берёт карточку, отмечает шаги и поддерживает heartbeat.</p></li>
+    <li><p class="number">05</p><h2>Приёмка</h2><p>Результат уходит в review; владелец принимает работу, история остаётся в карточке.</p></li>
+  </ol>
+  <section class="current"><strong>Текущий статус:</strong> <a href="taskflow-status-graph.html">открыть живой снимок активных карточек</a>.</section>
+</main></body></html>

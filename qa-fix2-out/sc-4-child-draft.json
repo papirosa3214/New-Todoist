@@ -1,0 +1,5 @@
+[
+  { "goto": "/task/32823165-872c-44a9-95eb-e02d2ffec607", "note": "дочерняя только с draft планом (не approved)" },
+  { "wait": 1500 },
+  { "snap": "04-child-draft" }
+]

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent пользователя для taskflow-host (D11).
+
+  Шаблон: install.sh подставляет __NODE__, __HOST_DIR__, __CONFIG__, __LOG_DIR__
+  и копирует результат в ~/Library/LaunchAgents/com.taskflow.host.plist.
+  Править руками смысла нет — install.sh перезапишет.
+
+  RunAtLoad + KeepAlive: хост поднимается при входе в систему и возвращается
+  после падения. Мак спит (D8) — launchd его не будит, это и не требуется.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.taskflow.host</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__HOST_DIR__/dist/index.js</string>
+  </array>
+
+  <!-- Конфиг задаётся флагом, а не переменной: так его видно в `launchctl print`. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TASKFLOW_HOST_CONFIG</key>
+    <string>__CONFIG__</string>
+    <key>TASKFLOW_HOST_LOG_LEVEL</key>
+    <string>info</string>
+    <!-- У launchd PATH короткий: без Homebrew роль не находит xcodegen (exit 127). -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__HOST_DIR__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Демон сам переподключается, но если он всё же упал — поднять снова. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <!-- Хост должен подняться быстро после входа, а не через полминуты. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <!-- stdout/stderr уходят в файлы: их и читает владелец при разборе. -->
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/host.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/host.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

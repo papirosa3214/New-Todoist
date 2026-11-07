@@ -1,0 +1,53 @@
+import {describe,it,expect} from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import db,{migrate} from '../src/db.js';
+import {runMigrations} from '../src/migrations.js';
+import {chatInstructionArgs,chatSystemPrompt,createTaskResourceLoader} from '../src/runtime/instructionResources.js';
+import {ensureRoleHome} from "../src/runtime/roleHome.js";
+import {applyOverride,composeLayer} from '../src/lib/roleContextResolver.js';
+
+migrate();runMigrations();
+
+describe('Pi instruction snapshot',()=>{
+ it('keeps the common delivery regulation with custom role instructions and system prompt',async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'taskflow-delivery-'));
+  const previous=process.env.TASKFLOW_ROLES_DIR; process.env.TASKFLOW_ROLES_DIR=dir;
+  try {
+   const home=ensureRoleHome('builder');
+   fs.writeFileSync(home.system,'CUSTOM_SYSTEM');fs.writeFileSync(home.agents,'CUSTOM_AGENTS');
+   const prompt=await chatSystemPrompt('builder','work',home.workspace);
+   expect(prompt).toContain('CUSTOM_SYSTEM');expect(prompt).toContain('CUSTOM_AGENTS');
+   expect(prompt).toContain('Регламент сдачи работы ролями TaskFlow');
+   expect(prompt).toContain('taskflow_doc_read');
+   const loader=await createTaskResourceLoader('builder',home.workspace,'CUSTOM_OVERRIDE');
+   try {expect(loader.getSystemPrompt()).toContain('CUSTOM_OVERRIDE');expect(loader.getSystemPrompt()).toContain('Регламент сдачи работы ролями TaskFlow');} finally {loader.disposeResources();}
+   expect(fs.readFileSync(home.agents,'utf8')).toBe('CUSTOM_AGENTS');
+  } finally {if(previous===undefined) delete process.env.TASKFLOW_ROLES_DIR;else process.env.TASKFLOW_ROLES_DIR=previous;fs.rmSync(dir,{recursive:true,force:true});}
+ });
+ it('registers all seven original builtin tools with effective descriptions',async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'taskflow-instruction-'));
+  try {
+   const key='tool.builtin.grep';
+   const before=composeLayer('builder',key);
+   // Discovery registers the live Pi SDK definitions before the edit.
+   await chatInstructionArgs('builder',path.join(dir,'probe.json'));
+   const version=composeLayer('builder',key)!.version;
+   const owner=(db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as {id:string}|undefined)?.id;
+   expect(owner).toBeTruthy();
+   applyOverride({scope:'role',roleKey:'builder',layer:key,text:'Искать точное совпадение',action:'set',expectedVersion:version,sourceKind:'file',sourceRef:'test',createdBy:owner!});
+   const args=await chatInstructionArgs('builder',path.join(dir,'probe.json'));
+   const file=args[args.indexOf('--extension')+1];
+   const loaded=await import('file://'+file+'?'+Date.now());
+   const tools:any[]=[];loaded.default({registerTool:(tool:any)=>tools.push(tool)});
+   expect(tools.map(t=>t.name)).toEqual(['read','bash','edit','write','grep','find','ls']);
+   expect(tools.find(t=>t.name==='grep')!.description).toBe('Искать точное совпадение');
+   expect(args).toContain('--no-context-files');
+   expect(fs.readFileSync(args[args.indexOf('--append-system-prompt')+1],'utf8')).not.toContain('РЕЖИМ КАРТОЧКИ');
+   db.prepare('DELETE FROM role_context_overrides WHERE scope=? AND role_key=? AND layer=?').run('role','builder',key);
+   db.prepare('DELETE FROM role_context_overrides_history WHERE scope=? AND role_key=? AND layer=?').run('role','builder',key);
+   expect(before?.effective ?? '').not.toBe('Искать точное совпадение');
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+ });
+});

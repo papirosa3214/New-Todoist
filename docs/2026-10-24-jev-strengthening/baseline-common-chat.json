@@ -1,0 +1,120 @@
+{
+  "numTotalTestSuites": 2,
+  "numPassedTestSuites": 0,
+  "numFailedTestSuites": 2,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 7,
+  "numPassedTests": 0,
+  "numFailedTests": 1,
+  "numPendingTests": 6,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1792805804438,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "Чаты: общий чат, тема задачи, только @"
+          ],
+          "fullName": "Чаты: общий чат, тема задачи, только @ Помощник владельца — обычная роль: role_key выставлен, спец-пути больше нет",
+          "status": "skipped",
+          "title": "Помощник владельца — обычная роль: role_key выставлен, спец-пути больше нет",
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "Чаты: общий чат, тема задачи, только @"
+          ],
+          "fullName": "Чаты: общий чат, тема задачи, только @ общий чат заведён: владелец в составе, регламент закреплён",
+          "status": "skipped",
+          "title": "общий чат заведён: владелец в составе, регламент закреплён",
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "Чаты: общий чат, тема задачи, только @"
+          ],
+          "fullName": "Чаты: общий чат, тема задачи, только @ в общий чат не пускает серверные записи, но пускает владельца",
+          "status": "skipped",
+          "title": "в общий чат не пускает серверные записи, но пускает владельца",
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "Чаты: общий чат, тема задачи, только @"
+          ],
+          "fullName": "Чаты: общий чат, тема задачи, только @ маркер новой сессии в общий чат не пишется (ручка new-session отбита)",
+          "status": "skipped",
+          "title": "маркер новой сессии в общий чат не пишется (ручка new-session отбита)",
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "Чаты: общий чат, тема задачи, только @"
+          ],
+          "fullName": "Чаты: общий чат, тема задачи, только @ тема задачи создаётся вместе с задачей проекта и закрывается с ней",
+          "status": "skipped",
+          "title": "тема задачи создаётся вместе с задачей проекта и закрывается с ней",
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "Чаты: общий чат, тема задачи, только @"
+          ],
+          "fullName": "Чаты: общий чат, тема задачи, только @ в групповом чате без @ никто не просыпается, с @ — отвечает",
+          "status": "skipped",
+          "title": "в групповом чате без @ никто не просыпается, с @ — отвечает",
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "Чаты: общий чат, тема задачи, только @"
+          ],
+          "fullName": "Чаты: общий чат, тема задачи, только @ в личном чате роль отвечает и без @",
+          "status": "failed",
+          "title": "в личном чате роль отвечает и без @",
+          "duration": 592.0364339999996,
+          "failureMessages": [
+            "AssertionError: expected +0 to be 1 // Object.is equality\n    at /home/maksim/Проекты/New-Todoist/server/test/chats-common-lifecycle.test.ts:311:20\n    at file:///home/maksim/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B/New-Todoist/server/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+          ],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1792805815181,
+      "endTime": 1792805815773.0364,
+      "status": "failed",
+      "message": "",
+      "name": "/home/maksim/Проекты/New-Todoist/server/test/chats-common-lifecycle.test.ts"
+    }
+  ]
+}

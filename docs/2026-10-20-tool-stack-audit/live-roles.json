@@ -1,0 +1,90 @@
+[
+  {
+    "key": "researcher",
+    "title": "Исследователь",
+    "summary": "узнать, найти, сравнить варианты вне нашего кода и свести найденное в выводы или документ.",
+    "enabled": 1,
+    "position": 0,
+    "runtime": "pi"
+  },
+  {
+    "key": "analyst",
+    "title": "Аналитик",
+    "summary": "посчитать цифры, метрики, деньги.",
+    "enabled": 1,
+    "position": 1,
+    "runtime": "pi"
+  },
+  {
+    "key": "critic_verifier",
+    "title": "Критик-проверяющий",
+    "summary": "проверить готовую работу и вынести вердикт.",
+    "enabled": 1,
+    "position": 2,
+    "runtime": "pi"
+  },
+  {
+    "key": "architect",
+    "title": "Архитектор",
+    "summary": "продумать устройство системы до кода, когда решений несколько.",
+    "enabled": 1,
+    "position": 3,
+    "runtime": "pi"
+  },
+  {
+    "key": "builder",
+    "title": "Разработчик",
+    "summary": "пишет и чинит код: сервер, приложение, веб. «Сделать, чтобы работало».",
+    "enabled": 1,
+    "position": 4,
+    "runtime": "pi"
+  },
+  {
+    "key": "qa",
+    "title": "Лайф-тестировщик",
+    "summary": "пройти сценарии в живом приложении и найти баги.",
+    "enabled": 1,
+    "position": 5,
+    "runtime": "pi"
+  },
+  {
+    "key": "designer",
+    "title": "Дизайнер",
+    "summary": "как выглядит: макет, экран, отступы, цвета. Не пишет серверную логику.",
+    "enabled": 1,
+    "position": 6,
+    "runtime": "pi"
+  },
+  {
+    "key": "secretary",
+    "title": "Помощник владельца",
+    "summary": "личный помощник владельца: разговор, вопросы, разбор надиктовки задач.",
+    "enabled": 1,
+    "position": 7,
+    "runtime": "pi"
+  },
+  {
+    "key": "code_orchestrator",
+    "title": "Оркестратор",
+    "summary": "Координация независимых ветвей, эксперимент MAK-100",
+    "enabled": 1,
+    "position": 8,
+    "runtime": "pi"
+  },
+  {
+    "key": "infra_engineer",
+    "title": "Инженер .110",
+    "summary": "дежурит по серверу .110: сервисы, сеть, модели, интеграции; чинит поломки из «Состояния системы».",
+    "enabled": 1,
+    "position": 9,
+    "runtime": "pi"
+  },
+  {
+    "key": "claude_code",
+    "title": "Claude Code",
+    "summary": "внешний агент Claude Code в своём окружении: память, MCP, скиллы. Код, разбор, исследование.",
+    "enabled": 1,
+    "position": 10,
+    "runtime": "claude-code"
+  }
+]

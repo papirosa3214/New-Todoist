@@ -1,0 +1,174 @@
+# CI сервера TaskFlow — проверки на GitHub.
+#
+# Правило проекта (AGENTS.md, 27.10.2026): на .110 витают живые сервисы,
+# полный набор тестов там не гонять (vitest без ограничения забирает все
+# ядра). Здесь — на отдельной машине GitHub — ограничение не нужно, но
+# `--maxWorkers` оставлен: лишние потоки на общих раннерах приводят к
+# таймаутам, а не к честному результату.
+#
+# Тесты изолированы: server/test/setup.ts поднимает отдельную БД во
+# временной папке (DB_PATH) и гасит сторожи, ходящие в боевые сервисы.
+# Боевые сервисы .110 прогон не трогает.
+#
+# ГЕЙТ — ПО РЕГРЕССИЯМ, А НЕ ПО ЦВЕТУ. У сервера своя красная база
+# (48 упавших файлов из 399 на снимке 28.10.2026) — она тянется давно и к
+# правкам отношения не имеет. Требовать «все зелёные» бессмысленно: прогоны
+# всегда красные, и CI перестаёт что-то значить. Тот же приём уже работает
+# для слияния ролей (server/src/lib/worktree/testGate.ts).
+#
+# АВТОСЛИЯНИЕ (владелец, 28.10.2026). Зелёный PR без конфликтов вливается
+# сам — job `automerge` в конце. Конфликтный PR GitHub не проверяет вовсе:
+# он остаётся открытым, ветку обновляет и чинит агент. Метка `no-automerge`
+# или черновик — PR ждёт владельца. Защита ветки на бесплатном тарифе для
+# приватного репозитория недоступна, поэтому сливает сам CI, а не
+# встроенный auto-merge GitHub. Слияние токеном GITHUB_TOKEN не запускает
+# CI на main повторно — тесты уже прошли в PR.
+#
+# PR без кода тесты не гоняет: *.md, документация, данные-тексты (переводы
+# Composio), отчёты QA, макеты, аватары, бэкапы. Список папок проверен
+# 28.10.2026: ни server/src, ни server/test их файлы не читают. Код сервера,
+# scripts/, host/, roles/, server/agents|assets|shared|systemd и корневые
+# package*.json/tsconfig — по-прежнему с тестами.
+# Тесты разбиты на 4 параллельных куска (--shard), гейт — на каждом.
+name: CI — сервер TaskFlow
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Что изменилось
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        name: Есть ли правки в коде
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "$files"
+          if echo "$files" | grep -qvE '(\.md$|\.patch$|^qa-[^/]*\.json$|^(docs|server/docs|server/data|server/backups|workspace|qa|qa-srok|qa-report|tests|public|handoff|mockup-reference|avatar-sets|infra-110-verify|\.artifacts|\.superdesign|\.superpowers|\.ui-craft)/)'; then echo "code=true" >> "$GITHUB_OUTPUT"; else echo "code=false" >> "$GITHUB_OUTPUT"; fi
+
+  typecheck:
+    name: Типы (tsc --noEmit)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Тесты читают файлы из рабочего дерева (scripts/role-routing.yaml
+          # и прочее) — нужен полный checkout содержимого коммита.
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+      # typescript лежит в корневом package.json (devDependencies) — tsc
+      # нужен и для сервера, поэтому ставим оба набора зависимостей.
+      - name: Установить зависимости (корень)
+        run: npm ci
+      - name: Установить зависимости (сервер)
+        run: npm ci --prefix server
+      - name: Проверить типы сервера
+        working-directory: server
+        run: npx tsc -p tsconfig.json --noEmit
+
+  test:
+    name: Тесты сервера ${{ matrix.shard }}/4 (гейт по регрессиям)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+      - name: Установить зависимости (корень)
+        run: npm ci
+      - name: Установить зависимости (сервер)
+        run: npm ci --prefix server
+      - name: Собрать сервер
+        working-directory: server
+        run: npx tsc -p tsconfig.json
+      - name: Python-зависимости тестов
+        # scripts/md_sanitize.py (отчёты в markdown) импортирует markdown —
+        # на .110 он стоит (3.5.2), на раннере его не было, и
+        # securityAuditFixes падал на ModuleNotFoundError, а не на логике.
+        run: python3 -m pip install --quiet "markdown==3.5.2"
+      - name: Прогнать тесты
+        working-directory: server
+        # У приватного репозитория на раннере 2 ядра: 4 потока на кусок
+        # душили процессор, и тесты с таймаутом (acpAgentSession) падали по
+        # времени. Один повтор упавшего теста отсекает гонки и флаки —
+        # настоящая поломка падает и на повторе. Вывод пишем в файл: его
+        # разбирает гейт (шаг ниже).
+        run: npx vitest run --shard=${{ matrix.shard }}/4 --maxWorkers=2 --retry=1 --reporter=dot 2>&1 | tee vitest-output.log
+      - name: Гейт — новые падения
+        working-directory: server
+        # Падает только если упали файлы, которых нет в эталоне
+        # (ci/baseline-failed-tests.json). Сама красная база — не провал.
+        run: node scripts/ci/test-gate.mjs vitest-output.log ci/baseline-failed-tests.json
+      - name: Сводка прогона
+        if: always()
+        working-directory: server
+        run: |
+          echo "### Итог прогона"
+          grep -E "Test Files|Tests  |Duration" vitest-output.log || true
+          echo
+          echo "### Файлы с падениями (для разбора)"
+          grep -oE "FAIL  test/[^ ]+\.test\.ts" vitest-output.log | sed 's/FAIL  //' | sort -u || true
+      - name: Выложить отчёт прогона
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-output-${{ matrix.shard }}
+          path: server/vitest-output.log
+          retention-days: 14
+
+  automerge:
+    name: Автослияние
+    runs-on: ubuntu-latest
+    needs: [changes, typecheck, test]
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      !contains(github.event.pull_request.labels.*.name, 'no-automerge') &&
+      needs.changes.result == 'success' &&
+      (needs.changes.outputs.code == 'false' ||
+       (needs.typecheck.result == 'success' && needs.test.result == 'success'))
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Влить PR в main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Конфликт или main ушёл вперёд с конфликтом — merge откажет, PR
+        # останется открытым для агента. Ветка после слияния удаляется.
+        run: gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --merge --delete-branch

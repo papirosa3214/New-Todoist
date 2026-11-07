@@ -1,0 +1,12 @@
+[
+  { "goto": "/task/2d23e96a-794a-4096-8210-7ed4e1da7445/edit" },
+  { "wait": 1500 },
+  { "click": "text=\"Срок и время\"" },
+  { "wait": 600 },
+  { "click": "button:text-is(\"Убрать дату\")" },
+  { "wait": 400 },
+  { "snap": "bez-daty" },
+  { "click": "text=\"Готово\"" },
+  { "wait": 1500 },
+  { "snap": "sohraneno-bez-daty" }
+]

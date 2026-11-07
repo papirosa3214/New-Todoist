@@ -1,0 +1,2936 @@
+import { commentWithBlocks, ownerBlocks, taskTextWithBlocks } from "../lib/chatBlocks.js";
+import { listDescription, projectionOf } from "../lib/windowProjection.js";
+import {visibleTaskComments, isQuietSystemMessage} from "../lib/serviceNoise.js";
+import { registerIntegrationResponsibilityRoutes } from '../lib/integrationResponsibility.js';
+import { taskExecutionState } from "../runtime/taskExecutionState.js";
+import { ROLE_NAMES as PREPARATION_ROLES } from "../roleRouting.js";
+import { hierarchyRefusal } from "../lib/taskHierarchy.js";
+import { validatePreparation, type TaskPreparation } from "../lib/taskPreparation.js";
+import { applyRoleFormat, roleFormatRefusal } from "../lib/roleFormat.js";
+import { persistPreparedPlan } from "../lib/taskPreparationPersistence.js";
+import type { FastifyInstance } from "fastify";
+import crypto from "crypto";
+import { purgeTasks } from "../lib/taskPurge.js";
+import {
+  ensureTaskChangesLedger,
+  ledgerCursor,
+  listTaskChanges,
+} from "../lib/taskChanges.js";
+import { archiveTask, restoreTask, purgeArchivedTask, listArchivedTasks } from "../lib/taskArchive.js";
+import db from "../db.js";
+import { autoProposeCollaborationPlanIfNeeded, autoProposeCollaborationPlanWithJev, autoProposeFromSubtasksOnCreate } from "./task-collaboration-plans.js";
+import { jevPlanProfileConfig } from "../lib/jev.js";
+import { bumpContextVersion } from "../runtime/taskContextVersion.js";
+import { reviewerFirstEnabled } from "../reviewerPolicy.js";
+import { authOrApiToken, sessionOf } from "../auth.js";
+import { etagFor, etagMatches } from "../lib/etag.js";
+import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
+import {
+  getTaskForRead,
+  getTaskForWrite,
+  getTaskForOwnerDelete,
+  allLabelsOwnedByUser,
+  getProjectForFiling,
+  isOwner,
+  isOrchestrator,
+  isRoleAuthor,
+  seesEveryTask,
+} from "../access.js";
+import {
+  isStale,
+  logEvent,
+  registryRecord,
+  releaseSubtaskWork,
+} from "../agentState.js";
+import {
+  currentResultVersion,
+  ensureResultVersionForReview,
+  hasAnyResultVersion,
+  hasApprovedCurrentVersion,
+  resultFromSubtasks,
+} from "../resultVersions.js";
+import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
+import { ensurePlanTopic, setTaskTopicClosed } from "../lib/projectTopics.js";
+import { closeTaskTree } from "../lib/taskCloseCascade.js";
+import { criticApproved } from "../lib/criticApproved.js";
+
+export { criticApproved };
+import { attemptLadderForTask } from "../lib/attemptLadder.js";
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
+
+const uid = () => crypto.randomUUID();
+
+/**
+ * Стабильный признак «этого подъёма флага готовности» — часть ключа
+ * дедупликации задания в очереди ролей.
+ *
+ * Раньше стоял случайный `uid()` — защита `ON CONFLICT(dedupe_key)` от
+ * повторов не срабатывала (лава в очереди ролей, карточка 568a2b93).
+ * Теперь это порядковый номер подъёма флага: повтор того же значения
+ * идемпотентен и событие не пишет, поэтому номер меняется только на
+ * НОВОМ подъёме — и каждое намерение «запустить исполнителя» получает
+ * своё задание, а повторы склеиваются.
+ */
+function readyArmToken(taskId: string): string {
+  const seq = db
+    .prepare(
+      `SELECT count(*) AS n FROM task_events
+        WHERE task_id = ? AND kind = 'ready_flag_changed'
+          AND field = 'ready_for_pickup' AND to_value = '1'`,
+    )
+    .get(taskId) as { n: number };
+  return `arm${seq.n}`;
+}
+
+/** Событие запуска роли хранит весь манифест инструкций (≈25 КБ). В карточку
+ *  отдаём только суть — режим и «продолжение»; полный текст остаётся в базе. */
+function briefInstructionSnapshot(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const v = JSON.parse(raw) as { mode?: unknown; resumed?: unknown };
+    // Возвращаем только mode/resumed: полный манифест (18 КБ) в выдаче не
+    // нужен. Форма события изменился (24.10.2026): вместо полного манифеста
+    // в to_value лежит ссылка manifest_sha256 — на разбор это не влияет,
+    // читаются те же два поля.
+    return JSON.stringify({ mode: v.mode ?? null, resumed: v.resumed ?? null });
+  } catch {
+    return null;
+  }
+}
+
+const ALLOWED_STATUS = ["active", "completed"];
+
+// due_date is stored as plain "YYYY-MM-DD" text (see db.ts, and
+// src/lib/date.ts todayStr() on the frontend) — no time component, no
+// timezone. Reject anything that isn't that exact shape, including
+// calendar-invalid dates like "2026-02-30" that the regex alone would miss.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function isValidDateStr(s: string): boolean {
+  if (!DATE_RE.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return (
+    date.getUTCFullYear() === y &&
+    date.getUTCMonth() === m - 1 &&
+    date.getUTCDate() === d
+  );
+}
+
+// start_time хранится тем же приёмом, что и due_date выше — голым текстом
+// «ЧЧ:ММ» местного времени, без даты и без пояса (миграция
+// 005_task_time_of_day). Проверяем не только форму, но и осмысленность:
+// «25:00» и «10:75» регулярка одну бы пропустила.
+const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+function isValidTimeStr(s: string): boolean {
+  return TIME_RE.test(s);
+}
+
+// Длительность — целые минуты. Верхняя граница 24 часа: задача, которая
+// длится дольше суток, в дневную сетку не укладывается по определению, и
+// молча принять её значило бы нарисовать блок, уезжающий за край экрана.
+const MAX_DURATION_MIN = 24 * 60;
+function isValidDuration(n: unknown): boolean {
+  return (
+    Number.isInteger(n) &&
+    (n as number) > 0 &&
+    (n as number) <= MAX_DURATION_MIN
+  );
+}
+
+// agent_stale is derived, not stored (see agentState.ts) — attach it
+// wherever a task row goes out over the API. Gated on agent_state ===
+// 'in_progress': AGENT-PROTOCOL.md defines "агент пропал" specifically as
+// "задача в in_progress, но последний сигнал был давно" — a stale
+// agent_heartbeat_at left over on a completed task, or on one sitting in
+// blocked/review waiting on the owner (exactly as designed), must NOT
+// paint as abandoned just because 5 minutes passed since the last ping.
+//
+// `subtasks` (optional) — 17.08.2026: с тех пор, как подзадача обзавелась
+// собственной арендой (см. withSubtaskState), у задачи с шагами
+// task.agent_state годами остаётся NULL: работа идёт через
+// /api/subtasks/:id/work, а не через /api/tasks/:id/claim — и бейдж на
+// плитке доски (TaskRow.tsx: hasAgentTag = !!task.agent_state) гас, хотя
+// агент реально работал. Раз состояние подзадачи и так вычисляется на
+// каждое чтение, а не хранится — то же самое для роллапа наверх: если у
+// задачи нет своего agent_state, но среди подзадач кто-то running/stale/
+// blocked, задача показывает это состояние, унаследовав heartbeat самой
+// свежей активной подзадачи. Свой agent_state (claim на задаче без
+// подзадач, blocked/review от владельца) остаётся приоритетнее — роллап
+// только подставляет то, чего нет.
+//
+// Первая версия (эта же дата) фильтровала подзадачи по !isStale() ДО
+// роллапа — протухшая подзадача просто выпадала из выборки, и бейдж молча
+// гас вместо того, чтобы показать «агент пропал». Это ровно та ложь,
+// от которой весь этот механизм и задуман избавлять (см. AGENT-PROTOCOL.md
+// и лист 2026-08-15 про подзадачи: «индикатор, который горит без работы —
+// вранью равносилен» — тут была обратная сторона той же монеты, индикатор
+// молчал при работе, которая просто давно не подавала признаков жизни).
+// Теперь берём среди in_progress-подзадач самую свежую по heartbeat,
+// протухшая она или нет, — agent_stale ниже сам решит, каким показывать
+// бейдж: живым или «пропал».
+//
+// Второй заход (та же дата, чуть позже): без фильтра !s.done роллап считал
+// давно закрытые шаги живой работой — задача с одним взятым и закрытым
+// шагом из девяти показывала бы «агент пропал» бесконечно, хотя там
+// объективно нечему быть пропавшим.
+//
+// УТОЧНЕНО 20.08.2026 (вечер): причина того остатка устранена в источнике —
+// PATCH /api/subtasks/:id с done=true теперь сам гасит agent_state, agent_id
+// и аренду (routes/subtasks.ts), а накопленные строки подчищены миграцией
+// 007. Раньше здесь стояло «agent_state НЕ сбрасывается никогда» — это
+// больше не так, не опирайтесь на это как на инвариант. Сам фильтр !s.done
+// оставлен: он ничего не стоит и держит роллап честным на старых базах,
+// куда миграция ещё не доехала.
+/** Цепочка предков задачи от корня к непосредственному родителю.
+    Рекурсивный CTE в одном запросе: клиенту больше не нужно ходить вверх по
+    дереву и дёргать задачу на каждого предка (владелец 17.10.2026 — карточка
+    открывалась долго именно из-за этой очереди запросов). Защита от цикла в
+    дереве — повторный id в цепочке обрывает подъём. */
+function taskAncestors(taskId: string): Array<{ id: string; title: string; parent_id: string | null }> {
+  return db
+    .prepare(
+      `WITH RECURSIVE chain(id, title, parent_id, depth) AS (
+         SELECT id, title, parent_id, 0 FROM tasks WHERE id = ?
+         UNION ALL
+         SELECT t.id, t.title, t.parent_id, chain.depth + 1
+           FROM tasks t JOIN chain ON t.id = chain.parent_id
+          WHERE chain.depth < 20
+       )
+       SELECT id, title, parent_id FROM chain WHERE depth > 0 ORDER BY depth DESC`,
+    )
+    .all(taskId) as Array<{ id: string; title: string; parent_id: string | null }>;
+}
+
+export function withAgentStale(task: any, subtasks?: any[], children?: any[]) {
+  let agent_state = task.agent_state;
+  let agent_heartbeat_at = task.agent_heartbeat_at;
+
+  if (!agent_state && subtasks?.length) {
+    const inProgress = subtasks
+      .filter((s) => !s.done && s.agent_state === "in_progress")
+      .sort((a, b) => (a.agent_heartbeat_at < b.agent_heartbeat_at ? 1 : -1));
+    if (inProgress.length) {
+      agent_state = "in_progress";
+      agent_heartbeat_at = inProgress[0].agent_heartbeat_at;
+    } else if (subtasks.some((s) => !s.done && s.agent_state === "blocked")) {
+      agent_state = "blocked";
+    }
+  }
+
+  // Родитель не считается пропавшим, пока активны его дочерние задачи: он
+  // и не должен ничего делать сам — работу ведут они, а он ждёт (задача
+  // a195895d, 10.09.2026). Комментарий здесь до этого говорил «оркестратор
+  // не считается пропавшим»: строка появилась 29.08.2026, когда дробить и
+  // раздавать работу должен был он. Автономного оркестратора нет с
+  // 08.09.2026, а правило осталось верным — просто оно про любого
+  // родителя, а не про роль.
+  const hasActiveChildren =
+    children && children.some((c: any) => c.status === "active");
+
+  return {
+    ...task,
+    agent_state,
+    agent_heartbeat_at,
+    agent_stale: hasActiveChildren
+      ? false
+      : agent_state === "in_progress" && isStale(agent_heartbeat_at),
+    critic_approved: agent_state === "review" && !!task.id && criticApproved(task.id),
+  };
+}
+
+// То же самое для подзадачи (15.08.2026). Подзадача теперь единица работы:
+// у неё своё состояние и своя аренда, поэтому «в работе» здесь тоже
+// ВЫЧИСЛЯЕТСЯ, а не хранится. Замолчал дольше срока — крутилка в ленте
+// гаснет сама, без чьего-либо участия. Индикатор, горящий без работы, хуже
+// отсутствующего.
+export function withSubtaskState(s: any) {
+  const stale =
+    s.agent_state === "in_progress" && isStale(s.agent_heartbeat_at);
+  return {
+    ...s,
+    title_document: taskTextWithBlocks(s).title_document,
+    done: !!s.done,
+    agent_stale: stale,
+    // Результат роли готовыми блоками для владельца (lib/chatBlocks.ts).
+    display_result_blocks: ownerBlocks(s.result),
+    // Готово важнее: подзадачу могли отметить сделанной, не сняв состояние.
+    // Протухшая аренда возвращает её в «ждёт» — работы-то нет. review не
+    // протухает как in_progress (агент сдал и ждёт решения владельца —
+    // молчание тут не признак брошенной работы, а нормальное ожидание).
+    state: s.done
+      ? "done"
+      : stale
+        ? "pending"
+        : s.agent_state === "in_progress"
+          ? "running"
+          : s.agent_state === "blocked"
+            ? "blocked"
+            : s.agent_state === "review"
+              ? "review"
+              : "pending",
+  };
+}
+
+// Создатель отдаётся рядом с исполнителем: владелец 14.09.2026 —
+// «почему я не вижу в карточке, кто создаёт карточки». Раньше наружу шёл
+// только creator_id, по которому на экране ничего не покажешь; теперь с
+// карточкой едет имя и аватар, как у исполнителя. Особенно это нужно с
+// тех пор, как карточки заводит не только владелец: их создают агенты и
+// разбор надиктовки.
+/**
+ * Колонки tasks для выдачи — БЕЗ composed_prompt_snapshot.
+ *
+ * Раньше здесь стояло `t.*`, и список задач тянул из БД полный system prompt
+ * роли (composed_prompt_snapshot, ~28 КБ на задачу). Он пишется сервером для
+ * разбора «что модель реально получила», но его НИКТО не читает: ни одна
+ * ручка выдачи, ни фронт (проверено grep'ом по src/). При `t.*` список из
+ * 164 задач вычитывал 4,3 МБ, которые тут же выбрасывались — 33 мс из 35 мс
+ * ответа (аудит 24.10.2026).
+ *
+ * Список строится из схемы В МОМЕНТ ЗАПРОСА, а не выписан руками: новая
+ * колонка из миграции подхватится сама, и её нельзя случайно потерять.
+ */
+let taskColumnsCache: string | null = null;
+export function taskColumnsForOutput(): string {
+  // Кэш: схема меняется только на старте (migrate() + runMigrations()), а
+  // первый запрос приходит после них. Значит, снятый один раз список
+  // колонок актуален до перезапуска.
+  if (taskColumnsCache) return taskColumnsCache;
+  const cols = (
+    db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>
+  )
+    .map((c) => c.name)
+    .filter((n) => n !== "composed_prompt_snapshot");
+  taskColumnsCache = cols.map((n) => `t.${n}`).join(", ");
+  return taskColumnsCache;
+}
+
+export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.type as assignee_type, u.role as assignee_role, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
+             c.name as creator_name, c.type as creator_type, c.role as creator_role, c.avatar_color as creator_color, c.avatar_url as creator_avatar_url, c.initials as creator_initials,
+             COALESCE(t.project_name_snapshot, p.name) as project_name, p.color as project_color,
+             (SELECT COUNT(*) FROM tasks ch WHERE ch.parent_id = t.id) as children_count,
+             -- Состояние ветки по дочерним (владелец 20.10.2026): родитель ждёт, пока
+             -- работают дочерние, но в списке он тоже «в работе» — как в карточке.
+             (SELECT CASE WHEN SUM(bc.agent_state = 'in_progress') > 0 THEN 'in_progress'
+                          WHEN SUM(bc.agent_state = 'blocked') > 0 THEN 'blocked'
+                          WHEN SUM(bc.agent_state = 'review') > 0 THEN 'review' END
+                FROM tasks bc WHERE bc.parent_id = t.id AND bc.status = 'active' AND bc.archived_at IS NULL) as branch_agent_state,
+             EXISTS(SELECT 1 FROM task_collaboration_plans cp WHERE cp.task_id = t.id AND cp.status = 'approved') as has_collaboration_plan,
+             (SELECT 'role_' || n.role_key FROM subtasks s
+                JOIN task_collaboration_plans cp2 ON cp2.id = s.collaboration_plan_id AND cp2.status = 'approved'
+                JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+               WHERE s.task_id = t.id AND s.done = 0
+               ORDER BY CASE WHEN s.agent_state = 'in_progress' THEN 0 ELSE 1 END, s.position ASC LIMIT 1) as plan_responsible_id,
+             (SELECT ru.avatar_url FROM subtasks s
+                JOIN task_collaboration_plans cp4 ON cp4.id = s.collaboration_plan_id AND cp4.status = 'approved'
+                JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+                JOIN users ru ON ru.id = 'role_' || n.role_key
+               WHERE s.task_id = t.id AND s.done = 0
+               ORDER BY CASE WHEN s.agent_state = 'in_progress' THEN 0 ELSE 1 END, s.position ASC LIMIT 1) as plan_responsible_avatar_url,
+             (SELECT group_concat(rk) FROM (SELECT 'role_' || n.role_key AS rk, MIN(s.position) AS pos FROM subtasks s
+                JOIN task_collaboration_plans cp3 ON cp3.id = s.collaboration_plan_id AND cp3.status = 'approved'
+                JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+               WHERE s.task_id = t.id GROUP BY n.role_key ORDER BY pos)
+               WHERE NOT EXISTS (SELECT 1 FROM subtasks u2 WHERE u2.task_id = t.id AND u2.collaboration_plan_id IS NOT NULL AND u2.done = 0)) as plan_team,
+             (SELECT group_concat(au) FROM (SELECT COALESCE(tu.avatar_url, '') AS au, MIN(s.position) AS pos FROM subtasks s
+                JOIN task_collaboration_plans cp5 ON cp5.id = s.collaboration_plan_id AND cp5.status = 'approved'
+                JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+                JOIN users tu ON tu.id = 'role_' || n.role_key
+               WHERE s.task_id = t.id GROUP BY n.role_key ORDER BY pos)
+               WHERE NOT EXISTS (SELECT 1 FROM subtasks u3 WHERE u3.task_id = t.id AND u3.collaboration_plan_id IS NOT NULL AND u3.done = 0)) as plan_team_avatar_urls`;
+export const TASK_JOINS = `FROM tasks t
+      LEFT JOIN users u ON t.assignee_id = u.id
+      LEFT JOIN users c ON t.creator_id = c.id
+      LEFT JOIN projects p ON t.project_id = p.id`;
+
+export function getTaskRow(id: string) {
+  return db
+    .prepare(`SELECT ${taskColumnsForOutput()} ${TASK_JOINS} WHERE t.id = ?`)
+    .get(id) as any;
+}
+
+export function hydrateTask(task: any) {
+  if (!task) return task;
+  const labels = db
+    .prepare(
+      `SELECT l.id, l.name, l.color FROM labels l
+       JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?`,
+    )
+    .all(task.id);
+  const subtasks = db
+    .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
+    .all(task.id)
+    .map(withSubtaskState);
+  // Шаг 6 карточки 8ca87c61: лента попыток идёт вместе с задачей.
+  // Сортировка по started_at DESC — новые сверху, как в TaskFlow
+  // (см. ленту событий).
+  const attempts = db
+    .prepare(
+      `SELECT id, task_id, subtask_id, executor_id, runner, model,
+              started_at, ended_at, heartbeat_at, outcome, reason, reason_code,
+              consultation_suggested_reasons
+         FROM attempts WHERE task_id = ? ORDER BY started_at DESC`,
+    )
+    .all(task.id);
+  const children = db
+    .prepare(
+      `SELECT ${taskColumnsForOutput()} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`,
+    )
+    .all(task.id)
+    .map((t) => {
+      const childLabels = db
+        .prepare(
+          `SELECT l.id, l.name, l.color FROM labels l
+           JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?`,
+        )
+        .all((t as any).id);
+      const childSubtasks = db
+        .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
+        .all((t as any).id)
+        .map(withSubtaskState);
+      return {
+        ...withAgentStale(t, childSubtasks),
+        labels: childLabels,
+        subtasks: childSubtasks,
+      };
+    });
+
+  return {
+    ...taskTextWithBlocks(withAgentStale(task, subtasks, children)),
+    // Живое значение общего рубильника, а не сохранённый в карточке флаг:
+    // решает в моменте, включён он сейчас или нет (см. reviewerPolicy.ts).
+    requires_reviewer_review: reviewerFirstEnabled(),
+    // Время запуска: собирается из даты+времени карточки; время не
+    // задано — 09:00 (владелец 19.09.2026). Отдельного поля в UI нет.
+    run_at: task.due_date
+      ? `${task.due_date} ${task.start_time || "09:00"}`
+      : null,
+    run_repeat: task.run_repeat ?? "none",
+    recurrence_spawned: task.recurrence_spawned ?? 0,
+    repeat_until: task.repeat_until ?? null,
+    labels,
+    subtasks,
+    children,
+    attempts: attempts,
+    agent_started_at: agentStartedAt(task),
+    // Логическая роль: что задача сейчас «про», независимо от того,
+    // выбрал её владелец (owner_selected_role) или зафиксировал
+    // диспетчер при отдаче в работу (dispatched_role). Возвращается как
+    // строка, чтобы клиенту не приходилось гадать по двум колонкам.
+    // Пустая строка — роль ещё не выбрана: задача готова, но диспетчер
+    // её ещё не тронул, и до owner-override роли тоже нет.
+    role: task.dispatched_role || task.owner_selected_role || "",
+  };
+}
+
+/** Когда агент в последний раз взял эту задачу.
+ *
+ *  Не хранится в строке задачи — берётся из журнала, единственного места, где
+ *  этот момент вообще зафиксирован (kind='claimed', AGENT-PROTOCOL.md). Нужно
+ *  островку на телефоне: он показывает время работы, и точка отсчёта обязана
+ *  быть моментом взятия задачи, а не моментом, когда человек открыл
+ *  приложение. Иначе таймер обнуляется каждый раз, когда телефон достали из
+ *  кармана. Пусто — задачу никто не брал.
+ *
+ *  Журнал неизменяем и индексирован по (task_id, created_at), так что это
+ *  дешёвое чтение хвоста, а не скан. */
+function agentStartedAt(task: any): string | null {
+  if (!task?.id || !task.agent_state) return null;
+  const row = db
+    .prepare(
+      `SELECT created_at FROM task_events
+       WHERE task_id = ? AND kind = 'claimed'
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(task.id) as any;
+  return row?.created_at || null;
+}
+
+// ═══════ TASKS CRUD ═══════
+
+// ETag полного списка задач и сравнение отпечатков — общие на весь сервер
+// (`lib/etag.ts`): список задач и список чатов считают отпечаток одинаково.
+//
+// Отпечаток входа в журнал (`ledgerSeq`) в ETag НЕ входит намеренно: он
+// общий для всего трекера, и на живой системе (агенты пишут карточки
+// постоянно) он менялся бы каждые секунды — 304 не наступал бы никогда.
+// Дельты для «изменилось вот это» ведёт отдельный журнал.
+
+/**
+ * Собрать элементы списка задач — ОДНА форма ответа для полного списка
+ * (`GET /api/tasks`) и для батча (`POST /api/tasks/batch`).
+ *
+ * Зачем общий сборщик: дельта отдаёт id изменённых карточек, и клиент
+ * забирает их одним запросом. Брать их «как есть» (полная карточка) нельзя:
+ * у списка и у одиночной карточки РАЗНЫЕ формы — список отдаёт счётчики
+ * детей и одну строку описания, одиночная карточка — массив детей. Клиент
+ * кладёт в локальную базу ответ сервера как есть и рисует его без разбора
+ * форм, поэтому две формы одной сущности в одной базе — это рассинхрон
+ * полей (заметка «Кэш и синхронизация в мобильных клиентах», п.3 плана).
+ *
+ * `listProjection` — обрезать ли описание в одну строку и не отдавать
+ * подзадачи массивом (лёгкая форма списка).
+ */
+export function buildTaskListItems(
+  tasks: any[],
+  session: string | null,
+  listProjection: boolean,
+): any[] {
+  const taskIds = tasks.map((t: any) => t.id) as string[];
+  const ph = taskIds.map(() => "?").join(",");
+  const subtaskMap = new Map<string, any[]>();
+  const childMap = new Map<string, { id: string; status: string }[]>();
+  const labelMap = new Map<string, any[]>();
+  const startedMap = new Map<string, string>();
+  if (taskIds.length) {
+    for (const s of db.prepare(`SELECT * FROM subtasks WHERE task_id IN (${ph}) ORDER BY task_id, position`).all(...taskIds) as any[]) {
+      const arr = subtaskMap.get(s.task_id) ?? [];
+      arr.push(s);
+      subtaskMap.set(s.task_id, arr);
+    }
+    for (const c of db.prepare(`SELECT id, status, parent_id FROM tasks WHERE parent_id IN (${ph})`).all(...taskIds) as Array<{ id: string; status: string; parent_id: string }>) {
+      const arr = childMap.get(c.parent_id) ?? [];
+      arr.push({ id: c.id, status: c.status });
+      childMap.set(c.parent_id, arr);
+    }
+    for (const l of db.prepare(`SELECT tl.task_id AS task_id, l.id, l.name, l.color FROM labels l JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id IN (${ph})`).all(...taskIds) as any[]) {
+      const arr = labelMap.get(l.task_id) ?? [];
+      arr.push({ id: l.id, name: l.name, color: l.color });
+      labelMap.set(l.task_id, arr);
+    }
+    for (const r of db.prepare(`SELECT task_id, MAX(created_at) AS created_at FROM task_events WHERE task_id IN (${ph}) AND kind = 'claimed' GROUP BY task_id`).all(...taskIds) as Array<{ task_id: string; created_at: string }>) {
+      startedMap.set(r.task_id, r.created_at);
+    }
+  }
+
+  // Метка сессии вызывающего: кто именно спрашивает. По ней каждая
+  // задача помечается `mine` — ведёт ли её ЭТА сессия. Учётка агента
+  // одна на все сессии и на всех агентов, поэтому без такой пометки
+  // чужая незавершённая работа неотличима от своей, и любой скрипт
+  // реагирует на неё как на собственную (Максим 20.08.2026: «другие
+  // сессии к этой задаче отношения не имеют»). Пометка справочная:
+  // ничего не фильтрует и не прячет — владелец по-прежнему видит всё.
+  return tasks.map((t: any) => {
+
+    const subtasks = (subtaskMap.get(t.id) ?? []).map(withSubtaskState);
+    const children = childMap.get(t.id) ?? [];
+    // Закрытая карточка: завершена или в архиве. Для неё список не возит
+    // подзадачи (см. ниже) — только числа.
+    const closed =
+      Boolean(t.archived_at) || t.status === "completed" || Boolean(t.completed_at);
+    const bySubtask = subtasks.some(
+      (s: any) => s.agent_session_id && s.agent_session_id === session,
+    );
+    return {
+      ...withAgentStale(t, subtasks, children),
+      // Описание в списке рисуется одной строкой (`lineLimit(1)` в
+      // TFTaskRowContent), а присылалось целиком: 210 КБ на 126 задач, из
+      // которых видно было первые сорок символов. В лёгкой проекции —
+      // одна строка (29.10.2026, «телефон — чисто окошко»).
+      //
+      // 31.10.2026 (владелец): «по выполненным карточкам вы тоже можете
+      // слать кучу информации, которая мне нахуй не нужна». У закрытой
+      // карточки (completed/archived) строка списка тем более не
+      // раскрывается — там название, проект и дата. Поэтому её описание
+      // уходит одной строкой в любом случае: 341 КБ из 616 КБ ответа
+      // приходили на 125 завершённых карточек, которые никто не откроет.
+      ...(listProjection || closed ? { description: listDescription(t.description) } : {}),
+      // Снимок промпта списку не нужен: 2 МБ из 5 МБ ответа (20.10.2026),
+      // телефон перекачивал его на каждом обновлении. В базе остаётся.
+      composed_prompt_snapshot: undefined,
+      mine: session ? t.agent_session_id === session || bySubtask : null,
+      labels: labelMap.get(t.id) ?? [],
+      // Подзадачи в списке — ДВУМЯ ЧИСЛАМИ, а не массивом (29.10.2026).
+      //
+      // Подзадачи были 1,85 МБ из 2,9 МБ ответа: 716 штук по 22 поля.
+      // Телефон разбирал их в объекты, чтобы нарисовать чип «2/5 шагов»,
+      // а подробности шагов показываются в карточке — она берёт задачу
+      // целиком (`GET /api/tasks/:id`).
+      //
+      // Как и с `children` (10.09.2026): под прежним именем в списке нельзя
+      // класть обрезанную версию — у типизированного клиента это не
+      // «меньше данных», а невалидный ответ. Поэтому в списке их нет, а
+      // числа приходят новыми полями.
+      //
+      // 31.10.2026 (владелец): «по выполненным карточкам вы тоже можете
+      // слать кучу информации, которая мне нахуй не нужна». Поэтому
+      // закрытые карточки (completed/archived) отдают подзадачи теми же
+      // двумя числами, что и лёгкая проекция: из 990 подзадач базы 827
+      // висят на завершённых карточках, и все они уходили в список, где
+      // рисуется чип «2/5 шагов».
+      subtasks: listProjection || closed ? undefined : subtasks,
+      subtask_total: subtasks.length,
+      subtask_done: subtasks.filter((s: any) => Boolean(s.done)).length,
+      // Прогресс родителя в списке — ДВУМЯ ЧИСЛАМИ, а не массивом детей.
+      //
+      // Сначала здесь отдавался сам `children` в усечённом виде (id +
+      // status): списку больше и не нужно. Это положило нативный клиент —
+      // у него `children: [ApiTask]?`, то есть полноценная задача со
+      // всеми обязательными полями, и на двух ключах декодер падал с
+      // «данные отсутствуют» (поймано владельцем 10.09.2026 сразу после
+      // выкатки: «сеть недоступна… не удалось разобрать ответ сервера»).
+      //
+      // Урок общий: в список нельзя класть под именем существующего поля
+      // его обрезанную версию — у типизированных клиентов это не
+      // «меньше данных», а невалидный ответ. Полные объекты детей возит
+      // `GET /api/tasks/:id`, там они настоящие.
+      children_total: children.length,
+      children_done: (children as Array<{ status: string }>).filter(
+        (c) => c.status === "completed",
+      ).length,
+      // Третий путь отдачи задачи, и он тоже собирается вручную мимо
+      // hydrateTask. Островок на телефоне живёт как раз от списка, так что
+      // без этой строки время работы считалось бы от открытия приложения.
+      agent_started_at: t.id && t.agent_state ? (startedMap.get(t.id) ?? null) : null,
+    };
+  });
+}
+
+export function registerTaskRoutes(app: FastifyInstance) {
+  registerIntegrationResponsibilityRoutes(app);
+  const authPre = authOrApiToken;
+  // Журнал изменений задач (дельты, вариант B трафика iOS-клиента) должен
+  // быть готов ДО первого запроса: иначе клиент, пришедший с курсором,
+  // получит «журнал не покрывает этот момент» и будет перечитывать список
+  // целиком — то есть вернётся к прежней цене.
+  ensureTaskChangesLedger();
+
+  // Список задач. Кому что видно — правило в access.ts (шапка файла):
+  // владельцу и его агентам видны ВСЕ задачи, самостоятельно
+  // зарегистрированному человеку — только свои. Раньше правило было одно
+  // для всех, и задача, заведённая агентом без проекта и без исполнителя,
+  // не показывалась владельцу вообще.
+  // Серия повтора дошла до конца календарного года — помечаем завершённой
+  // и спрашиваем владельца (карточка f8e8a055, решение 20.09.2026).
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/repeat-ended",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const task = db
+        .prepare("SELECT id, title FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id: string; title: string } | undefined;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      db.prepare(
+        "UPDATE tasks SET recurrence_spawned = 1, updated_at = datetime('now') WHERE id = ?",
+      ).run(task.id);
+      const owner = db
+        .prepare(
+          "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+        )
+        .get() as { id?: string } | undefined;
+      if (owner?.id && owner.id !== req.userId) {
+        const notifId = uid();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'repeat_ended', ?, ?, ?)",
+        ).run(
+          notifId,
+          owner.id,
+          task.id,
+          `Серия «${task.title}» дошла до конца года. Продлить на следующий год?`,
+          req.userId,
+        );
+        broadcastToUsers([owner.id], {
+          type: "notification:new",
+          notificationId: notifId,
+          taskId: task.id,
+        });
+      }
+      return { ok: true };
+    },
+  );
+
+  // Разрешить ролям тесты на этой карточке (владелец 02.11.2026: «если
+  // нужно будет тесты делать — отдельную задачу и дам разрешение на
+  // тестирование»). По умолчанию роль в обычной работе тесты не гоняет.
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/allow-tests",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply
+          .code(403)
+          .send({ error: "разрешение на тесты даёт владелец" });
+      }
+      const task = db
+        .prepare("SELECT id FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id: string } | undefined;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      const allowed = req.body?.allowed !== false;
+      db.prepare(
+        "UPDATE tasks SET tests_allowed = ?, updated_at = datetime('now') WHERE id = ?",
+      ).run(allowed ? 1 : 0, task.id);
+      logEvent({
+        taskId: task.id,
+        actorId: null,
+        kind: "task_tests_allowed",
+        field: allowed ? "allowed" : "denied",
+        toValue: "разрешение ролям гонять тесты на этой карточке",
+      });
+      return { id: task.id, tests_allowed: allowed };
+    },
+  );
+
+  // Продлить серию на следующий год: «до 31 декабря следующего» и снова
+  // разрешаем воркеру создавать следующее вхождение (владелец).
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/repeat-extend",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply
+          .code(403)
+          .send({ error: "продлевать серию может только владелец" });
+      }
+      const task = db
+        .prepare("SELECT id FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id?: string } | undefined;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      const until = `${new Date().getFullYear() + 1}-12-31`;
+      db.prepare(
+        "UPDATE tasks SET repeat_until = ?, recurrence_spawned = 0, updated_at = datetime('now') WHERE id = ?",
+      ).run(until, task.id);
+      return { ok: true, repeat_until: until };
+    },
+  );
+
+  // Слойный контекст для ролей (владелец 25.09.2026, docs/ПЛАН Супер
+  // Помощник владельца/): счётчики + названия выполненных задач по периодам, а не
+  // вся история целиком — роль зовёт это сама, когда владелец спрашивает
+  // «что сделал за неделю», вместо того чтобы либо не знать, либо тащить
+  // в контекст полные карточки. Названия ограничены (15 на период) —
+  // счётчик при этом точный.
+  app.get("/api/tasks/my-stats", { preHandler: authPre }, async (req: any) => {
+    const actorId = req.userId;
+    const titleLimit = 15;
+    const period = (days: number) => {
+      const count = (
+        db
+          .prepare(
+            `SELECT COUNT(*) as n FROM tasks
+              WHERE assignee_id = ? AND status = 'completed'
+                AND completed_at >= datetime('now', ?)`,
+          )
+          .get(actorId, `-${days} days`) as { n: number }
+      ).n;
+      const tasks = db
+        .prepare(
+          `SELECT id, title FROM tasks
+            WHERE assignee_id = ? AND status = 'completed'
+              AND completed_at >= datetime('now', ?)
+            ORDER BY completed_at DESC LIMIT ?`,
+        )
+        .all(actorId, `-${days} days`, titleLimit);
+      return { count, tasks };
+    };
+    return { week: period(7), month: period(30) };
+  });
+
+  app.get("/api/tasks", { preHandler: authPre }, async (req: any, reply) => {
+    const userId = req.userId;
+
+    // Архивный список (карточка 57c69735…): GET /api/tasks?archived=true
+    // открыт только владельцу трекера. Это НЕ «снять фильтр
+    // archived_at IS NULL» в общем списке, а отдельная ветка — архивные
+    // карточки не светятся в обычных списках ни у кого. Возвращаем
+    // «живой» формат карточки (TASK_COLUMNS/JOINS/hydrateTask через
+    // getTaskRow), чтобы клиент мог рендерить экран Архива без второго
+    // запроса на каждую карточку. include_children=true добавляет
+    // subtask_count, чтобы iOS-чип «есть подзадачи» работал (контракт
+    // §3.2).
+    if (req.query.archived === "true") {
+      if (!isOwner(userId)) {
+        return reply.code(403).send({ error: "архив доступен только владельцу" });
+      }
+      const includeChildrenFlag = req.query.include_children === "true";
+      const rows = listArchivedTasks({
+        projectId: typeof req.query.project_id === "string" ? req.query.project_id : null,
+        assigneeId:
+          typeof req.query.assignee_id === "string" ? req.query.assignee_id : null,
+        // 31.10.2026 (владелец): «в архиве мне достаточно последних 20
+        // карточек, чтобы при необходимости восстановить». Больше не возим.
+        limit: 20,
+      });
+      const items = rows.map((r) => {
+        const row = getTaskRow(r.id) as any;
+        const hydrated = hydrateTask(row) as any;
+        // 31.10.2026 (владелец): «по архивным карточкам вы до сих пор шлёте
+        // историю активности, которую я не вижу». Экран Архива рисует
+        // строку: название, проект, дата, чип подзадач. Полную карточку
+        // клиент берёт по id, если владелец её откроет. Поэтому лента
+        // попыток (attempts), подзадачи и дочерние карточки в архивном
+        // списке больше не передаются — остаются числа.
+        hydrated.attempts = [];
+        hydrated.subtasks = [];
+        hydrated.children = [];
+        hydrated.subtask_count = r.subtask_count;
+        if (includeChildrenFlag) {
+          // Число архивных потомков корня поддерева — для iOS-чипа
+          // «в архиве с детьми» (политика B: при архивировании корня всё
+          // поддерево ушло вместе).
+          hydrated.archived_subtree_count = r.archived_subtree_count;
+        }
+        return hydrated;
+      });
+      return items;
+    }
+
+    const includeChildren = req.query.include_children === "true";
+    // Лёгкая проекция для списка (29.10.2026): телефон рисует, считает
+    // сервер. Старый клиент её не просит — ответ прежний.
+    const listProjection = projectionOf(req.query) === "list";
+    const parentFilter = includeChildren ? "" : "t.parent_id IS NULL AND ";
+    const columns = taskColumnsForOutput();
+    const joins = TASK_JOINS;
+
+    // Опциональные фильтры для планировщика (шаг 4): agent_state,
+    // block_type, retry_count < N, blocked_at старше N минут.
+    const filterAgentState =
+      typeof req.query.agent_state === "string" ? req.query.agent_state : "";
+    const filterBlockType =
+      typeof req.query.block_type === "string" ? req.query.block_type : "";
+    const filterRetryLt = Number(req.query.retry_count_lt);
+    const filterBlockedOlderMin = Number(req.query.blocked_older_min);
+
+    const extraFilters: string[] = [];
+    const extraParams: unknown[] = [];
+    if (filterAgentState) {
+      extraFilters.push("t.agent_state = ?");
+      extraParams.push(filterAgentState);
+    }
+    if (filterBlockType) {
+      extraFilters.push("t.block_type = ?");
+      extraParams.push(filterBlockType);
+    }
+    if (Number.isFinite(filterRetryLt) && filterRetryLt > 0) {
+      extraFilters.push("t.retry_count < ?");
+      extraParams.push(filterRetryLt);
+    }
+    if (
+      Number.isFinite(filterBlockedOlderMin) &&
+      filterBlockedOlderMin > 0
+    ) {
+      extraFilters.push(
+        "t.blocked_at IS NOT NULL AND t.blocked_at < datetime('now', ?)",
+      );
+      extraParams.push(`-${filterBlockedOlderMin} minutes`);
+    }
+    // Служебные карточки починки (incidents.ts) в общий список не попадают:
+    // владелец видит поломку уведомлением, а карточку — по ссылке из него.
+    // `?service=true` возвращает их в выдачу (для отладки и сторожей).
+    const serviceWhere =
+      req.query.service === "true" ? "" : " AND COALESCE(t.service_hidden, 0) = 0";
+    const extraWhere =
+      (extraFilters.length ? " AND " + extraFilters.join(" AND ") : "") + serviceWhere;
+
+    // Архивный проект (карточка a1be7d63…): при прямом запросе задачи по
+    // id из архивного проекта отдаём 404 всем, кроме владельца — проверка
+    // стоит в access.ts (getTaskForRead).
+    const asOwner = isOwner(userId);
+    const baseParent = includeChildren
+      ? "1 = 1"
+      : "(t.parent_id IS NULL OR t.project_id IS NOT NULL)";
+    // Архивный проект (карточка a1be7d63…) не должен попасть в список ни
+    // у кого, включая владельца — для архива есть отдельные ручки. Поэтому
+    // фильтр `p.archived_at IS NULL` есть в обеих ветках.
+    const privacy = asOwner
+      ? "(p.id IS NULL OR p.archived_at IS NULL)"
+      : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
+
+    // 31.10.2026 (владелец): «всё, что завершено, — мне на телефон не слать,
+    // ноль байт». Завершённые карточки в обычный список больше не попадают:
+    // на телефоне они не открываются, а полная карточка по-прежнему
+    // доступна из GET /api/tasks/:id. Вернуть их в ответ можно явно —
+    // ?include_closed=true (сторожа, отладка, скрипты).
+    const closedClause =
+      req.query.include_closed === "true"
+        ? "1 = 1"
+        : "(t.status <> 'completed' AND t.completed_at IS NULL)";
+
+    const tasks = (
+      seesEveryTask(userId)
+        ? db
+            .prepare(
+              `SELECT ${columns} ${joins}
+      WHERE ${baseParent}
+        AND t.archived_at IS NULL
+        AND ${closedClause}
+        AND ${privacy}
+        ${extraWhere}
+      ORDER BY t.created_at DESC`,
+            )
+            .all(...extraParams)
+        : db
+            .prepare(
+              `SELECT ${columns} ${joins}
+      WHERE ${baseParent}
+        AND t.archived_at IS NULL
+        AND ${closedClause}
+        AND (t.creator_id = ? OR t.assignee_id = ?
+           OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))
+        AND ${privacy}
+        ${extraWhere}
+      ORDER BY t.created_at DESC`,
+            )
+            .all(userId, userId, userId, ...extraParams)
+    ) as any[];
+
+    // Батч вместо N+1 (владелец 24.10.2026): подзадачи, дети, метки и время
+    // взятия собираются за 4 запроса на весь список, а не на каждую карточку.
+    // ETag и курсор синхронизации (вариант B трафика iOS-клиента, владелец
+    // 25.10.2026). Клиент, у которого список не менялся, присылает свой
+    // ETag — сервер отвечает 304 без тела и клиент не качает 402 КБ gzip
+    // впустую. Курсор нужен для ДЕЛЬТ: по нему клиент спрашивает «что
+    // изменилось с прошлого раза» вместо полной перечитки.
+    //
+    // Отпечаток считается по телу ответа (список собирается ниже), поэтому
+    // проверка 304 стоит ПОСЛЕ сборки: дешевле отдать 0 байт, чем повторно
+    // собирать то же самое ради хеша.
+    const session = sessionOf(req);
+    reply.header("X-TaskFlow-Sync-Cursor", ledgerCursor());
+
+    const items = buildTaskListItems(tasks, session, listProjection);
+
+    // ETag по телу ответа (вариант B трафика iOS-клиента, владелец
+    // 25.10.2026). Клиент, у которого список не менялся, присылает свой
+    // ETag — сервер отвечает 304 без тела и клиент не качает 402 КБ gzip
+    // впустую.
+    //
+    // Отпечаток считается по САМОМУ ответу, а не по строкам tasks: список
+    // показывает счётчики детей, метки, подзадачи и «кто ведёт карточку»,
+    // и всё это меняется без правки строки tasks. Отпечаток ответа честен
+    // по определению: тот же ответ — тот же ETag, другой — другой.
+    //
+    // Общий счётчик журнала (ledgerSeq) в отпечаток НЕ входит: он общий
+    // для всего трекера, и на живой системе (агенты пишут карточки
+    // постоянно) менялся бы каждые секунды — 304 не наступал бы никогда.
+    // «Что изменилось» ведёт отдельный журнал дельт.
+    const body = JSON.stringify(items);
+    const listEtag = etagFor(body, session);
+    reply.header("ETag", listEtag);
+    const ifNoneMatch = req.headers["if-none-match"];
+    if (typeof ifNoneMatch === "string" && etagMatches(ifNoneMatch, listEtag)) {
+      return reply.code(304).send();
+    }
+    reply.type("application/json; charset=utf-8");
+    return reply.send(body);
+  });
+
+  // ДЕЛЬТЫ (вариант B трафика iOS-клиента, владелец 25.10.2026).
+  //
+  // Проблема, которую это закрывает: полный список задач — 127 карточек,
+  // 1,83 МБ без сжатия (402 КБ в gzip). Клиент тянул его целиком на КАЖДЫЙ
+  // разрыв связи (30 675 реконнектов за неделю) — платил полную цену, чтобы
+  // узнать, что изменилась одна-две карточки.
+  //
+  // Контракт: `GET /api/tasks/changes?since=<курсор>` →
+  //   { server_time, changed_ids: string[], removed_ids: string[], full: boolean }
+  //
+  // Почему именно id, а не готовые карточки: у клиента УЖЕ есть проверенный
+  // путь «взять одну карточку» (`GET /api/tasks/:id` → upsert в стор), и он
+  // же используется для событий сокета. Взяв его и для дельты, мы не
+  // размножаем форму ответа списка (у списка и одиночной карточки РАЗНЫЕ
+  // формы — список отдаёт счётчики детей, одиночная — массив детей), а
+  // значит не размножаем и риск рассинхрона.
+  //
+  // `full: true` — журнал не покрывает запрошенный момент (курсор старше
+  // семи дней или не задан): клиент делает обычную полную перечитку.
+  app.get("/api/tasks/changes", { preHandler: authPre }, async (req: any) => {
+    const userId = req.userId;
+    const since = typeof req.query.since === "string" ? req.query.since : "";
+    const cursor = ledgerCursor();
+    const { rows, full } = listTaskChanges(since);
+    if (full) {
+      return { server_time: cursor, changed_ids: [], removed_ids: [], full: true };
+    }
+
+    const asOwner = isOwner(userId);
+    const seesAll = seesEveryTask(userId);
+
+    // Сводим журнал к последнему состоянию по каждой карточке: удаление
+    // перебивает правку (карточки уже нет), а признаки видимости берём из
+    // первой непустой записи — дочерние таблицы пишут в журнал без
+    // создателя.
+    type JournalState = {
+      deleted: boolean;
+      creator_id: string | null;
+      assignee_id: string | null;
+      project_id: string | null;
+    };
+    const state = new Map<string, JournalState>();
+    for (const r of rows) {
+      const prev = state.get(r.task_id);
+      state.set(r.task_id, {
+        deleted: (prev?.deleted ?? false) || r.deleted === 1,
+        creator_id: r.creator_id ?? prev?.creator_id ?? null,
+        assignee_id: r.assignee_id ?? prev?.assignee_id ?? null,
+        project_id: r.project_id ?? prev?.project_id ?? null,
+      });
+    }
+    const ids = [...state.keys()];
+    if (!ids.length) {
+      return { server_time: cursor, changed_ids: [], removed_ids: [], full: false };
+    }
+
+    // Живые карточки — текущее состояние (в журнале может лежать уже
+    // устаревшая запись: карточку переписали дважды).
+    const present = new Map<string, any>();
+    {
+      const ph = ids.map(() => "?").join(",");
+      for (const row of db
+        .prepare(
+          `SELECT t.id, t.archived_at, t.creator_id, t.assignee_id,
+                  p.id AS project_id, p.archived_at AS project_archived_at,
+                  p.is_private AS project_private, p.owner_id AS project_owner_id
+             FROM tasks t LEFT JOIN projects p ON t.project_id = p.id
+            WHERE t.id IN (${ph})`,
+        )
+        .all(...ids) as any[]) {
+        present.set(row.id, row);
+      }
+    }
+
+    // Проекты — по тем id, что встречались в журнале И в живых карточках:
+    // по ним решаем видимость (приватный проект, архив проекта, владелец
+    // проекта). Журнал знает проект не всегда: запись из дочерней таблицы
+    // (подзадача, комментарий) приходит без него.
+    const projectIds = [
+      ...new Set(
+        [
+          ...ids.map((id) => state.get(id)?.project_id),
+          ...[...present.values()].map((row) => row.project_id),
+        ].filter((v): v is string => typeof v === "string" && v.length > 0),
+      ),
+    ];
+    const projectInfo = new Map<string, any>();
+    if (projectIds.length) {
+      const pph = projectIds.map(() => "?").join(",");
+      for (const p of db
+        .prepare(
+          `SELECT id, owner_id, is_private, archived_at FROM projects WHERE id IN (${pph})`,
+        )
+        .all(...projectIds) as any[]) {
+        projectInfo.set(p.id, p);
+      }
+    }
+
+    const visible = (
+      creatorId: string | null,
+      assigneeId: string | null,
+      projectId: string | null,
+    ): boolean => {
+      const proj = projectId ? projectInfo.get(projectId) : null;
+      if (proj?.archived_at) return false;
+      if (proj && proj.is_private && !asOwner) return false;
+      if (seesAll) return true;
+      if (creatorId === userId || assigneeId === userId) return true;
+      if (proj && proj.owner_id === userId) return true;
+      return false;
+    };
+
+    const changedIds: string[] = [];
+    const removedIds: string[] = [];
+    for (const id of ids) {
+      const st = state.get(id)!;
+      const row = present.get(id);
+      if (st.deleted || !row) {
+        if (visible(st.creator_id, st.assignee_id, st.project_id)) {
+          removedIds.push(id);
+        }
+        continue;
+      }
+      if (row.archived_at) {
+        // Ушла в архив: из списка её убрать надо, в архив — отдельная ручка.
+        if (visible(row.creator_id, row.assignee_id, row.project_id)) {
+          removedIds.push(id);
+        }
+        continue;
+      }
+      if (!visible(row.creator_id, row.assignee_id, row.project_id)) {
+        removedIds.push(id);
+        continue;
+      }
+      changedIds.push(id);
+    }
+
+    // Большая дельта — признак того, что клиент отстал сильнее, чем
+    // выгодно догонять по одной карточке. Дешевле один полный список.
+    if (changedIds.length + removedIds.length > 60) {
+      return { server_time: cursor, changed_ids: [], removed_ids: [], full: true };
+    }
+
+    return {
+      server_time: cursor,
+      changed_ids: changedIds,
+      removed_ids: removedIds,
+      full: false,
+    };
+  });
+
+  // БАТЧ карточек по id (заметка «Кэш и синхронизация в мобильных клиентах»,
+  // п.3 плана: «батч-чтение изменённых карточек вместо N × GET /tasks/:id»).
+  //
+  // Зачем: дельта (`GET /api/tasks/changes`) отдаёт id изменённых карточек, и
+  // клиент раньше дёргал `GET /api/tasks/:id` по одной на каждую — до 60
+  // заходов подряд после разрыва связи, по 300–500 мс на заход.
+  //
+  // Форма ответа — как у списка (см. buildTaskListItems), иначе в локальной
+  // базе клиента окажутся две формы одной карточки.
+  //
+  // Закрытые (выполненные) карточки в батч ВХОДЯТ — в отличие от списка,
+  // где их нет: клиент должен убрать такую карточку из живых списков и
+  // положить в архив, а для этого ему нужно знать, что она закрыта.
+  app.post("/api/tasks/batch", { preHandler: authPre }, async (req: any) => {
+    const body = (req.body ?? {}) as { ids?: unknown };
+    const rawIds = Array.isArray(body.ids) ? body.ids : [];
+    const ids: string[] = [];
+    for (const value of rawIds) {
+      if (typeof value !== "string" || !value) continue;
+      if (!ids.includes(value)) ids.push(value);
+      if (ids.length >= 200) break;
+    }
+    if (!ids.length) return { tasks: [] };
+    const userId = req.userId;
+    const asOwner = isOwner(userId);
+    const ph = ids.map(() => "?").join(",");
+    // Приватность — как в списке: карточка из архивного проекта не отдаётся
+    // никому, из приватного — только владельцу трекера.
+    const privacy = asOwner
+      ? "(p.id IS NULL OR p.archived_at IS NULL)"
+      : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
+    const visibleClause = seesEveryTask(userId)
+      ? ""
+      : "AND (t.creator_id = ? OR t.assignee_id = ? OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))";
+    const rows = db
+      .prepare(
+        `SELECT ${taskColumnsForOutput()} ${TASK_JOINS}
+      WHERE t.id IN (${ph})
+        AND t.archived_at IS NULL
+        AND ${privacy}
+        ${visibleClause}
+      ORDER BY t.created_at DESC`,
+      )
+      .all(...ids, ...(seesEveryTask(userId) ? [] : [userId, userId, userId])) as any[];
+    return { tasks: buildTaskListItems(rows, sessionOf(req), true) };
+  });
+
+  // Агрегат по дням — данные для виджетов heatmap и calendar_grid (галерея
+  // компоновок карточки 3e27dafe, раздел 5). Считает по трём источникам:
+  // сроки задач (due_date), дни создания и дни закрытия. Ответ — готовые
+  // ячейки: роль не складывает счётчики сама и не выдумывает даты.
+  //
+  // from/to — «ГГГГ-ММ-ДД», границы включительные. bucket по умолчанию due.
+  app.get("/api/tasks/summary", { preHandler: authPre }, async (req: any, reply) => {
+    const { from, to, bucket } = req.query as {
+      from?: string;
+      to?: string;
+      bucket?: string;
+    };
+    if (!from || !to) {
+      return reply.code(400).send({
+        error: "Параметры from и to обязательны (ГГГГ-ММ-ДД)",
+      });
+    }
+    if (!isValidDateStr(from) || !isValidDateStr(to)) {
+      return reply.code(400).send({ error: "from/to должны быть датами ГГГГ-ММ-ДД" });
+    }
+    if (from > to) {
+      return reply.code(400).send({ error: "from позже to" });
+    }
+    const source = bucket === "created" ? "created_at" : bucket === "completed" ? "completed_at" : "due_date";
+    // Границы периода в пределах одного года — иначе ответ не поместится
+    // в блок виджета, а клиент всё равно рисует не больше 112 ячеек.
+    // Даты в сплите «ГГГГ-ММ-ДД», а Date.UTC ждёт нумерацию месяца с нуля —
+    // без «-1» весь ряд уезжал на месяц вперёд.
+    const fromUtc = (s: string) => {
+      const [y, m, d] = s.split("-").map(Number) as [number, number, number];
+      return Date.UTC(y, m - 1, d);
+    };
+    const spanDays = (fromUtc(to) - fromUtc(from)) / 86_400_000;
+    if (spanDays > 366) {
+      return reply.code(400).send({ error: "Период длиннее года не считается" });
+    }
+
+    const userId = req.userId;
+    const asOwner = isOwner(userId);
+    const privacy = asOwner
+      ? "(p.id IS NULL OR p.archived_at IS NULL)"
+      : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
+    const serviceHidden =
+      bucket === "created"
+        ? " AND COALESCE(t.service_hidden, 0) = 0"
+        : "";
+
+    // Права на видимость — те же, что у списка: либо агент видит всё, либо
+    // только свои и свои проекты. Иначе по дням утекала бы чужая работа.
+    const scopeSql = seesEveryTask(userId)
+      ? "1 = 1"
+      : "(t.creator_id = ? OR t.assignee_id = ? OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))";
+    const scopeParams = seesEveryTask(userId) ? [] : [userId, userId, userId];
+
+    const rows = db
+      .prepare(
+        `SELECT substr(t.${source}, 1, 10) AS day, COUNT(*) AS n
+         FROM tasks t LEFT JOIN projects p ON t.project_id = p.id
+         WHERE t.${source} IS NOT NULL AND t.${source} != ''
+           AND substr(t.${source}, 1, 10) >= ? AND substr(t.${source}, 1, 10) <= ?
+           AND t.archived_at IS NULL AND ${privacy}${serviceHidden}
+           AND ${scopeSql}
+         GROUP BY day ORDER BY day`,
+      )
+      .all(from, to, ...scopeParams) as Array<{ day: string; n: number }>;
+
+    const byDay = new Map(rows.map((r) => [r.day, Number(r.n)]));
+    // Каждый день периода отдаём ячейкой, даже пустым: heatmap рисует сетку
+    // целиком, и отсутствие дня читалось бы как «нет данных», а не как ноль.
+    const days: Array<{ date: string; value: number }> = [];
+    for (let d = fromUtc(from); d <= fromUtc(to); d += 86_400_000) {
+      const date = new Date(d).toISOString().slice(0, 10);
+      days.push({ date, value: byDay.get(date) ?? 0 });
+    }
+
+    return {
+      from,
+      to,
+      bucket,
+      days,
+      total: days.reduce((s, x) => s + x.value, 0),
+      max: days.reduce((m, x) => Math.max(m, x.value), 0),
+    };
+  });
+
+  // Get single task — must be creator or assignee.
+  app.get<{ Params: { id: string } }>(
+    "/api/tasks/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const task = getTaskForRead(req.params.id, req.userId);
+      if (!task) return reply.code(404).send({ error: "Not found" });
+
+      const full = getTaskRow(task.id);
+
+      const labels = db
+        .prepare(
+          `SELECT l.* FROM labels l JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?`,
+        )
+        .all(task.id);
+      const subtasks = db
+        .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
+        .all(task.id)
+        .map(withSubtaskState);
+      const children = db
+        .prepare(
+          `SELECT ${taskColumnsForOutput()} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`,
+        )
+        .all(task.id)
+        .map((t) => {
+          const childLabels = db
+            .prepare(
+              `SELECT l.id, l.name, l.color FROM labels l
+               JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?`,
+            )
+            .all((t as any).id);
+          const childSubtasks = db
+            .prepare(
+              "SELECT * FROM subtasks WHERE task_id = ? ORDER BY position",
+            )
+            .all((t as any).id)
+            .map(withSubtaskState);
+          return {
+            ...withAgentStale(t, childSubtasks),
+            labels: childLabels,
+            subtasks: childSubtasks,
+          };
+        });
+      const comments = db
+        .prepare(
+          `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.avatar_url as user_avatar_url, u.initials as user_initials
+           FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.task_id = ? ORDER BY c.created_at`,
+        )
+        .all(task.id) as any[];
+      comments.splice(0, comments.length, ...visibleTaskComments(comments).map(commentWithBlocks));
+
+      // Вложения раскладываются по своим комментариям. Одним запросом на всю
+      // задачу, а не по запросу на комментарий: файлов мало, а лишние
+      // обращения к базе на каждое открытие карточки ни к чему. Байты сюда
+      // не попадают — только имя, тип и размер; сам файл отдаётся отдельно
+      // (GET /api/attachments/:id), иначе карточка тащила бы за собой все
+      // приложенные скриншоты разом.
+      const attachments = db
+        .prepare(
+          `SELECT id, comment_id, kind, file_name, mime, size, created_at
+           FROM attachments WHERE task_id = ? ORDER BY created_at`,
+        )
+        .all(task.id) as any[];
+      for (const c of comments) {
+        c.attachments = attachments.filter((a) => a.comment_id === c.id);
+      }
+
+      // Сообщения чатов, привязанных к этой задаче (владелец 21.09.2026:
+      // «чтобы не комментарии они там писать в самой задаче, а в чате
+      // переписываться»). Отдаются в ОБЩЕМ списке comments — той же формой,
+      // что обычные комментарии, плюс пометка source='chat' и id чата: лента
+      // задачи и веб рисуют их наравне с комментариями, а отличать могут по
+      // пометке. Только канал 'chat' — старые owner/agents живут своей
+      // жизнью и в ленту задачи не подмешиваются (их для этого никто и не
+      // привязывал).
+      const chatComments = db
+        .prepare(
+          `SELECT m.id, m.task_id, m.from_user_id AS user_id, m.text, m.created_at, m.message_type, m.is_session_marker,
+                  m.chat_id,
+                  u.name AS user_name, u.avatar_color AS user_color,
+                  u.avatar_url AS user_avatar_url, u.initials AS user_initials
+             FROM chat_messages m
+             LEFT JOIN users u ON u.id = m.from_user_id
+            WHERE m.task_id = ? AND m.channel = 'chat'
+            ORDER BY m.created_at`,
+        )
+        .all(task.id) as any[];
+      chatComments.splice(0, chatComments.length, ...visibleTaskComments(chatComments).filter(row=>!isQuietSystemMessage(row)));
+      if (chatComments.length) {
+        // Вложения сообщений чата лежат не на задаче, а на самом сообщении
+        // (`chat_message_id`), поэтому в общий `attachments` выше они не
+        // попали — тянем их отдельным запросом.
+        const chatFiles = db
+          .prepare(
+            `SELECT id, chat_message_id, kind, file_name, mime, size, created_at
+               FROM attachments
+              WHERE chat_message_id IN (${chatComments.map(() => "?").join(",")})
+              ORDER BY created_at`,
+          )
+          .all(...chatComments.map((c) => c.id)) as any[];
+        for (const c of chatComments) {
+          c.source = "chat";
+          c.attachments = chatFiles.filter((a) => a.chat_message_id === c.id);
+        }
+        comments.push(...chatComments);
+        // Сортировка устойчивая (ES2019): при равных секундах комментарии
+        // задачи сохраняют свой прежний порядок, а сообщения чата встают
+        // после них — не перемешиваем две ленты внутри одной секунды.
+        comments.sort((a, b) =>
+          String(a.created_at).localeCompare(String(b.created_at)),
+        );
+      }
+      // Файлы самой задачи — то, что приложено к её заметке (19.08.2026).
+      // Разделение идёт по kind, а НЕ по «comment_id пустой»: пустой он и у
+      // комментарийного файла, пока комментарий не отправлен, и брошенный
+      // черновик иначе всплыл бы в карточке как вложение задачи.
+      const taskAttachments = attachments.filter((a) => a.kind === "task");
+
+      // Journal — same JOIN-users pattern as comments. actor_id can be NULL
+      // (a system-authored entry), in which case the actor_* columns come
+      // back NULL too and the frontend renders it as a system row.
+      // ORDER BY created_at, rowid — created_at is second-resolution, so
+      // several events written in the same transaction (e.g. claim's
+      // 'claimed' + 'state_changed') need rowid as the tiebreaker to stay
+      // in insertion order.
+      const events = db
+        .prepare(
+          `SELECT e.*, u.name as actor_name, u.avatar_color as actor_color, u.initials as actor_initials
+           FROM task_events e LEFT JOIN users u ON e.actor_id = u.id
+           WHERE e.task_id = ? ORDER BY e.created_at, e.rowid`,
+        )
+        .all(task.id)
+        .map((e: any) => (e.kind === "instruction_snapshot" ? { ...e, to_value: briefInstructionSnapshot(e.to_value) } : e));
+
+      // Шаг 6 карточки 8ca87c61, ревью 11.09.2026: GET /api/tasks/:id
+      // собирает карточку вручную мимо hydrateTask, и без явного запроса
+      // attempts лента попыток на этом пути молча пропадала.
+      const attempts = db
+        .prepare(
+          `SELECT id, task_id, subtask_id, executor_id, runner, model,
+                  started_at, ended_at, heartbeat_at, outcome, reason, reason_code,
+                  consultation_suggested_reasons
+             FROM attempts WHERE task_id = ? ORDER BY started_at DESC`,
+        )
+        .all(task.id);
+
+      return {
+        ...taskTextWithBlocks(withAgentStale(full, subtasks, children)),
+        // Снимок промпта (десятки КБ) карточке не нужен: клиенты его не
+        // показывают, а телефон перекачивал его при каждом событии
+        // (владелец 20.10.2026: карточка тормозила на 422 КБ). В базе остаётся.
+        composed_prompt_snapshot: undefined,
+        labels,
+        subtasks,
+        children,
+        // Вся цепочка предков одним запросом. Раньше клиент шёл вверх по
+        // дереву и дёргал задачу на каждого предка по очереди — на глубоких
+        // карточках это 5–15 последовательных запросов, и карточка открывалась
+        // долго (владелец 17.10.2026). Порядок — от корня к непосредственному
+        // родителю; первые два нужны экрану карточки (родитель и его название).
+        ancestors: taskAncestors(task.id),
+        comments,
+        // Чаты, привязанные к этой задаче. Нужны карточке, чтобы дать переход
+        // в переписку («Чат по задаче»); сам чат в карточке не заводится и не
+        // рисуется — для этого есть свой экран (владелец 21.09.2026, LOCK-195).
+        chats: db
+          .prepare(
+            `SELECT c.id, c.title, c.kind, c.updated_at,
+                    (SELECT COUNT(*) FROM chat_members cm WHERE cm.chat_id = c.id) AS members_count
+               FROM chats c WHERE c.task_id = ? ORDER BY c.updated_at DESC`,
+          )
+          .all(task.id),
+        attachments: taskAttachments,
+        events,
+        attempts,
+        attempt_ladder: attemptLadderForTask(task.id),
+        // Тот же расчёт, что в hydrateTask: карточка задачи собирается здесь
+        // вручную и мимо него, и поле, добавленное только туда, на этом пути
+        // молча пропало бы (ровно так уже терялось имя проекта).
+        agent_started_at: agentStartedAt(full),
+      };
+    },
+  );
+
+  // Create task
+  app.post<{
+    Body: {
+      title: string;
+      description?: string;
+      due_date?: string;
+      // «ЧЧ:ММ» местного времени и целые минуты — оба необязательные и
+      // осмысленны только вместе со сроком: время без даты некуда поставить
+      // в календаре (проверка ниже).
+      start_time?: string | null;
+      duration_min?: number | null;
+      project_id?: string;
+      priority?: number;
+      assignee_id?: string;
+      label_ids?: string[];
+      parent_id?: string;
+      requires_reviewer_review?: boolean;
+      // «Нужно глубокое исследование» (миграция 052): отметка при
+      // постановке — владелец или Помощник владельца. По ней владелец запускает
+      // серверный конвейер исследования (POST /api/tasks/:id/research).
+      needs_research?: boolean;
+      run_repeat?: string;
+      repeat_until?: string | null;
+      // Optional bulk-create for subtasks, created in the same transaction
+      // as the task (see below). Accepts either plain titles or objects
+      // shaped like { title } — TaskFormScreen currently sends plain
+      // strings (see localSubtasks), objects are accepted too so a future
+      // richer payload doesn't need a server change.
+      skip_auto_plan?: boolean;
+      preparation?: unknown;
+      subtasks?: (string | { title?: string })[];
+    };
+  }>("/api/tasks", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const {
+        title,
+        description,
+        due_date,
+        start_time,
+        duration_min,
+        project_id,
+        priority,
+        assignee_id,
+        label_ids,
+        parent_id,
+        requires_reviewer_review,
+        needs_research,
+        run_repeat,
+        repeat_until,
+        subtasks,
+      } = req.body;
+
+      // Аудит 2026-10-05, п. 1.2/1.6: организатор (role='orchestrator',
+      // type='ai') — живая роль, и ему разрешено класть задачу в любой
+      // проект и назначать исполнителя (b6b57092). Запрет стоит для
+      // рядовых исполнителей: type='ai' И role НЕ orchestrator/owner.
+      //
+      // Назначение САМОГО СЕБЯ (assignee_id === req.userId) под запрет не
+      // попадает: агент заводит свою задачу на себя, и без этого правило
+      // «задача агента обязана лежать в проекте» невыполнимо — см.
+      // getProjectForFiling в access.ts и test/access.test.ts «агент
+      // кладёт свою задачу в проект владельца». Запрет остаётся на
+      // назначение ДРУГИХ исполнителей: это работа сервера, а не агента.
+      if (assignee_id && assignee_id !== req.userId) {
+        const actorRow = db.prepare("SELECT type, role FROM users WHERE id=?").get(req.userId) as { type?: string; role?: string } | undefined;
+        if (actorRow?.type === "ai" && !isOrchestrator(req.userId) && actorRow.role !== "owner") {
+          return reply.code(403).send({error:"Назначения выполняет сервер"});
+        }
+      }
+      // Рутины с явным планом/исполнителем готовят план сами. Решение
+      // принимается до запуска любой асинхронной JEV-подготовки.
+      if (req.body.skip_auto_plan !== undefined && typeof req.body.skip_auto_plan !== "boolean") {
+        return reply.code(400).send({ error: "skip_auto_plan должен быть boolean" });
+      }
+      if (req.body.skip_auto_plan === true && !isOwner(req.userId)) {
+        return reply.code(403).send({ error: "отключить автоподготовку может владелец" });
+      }
+      const trimmedTitle = typeof title === "string" ? title.trim() : "";
+      if (!trimmedTitle)
+        return reply
+          .code(400)
+          .send({ error: "название задачи не может быть пустым" });
+
+      if (
+        due_date !== undefined &&
+        due_date !== null &&
+        (typeof due_date !== "string" || !isValidDateStr(due_date))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "некорректная дата (ожидается формат ГГГГ-ММ-ДД)" });
+      }
+
+      if (priority !== undefined && !(priority >= 1 && priority <= 4)) {
+        return reply
+          .code(400)
+          .send({ error: "priority must be between 1 and 4" });
+      }
+
+      if (
+        start_time !== undefined &&
+        start_time !== null &&
+        (typeof start_time !== "string" || !isValidTimeStr(start_time))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "некорректное время (ожидается формат ЧЧ:ММ)" });
+      }
+
+      if (
+        duration_min !== undefined &&
+        duration_min !== null &&
+        !isValidDuration(duration_min)
+      ) {
+        return reply.code(400).send({
+          error: "длительность — целые минуты от 1 до 1440",
+        });
+      }
+
+      // Время без даты в календарь не поставить: сетка строится по дню.
+      // Отсекаем здесь, а не молча сохраняем — иначе поле лежало бы в базе
+      // и нигде не показывалось, и разбираться пришлось бы уже по факту
+      // «я поставил время, а его нет на экране».
+      if (start_time && !due_date) {
+        return reply
+          .code(400)
+          .send({ error: "время начала имеет смысл только вместе со сроком" });
+      }
+
+      // project_id — свой проект, либо (для агента) проект того человека,
+      // которому задача и адресована. См. getProjectForFiling в access.ts.
+      // effectiveAssignee — что реально запишется в tasks.assignee_id. По
+      // умолчанию совпадает с присланным assignee_id; для приватного
+      // проекта (задача 9d583c58…) принудительно ставится владелец
+      // трекера — иначе нарушится «не отдавать через API никому, кроме
+      // владельца». Планировщик ниже использует именно effectiveAssignee,
+      // а не assignee_id из тела.
+      let effectiveAssignee: string | null = assignee_id || null;
+      // Признак «задача ложится в приватный проект» (задача 9d583c58…).
+      // По нему глушатся авто-план и доставка в inbox исполнителя: «без
+      // запуска агентов и планов». Определяется ниже в блоке project_id.
+      let isPrivateProject = false;
+      if (project_id) {
+        const project = getProjectForFiling(
+          project_id,
+          req.userId,
+          assignee_id,
+        );
+        if (!project)
+          return reply.code(400).send({ error: "invalid project_id" });
+        if (((project as any).is_private ?? 0) === 1) {
+          isPrivateProject = true;
+          const ownerRow = db
+            .prepare(
+              "SELECT id FROM users WHERE role = 'owner' ORDER BY id LIMIT 1",
+            )
+            .get() as { id?: string } | undefined;
+          const ownerId = ownerRow?.id;
+          if (!ownerId) {
+            return reply.code(500).send({
+              error: "владелец трекера не найден — приватный проект невозможен",
+            });
+          }
+          if (effectiveAssignee && effectiveAssignee !== ownerId) {
+            return reply.code(400).send({
+              error:
+                "в приватном проекте задача назначается только на владельца",
+            });
+          }
+          effectiveAssignee = ownerId;
+        }
+      }
+
+      // label_ids must all belong to the caller.
+      if (label_ids?.length && !allLabelsOwnedByUser(label_ids, req.userId)) {
+        return reply.code(400).send({ error: "invalid label_ids" });
+      }
+
+      // assignee_id must reference an existing user. Для приватного
+      // проекта effectiveAssignee уже подменён на владельца трекера
+      // выше — проверяем именно его, иначе ветка пропустила бы запрос
+      // с несуществующим assignee, а приватный проект выставил бы
+      // валидного владельца (старый код «глотал» мусор).
+      if (effectiveAssignee) {
+        const assignee = db
+          .prepare("SELECT id FROM users WHERE id = ?")
+          .get(effectiveAssignee);
+        if (!assignee)
+          return reply.code(400).send({ error: "invalid assignee_id" });
+      }
+
+      if (requires_reviewer_review !== undefined && typeof requires_reviewer_review !== "boolean") {
+        return reply.code(400).send({ error: "requires_reviewer_review должен быть boolean" });
+      }
+      // Отметка «нужно глубокое исследование» при постановке. Раньше
+      // принималась только PATCH'ем, поэтому созданная Помощником владельца/владельцем
+      // карточка с флагом теряла его молча (найдено 21.09.2026 на живом
+      // прогоне в симуляторе).
+      if (needs_research !== undefined && typeof needs_research !== "boolean") {
+        return reply.code(400).send({ error: "needs_research должен быть boolean" });
+      }
+
+      // Normalize+validate subtasks up front, before touching the DB, so a
+      // bad entry 400s cleanly instead of failing mid-transaction.
+      const subtaskTitles: string[] = [];
+      if (subtasks !== undefined) {
+        if (!Array.isArray(subtasks)) {
+          return reply
+            .code(400)
+            .send({ error: "subtasks должен быть массивом" });
+        }
+        for (const item of subtasks) {
+          const raw =
+            typeof item === "string"
+              ? item
+              : typeof item?.title === "string"
+                ? item.title
+                : "";
+          const t = raw.trim();
+          if (!t)
+            return reply
+              .code(400)
+              .send({ error: "у каждой подзадачи должно быть название" });
+          subtaskTitles.push(t);
+        }
+      }
+
+      let preparation:TaskPreparation|undefined;
+      if (req.body.preparation!==undefined) {
+        try {
+          preparation=validatePreparation(req.body.preparation,PREPARATION_ROLES);
+          if (preparation.representation==="child_cards") throw new Error("Для дерева карточек используйте импорт постановки, а не создание одной карточки");
+          if (preparation.representation==="role_plan" && (subtaskTitles.length!==preparation.workstreams.length || subtaskTitles.some((t,i)=>t!==preparation!.workstreams[i].title))) throw new Error("Подзадачи не совпадают с результатами плана");
+          if (preparation.representation==="role_plan" && assignee_id) throw new Error("План ролей нельзя назначить одному исполнителю при создании");
+        } catch(error:any) { return reply.code(400).send({error:error.message}); }
+      }
+      const id = uid();
+      // По умолчанию — общая настройка владельца «Сначала проверка
+      // Reviewer» (Обзор → Система). Клиент флаг больше не шлёт, поэтому
+      // решение тут, а не в форме карточки. Явное значение всё ещё
+      // уважается (серверный контракт не ломаем).
+      // Любая глубина; API и база запрещают циклы.
+      if (parent_id) {
+        const refusal = hierarchyRefusal(null, String(parent_id));
+        if (refusal) return reply.code(400).send({ error: refusal });
+      }
+
+      const ownerSetting = db
+        .prepare("SELECT reviewer_first_default FROM users WHERE id = ?")
+        .get(req.userId) as { reviewer_first_default?: number } | undefined;
+      const requiresReviewerReview =
+        requires_reviewer_review ?? ((ownerSetting?.reviewer_first_default ?? 1) === 1);
+      // Расписание повторения карточки (карточка f8e8a055).
+      const runRepeat =
+        ["daily", "weekdays", "weekly", "monthly"].includes(String(run_repeat))
+          ? String(run_repeat)
+          : "none";
+      const repeatUntil = repeat_until || null;
+
+      // Task + labels + subtasks all land in one transaction — the frontend
+      // used to POST the task, then POST each subtask separately (see
+      // src/api/subtasks.ts createSubtaskRequest / TaskFormScreen), which
+      // could leave an orphaned half-task if a later request failed. The
+      // `subtasks` param lets a single request do it atomically instead;
+      // omitting it keeps the exact old behavior (no subtasks written here).
+      const createTaskTxn = db.transaction(() => {
+        db.prepare(
+          `
+          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id, requires_reviewer_review, needs_research, run_repeat, repeat_until)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        ).run(
+          id,
+          trimmedTitle,
+          description || null,
+          due_date || null,
+          start_time || null,
+          // ?? , а не || — длительность приходит числом, и 0 через || стал бы
+          // null молча. Ноль сюда всё равно не дойдёт (isValidDuration его
+          // отсекает), но приём «числовое поле через ||» ошибочен сам по себе.
+          duration_min ?? null,
+          project_id || null,
+          priority || 1,
+          effectiveAssignee,
+          req.userId,
+          parent_id || null,
+          requiresReviewerReview ? 1 : 0,
+          needs_research ? 1 : 0,
+          runRepeat,
+          repeatUntil,
+        );
+
+        if (label_ids?.length) {
+          const ins = db.prepare(
+            "INSERT INTO task_labels (task_id, label_id) VALUES (?, ?)",
+          );
+          for (const lid of label_ids) ins.run(id, lid);
+        }
+
+        if (subtaskTitles.length) {
+          const insSub = db.prepare(
+            "INSERT INTO subtasks (id, task_id, title, position) VALUES (?, ?, ?, ?)",
+          );
+          subtaskTitles.forEach((t, i) => insSub.run(uid(), id, t, i + 1));
+        }
+        if (preparation) persistPreparedPlan(id,req.userId,preparation);
+      });
+      createTaskTxn();
+
+      // Тема задачи заводится сразу при создании (карточка ca816271, п. 4),
+      // а не только на подготовке плана: пропущенная подготовка (гонка
+      // автоприёма) оставляла задачу без темы вовсе. Приватные проекты не
+      // трогаем — там темы не нужны. Ошибка темы не должна ронять создание.
+      if (!isPrivateProject) {
+        try {
+          ensurePlanTopic(id);
+        } catch (error) {
+          req.log?.warn?.({ err: String(error), taskId: id }, "не удалось завести тему задачи");
+        }
+      }
+
+      // Первая запись ленты — «создал задачу»: до этого лента начиналась с
+      // первого же изменения, и по ней нельзя было понять, кто и когда
+      // задачу вообще завёл (просьба Максима 14.08.2026 — лента должна
+      // фиксировать всё, начиная с создания). Исполнитель, назначенный
+      // сразу при создании, пишется отдельной строкой — иначе назначение
+      // «в момент заведения» осталось бы невидимым, в отличие от того же
+      // назначения через правку задачи.
+      logEvent({
+        taskId: id,
+        actorId: req.userId,
+        kind: "task_created",
+        field: "task",
+        toValue: trimmedTitle,
+      });
+
+      // Владелец 28.09.2026: до этого предложить collaboration plan можно
+      // было только руками через API — при создании задачи ничего не
+      // считалось само. Для одиночного исполнителя план не создаётся
+      // (см. autoProposeCollaborationPlanIfNeeded); утверждает план
+      // по-прежнему только владелец. Ошибка здесь не должна ломать
+      // создание задачи — отдельный try/catch.
+      try {
+        // Карточка с подзадачами — план из них (асинхронно: классификатор
+        // ролей локальный, ждать его в ответе на создание незачем).
+        if (!req.body.skip_auto_plan && !preparation && !isPrivateProject && subtaskTitles.length) {
+          void autoProposeFromSubtasksOnCreate(id).catch((error) =>
+            req.log?.error?.({ err: error, taskId: id }, "auto plan from subtasks failed"));
+        } else if (!req.body.skip_auto_plan && !preparation && !isPrivateProject) {
+          // Галочка «JEV для выбора шаблона плана» включена — шаблон выбирает
+          // он (сетевой вызов, поэтому фоном, как и план из подзадач выше).
+          // Выключена — прежний синхронный путь, ровно как было.
+          if (jevPlanProfileConfig()) {
+            void autoProposeCollaborationPlanWithJev(id).catch((error) =>
+              req.log?.error?.({ err: error, taskId: id }, "auto plan via JEV failed"));
+          } else autoProposeCollaborationPlanIfNeeded(id);
+        }
+      } catch (error) {
+        req.log?.error?.({ err: error, taskId: id }, "auto collaboration plan proposal failed");
+      }
+
+      if (effectiveAssignee) {
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "field_changed",
+          field: "assignee_id",
+          fromValue: null,
+          toValue: String(effectiveAssignee),
+        });
+        // Назначение — тоже доставка (Reviewer 5f292e87: из реального потока
+        // не создаётся event_type=assignment). Кладём поручение в inbox
+        // исполнителю; chat_message_id синтетический (это не сообщение в чат).
+        // Для приватного проекта доставка глушится (задача 9d583c58…):
+        // это «без запуска агентов» — владелец и так видит свою задачу.
+        if (!isPrivateProject) {
+          db.prepare(
+            `INSERT INTO agent_inbox
+               (id, chat_message_id, to_user_id, body_text, task_id,
+                task_version, kind, event_type, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'text', 'assignment', 'sent', datetime('now'))`,
+          ).run(
+            uid(),
+            `asg-${uid()}`,
+            effectiveAssignee,
+            trimmedTitle,
+            id,
+            (
+              db
+                .prepare("SELECT current_revision FROM tasks WHERE id=?")
+                .get(id) as any
+            )?.current_revision ?? null,
+          );
+          registryRecord({
+            source: "assignment",
+            trigger: "POST /api/tasks",
+            toUserId: effectiveAssignee,
+            data: { task_id: id },
+            result: "inbox_sent",
+          });
+        }
+      }
+      // Шаги, заведённые вместе с задачей, — одной строкой с их числом, а
+      // не по строке на каждый: задача из десяти шагов иначе открывалась бы
+      // лентой из десяти одинаковых записей, в которой не видно ничего
+      // другого. Шаг, добавленный потом руками, по-прежнему пишется
+      // отдельной строкой со своим названием (routes/subtasks.ts).
+      if (subtaskTitles.length) {
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "subtasks_seeded",
+          field: "subtask",
+          toValue: String(subtaskTitles.length),
+        });
+      }
+
+      // Create notification for assignee
+      if (assignee_id && assignee_id !== req.userId) {
+        const notifId = uid();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
+        ).run(
+          notifId,
+          assignee_id,
+          id,
+          `Новая задача назначена: ${trimmedTitle}`,
+          req.userId,
+        );
+        broadcastToUsers([assignee_id], {
+          type: "notification:new",
+          notificationId: notifId,
+          taskId: id,
+        });
+      }
+
+      const task = getTaskRow(id);
+      const hydrated = hydrateTask(task);
+      const ownerRow = db
+        .prepare("SELECT id FROM users WHERE role = 'owner'")
+        .get() as any;
+      const notifyUsers = new Set<string>(
+        [req.userId, assignee_id, ownerRow?.id].filter(Boolean),
+      );
+      broadcastToUsers(Array.from(notifyUsers), {
+        type: "task:created",
+        task: hydrated,
+      });
+
+      if (parent_id) {
+        const parentTask = getTaskRow(parent_id);
+        if (parentTask) {
+          const hydratedParent = hydrateTask(parentTask);
+          const parentNotifyUsers = new Set<string>(
+            [
+              parentTask.creator_id,
+              parentTask.assignee_id,
+              ownerRow?.id,
+            ].filter(Boolean),
+          );
+          broadcastToUsers(Array.from(parentNotifyUsers), {
+            type: "task:updated",
+            task: hydratedParent,
+          });
+        }
+      }
+      // Приём новой задачи: подобрать исполнителя и, если стоит
+      // автоматический режим, поднять флаг и отдать в работу. Раньше это
+      // делал только конвейер надиктовки, поэтому задача, заведённая
+      // руками, оставалась без исполнителя и стояла даже после флага.
+      //
+      // Не ждём результата: подбор ходит за эмбеддингами по сети и занимает
+      // около секунды, а создание задачи должно вернуться сразу. Готовую
+      // карточку клиент получит по сокету.
+      //
+      // Импорт отложенный: dispatch.ts уже зависит от этого модуля,
+      // статический импорт в обратную сторону замкнул бы круг.
+      // Приём зовём ВСЕГДА, даже когда исполнитель указан при создании:
+      // режим постановки — настройка владельца, и она должна действовать
+      // одинаково для любой карточки. Раньше здесь стояло
+      // `if (!assignee_id)`, и карточка с указанной ролью не получала ни
+      // флага, ни приёма — её нельзя было взять в работу вообще.
+      // Что подбор роли и раздачу чужому исполнителю делать не надо —
+      // знает сам applyIntakeToNewTask.
+      void (async () => {
+        try {
+          const { applyIntakeToNewTask } = await import("./dispatch.js");
+          await applyIntakeToNewTask(id, req.userId);
+          const after = getTaskRow(id);
+          if (after) {
+            broadcastToUsers(Array.from(notifyUsers), {
+              type: "task:updated",
+              task: hydrateTask(after),
+            });
+          }
+        } catch (err) {
+          // Приём — улучшение, а не условие создания: задача уже
+          // заведена и видна. Молча ронять её из-за недоступной модели
+          // подбора нельзя.
+          console.warn(`приём задачи ${id} не удался:`, err);
+        }
+      })();
+
+      return { task: hydrated };
+    },
+  });
+
+  // Update task — caller must be creator or assignee. Only a fixed set of
+  // columns is writable (no mass-assignment of id/creator_id/created_at/etc).
+  app.patch<{
+    Params: { id: string };
+    Body: Partial<{
+      title: string;
+      description: string;
+      due_date: string | null;
+      start_time: string | null;
+      duration_min: number | null;
+      project_id: string | null;
+      priority: number;
+      assignee_id: string;
+      status: string;
+      label_ids: string[];
+      // Manual sort order within a TaskBoard column (see db.ts's additive
+      // migration). Any integer, including negative — TaskBoard reindexes a
+      // whole column's cards to 0..n-1 on every drop, it never needs gaps.
+      position: number | null;
+      // Закрепить наверх списка внутри проекта (db.ts's additive migration,
+      // 20.08.2026) — независимо от position, см. ProjectTasksScreen.
+      pinned: boolean;
+      // Признак готовности к самозахвату (миграция 026, карточка d598de9f).
+      // Поднимает только владелец; пока false — claim отклоняется.
+      ready_for_pickup: boolean;
+      // «Нужно глубокое исследование» (миграция 052). Галочка в карточке;
+      // по ней запускается серверный конвейер исследования. Ставит владелец
+      // или Помощник владельца при постановке — см. POST /api/tasks/:id/research.
+      needs_research: boolean;
+    }>;
+  }>("/api/tasks/:id", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const { id } = req.params;
+      const body = req.body || {};
+      if ((body.assignee_id !== undefined || body.owner_selected_role !== undefined)) {
+        const actorRow = db.prepare("SELECT type, role FROM users WHERE id=?").get(req.userId) as { type?: string; role?: string } | undefined;
+        // Аудит 2026-10-05, п. 1.2/1.6: «организатор — живая роль, не
+        // автономный бот». Запрет «агенты не назначают исполнителей» стоит
+        // для исполнителей (type='ai' И role НЕ orchestrator/owner); сам
+        // организатор (role='orchestrator') в матрице прав имеет право
+        // переназначать (задача b6b57092), и резать его этой проверкой —
+        // значит ломать матрицу на ровном месте.
+        if (actorRow?.type === "ai" && !isOrchestrator(req.userId) && actorRow.role !== "owner") {
+          return reply.code(403).send({error:"Агенты не назначают исполнителей. Назначения выполняет сервер."});
+        }
+      }
+
+      const existing = getTaskForWrite(id, req.userId);
+      if (!existing) return reply.code(404).send({ error: "Not found" });
+
+      // Перенос поддерева разрешён, циклы запрещены.
+      if (body.parent_id !== undefined && body.parent_id !== null && body.parent_id !== "") {
+        const refusal = hierarchyRefusal(id, String(body.parent_id));
+        if (refusal) return reply.code(400).send({ error: refusal });
+      }
+      if (body.parent_id === "") body.parent_id = null;
+
+      if (isOwner(req.userId) && !taskExecutionState(id).can_change_executor &&
+          ["assignee_id","owner_selected_role"].some(key => body[key] !== undefined && body[key] !== (existing as any)[key])) {
+        return reply.code(409).send({error:"После запуска нельзя менять исполнителя"});
+      }
+
+      // title, when sent, must not be blank — trim now so the ALLOWED_FIELDS
+      // loop below writes the trimmed value.
+      if (body.title !== undefined) {
+        const trimmed = typeof body.title === "string" ? body.title.trim() : "";
+        if (!trimmed)
+          return reply
+            .code(400)
+            .send({ error: "название задачи не может быть пустым" });
+        body.title = trimmed;
+      }
+      // due_date, when sent, must be a real "YYYY-MM-DD" date or null
+      // (null clears the due date — see TaskFormScreen's dueDate state).
+      if (
+        body.due_date !== undefined &&
+        body.due_date !== null &&
+        (typeof body.due_date !== "string" || !isValidDateStr(body.due_date))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "некорректная дата (ожидается формат ГГГГ-ММ-ДД)" });
+      }
+
+      // Те же правила, что при создании (см. POST выше): форма «ЧЧ:ММ»,
+      // целые минуты, и время только вместе со сроком. Последнее здесь
+      // сверяется с УЖЕ СОХРАНЁННЫМ сроком, если в этом же запросе его не
+      // меняют — иначе «поставить время задаче, у которой срок уже есть»
+      // отвергалось бы на ровном месте.
+      if (
+        body.start_time !== undefined &&
+        body.start_time !== null &&
+        (typeof body.start_time !== "string" ||
+          !isValidTimeStr(body.start_time))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "некорректное время (ожидается формат ЧЧ:ММ)" });
+      }
+      if (
+        body.duration_min !== undefined &&
+        body.duration_min !== null &&
+        !isValidDuration(body.duration_min)
+      ) {
+        return reply.code(400).send({
+          error: "длительность — целые минуты от 1 до 1440",
+        });
+      }
+      {
+        const nextDue =
+          body.due_date !== undefined ? body.due_date : existing.due_date;
+        const nextStart =
+          body.start_time !== undefined
+            ? body.start_time
+            : (existing as any).start_time;
+        if (nextStart && !nextDue) {
+          return reply.code(400).send({
+            error: "время начала имеет смысл только вместе со сроком",
+          });
+        }
+      }
+
+      if (body.status !== undefined && !ALLOWED_STATUS.includes(body.status)) {
+        return reply.code(400).send({ error: "invalid status" });
+      }
+      // ЗАКРЫТИЕ И ВОЗВРАТ В РАБОТУ — только владельцу (08.09.2026, задача
+      // b6b57092). Закрытая карточка уходит с доски вместе со всей своей
+      // историей, и если её сможет захлопнуть кто-то кроме человека, с глаз
+      // уберут работу, которую владелец не видел.
+      //
+      // История решения — два отменённых режима:
+      //  - 20.08.2026 закрывать разрешалось любому type='ai' («приёмка
+      //    отдельным шагом — лишнее телодвижение»);
+      //  - 29.08.2026 приёмку передали оркестратору (задача be329d8e).
+      // 08.09.2026 владелец отменил и это: автономного оркестратора в системе
+      // нет, декомпозиция описана как enricher плюс эскалация на владельца,
+      // и строка «закрывать задачу — оркестратор» удалена из матрицы прав.
+      // Ревьюер выносит вердикт, закрывает человек.
+      //
+      // Запрет держим на сервере: файл MCP общий, и агенту ничто не мешает
+      // дёрнуть API напрямую, а описание инструмента — это соглашение,
+      // которое легко забыть.
+      //
+      // Применяется к ОБОИМ переходам: completed (active→completed) и
+      // active (completed→active, «вернуть в работу»). Возврат — та же
+      // ручка, что и закрытие: нельзя закрыть «не глядя», нельзя и
+      // заново открыть «не глядя».
+      if (body.status !== undefined && body.status !== existing.status) {
+        const actor = db
+          .prepare("SELECT role FROM users WHERE id = ?")
+          .get(req.userId) as { role?: string } | undefined;
+        const role = actor?.role ?? "";
+        if (role !== "owner") {
+          return reply.code(403).send({
+            error:
+              "закрывать задачу и возвращать её в работу может только владелец: " +
+              "исполнитель сдаёт через review, вердикт выносит ревьюер, закрывает человек",
+          });
+        }
+      }
+
+      if (
+        body.status === "completed" &&
+        existing.status !== "completed" &&
+        (existing.agent_state === "review" || hasAnyResultVersion(id)) &&
+        !hasApprovedCurrentVersion(id)
+      ) {
+        // Если close пришёл от владельца (это уже доказано веткой выше —
+        // status менять может только owner), и есть актуальная версия
+        // результата, но она ещё не одобрена — автоодобряем от его же
+        // имени, а не возвращаем 409. Раньше клиенту приходилось слать
+        // POST /reviews отдельным запросом; на iPhone это терялось в
+        // гонке с локально устаревшим task.agentState, и карточка не
+        // закрывалась. Логика совпадает с тем, что свайп «Принять и
+        // закрыть» на iOS выражает одним действием: владелец закрыл =
+        // владелец одобрил. Для переходов из review — это уже сделано в
+        // routes/agent-state.ts через setState(review → null); здесь
+        // покрываем кейс, когда agent_state уже null (например, после
+        // явного «Принять сдачу» из чата/UI), а close приходит отдельно.
+        const owner = db
+          .prepare("SELECT role FROM users WHERE id = ?")
+          .get(req.userId) as { role?: string } | undefined;
+        if (owner?.role === "owner" && !existing.completed_at) {
+          const current = currentResultVersion(id);
+          if (current) {
+            db.prepare(
+              `INSERT INTO reviews
+                 (id, task_id, version_id, task_revision, reviewer_id,
+                  artifact_hash, criteria_version, verdict, findings,
+                  created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))`,
+            ).run(
+              uid(),
+              id,
+              current.id,
+              current.task_revision,
+              req.userId,
+              current.artifact_hash,
+              "1",
+              "approved",
+            );
+            logEvent({
+              taskId: id,
+              actorId: req.userId,
+              kind: "review_recorded",
+              field: "result_version",
+              toValue: `${current.version_no}:approved`,
+            });
+          } else {
+            // Нет версии — закрывать нельзя, оставляем 409 с понятным текстом.
+            return reply.code(409).send({
+              error:
+                "нельзя закрыть задачу: у неё нет актуальной версии результата, которую можно одобрить",
+            });
+          }
+        } else {
+          return reply.code(409).send({
+            error:
+              "нельзя принять задачу: у актуальной версии результата нет одобрения Reviewer/владельца",
+          });
+        }
+      }
+
+      if (
+        body.priority !== undefined &&
+        !(body.priority >= 1 && body.priority <= 4)
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "priority must be between 1 and 4" });
+      }
+      // Тот же допуск, что и при создании (getProjectForFiling): исполнитель
+      // берётся из тела, а если его там нет — из уже сохранённой задачи,
+      // иначе перенос задачи в проект её же владельца ломался бы только
+      // потому, что assignee_id не переслали повторно.
+      if (body.project_id) {
+        const project = getProjectForFiling(
+          body.project_id,
+          req.userId,
+          body.assignee_id !== undefined
+            ? body.assignee_id
+            : existing.assignee_id,
+        );
+        if (!project)
+          return reply.code(400).send({ error: "invalid project_id" });
+      }
+      // position, when sent, must be a plain integer — null is allowed (an
+      // explicit "un-order" this task), but not e.g. a fraction or NaN.
+      if (
+        body.position !== undefined &&
+        body.position !== null &&
+        !Number.isInteger(body.position)
+      ) {
+        return reply.code(400).send({ error: "position must be an integer" });
+      }
+      if (body.assignee_id) {
+        const assignee = db
+          .prepare("SELECT id FROM users WHERE id = ?")
+          .get(body.assignee_id);
+        if (!assignee)
+          return reply.code(400).send({ error: "invalid assignee_id" });
+      }
+      if (
+        body.label_ids?.length &&
+        !allLabelsOwnedByUser(body.label_ids, req.userId)
+      ) {
+        return reply.code(400).send({ error: "invalid label_ids" });
+      }
+
+      // better-sqlite3 rejects a raw JS boolean as a bind parameter — same
+      // normalization as subtasks.ts's `done` before it reaches ALLOWED_FIELDS.
+      if (body.pinned !== undefined) {
+        body.pinned = body.pinned ? 1 : 0;
+      }
+
+      // Тот же приём, что у pinned: JS-булево better-sqlite3 не примет
+      // параметром. Флаг глубокого исследования — обычное поле карточки,
+      // менять его может тот, кому доступна запись задачи (владелец либо
+      // исполнитель), отдельного owner-guard'а здесь нет: это не рубильник
+      // сервиса, а отметка на карточке.
+      if (body.needs_research !== undefined) {
+        body.needs_research = body.needs_research ? 1 : 0;
+      }
+
+      if (body.requires_reviewer_review !== undefined) {
+        if (!isOwner(req.userId)) {
+          return reply.code(403).send({ error: "маршрут ревью может менять только владелец трекера" });
+        }
+        if (typeof body.requires_reviewer_review !== "boolean") {
+          return reply.code(400).send({ error: "requires_reviewer_review должен быть boolean" });
+        }
+        body.requires_reviewer_review = body.requires_reviewer_review ? 1 : 0;
+      }
+
+      // ВЫБОР РОЛИ ВЛАДЕЛЬЦЕМ (миграция 038, карточка 5ceda583).
+      // Обрабатывается РАНЬШЕ флага готовности: владелец может передать в
+      // одном PATCH и роль, и флаг, а запуск по флагу обязан взять уже
+      // сохранённую роль, а не дефолт (иначе выбор владельца молча
+      // игнорируется, а план уходит дефолтной роли).
+      // Логика «только владелец трекера», как и у ready_for_pickup, но это
+      // НЕЗАВИСИМАЯ ось: можно поднять роль заранее, готовность — позже.
+      // Назначение роли само по себе работу не запускает — оно лишь говорит
+      // диспетчеру, какую из 8 ролей выбрал владелец, если тот доберётся до
+      // задачи. Валидация против ROLE_NAMES идёт здесь, а не в SQL: CHECK на
+      // этой колонке запер бы список ролей в схеме (миграция 005 уже
+      // показала, что CHECK(role IN (...)) сменить дороже, чем переписать
+      // таблицу), а роль добавить — операция дешевле, чем миграция через
+      // пересборку.
+      if (body.owner_selected_role !== undefined) {
+        if (!isOwner(req.userId)) {
+          return reply.code(403).send({
+            error: "выбрать роль задачи может только владелец трекера",
+          });
+        }
+
+        const raw = body.owner_selected_role;
+        if (raw !== null) {
+          if (
+            typeof raw !== "string" ||
+            !ROLE_NAMES.includes(raw as RoleName)
+          ) {
+            return reply.code(400).send({
+              error: `owner_selected_role должен быть одной из ролей: ${ROLE_NAMES.join(", ")}`,
+            });
+          }
+        }
+        const newValue = raw === null ? null : (raw as string);
+        const previous = existing.owner_selected_role ?? null;
+        if (previous === newValue) {
+          // идемпотентность: повтор того же значения не пишет лишнего
+          // события и не трогает карточку. Это не «подтверждение», это
+          // пустой PATCH.
+        } else {
+          db.prepare(
+            `UPDATE tasks SET owner_selected_role = ?, updated_at = datetime('now') WHERE id = ?`,
+          ).run(newValue, id);
+          logEvent({
+            taskId: id,
+            actorId: req.userId,
+            kind: "owner_role_changed",
+            field: "owner_selected_role",
+            fromValue: previous ?? "",
+            toValue: newValue ?? "",
+          });
+        }
+        // готово, остальные поля PATCH не трогают owner_selected_role — это
+        // своя ось. Но если в этом же запросе передали, скажем, title —
+        // общий UPDATE ниже всё равно отработает, и это нормально: это два
+        // независимых действия в одном HTTP-вызове.
+      }
+
+      // ФЛАГ ГОТОВНОСТИ К САМОЗАХВАТУ (миграция 026, карточка d598de9f):
+      // поднимает только владелец трекера. Если body.ready_for_pickup
+      // передано — обрабатываем здесь и НЕ пропускаем в общий UPDATE ниже
+      // (там это поле не в whitelist, и владельцу не нужно право «сменить
+      // чужое решение задним числом» через редактирование задачи как обычное
+      // поле). ready_for_pickup, ready_set_at и ready_set_by меняются
+      // синхронно — три поля одной транзакцией, чтобы лента не показала
+      // промежуточного состояния «флаг поднят, но без автора».
+      if (body.ready_for_pickup !== undefined) {
+        if (!isOwner(req.userId)) {
+          return reply.code(403).send({
+            error:
+              "поднять или снять флаг готовности может только владелец трекера",
+          });
+        }
+        if (typeof body.ready_for_pickup !== "boolean") {
+          return reply
+            .code(400)
+            .send({ error: "ready_for_pickup должно быть boolean" });
+        }
+        const newValue = body.ready_for_pickup ? 1 : 0;
+        const previous = existing.ready_for_pickup ?? 0;
+        if (previous === newValue) {
+          // идемпотентность: повтор того же значения не пишет лишнего события
+          // и не трогает ready_set_at/by — это не «подтверждение», это пустой
+          // PATCH.
+        } else {
+          const txn = db.transaction(() => {
+            if (newValue === 1) {
+              db.prepare(
+                `UPDATE tasks
+                    SET ready_for_pickup = 1,
+                        ready_set_at = datetime('now'),
+                        ready_set_by = ?,
+                        updated_at = datetime('now')
+                  WHERE id = ?`,
+              ).run(req.userId, id);
+              // Владелец 30.09.2026: «Запустить исполнителя» и «Утвердить
+              // план» — одно из двух. Ручной запуск здесь означает явный
+              // отказ от предложенного плана командной работы (если он
+              // есть и ещё не утверждён) — гасим черновик, чтобы он не
+              // висел «утверди меня» рядом с уже занятой одним
+              // исполнителем карточкой. approve на superseded/draft-only
+              // плане и так откажет 409 (task-collaboration-plans.ts:349).
+              db.prepare(
+                "UPDATE task_collaboration_plans SET status = 'superseded' WHERE task_id = ? AND status = 'draft'",
+              ).run(id);
+            } else {
+              db.prepare(
+                `UPDATE tasks
+                    SET ready_for_pickup = 0,
+                        ready_set_at = NULL,
+                        ready_set_by = NULL,
+                        updated_at = datetime('now')
+                  WHERE id = ?`,
+              ).run(id);
+            }
+            logEvent({
+              taskId: id,
+              actorId: req.userId,
+              kind: "ready_flag_changed",
+              field: "ready_for_pickup",
+              fromValue: String(previous),
+              toValue: String(newValue),
+            });
+            if (newValue === 1 && existing.assignee_id) {
+              enqueueRoleRunJob({
+                taskId: id,
+                reason: "assigned",
+                actorId: req.userId,
+                dedupeKey: `ready:${id}:${readyArmToken(id)}`,
+                manualStart: true,
+              });
+            }
+          });
+          txn();
+        }
+        // Флаг поднят владельцем — значит задача готова ехать. Раньше она
+        // на этом и останавливалась: отдать в работу нужно было отдельным
+        // действием, и про него легко забывалось. Сам подбор исполнителя
+        // сидит внутри отдачи, так что ручной и автоматический режимы
+        // расходятся ровно в одном — кто поднял флаг.
+        // Исполнитель уже назначен — флаг и есть запуск: роль будит сервер.
+        // MAK-68: 9 входов сведены к одной функции. PATCH ready_for_pickup=1
+        // без исполнителя идёт через `tryStartSingleExecutorPlan` —
+        // единая точка, создающая план single_executor и стартующая узел.
+        if (newValue === 1 && previous !== 1 && !existing.assignee_id) {
+          try {
+            const { tryStartSingleExecutorPlan } = await import("./dispatch.js");
+            await tryStartSingleExecutorPlan(id, req.userId, { manualStart: true });
+          } catch (err) {
+            // Отказ отдачи не отменяет поднятия флага: владелец своё
+            // действие сделал, и карточка обязана остаться готовой.
+            console.warn(`отдача задачи ${id} после флага не удалась:`, err);
+          }
+        }
+        // готово, остальные поля PATCH не трогают флаг — он своя ось.
+        // Но если в этом же запросе передали, скажем, title — общий UPDATE
+        // ниже всё равно отработает, и это нормально: это два независимых
+        // действия в одном HTTP-вызове, не «одна операция».
+      }
+
+      // СМЕНА ИСПОЛНИТЕЛЯ — владелец или оркестратор трекера. Правило
+      // AGENT-PROTOCOL.md «assignee_id не переписываем» защищает агента от
+      // самоснятия, но заодно блокировало и владельца: он не мог
+      // переназначить зависшую задачу (например, карточка ушла на
+      // постороннюю учётку по шаблону, а реально работает роль). Владелец системы и
+      // оркестратор должны менять assignee_id в любой момент — это их
+      // ручка, не агентская. Валидация «такой user существует» уже сделана выше
+      // (вернёт 400 invalid assignee_id), здесь — только право на смену.
+      if (
+        body.assignee_id !== undefined &&
+        body.assignee_id !== existing.assignee_id
+      ) {
+        if (!isOwner(req.userId) && !isOrchestrator(req.userId)) {
+          return reply.code(403).send({
+            error:
+              "сменить исполнителя задачи может только владелец или оркестратор трекера",
+          });
+        }
+      }
+
+      // ФОРМАТ ОПИСАНИЯ РОЛИ (карточка cea8d997). Описание пишут в основном
+      // роли; тот же гейт, что на результате шага: очевидное сервер заменяет
+      // сам (таблица Markdown → блок table), неверный блок возвращает роль
+      // с образцом. Текст человека гейт не трогает: у владельца своя
+      // таблица — это его слова, молча переписывать их нельзя.
+      if (isRoleAuthor(req.userId) && typeof body.description === "string" && body.description.trim()) {
+        const formatted = applyRoleFormat(body.description);
+        if (formatted.problems.length) {
+          return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });
+        }
+        body.description = formatted.text;
+      }
+
+      // Whitelisted columns only — request body keys never reach raw SQL.
+      const ALLOWED_FIELDS = [
+        "title",
+        "description",
+        "due_date",
+        "start_time",
+        "duration_min",
+        "project_id",
+        "parent_id",
+        "priority",
+        "assignee_id",
+        "status",
+        "position",
+        "pinned",
+        "requires_reviewer_review",
+        "needs_research",
+        "run_repeat",
+        "repeat_until",
+        "recurrence_spawned",
+      ] as const;
+      const fields: string[] = [];
+      const values: any[] = [];
+      for (const key of ALLOWED_FIELDS) {
+        if (body[key] !== undefined) {
+          fields.push(`${key} = ?`);
+          values.push(body[key]);
+        }
+      }
+
+      // completed_at tracks the moment the task became 'completed',
+      // independent of updated_at (which is bumped on every PATCH below,
+      // including unrelated edits). Set it only on the active→completed
+      // transition; clear it back to NULL on completed→active, so a task
+      // pulled back into work doesn't linger in a "completed on that day"
+      // history. A repeated status:"completed" PATCH against an
+      // already-completed task leaves it untouched — otherwise editing a
+      // finished task (e.g. its description) would re-stamp completed_at
+      // to now and slide it into "today" on an Activity screen grouped by
+      // completion day, which is exactly the bug this column exists to fix.
+      // Задачу перестал вести агент — гасим отметки о работе и на её шагах
+      // (см. ниже, releaseSubtaskWork).
+      let releasesAgentWork = false;
+      if (body.status !== undefined) {
+        if (body.status === "completed" && existing.status !== "completed") {
+          fields.push("completed_at = datetime('now')");
+          // A completed task is done — any in-flight agent_state (usually
+          // 'review', it's the owner accepting) no longer means anything.
+          fields.push("agent_state = NULL");
+          releasesAgentWork = true;
+        } else if (body.status === "active") {
+          fields.push("completed_at = NULL");
+          // completed -> active is "вернуть в работу" (AGENT-PROTOCOL.md
+          // transition matrix) — starts clean, nobody's mid-lease on it.
+          if (existing.status === "completed") {
+            fields.push("agent_state = NULL");
+            releasesAgentWork = true;
+          }
+        }
+      }
+
+      if (fields.length) {
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        db.prepare(`UPDATE tasks SET ${fields.join(", ")} WHERE id = ?`).run(
+          ...values,
+        );
+      }
+
+      // Тема задачи закрывается вместе с задачей и снова открывается при
+      // возврате в работу (карточка ca816271, п. 4). История остаётся.
+      if (body.status === "completed" && existing.status !== "completed") {
+        setTaskTopicClosed(id, true);
+      } else if (body.status === "active" && existing.status === "completed") {
+        setTaskTopicClosed(id, false);
+      }
+
+      // Гашение agent_state у самой задачи выше очищало только её колонку, а
+      // незакрытый шаг в in_progress/blocked продолжал поднимать состояние
+      // наверх роллапом (withAgentStale) — уже на ЗАКРЫТОЙ задаче. Владелец
+      // видел «Агент пропал» на карточке, с которой работа давно снята, а
+      // заново открытая задача сразу выглядела занятой.
+      if (releasesAgentWork) {
+        releaseSubtaskWork(id);
+      }
+
+      // Закрыли карточку — закрываем и всё под ней: активные дочерние
+      // карточки и неотмеченные шаги (владелец 12.10.2026).
+      if (body.status === "completed" && existing.status !== "completed") {
+        closeTaskTree(id, req.userId);
+      }
+
+      // Карточку закрыли — значит следующая в очереди дождалась своей
+      // предшественницы и может ехать. Без этого автоматический режим
+      // делал ровно один шаг дерева и вставал: остальные карточки висели
+      // готовыми, но никто их не брал.
+      //
+      // Только на active→completed: возврат задачи в работу очередь не
+      // двигает, иначе «вернуть в работу» запускало бы следующий шаг.
+      if (body.status === "completed" && existing.status !== "completed") {
+        bumpContextVersion(id);
+        // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
+        void import("./dispatch.js")
+          .then((m) => m.admitParentAfterChildren(id))
+          .catch((err) => console.warn("родитель после дочерней:", err));
+        try {
+          // Импорт отложенный: dispatch.ts уже зависит от этого модуля
+          // (getTaskRow, hydrateTask), и статический импорт в обратную
+          // сторону замкнул бы круг.
+          const { releaseQueuedSuccessors } = await import("./dispatch.js");
+          await releaseQueuedSuccessors(id, req.userId);
+        } catch (err) {
+          // Очередь — надстройка над закрытием задачи, а не его часть.
+          // Если она упала, закрытие всё равно должно состояться: иначе
+          // владелец не сможет закрыть карточку из-за проблемы в соседней.
+          req.log?.warn(
+            { err: String(err) },
+            `не удалось продвинуть очередь после закрытия ${id}`,
+          );
+        }
+      }
+
+      // Status changes go in the journal too — the "смена состояния"
+      // journal row isn't only about agent_state, `status` counts as well
+      // (this is how a human's own active<->completed toggles show up in
+      // the task's history feed alongside the agent transitions).
+      if (body.status !== undefined && body.status !== existing.status) {
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "state_changed",
+          field: "status",
+          fromValue: existing.status,
+          toValue: body.status,
+        });
+      }
+
+      // Родитель — зонтик над дочерними, своей работы у него нет: он ждёт,
+      // пока закроются дети. Закрылась последняя — родитель сам уходит на
+      // приёмку к владельцу. Замысел владельца 10.09.2026, дословно: «как
+      // только все дочерние поставили галочки — что приходит на родителя?
+      // Ревью сразу же. А не какие-то ещё эфемерные шаги».
+      //
+      // Именно review, а НЕ completed: закрывает задачу только владелец
+      // (решение 08.09.2026, проверка выше по этому же файлу). Автомат
+      // доводит работу до его стола, но не принимает её за него.
+      //
+      // actor_id = NULL у события — это не действие того, кто закрыл
+      // ребёнка, а следствие, которое его закрытие вскрыло: тот же довод,
+      // что у lease_expired в agent-state.ts.
+      if (
+        body.status === "completed" &&
+        existing.status !== "completed" &&
+        existing.parent_id
+      ) {
+        const parent = getTaskRow(existing.parent_id) as any;
+        // Родителя трогаем, только пока он сам активен и ещё не на приёмке:
+        // повторное закрытие ребёнка (или закрытие уже закрытого родителя)
+        // не должно поднимать карточку обратно на доску.
+        if (
+          parent &&
+          parent.status === "active" &&
+          parent.agent_state !== "review"
+        ) {
+          const siblings = db
+            .prepare("SELECT status FROM tasks WHERE parent_id = ?")
+            .all(existing.parent_id) as Array<{ status: string }>;
+          const allDone =
+            siblings.length > 0 &&
+            siblings.every((s) => s.status === "completed");
+          // Предохранитель (владелец 22.09.2026): у родителя есть свои
+          // невыполненные пункты — его работа ещё не сделана, и закрытие
+          // дочерних на проверку его не отправляет. Уйдёт туда сам, когда
+          // исполнитель закроет последний свой пункт (routes/subtasks.ts).
+          const openOwnSteps = (
+            db
+              .prepare(
+                "SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ? AND done = 0",
+              )
+              .get(parent.id) as { n: number }
+          ).n;
+          if (allDone && openOwnSteps === 0) {
+            const beforeVersion = currentResultVersion(parent.id);
+            const version = ensureResultVersionForReview(
+              parent.id,
+              req.userId,
+              resultFromSubtasks(parent.id),
+            );
+            db.prepare(
+              "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
+            ).run(parent.id);
+            bumpContextVersion(parent.id);
+            if (!beforeVersion) {
+              logEvent({
+                taskId: parent.id,
+                actorId: req.userId,
+                kind: "result_version_created",
+                field: "result_version",
+                toValue: String(version.version_no),
+              });
+            }
+            logEvent({
+              taskId: parent.id,
+              actorId: null,
+              kind: "state_changed",
+              field: "agent_state",
+              fromValue: parent.agent_state ?? null,
+              toValue: "review",
+            });
+            db.prepare(
+              "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
+            ).run(
+              uid(),
+              parent.id,
+              null,
+              `Все дочерние задачи закрыты (${siblings.length}) — задача ушла на приёмку.`,
+            );
+          }
+        }
+      }
+
+      // Остальные правки задачи — в тот же журнал. До этого писался ровно
+      // один вид записи (смена status выше) плюс переходы agent_state в
+      // agent-state.ts, поэтому назначение исполнителя не оставляло в ленте
+      // никакого следа: уведомление адресату уходило (ниже), а владелец,
+      // открыв ленту, не видел, что ответственный вообще менялся. Найдено
+      // Максимом 14.08.2026 — он назначил исполнителя, и лента промолчала.
+      //
+      // Пишем те поля, изменение которых человек воспринимает как событие:
+      // исполнитель, срок, приоритет, проект, название. description и
+      // position сознательно не журналируем — первое даёт «портянку» из
+      // текста в ленте (для этого есть комментарии), второе меняется при
+      // каждом перетаскивании карточки и забило бы ленту служебным шумом.
+      const JOURNALLED = [
+        "assignee_id",
+        "due_date",
+        "priority",
+        "project_id",
+        "title",
+      ] as const;
+      for (const key of JOURNALLED) {
+        if (body[key] === undefined) continue;
+        const before = existing[key] ?? null;
+        const after = body[key] ?? null;
+        // Числа и строки из тела запроса сравниваем по строковому виду:
+        // priority приходит числом, а в SQLite лежит числом же, но из JSON
+        // может прийти и строкой — String() снимает этот класс ложных
+        // «изменений» без изменения того, что реально пишется в базу.
+        if (String(before) === String(after)) continue;
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "field_changed",
+          field: key,
+          fromValue: before === null ? null : String(before),
+          toValue: after === null ? null : String(after),
+        });
+        // Смена исполнителя — тоже доставка (5f292e87): assignment в inbox
+        // новому исполнителю.
+        if (key === "assignee_id" && after) {
+          db.prepare(
+            `INSERT INTO agent_inbox
+               (id, chat_message_id, to_user_id, body_text, task_id,
+                task_version, kind, event_type, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'text', 'assignment', 'sent', datetime('now'))`,
+          ).run(
+            uid(),
+            `asg-${uid()}`,
+            String(after),
+            existing.title,
+            id,
+            (
+              db
+                .prepare("SELECT current_revision FROM tasks WHERE id=?")
+                .get(id) as any
+            )?.current_revision ?? null,
+          );
+          registryRecord({
+            source: "assignment",
+            trigger: "PATCH /api/tasks/:id",
+            toUserId: String(after),
+            data: { task_id: id },
+            result: "inbox_sent",
+          });
+        }
+      }
+
+      // Описание — фактом, без текста: «изменил описание». Сам текст в
+      // ленте был бы портянкой (и дублировал бы то, что видно выше в
+      // карточке), но и молчать нельзя — правка описания такое же
+      // телодвижение, как остальные.
+      if (
+        body.description !== undefined &&
+        (body.description ?? "") !== (existing.description ?? "")
+      ) {
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "description_changed",
+          field: "description",
+        });
+      }
+
+      // Update labels
+      if (body.label_ids) {
+        const before = (
+          db
+            .prepare("SELECT label_id FROM task_labels WHERE task_id = ?")
+            .all(id) as Array<{ label_id: string }>
+        )
+          .map((r) => r.label_id)
+          .sort();
+        const after = [...body.label_ids].sort();
+        if (before.join(",") !== after.join(",")) {
+          logEvent({
+            taskId: id,
+            actorId: req.userId,
+            kind: "labels_changed",
+            field: "labels",
+            fromValue: String(before.length),
+            toValue: String(after.length),
+          });
+        }
+        db.prepare("DELETE FROM task_labels WHERE task_id = ?").run(id);
+        const ins = db.prepare(
+          "INSERT INTO task_labels (task_id, label_id) VALUES (?, ?)",
+        );
+        for (const lid of body.label_ids) ins.run(id, lid);
+      }
+
+      // Notification for assignee change
+      if (body.assignee_id && body.assignee_id !== req.userId) {
+        const notifId = uid();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
+        ).run(
+          notifId,
+          body.assignee_id,
+          id,
+          `Вас назначили на: ${existing.title || id}`,
+          req.userId,
+        );
+        broadcastToUsers([body.assignee_id], {
+          type: "notification:new",
+          notificationId: notifId,
+          taskId: id,
+        });
+      }
+
+      const task = getTaskRow(id);
+      const hydrated = hydrateTask(task);
+      const eventType =
+        body.status === "completed" ? "task:completed" : "task:updated";
+      // Notify old + new assignee, and the creator, so nobody's client goes stale.
+      broadcastTaskEvent(
+        [existing.creator_id, existing.assignee_id, task.assignee_id],
+        {
+          type: eventType,
+          task: hydrated,
+        },
+      );
+
+      return { task: hydrated };
+    },
+  });
+
+  // Delete task — карточка 57c69735…: одна ручка, два поведения по
+  // состоянию. Создателю (== существующее право getTaskForOwnerDelete)
+  // удалять теперь значит «отправить в архив» — это и есть требование
+  // карточки «все удаления должны идти в архив». Владельцу трекера на
+  // АРХИВНОЙ карточке тот же DELETE значит «удалить навсегда» —
+  // физическая чистка с журналом `task_purge_log`.
+  //
+  // Разводка ответов для чужой (не-создатель, не-владелец) карточки:
+  //   - несуществующая → 404 (как раньше);
+  //   - живая чужая  → 404 (как раньше: «ваша» — это создатель);
+  //   - архивная чужая → 403 «удалить навсегда может только владелец».
+  // Это поведение контракта §3.2: «403 если карточка архивная, но
+  // запрашивающий не владелец». Проверка существования карточки идёт
+  // напрямую (одна строка из tasks), чтобы различить «не существует» от
+  // «чужая архивная».
+  app.delete<{ Params: { id: string } }>(
+    "/api/tasks/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const isOwnerCaller = isOwner(req.userId);
+      const task = getTaskForOwnerDelete(req.params.id, req.userId);
+      if (!task) {
+        // Точно различаем 404 и 403: 403 уходит только архивной чужой.
+        const probe = db
+          .prepare("SELECT id, archived_at, creator_id FROM tasks WHERE id = ?")
+          .get(req.params.id) as
+          | { id: string; archived_at: string | null; creator_id: string }
+          | undefined;
+        if (!probe) return reply.code(404).send({ error: "Not found" });
+        if (probe.archived_at && !isOwnerCaller) {
+          return reply
+            .code(403)
+            .send({ error: "удалить навсегда может только владелец" });
+        }
+        // Живая чужая карточка: getTaskForOwnerDelete уже отбил
+        // права, и 404 здесь — «для вас нет доступа» без раскрытия
+        // существования (тот же приём, что и в приватном проекте).
+        return reply.code(404).send({ error: "Not found" });
+      }
+
+      // Закрытая (выполненная) карточка — архивная по сути: «удалить
+      // навсегда» должно работать и для неё (владелец, 01.11.2026).
+      if (task.archived_at || task.status === "completed") {
+        // Архивная — только владелец может удалить навсегда. Для
+        // создателя (он же НЕ владелец) — идемпотентный «архивировано
+        // уже» через archiveTask.
+        if (!isOwnerCaller) {
+          // Создатель на своей архивной: archiveTask идемпотентен.
+          const outcome = archiveTask(req.params.id, req.userId);
+          const refreshed = getTaskRow(req.params.id) as any;
+          const hydrated = hydrateTask(refreshed) as any;
+          broadcastTaskEvent([task.creator_id, task.assignee_id], {
+            type: "task:archived",
+            task_id: req.params.id,
+            archived_at: outcome.archived_at,
+            archived_by: outcome.archived_by,
+            already_archived: outcome.already_archived,
+            task: hydrated,
+          });
+          return { task: hydrated };
+        }
+        const outcome = purgeArchivedTask(req.params.id, req.userId);
+        if (!outcome.ok) {
+          if (outcome.reason === "not_archived") {
+            return reply
+              .code(409)
+              .send({ error: "карточка уже не в архиве" });
+          }
+          if (outcome.reason === "has_children") {
+            return reply.code(409).send({
+              error:
+                "у карточки есть дочерние задачи; сначала разберитесь с ними",
+              child_count: outcome.child_count,
+            });
+          }
+          if (outcome.reason === "still_running") {
+            return reply.code(409).send({
+              error: "карточка ещё в работе; сначала остановите её",
+              running_subtask: outcome.running_subtask,
+            });
+          }
+          return reply
+            .code(409)
+            .send({ error: "не удалось удалить карточку", reason: outcome.reason });
+        }
+        broadcastTaskEvent([task.creator_id, task.assignee_id], {
+          type: "task:deleted",
+          id: req.params.id,
+          task_id: req.params.id,
+        });
+        return {
+          deleted: true,
+          task_id: req.params.id,
+          title: outcome.title,
+          counts: outcome.counts,
+        };
+      }
+
+      // Живая карточка — архивирование. Идемпотентно по уже-архивной,
+      // но обычный путь сюда не доходит: ветка выше перехватывает
+      // архивную.
+      const outcome = archiveTask(req.params.id, req.userId);
+      const refreshed = getTaskRow(req.params.id) as any;
+      const hydrated = hydrateTask(refreshed) as any;
+      broadcastTaskEvent([task.creator_id, task.assignee_id], {
+        type: "task:archived",
+        task_id: req.params.id,
+        archived_at: outcome.archived_at,
+        archived_by: outcome.archived_by,
+        already_archived: outcome.already_archived,
+        task: hydrated,
+      });
+      return { task: hydrated };
+    },
+  );
+
+  // Явное архивирование (карточка 57c69735…, §3.2): отдельная ручка для
+  // клиентов, которым неудобно пользоваться DELETE (iOS, веб-кнопка).
+  // Тело запроса пустое. Только владелец. Идемпотентно: архивная на
+  // входе → 200 + та же карточка. Чужая/несуществующая → 404.
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/archive",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "архивировать явно может только владелец" });
+      }
+      // На чужой/несуществующей карточке сначала убеждаемся, что она
+      // существует — без этого archiveTask бросит, и тест потеряет
+      // различимость 404/403. Здесь же прячем её от постороннего:
+      // getTaskForRead прячет архивные от постороннего, но владельцу как
+      // раз их и нужно видеть. Поэтому читаем напрямую.
+      const exists = db
+        .prepare("SELECT id, archived_at FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id: string; archived_at: string | null } | undefined;
+      if (!exists) return reply.code(404).send({ error: "Not found" });
+
+      const outcome = archiveTask(req.params.id, req.userId);
+      const refreshed = getTaskRow(req.params.id) as any;
+      const hydrated = hydrateTask(refreshed) as any;
+      broadcastTaskEvent([hydrated.creator_id, hydrated.assignee_id], {
+        type: "task:archived",
+        task_id: req.params.id,
+        archived_at: outcome.archived_at,
+        archived_by: outcome.archived_by,
+        already_archived: outcome.already_archived,
+        task: hydrated,
+      });
+      return { task: hydrated };
+    },
+  );
+
+  // Восстановление (карточка 57c69735…, §3.2). Только владелец.
+  // 409 not_archived на живой, 409 project_archived на архивном
+  // проекте — иначе клиент прочтёт «прошло», а карточка останется в
+  // архиве.
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/restore",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "восстанавливать может только владелец" });
+      }
+      const exists = db
+        .prepare("SELECT id FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id: string } | undefined;
+      if (!exists) return reply.code(404).send({ error: "Not found" });
+
+      const outcome = restoreTask(req.params.id, req.userId);
+      if ((outcome as any).project_archived) {
+        return reply.code(409).send({
+          error: "project_archived",
+          message: "Сначала восстановите проект",
+        });
+      }
+      if ((outcome as any).reason === "not_archived") {
+        return reply.code(409).send({
+          error: "карточка не в архиве",
+        });
+      }
+      const refreshed = getTaskRow(req.params.id) as any;
+      const hydrated = hydrateTask(refreshed) as any;
+      broadcastTaskEvent([hydrated.creator_id, hydrated.assignee_id], {
+        type: "task:restored",
+        task_id: req.params.id,
+        restored_by: req.userId,
+        task: hydrated,
+      });
+      return { task: hydrated, restored_subtree_count: (outcome as any).restored_subtree_count };
+    },
+  );
+}

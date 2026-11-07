@@ -1,0 +1,34 @@
+[
+  {
+    "mode": "work",
+    "operation": "mcp__composio__COMPOSIO_GET_TOOL_SCHEMAS",
+    "effects": "write",
+    "available": true
+  },
+  {
+    "mode": "work",
+    "operation": "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+    "effects": "write",
+    "available": true
+  },
+  {
+    "mode": "plan",
+    "operation": "mcp__composio__COMPOSIO_GET_TOOL_SCHEMAS",
+    "effects": "write",
+    "available": false,
+    "restriction": {
+      "code": "MODE_RESTRICTED",
+      "message": "Для изменения нужен режим Работа"
+    }
+  },
+  {
+    "mode": "plan",
+    "operation": "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+    "effects": "write",
+    "available": false,
+    "restriction": {
+      "code": "MODE_RESTRICTED",
+      "message": "Для изменения нужен режим Работа"
+    }
+  }
+]

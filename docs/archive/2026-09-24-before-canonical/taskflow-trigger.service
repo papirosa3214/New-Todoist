@@ -1,0 +1,18 @@
+[Unit]
+Description=Будильник TaskFlow — доска зовёт Клода в работу
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/maksim/Проекты/New-Todoist/server/scripts
+# Токен не лежит на диске и не печатается: vault-run отдаёт его только в
+# окружение дочернего процесса и процеживает вывод.
+# Второй ключ — Гермеса: уведомления сервер шлёт только адресату, и без
+# отдельного соединения под его учёткой служба не узнаёт, что владелец
+# назначил задачу ему (поймано 21.08.2026: «не берёт в работу»).
+ExecStart=/usr/bin/python3 /home/maksim/.claude/vault-run.py --secret TASKFLOW_TOKEN=TASKFLOW_AGENT_TOKEN --secret TASKFLOW_HERMES_TOKEN=TASKFLOW_HERMES_TOKEN --secret TASKFLOW_DEEPSEEK_TOKEN=TASKFLOW_DEEPSEEK_TOKEN -- /usr/bin/python3 /home/maksim/Проекты/New-Todoist/server/scripts/trigger.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

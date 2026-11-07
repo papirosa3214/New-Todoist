@@ -1,0 +1,21 @@
+[Unit]
+Description=TaskFlow Telegram gateway for chat-secretary
+After=network-online.target taskflow-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Проекты/New-Todoist/server
+EnvironmentFile=%h/.config/taskflow/telegram-gateway.env
+ExecStart=%h/.nvm/versions/node/v22.23.1/bin/node --use-env-proxy %h/Проекты/New-Todoist/server/integrations/telegram-gateway/gateway.mjs
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/taskflow-telegram-gateway
+Environment=TELEGRAM_GATEWAY_STATE=%h/.local/state/taskflow-telegram-gateway/state.json
+
+[Install]
+WantedBy=default.target

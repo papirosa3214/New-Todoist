@@ -1,0 +1,9 @@
+: дежурный думает
+
+event: message
+data: {"ok": true, "answer": "Меня зовут дежурный инженер .110, сегодня четверг.", "plan": [], "provider": "minimax", "error": ""}
+
+event: done
+data: {}
+
+EXIT=0

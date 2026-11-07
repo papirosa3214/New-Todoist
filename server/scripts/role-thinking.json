@@ -1,0 +1,16 @@
+{
+  "default": "minimal",
+  "roles": {
+    "analyst": "minimal",
+    "architect": "minimal",
+    "builder": "off",
+    "claude_code": "minimal",
+    "code_orchestrator": "minimal",
+    "critic_verifier": "minimal",
+    "designer": "minimal",
+    "infra_engineer": "minimal",
+    "qa": "minimal",
+    "researcher": "minimal",
+    "secretary": "minimal"
+  }
+}

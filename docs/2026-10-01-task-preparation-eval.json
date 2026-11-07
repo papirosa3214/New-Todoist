@@ -1,0 +1,126 @@
+{
+  "model": "qwen3.6-27b-iq4-16k:latest",
+  "results": [
+    {
+      "name": "question",
+      "text": "Почему в приложении кнопка сохранения расположена снизу?",
+      "expected": "informational_question",
+      "elapsed_ms": 37873,
+      "result": {
+        "schema_version": 1,
+        "source_record_id": "synthetic-question",
+        "status": "recommendation_only",
+        "intent": "informational_question",
+        "question": null,
+        "card": null
+      }
+    },
+    {
+      "name": "simple",
+      "text": "Напиши краткую инструкцию, как добавить задачу в TaskFlow.",
+      "expected": "executable_task",
+      "elapsed_ms": 9827,
+      "result": {
+        "schema_version": 1,
+        "source_record_id": "synthetic-simple",
+        "status": "recommendation_only",
+        "intent": "executable_task",
+        "question": null,
+        "card": {
+          "preparation": {
+            "intent": "executable_task",
+            "representation": "checklist",
+            "reason": "простая задача с одним результатом и последовательными шагами",
+            "question": null,
+            "workstreams": [
+              {
+                "key": "work_1",
+                "title": "Инструкция по добавлению задачи",
+                "result": "Текст инструкции готов, описывает шаги добавления задачи",
+                "role": "secretary",
+                "depends_on": [],
+                "parallel_with": []
+              }
+            ]
+          },
+          "role": "secretary",
+          "roleReason": "составление текстовой инструкции — задача секретаря",
+          "where": null,
+          "startTime": null,
+          "labelIds": [],
+          "title": "Инструкция по добавлению задачи",
+          "description": "Нужна краткая инструкция для пользователя: как добавить новую задачу в систему TaskFlow.",
+          "result": "Текст инструкции готов, описывает шаги добавления задачи",
+          "question": null,
+          "subtasks": [
+            "Описать путь к кнопке добавления",
+            "Перечислить обязательные поля",
+            "Собрать в краткий текст"
+          ],
+          "dueDate": null,
+          "priority": 4,
+          "projectId": null,
+          "children": []
+        }
+      }
+    },
+    {
+      "name": "role_plan",
+      "text": "В одной задаче исправь отображение кнопки сохранения в приложении на iPhone: разработчик вносит правку, затем QA проверяет, что кнопка видна при открытой клавиатуре. Результат — исправленная и проверенная кнопка. Нужен план ролей внутри одной карточки.",
+      "expected": "executable_task",
+      "elapsed_ms": 12966,
+      "result": {
+        "schema_version": 1,
+        "source_record_id": "synthetic-role_plan",
+        "status": "recommendation_only",
+        "intent": "executable_task",
+        "question": null,
+        "card": {
+          "preparation": {
+            "intent": "executable_task",
+            "representation": "role_plan",
+            "reason": "в задаче явно указан план ролей: разработчик делает правку, затем QA проверяет; это один общий результат с последовательными этапами от разных специалистов",
+            "question": null,
+            "workstreams": [
+              {
+                "key": "fix_button_display",
+                "title": "Исправить отображение кнопки при клавиатуре",
+                "result": "Кнопка видна и доступна для нажатия при открытой клавиатуре в коде приложения",
+                "role": "builder",
+                "depends_on": [],
+                "parallel_with": []
+              },
+              {
+                "key": "verify_button_display",
+                "title": "Проверить исправление кнопки QA",
+                "result": "QA подтвердил, что кнопка видна при открытой клавиатуре и баг не воспроизводится",
+                "role": "qa",
+                "depends_on": [
+                  "fix_button_display"
+                ],
+                "parallel_with": []
+              }
+            ]
+          },
+          "role": null,
+          "roleReason": "",
+          "where": "iphone",
+          "startTime": null,
+          "labelIds": [],
+          "title": "Исправить кнопку сохранения на iPhone",
+          "description": "Нужно исправить отображение кнопки сохранения в приложении на iPhone. Кнопка должна быть видна, когда открыта клавиатура. Задача требует совместной работы: разработчик вносит правки, затем QA проверяет результат.",
+          "result": "Кнопка сохранения исправлена и проверена QA: она видна при открытой клавиатуре",
+          "question": null,
+          "subtasks": [
+            "Исправить отображение кнопки при клавиатуре",
+            "Проверить исправление кнопки QA"
+          ],
+          "dueDate": null,
+          "priority": 4,
+          "projectId": null,
+          "children": []
+        }
+      }
+    }
+  ]
+}

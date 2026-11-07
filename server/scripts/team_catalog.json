@@ -1,0 +1,86 @@
+{
+  "_comment": "Карточка 5f292e87 (MVP надёжной доставки поручений) + миграция на 8 ролей (14.09.2026). Текущие активные исполнители: u1 (владелец), 6848a89b-… (Оркестратор) и восемь ролей. Архивные и удалённые профили в каталоге больше не значатся: маршрутизация и заполнение users.profile не должны смотреть в несуществующие профили.",
+  "profiles": {
+    "maxim": {
+      "id": "u1",
+      "level": 5,
+      "title": "Владелец продукта",
+      "competence": "финальная приёмка, приоритеты, продуктовые требования",
+      "skills": ["product", "priority", "acceptance"],
+      "auto_route": false,
+      "comment": "L5 — владелец. Только явный адресат."
+    },
+    "orchestrator": {
+      "id": "6848a89b-04fe-4015-bb1c-61b03782c378",
+      "level": 4,
+      "title": "Технический диспетчер",
+      "competence": "декомпозиция, маршрутизация, наблюдение за ходом",
+      "skills": ["decomposition", "routing", "coordination"],
+      "auto_route": true,
+      "comment": "L4 — диспетчер. Получает все поручения без явного исполнителя."
+    },
+    "researcher": {
+      "id": "role_researcher",
+      "level": 3,
+      "title": "Исследователь",
+      "competence": "разведка незнакомой области, поиск источников, ресёрч фактов",
+      "skills": ["research", "web-search", "graft", "kb-search"],
+      "auto_route": true
+    },
+    "analyst": {
+      "id": "role_analyst",
+      "level": 3,
+      "title": "Аналитик",
+      "competence": "анализ данных, сравнение вариантов, расчёты",
+      "skills": ["analysis", "data", "comparison"],
+      "auto_route": true
+    },
+    "critic_verifier": {
+      "id": "role_critic_verifier",
+      "level": 3,
+      "title": "Критик-проверяющий",
+      "competence": "проверка аргументов, поиск противоречий, приёмочный анализ",
+      "skills": ["critique", "review", "fact-checking"],
+      "auto_route": true
+    },
+    "architect": {
+      "id": "role_architect",
+      "level": 4,
+      "title": "Архитектор",
+      "competence": "структура системы, контракты модулей, миграции",
+      "skills": ["architecture", "schema", "interfaces"],
+      "auto_route": true
+    },
+    "builder": {
+      "id": "role_builder",
+      "level": 4,
+      "title": "Разработчик",
+      "competence": "написание и правка кода, тесты, рефакторинг",
+      "skills": ["code", "tests", "refactor", "debug"],
+      "auto_route": true
+    },
+    "qa": {
+      "id": "role_qa",
+      "level": 3,
+      "title": "Лайф-тестировщик",
+      "competence": "живая проверка в браузере: сценарии пользователя, замеры экрана, воспроизводимость",
+      "skills": ["testing", "verification", "regression"],
+      "auto_route": true
+    },
+    "designer": {
+      "id": "role_designer",
+      "level": 3,
+      "title": "Дизайнер интерфейсов",
+      "competence": "визуальная и UX-архитектура, проектная система",
+      "skills": ["ui", "ux", "design-system", "prototyping"],
+      "auto_route": true
+    }
+  },
+  "routing_rules": {
+    "explicit_addressee_wins": true,
+    "comment": "Явный адресат в сообщении (to=...) всегда побеждает автоподбор.",
+    "fallback_to_orchestrator": true,
+    "fallback_comment": "Если явного адресата нет и автоподбор не выбрал — fallback в Оркестратор. Маршрутизация больше не идёт в шесть архивных профилей.",
+    "comment_for_040": "Архивные профили удалены — миграция 040 пометила их users.archived=1. Сюда входят только живые исполнители."
+  }
+}

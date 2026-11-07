@@ -1,0 +1,643 @@
+{
+  "date": "2026-10-18",
+  "sdk": "0.84.4",
+  "inventory": [
+    {
+      "role": "builder",
+      "skills": [
+        {
+          "name": "chat-message-queue",
+          "description": "Работа с durable-очередью сообщений роли, идемпотентной доставкой и поколениями сессии чата. Применяй при потерях ходов после рестарта, повторной доставке и восстановлении очереди. Не применяй для очередей задач командного плана и визуального оформления чата.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/chat-message-queue/SKILL.md",
+          "sha256": "a1b33e68cde061ec16b974c2f0c496fb534b93c2f49dd24ea6b639b9cb53c260",
+          "template_candidate": false
+        },
+        {
+          "name": "debug-issue",
+          "description": "Систематически отлаживайте проблемы с помощью навигации по коду на основе графов, когда требуется проанализировать зависимости, найти причины ошибок и эффективно перемещаться между компонентами проекта",
+          "path": "/home/maksim/taskflow/roles/builder/skills/debug-issue/SKILL.md",
+          "sha256": "219b6394a5bfe8bba0cd474c03d942ee9384a1c99fc5d3dd6ec1cb7378be53c8",
+          "template_candidate": false
+        },
+        {
+          "name": "diagnosing-bugs",
+          "description": "Цикл диагностики для сложных багов и проблем с производительностью. Применяй, когда пользователь просит исправить или продиагностировать сломанное, падающее или медленное (\"почини\", \"разберись почему падает\", \"найди причину\", \"тормозит\"). Не применяй, если просят только посмотреть и доложить, без починки.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/diagnosing-bugs/SKILL.md",
+          "sha256": "322d2ef5358b1931eacd8172d2f0758f500630b5b83b40b57040839157210521",
+          "template_candidate": true
+        },
+        {
+          "name": "ios-native-rules",
+          "description": "Правила работы с нативным приложением TaskFlow на SwiftUI (репозиторий taskflow-native-ios на маке, ~/Проекты/TaskFlowNativeBuild). Вызывать ВСЕГДА перед любой правкой Swift-кода, нового экрана, компонента, вёрстки или сборки под iPhone — до первой строчки кода, а не после. Здесь то, чем этот проект уже падал и что нельзя повторять: разросшиеся представления, фиксированные кегли, неподписанная сборка, кромка прокрутки. Плюс требования Apple, сведённые к проверяемым правилам.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/ios-native-rules/SKILL.md",
+          "sha256": "0e3766b3f44e82eecfc56606e818f744ea372d7470d81dbed404fbce2fcfd821",
+          "template_candidate": false
+        },
+        {
+          "name": "property-based-testing",
+          "description": "Проверка свойств на множестве входных данных: сериализация, валидация, нормализация и инварианты. Применяй при поиске краевых случаев в API, парсерах и преобразованиях данных. Не применяй для UI-тестов, бенчмарков и тестов без содержательного проверяемого свойства.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/property-based-testing/SKILL.md",
+          "sha256": "06f6dd2c6832da54f3438635c4b595d6bd3da9d76a4479fd6ebbd574b0699511",
+          "template_candidate": true
+        },
+        {
+          "name": "refactor-safely",
+          "description": "Планировать и выполнять безопасный рефакторинг с использованием анализа зависимостей",
+          "path": "/home/maksim/taskflow/roles/builder/skills/refactor-safely/SKILL.md",
+          "sha256": "9d16537ad465cf1d6a8e02721de1ed2ff7568376fd32a6468c07bca3ec98272e",
+          "template_candidate": false
+        },
+        {
+          "name": "swift-concurrency",
+          "description": "Проверка и проектирование конкурентного Swift-кода: actor isolation, Sendable, отмена задач и гонки данных. Применяй при async/await, Swift 6, параллельных запросах и нарушениях порядка обновлений. Не применяй для чисто визуальных правок и серверного TypeScript.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/swift-concurrency/SKILL.md",
+          "sha256": "810be8e9b8ee45f79f92ce5c59280a6428247953a038f6a223b80a253239f4fa",
+          "template_candidate": true
+        },
+        {
+          "name": "swift-testing-expert",
+          "description": "Создание и диагностика тестов Swift Testing: асинхронные ожидания, параметризация и нестабильные проверки. Применяй при Swift-юнит-тестах и миграции XCTest на Swift Testing. Не применяй как замену XCUITest, визуальной проверке и приёмке на iPhone.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/swift-testing-expert/SKILL.md",
+          "sha256": "665a4ed818b943689027ade61050538ab964e3b65182724b4b6c2a97aaa7ccdd",
+          "template_candidate": true
+        },
+        {
+          "name": "swiftui-expert-skill",
+          "description": "Разработка и ревью SwiftUI: состояние, композиция представлений, обновления и производительность. Применяй при реализации или исправлении SwiftUI-экрана, списка, sheet или навигации. Не применяй для исследования потребностей пользователей и задач только серверного API.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/swiftui-expert-skill/SKILL.md",
+          "sha256": "7b8af3adbf1b7737ee067af9c5fa3448928566be32b864d320e802bd7a82e760",
+          "template_candidate": true
+        },
+        {
+          "name": "task-archive-purge-defect",
+          "description": "Диагностика известного сбоя archive/purge из-за каскадных удалений и конфликтов tf_realtime_dirty. Применяй при ошибке UNIQUE constraint failed во время удаления архивных задач с планами. Не применяй для обычной архивации без ошибки и не считай историческое состояние выкладки подтверждённым текущим.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/task-archive-purge-defect/SKILL.md",
+          "sha256": "9120ff43a714869a51c626f5487c1f811da123f92c8f7a8890895670cc5d5834",
+          "template_candidate": false
+        },
+        {
+          "name": "taskflow-escalation-patterns",
+          "description": "Разбор ошибок эскалации просроченных задач TaskFlow: ключи событий, приоритеты, часовые пояса и очистка. Применяй при дублях уведомлений, неверном времени эскалации и сбоях scheduler. Не применяй для эскалации вопросов между агентами и общего управления командой.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/taskflow-escalation-patterns/SKILL.md",
+          "sha256": "72662c3d3217cb1e9a362d943074dac8822e16a6cbb18d9a1f43f4499e9c1eed",
+          "template_candidate": false
+        },
+        {
+          "name": "traycer-execute",
+          "description": "Поднадзорная реализация задач, уже разбитых на тикеты.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/traycer-execute/SKILL.md",
+          "sha256": "89eb34f0f78c733512c22a1b553530f832d11064758ed26253deb002512698eb",
+          "template_candidate": false
+        },
+        {
+          "name": "traycer-implement",
+          "description": "Для дочернего агента, которому поручили тикет: когда спрашивать поручившего, когда решать самому и что доложить в конце.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/traycer-implement/SKILL.md",
+          "sha256": "f1346771b72b6157ac393dfb2510b0a75d7c278fb3cf25ebe908b98c80783f34",
+          "template_candidate": false
+        },
+        {
+          "name": "verify-after-edit",
+          "description": "ОБЯЗАТЕЛЬНЫЙ чек за собой после ЛЮБОЙ правки кода, особенно общих/переиспользуемых компонентов, общих утилит, дефолтов/сидов БД. Применять АВТОМАТИЧЕСКИ перед тем, как сказать «готово» после Edit/Write в коде проекта: правка в одном месте не должна ломать другое. Триггеры: правка компонента из ui/kit, общего хелпера, схемы/дефолтов БД, CSS/токенов темы; ЛЮБАЯ правка UI/вёрстки (новый экран, карточка, кнопка, раскладка); жалоба Максима «опять сломалось в другом месте», «не проверяешь за собой», «вёрстка поехала / кнопки в разнобой / дизайн кривой / компоненты не притянулись».",
+          "path": "/home/maksim/taskflow/roles/builder/skills/verify-after-edit/SKILL.md",
+          "sha256": "031d04f9cf9bc40bb84cbeb6f76b47a9ef36ac4b918c5cd572beb339dbdde327",
+          "template_candidate": true
+        },
+        {
+          "name": "writing-for-agents",
+          "description": "Написание документов для агентов. Применяется при создании или изменении навыков, а также при редактировании файлов AGENTS.md, CLAUDE.md, MEMORY.md или файла памяти.",
+          "path": "/home/maksim/taskflow/roles/builder/skills/writing-for-agents/SKILL.md",
+          "sha256": "a586a55e87ceefc2ee50484945303afdd449087d733d0cb7bf77144cf8953c9c",
+          "template_candidate": false
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "role": "architect",
+      "skills": [
+        {
+          "name": "audit-context-building",
+          "description": "Построение контекста аудита кода: зависимости, инварианты, границы доверия и непроверенные допущения. Применяй перед аудитом незнакомой системы или её архитектуры. Не применяй для вынесения вердикта об уязвимости, исправления кода или визуального аудита интерфейса.",
+          "path": "/home/maksim/taskflow/roles/architect/skills/audit-context-building/SKILL.md",
+          "sha256": "67c3850ba6c9890aecb7d72a9c813461c1b0e1609a539d3315a65319afba4c49",
+          "template_candidate": true
+        },
+        {
+          "name": "branch-plan-pulse",
+          "description": "Проверка клиентского прогресса дочерних задач по общему плану ветки TaskFlow. Применяй при пустом плане дочерней карточки, неверных счётчиках и отображении прогресса ветки. Не применяй для самостоятельного изменения серверного контракта или перестройки командного плана.",
+          "path": "/home/maksim/taskflow/roles/architect/skills/branch-plan-pulse/SKILL.md",
+          "sha256": "af7d4ce5d9702f9ddcc899a9aaa4a8cf8f90c306ab1e4e13ba7b7c05515ff3dd",
+          "template_candidate": false
+        },
+        {
+          "name": "diagnosing-bugs",
+          "description": "Диагностика причины сложных багов, падений и замедлений с воспроизведением и проверкой гипотез. Применяй на этапе расследования дефекта и определения границы исправления. Не применяй для обзорного аудита и не начинай исправление, если текущий этап требует только установить причину.",
+          "path": "/home/maksim/taskflow/roles/architect/skills/diagnosing-bugs/SKILL.md",
+          "sha256": "ea7ca8c97f9b38acd2456a3b19bc34dff84d064d9001e661a3666b541065e259",
+          "template_candidate": true
+        },
+        {
+          "name": "domain-modeling",
+          "description": "Создайте и усовершенствуйте доменную модель проекта. Используйте, когда пользователь хочет точно определить терминологию домена или универсальный язык, зафиксировать архитектурное решение или когда другой навык нуждается в поддержании доменной модели.",
+          "path": "/home/maksim/taskflow/roles/architect/skills/domain-modeling/SKILL.md",
+          "sha256": "2663bbb292d62987fe0846a3a3f9b8df9d7e121ae6ce8cc377dd0fd4b13574ce",
+          "template_candidate": true
+        },
+        {
+          "name": "information-architecture",
+          "description": "Разработка структуры контента, иерархии, наименования, модели навигации. Используется при организации того, что существует. Для пользовательского интерфейса, который её представляет, используй `navigation-patterns` (interaction-design); для группировки на основе пользовательских данных используй `card-sort-analysis` (design-research).",
+          "path": "/home/maksim/taskflow/roles/architect/skills/information-architecture/SKILL.md",
+          "sha256": "838b6fc60134e7719073832ac7373b06f3ba52e20e3550b43da5baff92df4187",
+          "template_candidate": false
+        },
+        {
+          "name": "swift-concurrency",
+          "description": "Проверка и проектирование конкурентного Swift-кода: actor isolation, Sendable, отмена задач и гонки данных. Применяй при async/await, Swift 6, параллельных запросах и нарушениях порядка обновлений. Не применяй для чисто визуальных правок и серверного TypeScript.",
+          "path": "/home/maksim/taskflow/roles/architect/skills/swift-concurrency/SKILL.md",
+          "sha256": "810be8e9b8ee45f79f92ce5c59280a6428247953a038f6a223b80a253239f4fa",
+          "template_candidate": true
+        },
+        {
+          "name": "traycer-core-flows",
+          "description": "Продумать пользовательские сценарии, пути и решения по интерфейсу до написания кода — поведение продукта, а не техника.",
+          "path": "/home/maksim/taskflow/roles/architect/skills/traycer-core-flows/SKILL.md",
+          "sha256": "e7d5125864de4e1a601ad53b70c1ab5bc962413adca2bb992e802b0c2afe3003",
+          "template_candidate": false
+        },
+        {
+          "name": "traycer-debate",
+          "description": "Устроить спор нескольких агентов вокруг неоднозначного решения: разные точки зрения, затем свод в один вывод. Для выборов с последствиями, где одна позиция ненадёжна.",
+          "path": "/home/maksim/taskflow/roles/architect/skills/traycer-debate/SKILL.md",
+          "sha256": "0d9af69a539f20b7784fcbefae764a0a49159a959e58418348b44dc6e19d0b64",
+          "template_candidate": false
+        },
+        {
+          "name": "traycer-tech-plan",
+          "description": "Продумать техническое решение до реализации: архитектура, механизмы, границы интерфейсов, размен вариантов. Пропускать, когда изменение мелкое и очевидное.",
+          "path": "/home/maksim/taskflow/roles/architect/skills/traycer-tech-plan/SKILL.md",
+          "sha256": "ae0d6cc09a24f6c6e00f758e229437536cc158262a4d6b27a75c438a361a9018",
+          "template_candidate": false
+        },
+        {
+          "name": "writing-for-agents",
+          "description": "Написание документов для агентов. Применяется при создании или изменении навыков, а также при редактировании файлов AGENTS.md, CLAUDE.md, MEMORY.md или файла памяти.",
+          "path": "/home/maksim/taskflow/roles/architect/skills/writing-for-agents/SKILL.md",
+          "sha256": "a586a55e87ceefc2ee50484945303afdd449087d733d0cb7bf77144cf8953c9c",
+          "template_candidate": true
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "role": "qa",
+      "skills": [
+        {
+          "name": "audit",
+          "description": "Технический аудит интерфейса — доступность (a11y), производительность, адаптивность. Формирует приоритизированную таблицу результатов. Применяйте, когда пользователь запрашивает аудит интерфейса или упоминает 'audit' в контексте дизайна / UI / фронтенд-разработки.",
+          "path": "/home/maksim/taskflow/roles/qa/skills/audit/SKILL.md",
+          "sha256": "a7997d9612aebbe8ec5baa19f40e51cbe6d32cf5e0e8764762bafb403f0f0ca2",
+          "template_candidate": false
+        },
+        {
+          "name": "harden",
+          "description": "Проверка готовности к продакшену: аудит и реализация полной матрики неидеальных сценариев: загрузочные состояния (skeleton), пустые экраны, сообщения об ошибках, частичные данные, i18n, офлайн-режим, права доступа и первый запуск. Используй при подготовке интерфейса к продакшену или когда пользователь говорит «it crashes on empty data» / «there's no loading state» / «harden this». Вызывай, если пользователь просит harden для UI или упоминает 'harden' в контексте работ по дизайну/UI/фронтенду.",
+          "path": "/home/maksim/taskflow/roles/qa/skills/harden/SKILL.md",
+          "sha256": "5ea1d9814bb4ae35ec9b70883f442e18e7ccf1948bc1a60491449740fa9c0ca2",
+          "template_candidate": false
+        },
+        {
+          "name": "ios-accessibility",
+          "description": "Проектирование и проверка доступности Apple-интерфейса: VoiceOver, Dynamic Type, фокус и альтернативное управление. Применяй при проверке доступности SwiftUI/UIKit/AppKit и нарушениях работы ассистивных технологий. Не применяй вместо общего визуального ревью; без запуска не утверждай, что сценарий проверен на устройстве.",
+          "path": "/home/maksim/taskflow/roles/qa/skills/ios-accessibility/SKILL.md",
+          "sha256": "42e6f548448ce58adab94f29b6c806e4507db44d5bf47db15c3c76e3dd2e6823",
+          "template_candidate": true
+        },
+        {
+          "name": "ios-simulator-ui-check",
+          "description": "Проверить интерфейс любого iOS-приложения в симуляторе на маке — нажать кнопку, зажать строку, пройти сценарий, снять кадры — БЕЗ ручных тапов по координатам. Вызывать ВСЕГДА, когда нужно «проверить на симуляторе», «потыкать экран», «нажать/зажать в симуляторе», «снять кадр после действия», для любого проекта (GeoPhotoMarks, TaskFlowNativeBuild, новые). Здесь готовый рецепт временного XCUITest и список того, что НЕ работает (axe, tap XcodeBuildMCP) — чтобы не угробить на это час, как 07.10.2026.",
+          "path": "/home/maksim/taskflow/roles/qa/skills/ios-simulator-ui-check/SKILL.md",
+          "sha256": "ea39ad86f8a9f578cf57fceed61a679a9e84004c176c2c79a3066d7dc6602784",
+          "template_candidate": true
+        },
+        {
+          "name": "property-based-testing",
+          "description": "Проверка свойств на множестве входных данных: сериализация, валидация, нормализация и инварианты. Применяй при поиске краевых случаев в API, парсерах и преобразованиях данных. Не применяй для UI-тестов, бенчмарков и тестов без содержательного проверяемого свойства.",
+          "path": "/home/maksim/taskflow/roles/qa/skills/property-based-testing/SKILL.md",
+          "sha256": "06f6dd2c6832da54f3438635c4b595d6bd3da9d76a4479fd6ebbd574b0699511",
+          "template_candidate": true
+        },
+        {
+          "name": "swift-testing-expert",
+          "description": "Создание и диагностика тестов Swift Testing: асинхронные ожидания, параметризация и нестабильные проверки. Применяй при Swift-юнит-тестах и миграции XCTest на Swift Testing. Не применяй как замену XCUITest, визуальной проверке и приёмке на iPhone.",
+          "path": "/home/maksim/taskflow/roles/qa/skills/swift-testing-expert/SKILL.md",
+          "sha256": "665a4ed818b943689027ade61050538ab964e3b65182724b4b6c2a97aaa7ccdd",
+          "template_candidate": true
+        },
+        {
+          "name": "unhappy",
+          "description": "Проход проектирования, ориентированного на состояние — описывает и реализует все состояния, кроме сценария успеха (загрузка, пустое, ошибка, частичное, конфликт, офлайн), до реализации сценария успеха, а также рефакторит невозможные булевы состояния в полноценные машины состояний. Применяй при создании нового экрана, при проверке существующего на наличие пропущенных крайних случаев или когда пользователь говорит «handle the error state» / «add loading states» / «what happens when data is missing». Вызывай, когда пользователь просит добавить unhappy состояния в свой UI или упоминает 'unhappy' вместе с дизайном / UI / фронтенд-работой.",
+          "path": "/home/maksim/taskflow/roles/qa/skills/unhappy/SKILL.md",
+          "sha256": "2649866f5f647be737bc5baeba11f421e84f2036877cb2ac82aaa32151ee0ed3",
+          "template_candidate": true
+        },
+        {
+          "name": "writing-for-agents",
+          "description": "Написание документов для агентов. Применяется при создании или изменении навыков, а также при редактировании файлов AGENTS.md, CLAUDE.md, MEMORY.md или файла памяти.",
+          "path": "/home/maksim/taskflow/roles/qa/skills/writing-for-agents/SKILL.md",
+          "sha256": "a586a55e87ceefc2ee50484945303afdd449087d733d0cb7bf77144cf8953c9c",
+          "template_candidate": false
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "role": "critic_verifier",
+      "skills": [
+        {
+          "name": "audit-context-building",
+          "description": "Построение контекста аудита кода: зависимости, инварианты, границы доверия и непроверенные допущения. Применяй перед аудитом незнакомой системы или её архитектуры. Не применяй для вынесения вердикта об уязвимости, исправления кода или визуального аудита интерфейса.",
+          "path": "/home/maksim/taskflow/roles/critic_verifier/skills/audit-context-building/SKILL.md",
+          "sha256": "67c3850ba6c9890aecb7d72a9c813461c1b0e1609a539d3315a65319afba4c49",
+          "template_candidate": true
+        },
+        {
+          "name": "design-critique",
+          "description": "Независимое ревью дизайна: понятность сценария, визуальная иерархия и согласованность. Применяй для оценки макета, прототипа или экрана по задаче пользователя. Не применяй вместо реализации интерфейса и не объявляй субъективное предпочтение дефектом.",
+          "path": "/home/maksim/taskflow/roles/critic_verifier/skills/design-critique/SKILL.md",
+          "sha256": "0312c067b9a3aceb1d01c318dbf28538e192d4c4c8738bac94740d8472c0f0c3",
+          "template_candidate": true
+        },
+        {
+          "name": "differential-review",
+          "description": "Проверка изменений кода на риски безопасности с историей Git и анализом затронутых вызовов. Применяй при аудите PR, коммита, авторизации и внешних вызовов. Не применяй для оценки макета, правки текста и нового проекта без исходной версии для сравнения.",
+          "path": "/home/maksim/taskflow/roles/critic_verifier/skills/differential-review/SKILL.md",
+          "sha256": "b0f49770ef1fdd32ed99f755045d9d1ac8d8c60d369edec2ad01a28abe605c4b",
+          "template_candidate": true
+        },
+        {
+          "name": "review-changes",
+          "description": "Проведите структурированный обзор кода с использованием обнаружения изменений и анализа влияния",
+          "path": "/home/maksim/taskflow/roles/critic_verifier/skills/review-changes/SKILL.md",
+          "sha256": "c60a4797b8e03920786e8a69af44555a780aae344a8a8341cd26f92ac909e6c1",
+          "template_candidate": true
+        },
+        {
+          "name": "traycer-artifact-critique",
+          "description": "Проверить артефакт на прочность: найти слабые места, пробелы и противоречия в плане, требованиях или дизайне. Применять, когда нужно раскритиковать готовый документ до того, как по нему начнут работать.",
+          "path": "/home/maksim/taskflow/roles/critic_verifier/skills/traycer-artifact-critique/SKILL.md",
+          "sha256": "03041dcf587899ad5114c9ba56051973b379ca7ce13e31b3d023076973a4e414",
+          "template_candidate": false
+        },
+        {
+          "name": "traycer-changeset-walkthrough",
+          "description": "Разбор набора изменений для владельца: что поменялось, зачем и на что смотреть при приёмке. Уместно после существенной, рискованной или неочевидной работы.",
+          "path": "/home/maksim/taskflow/roles/critic_verifier/skills/traycer-changeset-walkthrough/SKILL.md",
+          "sha256": "fcdf2ad4811563033656edbc8a0375f689f73729d1e542c6f48bba1ac70ea5a6",
+          "template_candidate": false
+        },
+        {
+          "name": "traycer-review",
+          "description": "Ревью изменений в коде на корректность и качество.",
+          "path": "/home/maksim/taskflow/roles/critic_verifier/skills/traycer-review/SKILL.md",
+          "sha256": "4fe0ace0ec2b1ffa70998d7386d1b721f12833f6ec415117c6eb176edb66d132",
+          "template_candidate": false
+        },
+        {
+          "name": "verdict-requires-live-scenario",
+          "description": "Проверка оснований вердикта для результата, который владелец должен увидеть в приложении. Применяй при приёмке экрана, виджета, чата или документа по живому пользовательскому сценарию. Не применяй как требование запуска интерфейса для работ только с документацией или без пользовательского UI.",
+          "path": "/home/maksim/taskflow/roles/critic_verifier/skills/verdict-requires-live-scenario/SKILL.md",
+          "sha256": "66d82195494f3ce005b300df7f6673447c6945545ee4044fac3367d542036df2",
+          "template_candidate": true
+        },
+        {
+          "name": "writing-for-agents",
+          "description": "Написание документов для агентов. Применяется при создании или изменении навыков, а также при редактировании файлов AGENTS.md, CLAUDE.md, MEMORY.md или файла памяти.",
+          "path": "/home/maksim/taskflow/roles/critic_verifier/skills/writing-for-agents/SKILL.md",
+          "sha256": "a586a55e87ceefc2ee50484945303afdd449087d733d0cb7bf77144cf8953c9c",
+          "template_candidate": true
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "role": "researcher",
+      "skills": [
+        {
+          "name": "explore-codebase",
+          "description": "Навигация и понимание структуры кодовой базы с помощью графа знаний, когда необходимо исследовать архитектуру проекта или найти определённые компоненты",
+          "path": "/home/maksim/taskflow/roles/researcher/skills/explore-codebase/SKILL.md",
+          "sha256": "30ac5f504b0ad5b91fbde8b7316c4ad26d4b08080a63217f48c094ae56712724",
+          "template_candidate": true
+        },
+        {
+          "name": "find-skills",
+          "description": "Поиск и оценка готовых навыков в открытой экосистеме по конкретной задаче. Применяй, когда нужно найти профильный навык, сравнить источники и определить пригодность для роли. Не применяй для выполнения самой предметной задачи и не считай поиск разрешением на установку.",
+          "path": "/home/maksim/taskflow/roles/researcher/skills/find-skills/SKILL.md",
+          "sha256": "bf47a9c7ef281ea49e23152e7006c8408c04cb4518fe6269e60f3be53d84dc53",
+          "template_candidate": false
+        },
+        {
+          "name": "research-synthesis",
+          "description": "Синтез имеющихся интервью, отзывов, опросов и наблюдений в темы и рекомендации с доказательствами. Применяй, когда уже есть материалы исследования и нужно выделить повторяющиеся проблемы. Не применяй вместо сбора данных и не выдавай предположения за наблюдения.",
+          "path": "/home/maksim/taskflow/roles/researcher/skills/research-synthesis/SKILL.md",
+          "sha256": "24280b7f061f9bfe9ae77298f3eab90d97521966bc90edc953e95be28f64c875",
+          "template_candidate": true
+        },
+        {
+          "name": "user-research",
+          "description": "Планирование исследования пользователей: исследовательские вопросы, выбор метода, интервью и usability-сессии. Применяй, когда нужно выяснить потребности, причины поведения и проверить пользовательскую гипотезу. Не применяй вместо поиска технической документации и не выдумывай интервью или ответы участников.",
+          "path": "/home/maksim/taskflow/roles/researcher/skills/user-research/SKILL.md",
+          "sha256": "3dd3f3e496b64c6a8f120df11dc793aa62f83423e2a64b6e3422f6d4b8dd60e5",
+          "template_candidate": true
+        },
+        {
+          "name": "writing-for-agents",
+          "description": "Написание документов для агентов. Применяется при создании или изменении навыков, а также при редактировании файлов AGENTS.md, CLAUDE.md, MEMORY.md или файла памяти.",
+          "path": "/home/maksim/taskflow/roles/researcher/skills/writing-for-agents/SKILL.md",
+          "sha256": "a586a55e87ceefc2ee50484945303afdd449087d733d0cb7bf77144cf8953c9c",
+          "template_candidate": true
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "role": "analyst",
+      "skills": [
+        {
+          "name": "grill-with-docs",
+          "description": "Неумолимый допрос для оттачивания плана или дизайна с параллельным созданием документов (ADR и глоссария) по ходу работы",
+          "path": "/home/maksim/taskflow/roles/analyst/skills/grill-with-docs/SKILL.md",
+          "sha256": "b4181772ed0210a8715123fe8bce3b48add56c29c395a9b1b6dfab6992bdf87c",
+          "template_candidate": false
+        },
+        {
+          "name": "grilling",
+          "description": "Бескомпромиссно допрашивай пользователя о плане, решении или идее. Применяй, когда пользователь хочет проверить свои мысли на прочность, или использует любые триггерные фразы 'grill' — английские или русские (\"прогрилль\", \"допроси меня\", \"разбери план по косточкам\", \"задай мне вопросы\").",
+          "path": "/home/maksim/taskflow/roles/analyst/skills/grilling/SKILL.md",
+          "sha256": "1874eb6dbdce569356c156346bfa521fa09012ff91cbacc965a0ae2c897cd4a9",
+          "template_candidate": false
+        },
+        {
+          "name": "research-synthesis",
+          "description": "Синтез имеющихся интервью, отзывов, опросов и наблюдений в темы и рекомендации с доказательствами. Применяй, когда уже есть материалы исследования и нужно выделить повторяющиеся проблемы. Не применяй вместо сбора данных и не выдавай предположения за наблюдения.",
+          "path": "/home/maksim/taskflow/roles/analyst/skills/research-synthesis/SKILL.md",
+          "sha256": "24280b7f061f9bfe9ae77298f3eab90d97521966bc90edc953e95be28f64c875",
+          "template_candidate": true
+        },
+        {
+          "name": "traycer-artifact-critique",
+          "description": "Проверить артефакт на прочность: найти слабые места, пробелы и противоречия в плане, требованиях или дизайне. Применять, когда нужно раскритиковать готовый документ до того, как по нему начнут работать.",
+          "path": "/home/maksim/taskflow/roles/analyst/skills/traycer-artifact-critique/SKILL.md",
+          "sha256": "03041dcf587899ad5114c9ba56051973b379ca7ce13e31b3d023076973a4e414",
+          "template_candidate": false
+        },
+        {
+          "name": "writing-for-agents",
+          "description": "Написание документов для агентов. Применяется при создании или изменении навыков, а также при редактировании файлов AGENTS.md, CLAUDE.md, MEMORY.md или файла памяти.",
+          "path": "/home/maksim/taskflow/roles/analyst/skills/writing-for-agents/SKILL.md",
+          "sha256": "a586a55e87ceefc2ee50484945303afdd449087d733d0cb7bf77144cf8953c9c",
+          "template_candidate": true
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "role": "designer",
+      "skills": [
+        {
+          "name": "adapt",
+          "description": "Проверка адаптивной вёрстки: брейкпоинты, кликабельные элементы, safe areas и масштабируемый текст. Применяй, когда есть проблемы с компоновкой или взаимодействием на мобильных/планшетах, при добавлении нового экрана без проверки на разных разрешениях или если пользователь говорит «make it responsive» / «fix mobile layout». Вызывай, когда просят адаптировать UI или упоминают 'adapt' в контексте дизайна/ui-фронтенда.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/adapt/SKILL.md",
+          "sha256": "e1bfc65a75f9d859b8fd5941d8bb91246535f8456bdbd54cf18797805581bbb6",
+          "template_candidate": false
+        },
+        {
+          "name": "animate",
+          "description": "Motion design pass — добавляет осознанные анимации или удаляет избыточные, соблюдая MOTION_INTENSITY и стек анимаций проекта; применяй, когда пользователь просит добавить анимацию, \"make it feel smoother\", исправить дерганные переходы или убрать отвлекающее движение; запускай, если просят animate on их UI или упоминают 'animate' в контексте дизайна / UI / фронтенда",
+          "path": "/home/maksim/taskflow/roles/designer/skills/animate/SKILL.md",
+          "sha256": "ebca776df0d6acbbf251b7d958914dcde1d25a2cc1f13d970117548978fabb90",
+          "template_candidate": false
+        },
+        {
+          "name": "apple-design",
+          "description": "Подход Apple к проектированию интерфейсов и плавности физических анимаций, адаптированный для веба. Применяй при создании или ревью gesture-driven UI, spring animations, drag/swipe/sheet interactions, инерции (momentum) и прерываемых переходов, полупрозрачных материалов и глубины, типографики (optical sizing, tracking, leading), reduced-motion или основах дизайна Apple-интерфейсов: feedback, spatial consistency, restraint",
+          "path": "/home/maksim/taskflow/roles/designer/skills/apple-design/SKILL.md",
+          "sha256": "6da416209ca22919da45955a3876a3a8e460f90d309bde20b01dcb221bc0a322",
+          "template_candidate": false
+        },
+        {
+          "name": "bolder",
+          "description": "Усиление характера — повышает вариативность макета и динамику, усиливает типографику и одну ключевую деталь без хаотичности. Используйте, когда интерфейс рабочий, но выглядит слишком безопасным, плоским или «шаблонным», либо когда пользователь говорит «bolder», «more personality», «more creative» или «make it pop» (оставаясь профессиональным). Вызывайте, если пользователь просит сделать UI смелее или упоминает 'bolder' в контексте дизайна / UI / фронтенда.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/bolder/SKILL.md",
+          "sha256": "227f9cbc24cf4354663057e8749b03bd96faee620e2e9b8b1bb7066d57a7c79a",
+          "template_candidate": false
+        },
+        {
+          "name": "clarify",
+          "description": "Обзор UX-текстов в кнопках, ошибках, пустых состояниях и подсказках форм — по умолчанию даёт критику, применяет изменения только по запросу. Используется, когда тексты кажутся размытыми, общими или звучат как от ИИ, или если пользователь говорит «fix the labels», «improve error messages» или «review the copy». Вызывается, когда просят уточнить UI, или упоминают 'clarify' в контексте дизайна / UI / фронтенда.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/clarify/SKILL.md",
+          "sha256": "533ae5fa118a137c64320dd4970b273e35c4a44f1498795e54121ff5fb58e464",
+          "template_candidate": false
+        },
+        {
+          "name": "colorize",
+          "description": "Проход оптимизации цветовой стратегии — внедряет один акцент на 3–5 осознанных элементах или возвращает перегруженный цветами интерфейс к 90% нейтральных тонов; применять, когда у интерфейса нет цветовой идентичности, используется синий по умолчанию или преобладает чрезмерное количество конкурирующих акцентов; активировать при запросе пользователя на colorize его UI или упоминании 'colorize' в контексте работы с дизайном / UI / фронтендом",
+          "path": "/home/maksim/taskflow/roles/designer/skills/colorize/SKILL.md",
+          "sha256": "0516283b8e55f85c09dcb12c471f859d1bca3bb5c28b126c4de6b56becafc2d6",
+          "template_candidate": false
+        },
+        {
+          "name": "critique",
+          "description": "Критика дизайна с анализом визуальной иерархии, ясности и паттернов anti-slop: формирует таблицу выводов, не вносит рефакторинг кода без запроса пользователя; применяется когда пользователь хочет обзор дизайна, спрашивает “what's wrong with this UI”, или нуждается во втором мнении перед передачей задачи; вызывается при запросе критики UI, упоминании 'critique' вместе с дизайном/UX/frontend",
+          "path": "/home/maksim/taskflow/roles/designer/skills/critique/SKILL.md",
+          "sha256": "e6b46360501d333345ac8d56057c2e9d805265b7fb27e371203ca5731f78a673",
+          "template_candidate": false
+        },
+        {
+          "name": "delight",
+          "description": "Delight pass: добавляет одну или две запоминающиеся микро-интеракции (уточнение копирования, анимация при наведении, переходы состояний, одна ключевая деталь) без украшений или конфетти; применяй, когда UI работает, но выглядит слишком обыденно, или если пользователь говорит \"make it feel special\" / \"add some personality\"; активируй, если человек просит добавить delight к его интерфейсу или упоминает 'delight' в контексте дизайна / UI / фронтенд-разработки",
+          "path": "/home/maksim/taskflow/roles/designer/skills/delight/SKILL.md",
+          "sha256": "b8184f3ce55ffb40d28e3238bfe20b3d42c622f88f64a1bc58bc422d3d9811ff",
+          "template_candidate": false
+        },
+        {
+          "name": "design-by-measurement",
+          "description": "ОБЯЗАТЕЛЬНО, когда нужно придумать/собрать UI-компонент, панель, плашку, карточку, навигацию, анимацию или любой визуальный элемент. Вкус и «плавность» агент не ощущает — значит выверяет МАТЕМАТИКОЙ: все размеры выводятся друг от друга от одного модуля, поля проверяются замером, симметрия доказывается числами. Триггеры: «сделай компонент», «придумай анимацию», «нарисуй плашку/панель/меню», «дай варианты интерфейса», редизайн экрана, любая новая вёрстка с нуля. И ОСОБО — любое «улучшить/переделать/сделать вариант» СУЩЕСТВУЮЩЕГО компонента: там сначала читается исходник целиком (правило 0), иначе выходит «по мотивам» вместо улучшения. А также жалобы Максима: «кривое», «не шаришь за композицию/симметрию», «разброс дикий», «отвратительно смотрится», «поебень», «на глаз лепишь».",
+          "path": "/home/maksim/taskflow/roles/designer/skills/design-by-measurement/SKILL.md",
+          "sha256": "5ceb1fe71271cacb45c3ecdf9db41d00d372316f798ccf69670d0bc9f0773391",
+          "template_candidate": false
+        },
+        {
+          "name": "design-critique",
+          "description": "Получите структурированную обратную связь по юзабилити, иерархии и согласованности дизайна; используйте триггеры \"review this design\", \"critike this mockup\", \"what do you think of this screen?\" или при обмене Figma ссылками и скриншотами для получения отзывов на любом этапе от исследований до финальной обработки",
+          "path": "/home/maksim/taskflow/roles/designer/skills/design-critique/SKILL.md",
+          "sha256": "ed492dbd4b05b17b9e38cce05a4dfcc53d36b04a0a6001e8d9ec49872523fe31",
+          "template_candidate": true
+        },
+        {
+          "name": "distill",
+          "description": "Пасс редукции — удаляет контент, структуру, визуальные элементы и мёртвый код, не отвечающие на вопрос пользователя или не стимулирующие действие, с учётом CRAFT_LEVEL; используйте, когда интерфейс перегружен, содержит слишком много призывов к действию, сплошные текстовые блоки или декоративный шум, либо пользователь говорит \"simplify this\" / \"it feels too busy\"; вызывайте, если пользователь просит сделать distill для своего интерфейса или упоминает 'distill' в контексте дизайна/интерфейса/frontend-разработки",
+          "path": "/home/maksim/taskflow/roles/designer/skills/distill/SKILL.md",
+          "sha256": "be09df7fb3d47ef7a95e42e721ed50d0e2fa23a1b8b0277c7e11e151b50c6116",
+          "template_candidate": false
+        },
+        {
+          "name": "information-architecture",
+          "description": "Проектирование структуры разделов, иерархии контента и модели навигации. Применяй, когда пользователю трудно найти функцию, нужно сгруппировать разделы или спроектировать структуру продукта. Не применяй для выбора цветов, отступов и написания текстов кнопок.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/information-architecture/SKILL.md",
+          "sha256": "44d6a4c85fe43f282777cdc74eb971390d7c2cefba1d43f53a570ab96104f4ea",
+          "template_candidate": true
+        },
+        {
+          "name": "ios-accessibility",
+          "description": "Проектирование и проверка доступности Apple-интерфейса: VoiceOver, Dynamic Type, фокус и альтернативное управление. Применяй при проверке доступности SwiftUI/UIKit/AppKit и нарушениях работы ассистивных технологий. Не применяй вместо общего визуального ревью; без запуска не утверждай, что сценарий проверен на устройстве.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/ios-accessibility/SKILL.md",
+          "sha256": "42e6f548448ce58adab94f29b6c806e4507db44d5bf47db15c3c76e3dd2e6823",
+          "template_candidate": true
+        },
+        {
+          "name": "ios-hig-design",
+          "description": "Проектирование нативного iOS-интерфейса: навигация, системные компоненты, safe area и состояния. Применяй для iPhone, iPad и проверки соответствия Apple HIG. Не применяй для веб-дизайна; собственное оформление не выдавай за чистый системный компонент.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/ios-hig-design/SKILL.md",
+          "sha256": "b209cece43814e3ed658b868b5ee4aedb7e665d58688d3b08d0a765f3e561d2d",
+          "template_candidate": true
+        },
+        {
+          "name": "pixel-copy-from-screenshot",
+          "description": "Скопировать интерфейс ПИКСЕЛЬ В ПИКСЕЛЬ по скриншоту, который прислал Максим.\nВызывать СРАЗУ, с первого его сообщения, как только прозвучало: «скинул\nскриншот», «сделай как здесь», «наложи и повтори», «пиксель в пиксель»,\n«как в нормальном приложении», «как оригинальное», «возьми и перерисуй»,\n«почему у тебя не так, как на фотке», «что за расстояние между кнопками».\nТакже — когда сам собираешься воспроизводить чужой существующий UI\n(системный компонент, чужое приложение, присланный макет).\nСуть: цвета и размеры БЕРУТСЯ ЗАМЕРОМ из его файла (пипетка + сканирование\nпикселей), а не подбираются на глаз и не берутся «из типичных значений\niOS». Прецедент 18.08.2026: три захода правок клавиатуры на глаз, прежде\nчем взял пипетку — и тогда сразу совпало.\n",
+          "path": "/home/maksim/taskflow/roles/designer/skills/pixel-copy-from-screenshot/SKILL.md",
+          "sha256": "0028b293052cd9a82df38d83b3f35c0851ea9c785eb8eb0c611d0b3287828100",
+          "template_candidate": false
+        },
+        {
+          "name": "polish",
+          "description": "Финальная обработка деталей из чек-листа полировки — микро-типографика, ритм отступов, состояния hover и фирменный штрих — с мгновенной впиской этих улучшений непосредственно в код; применять, когда интерфейс работает полностью, но выглядит недоделанным или «слишком общими», а также по фразам «отполируй это» / «выглядит банально» / «добавь финальные штрихи»",
+          "path": "/home/maksim/taskflow/roles/designer/skills/polish/SKILL.md",
+          "sha256": "581ac681e900d3d7b95f299e490374c1d6dfe04a46d66477785d2a5679f8be81",
+          "template_candidate": false
+        },
+        {
+          "name": "quieter",
+          "description": "Снижение визуального шума — уменьшает вариативность и динамику, упрощает макет и цветовые акценты, сохраняя четкую иерархию; применяйте, если интерфейс кажется громоздким, перегруженным или чрезмерно оформленным, либо когда пользователь говорит \"quieter\", \"more restrained\", \"simpler\" или \"tone it down\"; активируйте по запросу сделать UI более приглушенным или упоминанию 'quieter' в контексте работы с дизайном/UI/фронтендом",
+          "path": "/home/maksim/taskflow/roles/designer/skills/quieter/SKILL.md",
+          "sha256": "ec22ed8305216c2d2f117831c2c52a1cb0385e80c32b5ddbf3a77872e50b34ec",
+          "template_candidate": false
+        },
+        {
+          "name": "sddesign",
+          "description": "Полный конвейер на основе спецификаций — выполняет этапы краткое описание → токены → форма (спецификация) → создание (сборка) → согласование → публикация за один сеанс с руководствами; создаёт файл `.ui-craft/spec.md`; используется при создании нового интерфейса с нуля; активируйте, когда пользователь просит sddesign для своего UI или упоминает 'sddesign' в контексте дизайна / UI / фронтенд-разработки.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/sddesign/SKILL.md",
+          "sha256": "32f031dde1ee3bf3e09412323c419c484fd1a30cb399b7ea27c1ee4336a28bbe",
+          "template_candidate": false
+        },
+        {
+          "name": "shape",
+          "description": "Первый шаг по созданию Wireframes — формирует ASCII-композицию + список состояний + реестр контента + список вопросов перед написанием кода; применять при создании нового экрана с нуля или при размытом описании задачи пользователь, либо если упоминается словосочетание «форма» интерфейса (shape)",
+          "path": "/home/maksim/taskflow/roles/designer/skills/shape/SKILL.md",
+          "sha256": "976c875d98125d5a7b0de9f8dbe37504ef4296a1063d23031dc6512c2dd7d266",
+          "template_candidate": false
+        },
+        {
+          "name": "typeset",
+          "description": "Проход по типографике: выбор шрифтов, модульная шкала, кернинг, межстрочный интервал, иерархия начертаний, детали микро-типографики; применяй когда шрифты кажутся шаблонными (например Inter используется без причин), если шкала подобрана произвольно, иерархика плоская или пользователь говорит \"fix the typography\" / \"the text doesn't feel right\"; активируй если просят сделать typeset для интерфейса или упоминают 'typeset' вместе с дизайном / UI / фронтенд",
+          "path": "/home/maksim/taskflow/roles/designer/skills/typeset/SKILL.md",
+          "sha256": "55fbc5afdbe063be2b78d8aaccfe22445c645cf9ecfae9320c048ae9f8ce27bd",
+          "template_candidate": false
+        },
+        {
+          "name": "ui-craft",
+          "description": "Используйте для проектирования и реализации интерфейсов, чтобы избежать шаблонного AI-дизайна; предоставляет правила против шаблонности, обязательный этап анализа перед написанием кода и рекомендации по компоновке, типографике, цвету, анимации, доступности, дашбордам, таблицам, лендингам, оформлению тем и детализации; запускается при редактировании UI-кода или просмотре и доработке компонентов, страниц, экранов, макетов, анимаций, адаптивного поведения или дизайн-систем.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/ui-craft/SKILL.md",
+          "sha256": "2f36ef4ba29dd4b5d133b74209670cbc92635804850ff1c441eced0dadf22b73",
+          "template_candidate": false
+        },
+        {
+          "name": "ui-craft-dense-dashboard",
+          "description": "Плотные дашборды / панели администратора / инструменты в стиле Bloomberg / Retool / сложные внутренние инструменты с большим объёмом данных. Зафиксированные параметры: CRAFT=7, MOTION=3, DENSITY=9. Шрифты IBM Plex и моноширинный для чисел, семантическая палитра, сетка 4/8px, sparklines, tabular-nums. Срабатывает при запросах на: dashboard, admin panel, data-dense, analytics, Bloomberg- like, Retool-like.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/ui-craft-dense-dashboard/SKILL.md",
+          "sha256": "aaf23c5bdb6eeff66413dad4c8b10c3b63c695958042adb038f9fb7d2ee9ef6b",
+          "template_candidate": false
+        },
+        {
+          "name": "ui-craft-editorial",
+          "description": "Редакционные / журналы / длинные статьи / Medium / Substack / UI с большим объёмом контента. Заблокированные настройки: CRAFT=9, MOTION=4, DENSITY=3. Шрифт без засечек для заголовков + гуманистический шрифт для текста, широкая колонка чтения, буквицы, OpenType. Срабатывает на команды: editorial, magazine, long-form, blog, Medium-like, Substack-like",
+          "path": "/home/maksim/taskflow/roles/designer/skills/ui-craft-editorial/SKILL.md",
+          "sha256": "c70a29383a6e33e66717ca4996c68d9b2dbab8300c2e767daf9da4048e43c930",
+          "template_candidate": false
+        },
+        {
+          "name": "ui-craft-minimal",
+          "description": "Минималистичные / аккуратные стили UI в духе Linear / Notion / Vercel с преобладанием留白. Фиксированные параметры: CRAFT=8, MOTION=3, DENSITY=2. Монохром + один акцентный цвет, шрифты Inter/Geist, волосовые границы вместо теней. Применяй когда указаны: minimal, clean, Linear-like, Notion-like, Vercel-like, whitespace-heavy",
+          "path": "/home/maksim/taskflow/roles/designer/skills/ui-craft-minimal/SKILL.md",
+          "sha256": "59082483c3ec54e6a1220908c12627efb835c7c9d87d5188c742c429d38f7260",
+          "template_candidate": false
+        },
+        {
+          "name": "ux-copy",
+          "description": "Создание и проверка текстов интерфейса: кнопки, ошибки, пустые состояния и подсказки. Применяй при именовании действий и объяснении поведения экрана пользователю. Не применяй для маркетинговых статей, проектирования навигации и описания ещё не существующих функций.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/ux-copy/SKILL.md",
+          "sha256": "cbbef64adbc1d1e5c71a2539333b5d2135ee34c5acbdc3424e1f3c2d46804c14",
+          "template_candidate": true
+        },
+        {
+          "name": "writing-for-agents",
+          "description": "Написание документов для агентов. Применяется при создании или изменении навыков, а также при редактировании файлов AGENTS.md, CLAUDE.md, MEMORY.md или файла памяти.",
+          "path": "/home/maksim/taskflow/roles/designer/skills/writing-for-agents/SKILL.md",
+          "sha256": "a586a55e87ceefc2ee50484945303afdd449087d733d0cb7bf77144cf8953c9c",
+          "template_candidate": false
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "role": "code_orchestrator",
+      "skills": [
+        {
+          "name": "one-agent-one-task",
+          "description": "ОДИН запуск субагента = РОВНО ОДНА задача. Если центральная задача дробится на несколько НЕЗАВИСИМЫХ подзадач — на КАЖДУЮ подзадачу отдельный агент, все Task-вызовы в ОДНОМ сообщении (параллельно). НЕ пихать несколько подзадач («сделай фронт + бэк + тесты») одному агенту. Триггеры: запускаю Agent; в ТЗ вписываю «сделай A, потом B, потом C»; жалоба Максима «опять всё одному агенту», «дроби на агентов», «раз дробишь на подзадачи — агент на каждую».",
+          "path": "/home/maksim/taskflow/roles/code_orchestrator/skills/one-agent-one-task/SKILL.md",
+          "sha256": "7aa6a44390743b683b5b63410433c06df6ab2beaa29aa58dc176a5a4ecffe34d",
+          "template_candidate": true
+        },
+        {
+          "name": "orchestrate-step-submission",
+          "description": "Сдача шага разбиения работы в режиме Оркестратор при требовании содержательного коммита поверх main. Применяй, когда сдача шага без правок кода отклонена из-за ahead=0. Не применяй вместо реализации кода и не создавай пустой коммит для обхода проверки.",
+          "path": "/home/maksim/taskflow/roles/code_orchestrator/skills/orchestrate-step-submission/SKILL.md",
+          "sha256": "c0cb04912b3d26cbf39053690e8a7d8d05a44a8be9d28f787699579832f21ccf",
+          "template_candidate": true
+        },
+        {
+          "name": "traycer-epic-brief",
+          "description": "Зафиксировать постановку крупной затеи: в чём проблема, что входит в границы, а что нет. До всякого планирования и оценок.",
+          "path": "/home/maksim/taskflow/roles/code_orchestrator/skills/traycer-epic-brief/SKILL.md",
+          "sha256": "fa8477840363ec13911bb41881b0fdf647851fae71b0b128a4ea99fcd358a81f",
+          "template_candidate": false
+        },
+        {
+          "name": "traycer-revise-requirements",
+          "description": "Переписать планы, когда требования или ограничения существенно поменялись. Не для мелких уточнений, которые влезают в существующий документ.",
+          "path": "/home/maksim/taskflow/roles/code_orchestrator/skills/traycer-revise-requirements/SKILL.md",
+          "sha256": "6b022ba1227032dfc7db26d287b06565c0f06ebf8fdb44a93653726aeffd15ea",
+          "template_candidate": false
+        },
+        {
+          "name": "traycer-ticket-breakdown",
+          "description": "Разбить утверждённый подход на конкретные тикеты, по которым можно работать.",
+          "path": "/home/maksim/taskflow/roles/code_orchestrator/skills/traycer-ticket-breakdown/SKILL.md",
+          "sha256": "756be40bd08d4604405d96012bbd77dc427f1ec862aca4396bffd82a715fec88",
+          "template_candidate": false
+        },
+        {
+          "name": "writing-for-agents",
+          "description": "Написание документов для агентов. Применяется при создании или изменении навыков, а также при редактировании файлов AGENTS.md, CLAUDE.md, MEMORY.md или файла памяти.",
+          "path": "/home/maksim/taskflow/roles/code_orchestrator/skills/writing-for-agents/SKILL.md",
+          "sha256": "a586a55e87ceefc2ee50484945303afdd449087d733d0cb7bf77144cf8953c9c",
+          "template_candidate": false
+        }
+      ],
+      "diagnostics": []
+    }
+  ],
+  "unavailable": []
+}

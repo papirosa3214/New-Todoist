@@ -1,0 +1,6 @@
+[
+  { "goto": "/task/1fe2d05c-540a-4032-8f9c-7ecebe78c5b1", "note": "родительская с 13 детьми" },
+  { "wait": "text=План", "timeout": 10000 },
+  { "wait": 1500 },
+  { "snap": "01-parent-pulse" }
+]

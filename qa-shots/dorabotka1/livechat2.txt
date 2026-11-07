@@ -1,0 +1,30 @@
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+: дежурный думает
+
+event: message
+data: {"ok": true, "answer": "Модель недоступна: opencode-go: Command '['/home/maksim/.opencode/bin/opencode']' timed out after 120 seconds. Отчёты и инциденты при этом продолжают работать.", "plan": [], "provider": "opencode-go", "error": "opencode-go: Command '['/home/maksim/.opencode/bin/opencode']' timed out after 120 seconds"}
+
+event: done
+data: {}
+

@@ -1,0 +1,10 @@
+609f7c8932d3bcc961ee43cafadfb688c158ddea
+ M AGENT-WORK-SCOPES.md
+ M server/scripts/role-routing.yaml
+ M server/src/runtime/universalTaskflow.ts
+ M server/test/universalTaskflow.test.ts
+?? docs/2026-10-20-discover-conflict.md
+?? docs/2026-10-20-minimax-flash.md
+?? docs/2026-10-20-tool-error-diagnostics.md
+?? docs/2026-10-20-tool-stack-audit/
+?? server/test/toolStackAudit.test.ts

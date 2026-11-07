@@ -1,0 +1,795 @@
+{
+  "at": "2026-10-20T08:15:22.840Z",
+  "results": [
+    {
+      "path": "/api/health",
+      "http": 200,
+      "data": {
+        "ok": true,
+        "ts": 1792484118735
+      }
+    },
+    {
+      "path": "/api/runtime/status",
+      "http": 200,
+      "data": {
+        "runtime": {
+          "id": "runtime:pi",
+          "kind": "pi",
+          "status": "ready",
+          "version": "unknown",
+          "endpoint": "cli"
+        }
+      }
+    },
+    {
+      "path": "/api/runtime/models",
+      "http": 200,
+      "data": {
+        "count": 1339,
+        "minimax": [
+          {
+            "id": "MiniMax-M2.7",
+            "available": true
+          },
+          {
+            "id": "MiniMax-M2.7-highspeed",
+            "available": true
+          },
+          {
+            "id": "MiniMax-M3",
+            "available": true
+          },
+          {
+            "id": "MiniMax-M3.1-Flash",
+            "available": true
+          }
+        ]
+      }
+    },
+    {
+      "path": "/api/runtime/providers",
+      "http": 200,
+      "data": [
+        {
+          "provider": "amazon-bedrock",
+          "name": "Amazon Bedrock",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "ant-ling",
+          "name": "Ant Ling",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "anthropic",
+          "name": "Anthropic",
+          "status": "connected",
+          "authType": null,
+          "authMethods": [
+            "api_key",
+            "oauth"
+          ]
+        },
+        {
+          "provider": "azure-openai-responses",
+          "name": "Azure OpenAI",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "baseten",
+          "name": "Baseten",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "cerebras",
+          "name": "Cerebras",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "cloudflare-ai-gateway",
+          "name": "Cloudflare AI Gateway",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "cloudflare-workers-ai",
+          "name": "Cloudflare Workers AI",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "deepseek",
+          "name": "DeepSeek",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "fireworks",
+          "name": "Fireworks",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "github-copilot",
+          "name": "GitHub Copilot",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key",
+            "oauth"
+          ]
+        },
+        {
+          "provider": "google",
+          "name": "Google",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "google-vertex",
+          "name": "Google Vertex AI",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "groq",
+          "name": "Groq",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "huggingface",
+          "name": "Hugging Face",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "kimi-coding",
+          "name": "Kimi For Coding",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key",
+            "oauth"
+          ]
+        },
+        {
+          "provider": "minimax",
+          "name": "MiniMax",
+          "status": "connected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "minimax-cn",
+          "name": "MiniMax CN",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "mistral",
+          "name": "Mistral",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "moonshotai",
+          "name": "Moonshot AI",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "moonshotai-cn",
+          "name": "Moonshot AI CN",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "nvidia",
+          "name": "NVIDIA",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "openai",
+          "name": "OpenAI",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "openai-codex",
+          "name": "OpenAI Codex",
+          "status": "connected",
+          "authType": null,
+          "authMethods": [
+            "oauth"
+          ]
+        },
+        {
+          "provider": "opencode",
+          "name": "OpenCode Zen",
+          "status": "connected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "opencode-go",
+          "name": "OpenCode Go",
+          "status": "connected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "openrouter",
+          "name": "OpenRouter",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key",
+            "oauth"
+          ]
+        },
+        {
+          "provider": "qwen-token-plan",
+          "name": "Qwen Token Plan",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "qwen-token-plan-cn",
+          "name": "Qwen Token Plan CN",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "qwen-token-plan-individual",
+          "name": "Qwen Token Plan Individual",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "radius",
+          "name": "Radius",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key",
+            "oauth"
+          ]
+        },
+        {
+          "provider": "together",
+          "name": "Together",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "vercel-ai-gateway",
+          "name": "Vercel AI Gateway",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "xai",
+          "name": "xAI",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key",
+            "oauth"
+          ]
+        },
+        {
+          "provider": "xiaomi",
+          "name": "Xiaomi",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "xiaomi-token-plan-ams",
+          "name": "Xiaomi Token Plan AMS",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "xiaomi-token-plan-cn",
+          "name": "Xiaomi Token Plan CN",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "xiaomi-token-plan-sgp",
+          "name": "Xiaomi Token Plan SGP",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "zai",
+          "name": "Z.AI",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "zai-coding-cn",
+          "name": "Z.AI Coding CN",
+          "status": "disconnected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        },
+        {
+          "provider": "ollama",
+          "name": "ollama",
+          "status": "connected",
+          "authType": null,
+          "authMethods": [
+            "api_key"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "/api/runtime/profiles",
+      "http": 200,
+      "data": [
+        {
+          "id": "researcher",
+          "runtime_id": "runtime:pi",
+          "tools": [
+            "taskflow_my_tasks",
+            "taskflow_task",
+            "taskflow_claim",
+            "taskflow_heartbeat",
+            "taskflow_state",
+            "taskflow_comment",
+            "taskflow_subtask_done",
+            "taskflow_subtask_add",
+            "taskflow_rules",
+            "taskflow_status",
+            "taskflow_agents",
+            "taskflow_chat_send",
+            "taskflow_chat_typing",
+            "taskflow_chat_read",
+            "taskflow_subtask_work",
+            "taskflow_projects",
+            "taskflow_project_tasks",
+            "taskflow_create_project",
+            "taskflow_create_task",
+            "taskflow_suggest_subtasks",
+            "taskflow_structure_dictation",
+            "taskflow_docs",
+            "taskflow_doc_read",
+            "taskflow_doc_write",
+            "taskflow_kb_search",
+            "taskflow_runtime",
+            "taskflow_report"
+          ]
+        },
+        {
+          "id": "analyst",
+          "runtime_id": "runtime:pi",
+          "tools": [
+            "taskflow_my_tasks",
+            "taskflow_task",
+            "taskflow_claim",
+            "taskflow_heartbeat",
+            "taskflow_state",
+            "taskflow_comment",
+            "taskflow_subtask_done",
+            "taskflow_subtask_add",
+            "taskflow_rules",
+            "taskflow_status",
+            "taskflow_agents",
+            "taskflow_chat_send",
+            "taskflow_chat_typing",
+            "taskflow_chat_read",
+            "taskflow_subtask_work",
+            "taskflow_projects",
+            "taskflow_project_tasks",
+            "taskflow_create_project",
+            "taskflow_create_task",
+            "taskflow_suggest_subtasks",
+            "taskflow_structure_dictation",
+            "taskflow_docs",
+            "taskflow_doc_read",
+            "taskflow_doc_write",
+            "taskflow_kb_search",
+            "taskflow_runtime"
+          ]
+        },
+        {
+          "id": "critic_verifier",
+          "runtime_id": "runtime:pi",
+          "tools": [
+            "taskflow_my_tasks",
+            "taskflow_task",
+            "taskflow_claim",
+            "taskflow_heartbeat",
+            "taskflow_state",
+            "taskflow_comment",
+            "taskflow_subtask_done",
+            "taskflow_subtask_add",
+            "taskflow_rules",
+            "taskflow_status",
+            "taskflow_agents",
+            "taskflow_chat_send",
+            "taskflow_chat_typing",
+            "taskflow_chat_read",
+            "taskflow_subtask_work",
+            "taskflow_projects",
+            "taskflow_project_tasks",
+            "taskflow_create_project",
+            "taskflow_create_task",
+            "taskflow_suggest_subtasks",
+            "taskflow_structure_dictation",
+            "taskflow_docs",
+            "taskflow_doc_read",
+            "taskflow_doc_write",
+            "taskflow_kb_search",
+            "taskflow_review",
+            "taskflow_runtime"
+          ]
+        },
+        {
+          "id": "architect",
+          "runtime_id": "runtime:pi",
+          "tools": [
+            "taskflow_my_tasks",
+            "taskflow_task",
+            "taskflow_claim",
+            "taskflow_heartbeat",
+            "taskflow_state",
+            "taskflow_comment",
+            "taskflow_subtask_done",
+            "taskflow_subtask_add",
+            "taskflow_rules",
+            "taskflow_status",
+            "taskflow_agents",
+            "taskflow_chat_send",
+            "taskflow_chat_typing",
+            "taskflow_chat_read",
+            "taskflow_subtask_work",
+            "taskflow_projects",
+            "taskflow_project_tasks",
+            "taskflow_create_project",
+            "taskflow_create_task",
+            "taskflow_suggest_subtasks",
+            "taskflow_structure_dictation",
+            "taskflow_docs",
+            "taskflow_doc_read",
+            "taskflow_doc_write",
+            "taskflow_kb_search",
+            "taskflow_runtime"
+          ]
+        },
+        {
+          "id": "builder",
+          "runtime_id": "runtime:pi",
+          "tools": [
+            "taskflow_my_tasks",
+            "taskflow_task",
+            "taskflow_claim",
+            "taskflow_heartbeat",
+            "taskflow_state",
+            "taskflow_comment",
+            "taskflow_subtask_done",
+            "taskflow_subtask_add",
+            "taskflow_rules",
+            "taskflow_status",
+            "taskflow_agents",
+            "taskflow_chat_send",
+            "taskflow_chat_typing",
+            "taskflow_chat_read",
+            "taskflow_subtask_work",
+            "taskflow_projects",
+            "taskflow_project_tasks",
+            "taskflow_create_project",
+            "taskflow_create_task",
+            "taskflow_suggest_subtasks",
+            "taskflow_structure_dictation",
+            "taskflow_docs",
+            "taskflow_doc_read",
+            "taskflow_doc_write",
+            "taskflow_kb_search",
+            "taskflow_runtime"
+          ]
+        },
+        {
+          "id": "qa",
+          "runtime_id": "runtime:pi",
+          "tools": [
+            "taskflow_my_tasks",
+            "taskflow_task",
+            "taskflow_claim",
+            "taskflow_heartbeat",
+            "taskflow_state",
+            "taskflow_comment",
+            "taskflow_subtask_done",
+            "taskflow_subtask_add",
+            "taskflow_rules",
+            "taskflow_status",
+            "taskflow_agents",
+            "taskflow_chat_send",
+            "taskflow_chat_typing",
+            "taskflow_chat_read",
+            "taskflow_subtask_work",
+            "taskflow_projects",
+            "taskflow_project_tasks",
+            "taskflow_create_project",
+            "taskflow_create_task",
+            "taskflow_suggest_subtasks",
+            "taskflow_structure_dictation",
+            "taskflow_docs",
+            "taskflow_doc_read",
+            "taskflow_doc_write",
+            "taskflow_kb_search",
+            "taskflow_runtime"
+          ]
+        },
+        {
+          "id": "designer",
+          "runtime_id": "runtime:pi",
+          "tools": [
+            "taskflow_my_tasks",
+            "taskflow_task",
+            "taskflow_claim",
+            "taskflow_heartbeat",
+            "taskflow_state",
+            "taskflow_comment",
+            "taskflow_subtask_done",
+            "taskflow_subtask_add",
+            "taskflow_rules",
+            "taskflow_status",
+            "taskflow_agents",
+            "taskflow_chat_send",
+            "taskflow_chat_typing",
+            "taskflow_chat_read",
+            "taskflow_subtask_work",
+            "taskflow_projects",
+            "taskflow_project_tasks",
+            "taskflow_create_project",
+            "taskflow_create_task",
+            "taskflow_suggest_subtasks",
+            "taskflow_structure_dictation",
+            "taskflow_docs",
+            "taskflow_doc_read",
+            "taskflow_doc_write",
+            "taskflow_kb_search",
+            "taskflow_runtime"
+          ]
+        },
+        {
+          "id": "secretary",
+          "runtime_id": "runtime:pi",
+          "tools": []
+        },
+        {
+          "id": "code_orchestrator",
+          "runtime_id": "runtime:pi",
+          "tools": []
+        },
+        {
+          "id": "infra_engineer",
+          "runtime_id": "runtime:pi",
+          "tools": []
+        },
+        {
+          "id": "claude_code",
+          "runtime_id": "runtime:pi",
+          "tools": []
+        }
+      ]
+    },
+    {
+      "path": "/api/runtime/routing",
+      "http": 200,
+      "data": {
+        "routing": {
+          "defaults": {
+            "researcher": "pi_runtime",
+            "analyst": "pi_runtime",
+            "critic_verifier": "pi_runtime",
+            "architect": "pi_runtime",
+            "builder": "pi_runtime",
+            "qa": "pi_runtime",
+            "designer": "pi_runtime",
+            "secretary": "pi_runtime",
+            "code_orchestrator": "pi_runtime",
+            "infra_engineer": "pi_runtime",
+            "claude_code": "pi_runtime"
+          },
+          "fallbacks": {
+            "researcher": [
+              "opencode-go/deepseek-v4.1-flash",
+              "opencode/space-bunny-free"
+            ],
+            "analyst": [
+              "opencode-go/deepseek-v4.1-flash",
+              "opencode/space-bunny-free"
+            ],
+            "critic_verifier": [
+              "opencode-go/minimax-m3",
+              "opencode/space-bunny-free"
+            ],
+            "architect": [
+              "opencode-go/deepseek-v4.1-flash",
+              "opencode/space-bunny-free"
+            ],
+            "builder": [
+              "opencode-go/deepseek-v4.1-flash",
+              "opencode/space-bunny-free"
+            ],
+            "qa": [
+              "opencode-go/minimax-m3",
+              "opencode/space-bunny-free"
+            ],
+            "designer": [
+              "opencode-go/deepseek-v4.1-flash",
+              "opencode/space-bunny-free"
+            ],
+            "secretary": [
+              "opencode-go/deepseek-v4.1-flash",
+              "opencode/space-bunny-free"
+            ],
+            "code_orchestrator": [
+              "opencode-go/deepseek-v4.1-flash",
+              "opencode/space-bunny-free"
+            ],
+            "infra_engineer": [],
+            "claude_code": []
+          },
+          "models": {
+            "researcher": "MiniMax-M3.1-Flash",
+            "analyst": "MiniMax-M3.1-Flash",
+            "critic_verifier": "MiniMax-M3.1-Flash",
+            "architect": "MiniMax-M3.1-Flash",
+            "builder": "MiniMax-M3.1-Flash",
+            "qa": "MiniMax-M3.1-Flash",
+            "designer": "MiniMax-M3.1-Flash",
+            "secretary": "MiniMax-M3.1-Flash",
+            "code_orchestrator": "MiniMax-M3.1-Flash",
+            "infra_engineer": "MiniMax-M3.1-Flash",
+            "claude_code": "MiniMax-M3.1-Flash"
+          }
+        }
+      }
+    },
+    {
+      "path": "composio/builder",
+      "http": 200,
+      "enabled": false,
+      "configured": true,
+      "available": true,
+      "count": 50,
+      "error": null
+    },
+    {
+      "path": "composio/secretary",
+      "http": 200,
+      "enabled": true,
+      "configured": true,
+      "available": true,
+      "count": 50,
+      "error": null
+    },
+    {
+      "path": "/api/machines",
+      "http": 200,
+      "data": [
+        {
+          "id": "c24ec665-d3e3-4265-8a94-412dc39c4ed9",
+          "name": "macbook",
+          "online": true,
+          "host_version": "0.1.0"
+        }
+      ]
+    },
+    {
+      "path": "machine/things_today",
+      "http": 200,
+      "ok": true,
+      "contentType": "string",
+      "contentLength": 9975
+    }
+  ]
+}

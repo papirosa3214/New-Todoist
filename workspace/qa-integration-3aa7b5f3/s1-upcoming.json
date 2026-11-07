@@ -1,0 +1,12 @@
+[
+  { "goto": "/upcoming" },
+  { "wait": 3000 },
+  { "snap": "planirovanie-nachalo" },
+  { "expect_no_text": "Экран не смог отрисоваться" },
+  { "expect_text": "Проверка" },
+  { "scroll": 600 },
+  { "wait": 1000 },
+  { "snap": "planirovanie-prokrutka" },
+  { "expect_no_text": "Экран не смог отрисоваться" },
+  { "expect_text": "Проверка" }
+]

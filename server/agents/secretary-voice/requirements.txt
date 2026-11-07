@@ -1,0 +1,2 @@
+livekit-agents[google,images]==1.8.3
+python-dotenv

@@ -1,0 +1,7 @@
+{
+  "_comment": "Сопоставление project_id -> repo_root для RepositoryEnricher (Шаг 3 архивного ТЗ docs/archive/2026-09-24-before-canonical/taskflow-direct-dispatch-mvp.md). Ключ — id проекта из таблицы projects в taskflow.db; значение — путь к корню git-репозитория. RepositoryEnricher зовёт `git -C repo_root rev-parse --abbrev-ref HEAD` и `git status --short` — никаких операций, меняющих репозиторий.",
+  "projects": {
+    "c2fcbcdb-951f-449f-a1bd-123ea2a46a58": "/home/maksim/Проекты/New-Todoist",
+    "0248c423-55ba-45a6-a4c5-cff02269b872": "/home/maksim/Проекты/TaskFlow-Web-Desktop"
+  }
+}

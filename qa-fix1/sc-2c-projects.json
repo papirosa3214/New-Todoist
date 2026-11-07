@@ -1,0 +1,10 @@
+[
+  { "goto": "/login" },
+  { "wait": 800 },
+  { "fill": ["[data-testid=login-name-input]", "Максим"] },
+  { "click": "[data-testid=login-submit]" },
+  { "wait": 1500 },
+  { "goto": "/projects" },
+  { "wait": 1500 },
+  { "snap": "02c-projects" }
+]

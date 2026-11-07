@@ -1,0 +1,27 @@
+# Role routing для TaskFlow. Сгенерировано автоматически Pi
+# runtime (карточка be9cf712, фаза 2). При правке руками — не
+# забывайте порядок: defaults, fallbacks, models.
+defaults:
+  researcher: pi_runtime
+  analyst: pi_runtime
+  critic_verifier: pi_runtime
+  architect: pi_runtime
+  builder: pi_runtime
+  qa: pi_runtime
+  designer: pi_runtime
+fallbacks:
+  researcher: []
+  analyst: []
+  critic_verifier: []
+  architect: []
+  builder: []
+  qa: []
+  designer: []
+models:
+  researcher: MiniMax-M3
+  analyst: MiniMax-M3
+  critic_verifier: MiniMax-M3
+  architect: MiniMax-M3
+  builder: MiniMax-M3
+  qa: MiniMax-M3
+  designer: MiniMax-M3

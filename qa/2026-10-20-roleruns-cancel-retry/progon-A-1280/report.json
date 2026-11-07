@@ -1,0 +1,274 @@
+{
+ "base": "http://127.0.0.1:4180",
+ "viewport": "1280x800@2",
+ "engine": "chromium",
+ "failed_steps": 0,
+ "problems": {
+  "console": [],
+  "pageerror": [],
+  "network": []
+ },
+ "steps": [
+  {
+   "n": 1,
+   "step": "goto",
+   "arg": "/role-runs",
+   "note": "экран «Заходы ролей» на копии",
+   "ok": true
+  },
+  {
+   "n": 2,
+   "step": "wait",
+   "arg": 1200,
+   "note": "ждём загрузку очереди",
+   "ok": true
+  },
+  {
+   "n": 3,
+   "step": "expect_text",
+   "arg": "Заходы ролей",
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 4,
+   "step": "expect_text",
+   "arg": "QA-копия: запуск в очереди",
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 5,
+   "step": "expect_text",
+   "arg": "QA-копия: запуск упал",
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 6,
+   "step": "expect_text",
+   "arg": "В очереди",
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 7,
+   "step": "expect_text",
+   "arg": "Упал",
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 8,
+   "step": "snap",
+   "arg": "очередь-до-действий",
+   "note": "",
+   "ok": true,
+   "file": "01-очередь-до-действий.png",
+   "aria": "- complementary:\n  - text: TaskFlow\n  - button \"Свернуть меню\" [expanded]\n  - textbox \"Поиск — появится на этапе 5\" [disabled]:\n    - /placeholder: Поиск\n  - text: ⌘K\n  - tree \"Разделы\":\n    - treeitem \"Обзор\" [expanded] [level=1]\n    - treeitem \"Дашборд\" [level=2]\n    - treeitem \"Статистика\" [level=2]\n    - treeitem \"Задачи 14\" [expanded] [level=1]\n    - treeitem \"Входящие 7\" [level=2]\n    - treeitem \"Сегодня 0\" [level=2]\n    - treeitem \"Предстоящее\" [level=2]\n    - treeitem \"Метки\" [level=2]\n    - treeitem \"Проекты\" [expanded] [level=1]\n    - treeitem \"TaskFlow - NewTodoist 3\" [level=2]\n    - treeitem \"TaskFlow Native iOS\" [level=2]\n    - treeitem \"Учёт личных финансов\" [level=2]\n    - treeitem \"Доступ к TaskFlow вне дома\" [level=2]\n    - treeitem \"TaskFlow Web Desktop 4\" [level=2]\n    - treeitem \"Чаты\" [level=1]\n    - treeitem \"Знания\" [level=1]\n    - treeitem \"Агенты\" [level=1]\n    - treeitem \"Состояние системы 105\" [level=1]\n    - treeitem \"Архив\" [level=1]\n    - treeitem \"Настройки\" [level=1]\n  - button \"Секретарь⌥ Space\" [disabled]\n  - text: МА Максим Личное пространство\n  - button \"Тёмная тема\"\n- main:\n  - heading \"Заходы ролей\" [level=1]\n  - text: Кто заходил, зачем и что с заходом\n  - button \"Обновить\"\n  - heading \"Сейчас\" [level=2]\n  - text: \"4\"\n  - 'heading \"QA-копия: гонка отмены\" [level=3]':\n    - 'button \"QA-копия: гонка отмены\"'\n  - text: Лайф-тестировщик · назначение · 15:11\n  - button \"Отменить\"\n  - text: \"В очереди Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск в очереди\" [level=3]':\n    - 'button \"QA-копия: запуск в очереди\"'\n  - text: Лайф-тестировщик · назначение · 15:11\n  - button \"Отменить\"\n  - text: \"В очереди Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск идёт\" [level=3]':\n    - 'button \"QA-копия: запуск идёт\"'\n  - text: \"Лайф-тестировщик · продолжение · 15:09 Работает Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск ждёт повтора\" [level=3]':\n    - 'button \"QA-копия: запуск ждёт повтора\"'\n  - text: Лайф-тестировщик · проверка · 15:03 · попытка 1 из 3\n  - button \"Отменить\"\n  - text: \"Ждёт повтора Модель роли сейчас: MiniMax-M3.1-Flash первая попытка не удалась\"\n  - heading \"Недавние\" [level=2]\n  - text: \"3\"\n  - 'heading \"QA-копия: запуск упал\" [level=3]':\n    - 'button \"QA-копия: запуск упал\"'\n  - text: Лайф-тестировщик · комментарий · 15:06 · попытка 3 из 3\n  - button \"Повторить\"\n  - text: \"Упал Модель роли сейчас: MiniMax-M3.1-Flash Роль упала: тестовая ошибка в копии\"\n  - 'heading \"QA-копия: запуск не понадобился\" [level=3]':\n    - 'button \"QA-копия: запуск не понадобился\"'\n  - text: \"Лайф-тестировщик · назначение · 14:41 Не понадобился Модель роли сейчас: MiniMax-M3.1-Flash карточка не активна\"\n  - 'heading \"QA-копия: запуск готово\" [level=3]':\n    - 'button \"QA-копия: запуск готово\"'\n  - text: \"Лайф-тестировщик · назначение · 14:12 Готово Модель роли сейчас: MiniMax-M3.1-Flash\"",
+   "text": "✓\nTaskFlow\n⌘K\nОбзор\nДашборд\nСтатистика\nЗадачи\n14\nВходящие\n7\nСегодня\n0\nПредстоящее\nМетки\nПроекты\nTaskFlow - NewTodoist\n3\nTaskFlow Native iOS\nУчёт личных финансов\nДоступ к TaskFlow вне дома\nTaskFlow Web Desktop\n4\nЧаты\nЗнания\nАгенты\nСостояние системы\n105\nАрхив\nНастройки\nСекретарь⌥ Space\nМА\nМаксим\nЛичное пространство\nТёмная тема\nЗаходы ролей\nКто заходил, зачем и что с заходом\nОбновить\nСейчас\n4\nQA-копия: гонка отмены\nЛайф-тестировщик · назначение · 15:11\nОтменить\nВ очереди\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск в очереди\nЛайф-тестировщик · назначение · 15:11\nОтменить\nВ очереди\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск идёт\nЛайф-тестировщик · продолжение · 15:09\nРаботает\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск ждёт повтора\nЛайф-тестировщик · проверка · 15:03 · попытка 1 из 3\nОтменить\nЖдёт повтора\nМодель роли сейчас: MiniMax-M3.1-Flash\nпервая попытка не удалась\nНедавние\n3\nQA-копия: запуск упал\nЛайф-тестировщик · комментарий · 15:06 · попытка 3 из 3\nПовторить\nУпал\nМодель роли сейчас: MiniMax-M3.1-Flash\nРоль упала: тестовая ошибка в копии\nQA-копия: запуск не понадобился\nЛайф-тестировщик · назначение · 14:41\nНе понадобился\nМодель роли сейчас: MiniMax-M3.1-Flash\nкарточка не активна\nQA-копия: запуск готово\nЛайф-тестировщик · назначение · 14:12\nГотово\nМодель роли сейчас: MiniMax-M3.1-Flash",
+   "layout": {
+    "hscroll": false,
+    "offscreen": [],
+    "small": [
+     "button.ui-button «Свернуть меню» 32×32",
+     "input.ui-search__input «Поиск — появится на этапе 5» 178×30",
+     "button.ui-button «Секретарь⌥ Space» 139×32",
+     "button.ui-button «Тёмная тема» 106×32",
+     "button.ui-button «Обновить» 90×32",
+     "button.runs__task «QA-копия: гонка отмены» 167×20",
+     "button.ui-button «Отменить» 90×32",
+     "button.runs__task «QA-копия: запуск в очереди» 190×20"
+    ],
+    "clipped": []
+   }
+  },
+  {
+   "n": 9,
+   "step": "measure",
+   "arg": ".runs__run:has-text(\"QA-копия: запуск в очереди\") >> button.ui-button:has-text(\"Отменить\")",
+   "note": "размер кнопки «Отменить»",
+   "ok": true,
+   "measure": {
+    "rect": {
+     "x": 1150,
+     "y": 216,
+     "w": 90,
+     "h": 32
+    },
+    "color": "rgb(23, 23, 23)",
+    "background": "rgba(0, 0, 0, 0)",
+    "fontSize": "13px",
+    "fontWeight": "400",
+    "opacity": "1",
+    "display": "flex",
+    "text": "Отменить"
+   }
+  },
+  {
+   "n": 10,
+   "step": "click",
+   "arg": ".runs__run:has-text(\"QA-копия: запуск в очереди\") >> button.ui-button:has-text(\"Отменить\")",
+   "note": "отменяем запуск в очереди",
+   "ok": true
+  },
+  {
+   "n": 11,
+   "step": "wait",
+   "arg": 1500,
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 12,
+   "step": "expect_text",
+   "arg": "Отменён",
+   "note": "состояние сменилось на «Отменён»",
+   "ok": true
+  },
+  {
+   "n": 13,
+   "step": "snap",
+   "arg": "после-отмены-запуска-в-очереди",
+   "note": "",
+   "ok": true,
+   "file": "02-после-отмены-запуска-в-очереди.png",
+   "aria": "- complementary:\n  - text: TaskFlow\n  - button \"Свернуть меню\" [expanded]\n  - textbox \"Поиск — появится на этапе 5\" [disabled]:\n    - /placeholder: Поиск\n  - text: ⌘K\n  - tree \"Разделы\":\n    - treeitem \"Обзор\" [expanded] [level=1]\n    - treeitem \"Дашборд\" [level=2]\n    - treeitem \"Статистика\" [level=2]\n    - treeitem \"Задачи 14\" [expanded] [level=1]\n    - treeitem \"Входящие 7\" [level=2]\n    - treeitem \"Сегодня 0\" [level=2]\n    - treeitem \"Предстоящее\" [level=2]\n    - treeitem \"Метки\" [level=2]\n    - treeitem \"Проекты\" [expanded] [level=1]\n    - treeitem \"TaskFlow - NewTodoist 3\" [level=2]\n    - treeitem \"TaskFlow Native iOS\" [level=2]\n    - treeitem \"Учёт личных финансов\" [level=2]\n    - treeitem \"Доступ к TaskFlow вне дома\" [level=2]\n    - treeitem \"TaskFlow Web Desktop 4\" [level=2]\n    - treeitem \"Чаты\" [level=1]\n    - treeitem \"Знания\" [level=1]\n    - treeitem \"Агенты\" [level=1]\n    - treeitem \"Состояние системы 105\" [level=1]\n    - treeitem \"Архив\" [level=1]\n    - treeitem \"Настройки\" [level=1]\n  - button \"Секретарь⌥ Space\" [disabled]\n  - text: МА Максим Личное пространство\n  - button \"Тёмная тема\"\n- main:\n  - heading \"Заходы ролей\" [level=1]\n  - text: Кто заходил, зачем и что с заходом\n  - button \"Обновить\"\n  - heading \"Сейчас\" [level=2]\n  - text: \"3\"\n  - 'heading \"QA-копия: гонка отмены\" [level=3]':\n    - 'button \"QA-копия: гонка отмены\"'\n  - text: Лайф-тестировщик · назначение · 15:11\n  - button \"Отменить\"\n  - text: \"В очереди Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск идёт\" [level=3]':\n    - 'button \"QA-копия: запуск идёт\"'\n  - text: \"Лайф-тестировщик · продолжение · 15:09 Работает Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск ждёт повтора\" [level=3]':\n    - 'button \"QA-копия: запуск ждёт повтора\"'\n  - text: Лайф-тестировщик · проверка · 15:03 · попытка 1 из 3\n  - button \"Отменить\"\n  - text: \"Ждёт повтора Модель роли сейчас: MiniMax-M3.1-Flash первая попытка не удалась\"\n  - heading \"Недавние\" [level=2]\n  - text: \"4\"\n  - 'heading \"QA-копия: запуск в очереди\" [level=3]':\n    - 'button \"QA-копия: запуск в очереди\"'\n  - text: Лайф-тестировщик · назначение · 15:13\n  - button \"Повторить\"\n  - text: \"Отменён Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск упал\" [level=3]':\n    - 'button \"QA-копия: запуск упал\"'\n  - text: Лайф-тестировщик · комментарий · 15:06 · попытка 3 из 3\n  - button \"Повторить\"\n  - text: \"Упал Модель роли сейчас: MiniMax-M3.1-Flash Роль упала: тестовая ошибка в копии\"\n  - 'heading \"QA-копия: запуск не понадобился\" [level=3]':\n    - 'button \"QA-копия: запуск не понадобился\"'\n  - text: \"Лайф-тестировщик · назначение · 14:41 Не понадобился Модель роли сейчас: MiniMax-M3.1-Flash карточка не активна\"\n  - 'heading \"QA-копия: запуск готово\" [level=3]':\n    - 'button \"QA-копия: запуск готово\"'\n  - text: \"Лайф-тестировщик · назначение · 14:12 Готово Модель роли сейчас: MiniMax-M3.1-Flash\"",
+   "text": "✓\nTaskFlow\n⌘K\nОбзор\nДашборд\nСтатистика\nЗадачи\n14\nВходящие\n7\nСегодня\n0\nПредстоящее\nМетки\nПроекты\nTaskFlow - NewTodoist\n3\nTaskFlow Native iOS\nУчёт личных финансов\nДоступ к TaskFlow вне дома\nTaskFlow Web Desktop\n4\nЧаты\nЗнания\nАгенты\nСостояние системы\n105\nАрхив\nНастройки\nСекретарь⌥ Space\nМА\nМаксим\nЛичное пространство\nТёмная тема\nЗаходы ролей\nКто заходил, зачем и что с заходом\nОбновить\nСейчас\n3\nQA-копия: гонка отмены\nЛайф-тестировщик · назначение · 15:11\nОтменить\nВ очереди\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск идёт\nЛайф-тестировщик · продолжение · 15:09\nРаботает\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск ждёт повтора\nЛайф-тестировщик · проверка · 15:03 · попытка 1 из 3\nОтменить\nЖдёт повтора\nМодель роли сейчас: MiniMax-M3.1-Flash\nпервая попытка не удалась\nНедавние\n4\nQA-копия: запуск в очереди\nЛайф-тестировщик · назначение · 15:13\nПовторить\nОтменён\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск упал\nЛайф-тестировщик · комментарий · 15:06 · попытка 3 из 3\nПовторить\nУпал\nМодель роли сейчас: MiniMax-M3.1-Flash\nРоль упала: тестовая ошибка в копии\nQA-копия: запуск не понадобился\nЛайф-тестировщик · назначение · 14:41\nНе понадобился\nМодель роли сейчас: MiniMax-M3.1-Flash\nкарточка не активна\nQA-копия: запуск готово\nЛайф-тестировщик · назначение · 14:12\nГотово\nМодель роли сейчас: MiniMax-M3.1-Flash",
+   "layout": {
+    "hscroll": false,
+    "offscreen": [],
+    "small": [
+     "button.ui-button «Свернуть меню» 32×32",
+     "input.ui-search__input «Поиск — появится на этапе 5» 178×30",
+     "button.ui-button «Секретарь⌥ Space» 139×32",
+     "button.ui-button «Тёмная тема» 106×32",
+     "button.ui-button «Обновить» 90×32",
+     "button.runs__task «QA-копия: гонка отмены» 167×20",
+     "button.ui-button «Отменить» 90×32",
+     "button.runs__task «QA-копия: запуск идёт» 154×20"
+    ],
+    "clipped": []
+   }
+  },
+  {
+   "n": 14,
+   "step": "click",
+   "arg": ".runs__run:has-text(\"QA-копия: запуск упал\") >> button.ui-button:has-text(\"Повторить\")",
+   "note": "повторяем упавший запуск",
+   "ok": true
+  },
+  {
+   "n": 15,
+   "step": "wait",
+   "arg": 1500,
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 16,
+   "step": "expect_text",
+   "arg": "В очереди",
+   "note": "упавший запуск снова в очереди",
+   "ok": true
+  },
+  {
+   "n": 17,
+   "step": "expect_no_text",
+   "arg": "Роль упала: тестовая ошибка в копии",
+   "note": "текст ошибки исчез",
+   "ok": true
+  },
+  {
+   "n": 18,
+   "step": "snap",
+   "arg": "после-повтора-упавшего",
+   "note": "",
+   "ok": true,
+   "file": "03-после-повтора-упавшего.png",
+   "aria": "- complementary:\n  - text: TaskFlow\n  - button \"Свернуть меню\" [expanded]\n  - textbox \"Поиск — появится на этапе 5\" [disabled]:\n    - /placeholder: Поиск\n  - text: ⌘K\n  - tree \"Разделы\":\n    - treeitem \"Обзор\" [expanded] [level=1]\n    - treeitem \"Дашборд\" [level=2]\n    - treeitem \"Статистика\" [level=2]\n    - treeitem \"Задачи 14\" [expanded] [level=1]\n    - treeitem \"Входящие 7\" [level=2]\n    - treeitem \"Сегодня 0\" [level=2]\n    - treeitem \"Предстоящее\" [level=2]\n    - treeitem \"Метки\" [level=2]\n    - treeitem \"Проекты\" [expanded] [level=1]\n    - treeitem \"TaskFlow - NewTodoist 3\" [level=2]\n    - treeitem \"TaskFlow Native iOS\" [level=2]\n    - treeitem \"Учёт личных финансов\" [level=2]\n    - treeitem \"Доступ к TaskFlow вне дома\" [level=2]\n    - treeitem \"TaskFlow Web Desktop 4\" [level=2]\n    - treeitem \"Чаты\" [level=1]\n    - treeitem \"Знания\" [level=1]\n    - treeitem \"Агенты\" [level=1]\n    - treeitem \"Состояние системы 105\" [level=1]\n    - treeitem \"Архив\" [level=1]\n    - treeitem \"Настройки\" [level=1]\n  - button \"Секретарь⌥ Space\" [disabled]\n  - text: МА Максим Личное пространство\n  - button \"Тёмная тема\"\n- main:\n  - heading \"Заходы ролей\" [level=1]\n  - text: Кто заходил, зачем и что с заходом\n  - button \"Обновить\"\n  - heading \"Сейчас\" [level=2]\n  - text: \"4\"\n  - 'heading \"QA-копия: гонка отмены\" [level=3]':\n    - 'button \"QA-копия: гонка отмены\"'\n  - text: Лайф-тестировщик · назначение · 15:11\n  - button \"Отменить\"\n  - text: \"В очереди Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск идёт\" [level=3]':\n    - 'button \"QA-копия: запуск идёт\"'\n  - text: \"Лайф-тестировщик · продолжение · 15:09 Работает Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск ждёт повтора\" [level=3]':\n    - 'button \"QA-копия: запуск ждёт повтора\"'\n  - text: Лайф-тестировщик · проверка · 15:03 · попытка 1 из 3\n  - button \"Отменить\"\n  - text: \"Ждёт повтора Модель роли сейчас: MiniMax-M3.1-Flash первая попытка не удалась\"\n  - 'heading \"QA-копия: запуск упал\" [level=3]':\n    - 'button \"QA-копия: запуск упал\"'\n  - text: Лайф-тестировщик · комментарий · 15:13\n  - button \"Отменить\"\n  - text: \"В очереди Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - heading \"Недавние\" [level=2]\n  - text: \"3\"\n  - 'heading \"QA-копия: запуск в очереди\" [level=3]':\n    - 'button \"QA-копия: запуск в очереди\"'\n  - text: Лайф-тестировщик · назначение · 15:13\n  - button \"Повторить\"\n  - text: \"Отменён Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск не понадобился\" [level=3]':\n    - 'button \"QA-копия: запуск не понадобился\"'\n  - text: \"Лайф-тестировщик · назначение · 14:41 Не понадобился Модель роли сейчас: MiniMax-M3.1-Flash карточка не активна\"\n  - 'heading \"QA-копия: запуск готово\" [level=3]':\n    - 'button \"QA-копия: запуск готово\"'\n  - text: \"Лайф-тестировщик · назначение · 14:12 Готово Модель роли сейчас: MiniMax-M3.1-Flash\"",
+   "text": "✓\nTaskFlow\n⌘K\nОбзор\nДашборд\nСтатистика\nЗадачи\n14\nВходящие\n7\nСегодня\n0\nПредстоящее\nМетки\nПроекты\nTaskFlow - NewTodoist\n3\nTaskFlow Native iOS\nУчёт личных финансов\nДоступ к TaskFlow вне дома\nTaskFlow Web Desktop\n4\nЧаты\nЗнания\nАгенты\nСостояние системы\n105\nАрхив\nНастройки\nСекретарь⌥ Space\nМА\nМаксим\nЛичное пространство\nТёмная тема\nЗаходы ролей\nКто заходил, зачем и что с заходом\nОбновить\nСейчас\n4\nQA-копия: гонка отмены\nЛайф-тестировщик · назначение · 15:11\nОтменить\nВ очереди\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск идёт\nЛайф-тестировщик · продолжение · 15:09\nРаботает\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск ждёт повтора\nЛайф-тестировщик · проверка · 15:03 · попытка 1 из 3\nОтменить\nЖдёт повтора\nМодель роли сейчас: MiniMax-M3.1-Flash\nпервая попытка не удалась\nQA-копия: запуск упал\nЛайф-тестировщик · комментарий · 15:13\nОтменить\nВ очереди\nМодель роли сейчас: MiniMax-M3.1-Flash\nНедавние\n3\nQA-копия: запуск в очереди\nЛайф-тестировщик · назначение · 15:13\nПовторить\nОтменён\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск не понадобился\nЛайф-тестировщик · назначение · 14:41\nНе понадобился\nМодель роли сейчас: MiniMax-M3.1-Flash\nкарточка не активна\nQA-копия: запуск готово\nЛайф-тестировщик · назначение · 14:12\nГотово\nМодель роли сейчас: MiniMax-M3.1-Flash",
+   "layout": {
+    "hscroll": false,
+    "offscreen": [],
+    "small": [
+     "button.ui-button «Свернуть меню» 32×32",
+     "input.ui-search__input «Поиск — появится на этапе 5» 178×30",
+     "button.ui-button «Секретарь⌥ Space» 139×32",
+     "button.ui-button «Тёмная тема» 106×32",
+     "button.ui-button «Обновить» 90×32",
+     "button.runs__task «QA-копия: гонка отмены» 167×20",
+     "button.ui-button «Отменить» 90×32",
+     "button.runs__task «QA-копия: запуск идёт» 154×20"
+    ],
+    "clipped": []
+   }
+  },
+  {
+   "n": 19,
+   "step": "click",
+   "arg": ".runs__run:has-text(\"QA-копия: запуск ждёт повтора\") >> button.ui-button:has-text(\"Отменить\")",
+   "note": "отменяем запуск, ждущий повтора",
+   "ok": true
+  },
+  {
+   "n": 20,
+   "step": "wait",
+   "arg": 1500,
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 21,
+   "step": "expect_text",
+   "arg": "Отменён",
+   "note": "",
+   "ok": true
+  },
+  {
+   "n": 22,
+   "step": "snap",
+   "arg": "после-отмены-ждущего-повтора",
+   "note": "",
+   "ok": true,
+   "file": "04-после-отмены-ждущего-повтора.png",
+   "aria": "- complementary:\n  - text: TaskFlow\n  - button \"Свернуть меню\" [expanded]\n  - textbox \"Поиск — появится на этапе 5\" [disabled]:\n    - /placeholder: Поиск\n  - text: ⌘K\n  - tree \"Разделы\":\n    - treeitem \"Обзор\" [expanded] [level=1]\n    - treeitem \"Дашборд\" [level=2]\n    - treeitem \"Статистика\" [level=2]\n    - treeitem \"Задачи 14\" [expanded] [level=1]\n    - treeitem \"Входящие 7\" [level=2]\n    - treeitem \"Сегодня 0\" [level=2]\n    - treeitem \"Предстоящее\" [level=2]\n    - treeitem \"Метки\" [level=2]\n    - treeitem \"Проекты\" [expanded] [level=1]\n    - treeitem \"TaskFlow - NewTodoist 3\" [level=2]\n    - treeitem \"TaskFlow Native iOS\" [level=2]\n    - treeitem \"Учёт личных финансов\" [level=2]\n    - treeitem \"Доступ к TaskFlow вне дома\" [level=2]\n    - treeitem \"TaskFlow Web Desktop 4\" [level=2]\n    - treeitem \"Чаты\" [level=1]\n    - treeitem \"Знания\" [level=1]\n    - treeitem \"Агенты\" [level=1]\n    - treeitem \"Состояние системы 105\" [level=1]\n    - treeitem \"Архив\" [level=1]\n    - treeitem \"Настройки\" [level=1]\n  - button \"Секретарь⌥ Space\" [disabled]\n  - text: МА Максим Личное пространство\n  - button \"Тёмная тема\"\n- main:\n  - heading \"Заходы ролей\" [level=1]\n  - text: Кто заходил, зачем и что с заходом\n  - button \"Обновить\"\n  - heading \"Сейчас\" [level=2]\n  - text: \"3\"\n  - 'heading \"QA-копия: гонка отмены\" [level=3]':\n    - 'button \"QA-копия: гонка отмены\"'\n  - text: Лайф-тестировщик · назначение · 15:11\n  - button \"Отменить\"\n  - text: \"В очереди Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск идёт\" [level=3]':\n    - 'button \"QA-копия: запуск идёт\"'\n  - text: \"Лайф-тестировщик · продолжение · 15:09 Работает Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск упал\" [level=3]':\n    - 'button \"QA-копия: запуск упал\"'\n  - text: Лайф-тестировщик · комментарий · 15:13\n  - button \"Отменить\"\n  - text: \"В очереди Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - heading \"Недавние\" [level=2]\n  - text: \"4\"\n  - 'heading \"QA-копия: запуск в очереди\" [level=3]':\n    - 'button \"QA-копия: запуск в очереди\"'\n  - text: Лайф-тестировщик · назначение · 15:13\n  - button \"Повторить\"\n  - text: \"Отменён Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск ждёт повтора\" [level=3]':\n    - 'button \"QA-копия: запуск ждёт повтора\"'\n  - text: Лайф-тестировщик · проверка · 15:13\n  - button \"Повторить\"\n  - text: \"Отменён Модель роли сейчас: MiniMax-M3.1-Flash первая попытка не удалась\"\n  - 'heading \"QA-копия: запуск не понадобился\" [level=3]':\n    - 'button \"QA-копия: запуск не понадобился\"'\n  - text: \"Лайф-тестировщик · назначение · 14:41 Не понадобился Модель роли сейчас: MiniMax-M3.1-Flash карточка не активна\"\n  - 'heading \"QA-копия: запуск готово\" [level=3]':\n    - 'button \"QA-копия: запуск готово\"'\n  - text: \"Лайф-тестировщик · назначение · 14:12 Готово Модель роли сейчас: MiniMax-M3.1-Flash\"",
+   "text": "✓\nTaskFlow\n⌘K\nОбзор\nДашборд\nСтатистика\nЗадачи\n14\nВходящие\n7\nСегодня\n0\nПредстоящее\nМетки\nПроекты\nTaskFlow - NewTodoist\n3\nTaskFlow Native iOS\nУчёт личных финансов\nДоступ к TaskFlow вне дома\nTaskFlow Web Desktop\n4\nЧаты\nЗнания\nАгенты\nСостояние системы\n105\nАрхив\nНастройки\nСекретарь⌥ Space\nМА\nМаксим\nЛичное пространство\nТёмная тема\nЗаходы ролей\nКто заходил, зачем и что с заходом\nОбновить\nСейчас\n3\nQA-копия: гонка отмены\nЛайф-тестировщик · назначение · 15:11\nОтменить\nВ очереди\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск идёт\nЛайф-тестировщик · продолжение · 15:09\nРаботает\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск упал\nЛайф-тестировщик · комментарий · 15:13\nОтменить\nВ очереди\nМодель роли сейчас: MiniMax-M3.1-Flash\nНедавние\n4\nQA-копия: запуск в очереди\nЛайф-тестировщик · назначение · 15:13\nПовторить\nОтменён\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск ждёт повтора\nЛайф-тестировщик · проверка · 15:13\nПовторить\nОтменён\nМодель роли сейчас: MiniMax-M3.1-Flash\nпервая попытка не удалась\nQA-копия: запуск не понадобился\nЛайф-тестировщик · назначение · 14:41\nНе понадобился\nМодель роли сейчас: MiniMax-M3.1-Flash\nкарточка не активна\nQA-копия: запуск готово\nЛайф-тестировщик · назначение · 14:12\nГотово\nМодель роли сейчас: MiniMax-M3.1-Flash",
+   "layout": {
+    "hscroll": false,
+    "offscreen": [],
+    "small": [
+     "button.ui-button «Свернуть меню» 32×32",
+     "input.ui-search__input «Поиск — появится на этапе 5» 178×30",
+     "button.ui-button «Секретарь⌥ Space» 139×32",
+     "button.ui-button «Тёмная тема» 106×32",
+     "button.ui-button «Обновить» 90×32",
+     "button.runs__task «QA-копия: гонка отмены» 167×20",
+     "button.ui-button «Отменить» 90×32",
+     "button.runs__task «QA-копия: запуск идёт» 154×20"
+    ],
+    "clipped": []
+   }
+  }
+ ],
+ "final": {
+  "file": "05-финал.png",
+  "aria": "- complementary:\n  - text: TaskFlow\n  - button \"Свернуть меню\" [expanded]\n  - textbox \"Поиск — появится на этапе 5\" [disabled]:\n    - /placeholder: Поиск\n  - text: ⌘K\n  - tree \"Разделы\":\n    - treeitem \"Обзор\" [expanded] [level=1]\n    - treeitem \"Дашборд\" [level=2]\n    - treeitem \"Статистика\" [level=2]\n    - treeitem \"Задачи 14\" [expanded] [level=1]\n    - treeitem \"Входящие 7\" [level=2]\n    - treeitem \"Сегодня 0\" [level=2]\n    - treeitem \"Предстоящее\" [level=2]\n    - treeitem \"Метки\" [level=2]\n    - treeitem \"Проекты\" [expanded] [level=1]\n    - treeitem \"TaskFlow - NewTodoist 3\" [level=2]\n    - treeitem \"TaskFlow Native iOS\" [level=2]\n    - treeitem \"Учёт личных финансов\" [level=2]\n    - treeitem \"Доступ к TaskFlow вне дома\" [level=2]\n    - treeitem \"TaskFlow Web Desktop 4\" [level=2]\n    - treeitem \"Чаты\" [level=1]\n    - treeitem \"Знания\" [level=1]\n    - treeitem \"Агенты\" [level=1]\n    - treeitem \"Состояние системы 105\" [level=1]\n    - treeitem \"Архив\" [level=1]\n    - treeitem \"Настройки\" [level=1]\n  - button \"Секретарь⌥ Space\" [disabled]\n  - text: МА Максим Личное пространство\n  - button \"Тёмная тема\"\n- main:\n  - heading \"Заходы ролей\" [level=1]\n  - text: Кто заходил, зачем и что с заходом\n  - button \"Обновить\"\n  - heading \"Сейчас\" [level=2]\n  - text: \"3\"\n  - 'heading \"QA-копия: гонка отмены\" [level=3]':\n    - 'button \"QA-копия: гонка отмены\"'\n  - text: Лайф-тестировщик · назначение · 15:11\n  - button \"Отменить\"\n  - text: \"В очереди Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск идёт\" [level=3]':\n    - 'button \"QA-копия: запуск идёт\"'\n  - text: \"Лайф-тестировщик · продолжение · 15:09 Работает Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск упал\" [level=3]':\n    - 'button \"QA-копия: запуск упал\"'\n  - text: Лайф-тестировщик · комментарий · 15:13\n  - button \"Отменить\"\n  - text: \"В очереди Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - heading \"Недавние\" [level=2]\n  - text: \"4\"\n  - 'heading \"QA-копия: запуск в очереди\" [level=3]':\n    - 'button \"QA-копия: запуск в очереди\"'\n  - text: Лайф-тестировщик · назначение · 15:13\n  - button \"Повторить\"\n  - text: \"Отменён Модель роли сейчас: MiniMax-M3.1-Flash\"\n  - 'heading \"QA-копия: запуск ждёт повтора\" [level=3]':\n    - 'button \"QA-копия: запуск ждёт повтора\"'\n  - text: Лайф-тестировщик · проверка · 15:13\n  - button \"Повторить\"\n  - text: \"Отменён Модель роли сейчас: MiniMax-M3.1-Flash первая попытка не удалась\"\n  - 'heading \"QA-копия: запуск не понадобился\" [level=3]':\n    - 'button \"QA-копия: запуск не понадобился\"'\n  - text: \"Лайф-тестировщик · назначение · 14:41 Не понадобился Модель роли сейчас: MiniMax-M3.1-Flash карточка не активна\"\n  - 'heading \"QA-копия: запуск готово\" [level=3]':\n    - 'button \"QA-копия: запуск готово\"'\n  - text: \"Лайф-тестировщик · назначение · 14:12 Готово Модель роли сейчас: MiniMax-M3.1-Flash\"",
+  "text": "✓\nTaskFlow\n⌘K\nОбзор\nДашборд\nСтатистика\nЗадачи\n14\nВходящие\n7\nСегодня\n0\nПредстоящее\nМетки\nПроекты\nTaskFlow - NewTodoist\n3\nTaskFlow Native iOS\nУчёт личных финансов\nДоступ к TaskFlow вне дома\nTaskFlow Web Desktop\n4\nЧаты\nЗнания\nАгенты\nСостояние системы\n105\nАрхив\nНастройки\nСекретарь⌥ Space\nМА\nМаксим\nЛичное пространство\nТёмная тема\nЗаходы ролей\nКто заходил, зачем и что с заходом\nОбновить\nСейчас\n3\nQA-копия: гонка отмены\nЛайф-тестировщик · назначение · 15:11\nОтменить\nВ очереди\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск идёт\nЛайф-тестировщик · продолжение · 15:09\nРаботает\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск упал\nЛайф-тестировщик · комментарий · 15:13\nОтменить\nВ очереди\nМодель роли сейчас: MiniMax-M3.1-Flash\nНедавние\n4\nQA-копия: запуск в очереди\nЛайф-тестировщик · назначение · 15:13\nПовторить\nОтменён\nМодель роли сейчас: MiniMax-M3.1-Flash\nQA-копия: запуск ждёт повтора\nЛайф-тестировщик · проверка · 15:13\nПовторить\nОтменён\nМодель роли сейчас: MiniMax-M3.1-Flash\nпервая попытка не удалась\nQA-копия: запуск не понадобился\nЛайф-тестировщик · назначение · 14:41\nНе понадобился\nМодель роли сейчас: MiniMax-M3.1-Flash\nкарточка не активна\nQA-копия: запуск готово\nЛайф-тестировщик · назначение · 14:12\nГотово\nМодель роли сейчас: MiniMax-M3.1-Flash",
+  "layout": {
+   "hscroll": false,
+   "offscreen": [],
+   "small": [
+    "button.ui-button «Свернуть меню» 32×32",
+    "input.ui-search__input «Поиск — появится на этапе 5» 178×30",
+    "button.ui-button «Секретарь⌥ Space» 139×32",
+    "button.ui-button «Тёмная тема» 106×32",
+    "button.ui-button «Обновить» 90×32",
+    "button.runs__task «QA-копия: гонка отмены» 167×20",
+    "button.ui-button «Отменить» 90×32",
+    "button.runs__task «QA-копия: запуск идёт» 154×20"
+   ],
+   "clipped": []
+  }
+ }
+}

@@ -1,0 +1,170 @@
+[
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_overview",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_services",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_service",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_logs",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_health",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_stats",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_dependencies",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_projects",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_backups",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_net",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_net_graph",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_net_path",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_net_probe",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_net_uses",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_security_exposure",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_runbooks",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_timeline",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_api_get",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "infra",
+    "operation": "mcp__infra__infra_vpn_map",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "composio-secretary",
+    "operation": "mcp__composio__COMPOSIO_GET_TOOL_SCHEMAS",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "composio-secretary",
+    "operation": "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "composio-secretary",
+    "operation": "mcp__composio__COMPOSIO_REMOTE_BASH_TOOL",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "composio-secretary",
+    "operation": "mcp__composio__COMPOSIO_REMOTE_WORKBENCH",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  },
+  {
+    "source": "composio-secretary",
+    "operation": "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+    "schema": "PASS",
+    "describe": "PASS",
+    "templateType": "object"
+  }
+]

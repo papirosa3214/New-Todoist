@@ -1,0 +1,372 @@
+{
+  "baseline_failed_tests": 89,
+  "baseline_failures": [
+    {
+      "file": "agentMessaging.test.ts",
+      "test": "a reply returns to the question author and read exposes the same conversation"
+    },
+    {
+      "file": "agentMessaging.test.ts",
+      "test": "chat_send invokes a sleeping internal role without a webhook subscription"
+    },
+    {
+      "file": "agentMessaging.test.ts",
+      "test": "group context without @ stays quiet; an explicit @ returns a linked answer"
+    },
+    {
+      "file": "agentMessaging.test.ts",
+      "test": "model failure remains visible and does not become a successful answer"
+    },
+    {
+      "file": "agentMessaging.test.ts",
+      "test": "nested questions across personal chats keep the hop limit"
+    },
+    {
+      "file": "api.test.ts",
+      "test": "runtime API — status, profiles, models GET /api/runtime/profiles returns 7 profiles"
+    },
+    {
+      "file": "artifactEvidenceAndClose.test.ts",
+      "test": "результат шага плана: доказательства и закрытие идентификатор документа принимается как доказательство и приводится к path"
+    },
+    {
+      "file": "artifactEvidenceAndClose.test.ts",
+      "test": "результат шага плана: доказательства и закрытие мусорное доказательство по-прежнему отклоняется, понятным текстом"
+    },
+    {
+      "file": "artifactEvidenceAndClose.test.ts",
+      "test": "результат шага плана: доказательства и закрытие после сдачи результата шаг больше ничего не ждёт"
+    },
+    {
+      "file": "artifactEvidenceAndClose.test.ts",
+      "test": "результат шага плана: доказательства и закрытие роль не закрывает узел с контрактом простой отметкой, пока результат не сдан"
+    },
+    {
+      "file": "blockedHelpGate.test.ts",
+      "test": "перед blocked — проверь и позови помощь промпты всех ролей содержат порядок «перед blocked»"
+    },
+    {
+      "file": "branchPlan.test.ts",
+      "test": "one approval for a complete task branch replays rejected child and downstream assembly after global critique"
+    },
+    {
+      "file": "branchPlan.test.ts",
+      "test": "one approval for a complete task branch shows all cards and dependencies only at root; approves once and assigns accountable roles"
+    },
+    {
+      "file": "chat-session-runtime.test.ts",
+      "test": "HTTP: async steer не позволяет позднему сообщению обогнать уточнение"
+    },
+    {
+      "file": "chat-session-runtime.test.ts",
+      "test": "HTTP: fallback сохраняет место перед более поздним сообщением"
+    },
+    {
+      "file": "chat-session-runtime.test.ts",
+      "test": "HTTP: второе сообщение меняет работающий ход, durable закрывается после ответа"
+    },
+    {
+      "file": "chat-session-runtime.test.ts",
+      "test": "HTTP: непрочитанное уточнение исполняется очередью, а не исчезает"
+    },
+    {
+      "file": "chat-session-runtime.test.ts",
+      "test": "HTTP: уточнение в текущем чате не создаёт карточку координации"
+    },
+    {
+      "file": "chat-session-runtime.test.ts",
+      "test": "startChatRun (ход чата внутри сервера) обсуждение разрешает вопросы коллегам без рабочих команд и мутаций"
+    },
+    {
+      "file": "chat-session-runtime.test.ts",
+      "test": "startChatRun (ход чата внутри сервера) режим планирования — только инструменты чтения"
+    },
+    {
+      "file": "chat-session-runtime.test.ts",
+      "test": "startChatRun (ход чата внутри сервера) сессия SDK в папке роли, с моделью роли и инструментами трекера — без MCP"
+    },
+    {
+      "file": "chatWork.test.ts",
+      "test": "работа по разговору: чат запускает исполнителей обе разовые проверки доступны ролям через настоящий универсальный шлюз"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) B5: два быстрых сообщения подряд на одну роль отвечают в порядке присылки"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) deep research targets researcher even in a group"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) explicit @роль в тексте → ответ от role_<role>, attempts пустая"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) membership changes immediately switch implicit and explicit addressing"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) persistence failure clears live/typing and leaves an explained reply"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) planning is persisted and reaches the guarded runtime; next work turn restores work"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) «Остановить» прерывает ход, написанное ролью остаётся в чате"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) без @роли и без семантики — авто-ответа нет, ложится только текст владельца"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) виджет Помощника владельца (без type) сохраняется уже каноническим"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) во время хода роли chats:typing несёт tool из toolcall_start"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) во время хода роли идёт chats:live с текстом и шагами, шаги ложатся в историю"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) второе сообщение в чат продолжает ту же pi_session_id"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) канонический виджет проходит насквозь (без перезаписи)"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) несколько @упоминаний — отвечает каждая упомянутая роль"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) онлайн-сессия не трогает tasks.agent_state и не создаёт attempt"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) ответ роли: chat:new несёт готовое сообщение раньше, чем «ход закончен»"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) ошибка модели с пустым ответом — в чат ложится причина, а не тишина"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) пинг-понг ролей ограничен — без человека разговор затихает"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) продолжение сессии получает только новое, без повторной инструкции и истории"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) пустой ответ модели () не исчезает молча и снимает статус работы"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) пустой ответ модели (БЫСТРО: Да | Нет) не исчезает молча и снимает статус работы"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) роль зовёт коллегу через @имя — тот отвечает следом в том же чате"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) сорванный ход — в чат ложится сообщение с причиной, а не тишина"
+    },
+    {
+      "file": "chats-online.test.ts",
+      "test": "Чаты (этап 2, онлайн-сессия Пи) список чатов: виджет и артефакт в превью — словом, а не кодом"
+    },
+    {
+      "file": "consultation.test.ts",
+      "test": "POST /api/tasks/:id/consultation (спек 1.2, 1.2.4) consultant_model 'opus' идёт в callUnifiedAi как claude+opus, haiku — как local+qwen"
+    },
+    {
+      "file": "contextObservability.test.ts",
+      "test": "контекст и JEV: наблюдаемость доступен только владельцу и проверяет период"
+    },
+    {
+      "file": "diagnosticDispatch.test.ts",
+      "test": "Автоматическое назначение диагностики назначает при включённой Системе и создаёт ровно один план single_executor"
+    },
+    {
+      "file": "diagnosticDispatch.test.ts",
+      "test": "Автоматическое назначение диагностики не теряет карточку при отказе выбора роли и повторяет после устранения причины"
+    },
+    {
+      "file": "hostToolRequestId.test.ts",
+      "test": "request_id операций-писателей не ослабляет защиту: запись без request_id по-прежнему отклоняется"
+    },
+    {
+      "file": "inProcessRun.test.ts",
+      "test": "агент роли внутри сервера задача получает AGENTS и skills своей роли, а write остаётся в проекте"
+    },
+    {
+      "file": "instructionRuntime.test.ts",
+      "test": "Pi instruction snapshot keeps the common delivery regulation with custom role instructions and system prompt"
+    },
+    {
+      "file": "integrationHandoff.test.ts",
+      "test": "occupied integrator receives the receipt in existing work without another model run"
+    },
+    {
+      "file": "orchestratorTools.test.ts",
+      "test": "internal orchestrator tools work, chat and catalog report the real same controls"
+    },
+    {
+      "file": "ownerDictation.test.ts",
+      "test": "Окно постановки задач (карточка 4396f8c9) «✓ Идёт» из чата: черновик запускается с очередью, личное не трогается"
+    },
+    {
+      "file": "ownerDictation.test.ts",
+      "test": "Окно постановки задач (карточка 4396f8c9) автоматический режим: карточка сама получает флаг и уходит исполнителю"
+    },
+    {
+      "file": "ownerDictation.test.ts",
+      "test": "Окно постановки задач (карточка 4396f8c9) очередь едет дальше: закрыли первый шаг — второй уходит исполнителю сам"
+    },
+    {
+      "file": "privateRoleChat.test.ts",
+      "test": "Владелец открывает существующий приватный чат роли переиспользует личную историю независимо от создателя; чужому читателю не видна"
+    },
+    {
+      "file": "providerFailover.test.ts",
+      "test": "Автопереключение провайдера при лимите боевой role-routing.yaml читается: одна основная модель на все роли; у Критика и QA запасной minimax-m3, у остальных DeepSeek, последний запас — бесплатный space-bunny"
+    },
+    {
+      "file": "roleProfiles.test.ts",
+      "test": "Профили ролей для экрана «Команда» сломанный профиль одной роли не роняет остальные восемь"
+    },
+    {
+      "file": "rolePromptLaconism.test.ts",
+      "test": "промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4) analyst.md: «# Title» сразу за ним блок «## Лаконичность» с пределами"
+    },
+    {
+      "file": "rolePromptLaconism.test.ts",
+      "test": "промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4) architect.md: «# Title» сразу за ним блок «## Лаконичность» с пределами"
+    },
+    {
+      "file": "rolePromptLaconism.test.ts",
+      "test": "промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4) builder.md: «# Title» сразу за ним блок «## Лаконичность» с пределами"
+    },
+    {
+      "file": "rolePromptLaconism.test.ts",
+      "test": "промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4) critic_verifier.md: «# Title» сразу за ним блок «## Лаконичность» с пределами"
+    },
+    {
+      "file": "rolePromptLaconism.test.ts",
+      "test": "промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4) designer.md: «# Title» сразу за ним блок «## Лаконичность» с пределами"
+    },
+    {
+      "file": "rolePromptLaconism.test.ts",
+      "test": "промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4) qa.md: «# Title» сразу за ним блок «## Лаконичность» с пределами"
+    },
+    {
+      "file": "rolePromptLaconism.test.ts",
+      "test": "промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4) researcher.md: «# Title» сразу за ним блок «## Лаконичность» с пределами"
+    },
+    {
+      "file": "rolePromptLaconism.test.ts",
+      "test": "промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4) secretary.md: «# Title» сразу за ним блок «## Лаконичность» с пределами"
+    },
+    {
+      "file": "rolePromptLaconism.test.ts",
+      "test": "промпты ролей: блок «Лаконичность» (c19c9460 D1, D3, D4) synthesizer.md: «# Title» сразу за ним блок «## Лаконичность» с пределами"
+    },
+    {
+      "file": "roleResultReport.test.ts",
+      "test": "Читаемый отчёт — часть результата роли без отчёта не закрывает шаг и не создаёт артефакт или документ"
+    },
+    {
+      "file": "roleResultReport.test.ts",
+      "test": "Читаемый отчёт — часть результата роли инструмент сдачи возвращает подтверждение основного сервера для артефакта и обычного этапа"
+    },
+    {
+      "file": "roleResultReport.test.ts",
+      "test": "Читаемый отчёт — часть результата роли не принимает пустой, JSON или неполный отчёт: "
+    },
+    {
+      "file": "roleResultReport.test.ts",
+      "test": "Читаемый отчёт — часть результата роли не принимает пустой, JSON или неполный отчёт: # Отчёт\n\n## Результат\nСделано."
+    },
+    {
+      "file": "roleResultReport.test.ts",
+      "test": "Читаемый отчёт — часть результата роли не принимает пустой, JSON или неполный отчёт: {\"summary\":\"done\"}"
+    },
+    {
+      "file": "roleResultReport.test.ts",
+      "test": "Читаемый отчёт — часть результата роли отчёт сохраняется заметкой в папке задачи, виден в графе; JSON следующей роли прежний"
+    },
+    {
+      "file": "roleResultReport.test.ts",
+      "test": "Читаемый отчёт — часть результата роли песочница не принимает сдачу ни артефактом, ни простым закрытием, ни квитанцией скопированной базы"
+    },
+    {
+      "file": "roleResultReport.test.ts",
+      "test": "Читаемый отчёт — часть результата роли роль без структурного контракта тоже сдаёт отчёт; повторная правка закрытого результата не создаёт дубль"
+    },
+    {
+      "file": "roles.test.ts",
+      "test": "role catalog API exposes shared external operations behind the universal tool"
+    },
+    {
+      "file": "roles.test.ts",
+      "test": "role catalog API lists nine roles (with Инженер .110) and returns Architect details"
+    },
+    {
+      "file": "rolesManage.test.ts",
+      "test": "roles: создание и правка с экрана «Команда» владелец заводит роль — сразу в списке, с учёткой и инструкцией"
+    },
+    {
+      "file": "secretary-tool-parity.test.ts",
+      "test": "Помощник владельца — единые инструменты чата, голоса и задач голос передаёт вызов в универсальный execute и сохраняет его error envelope и request_id"
+    },
+    {
+      "file": "secretaryVoiceBridge.test.ts",
+      "test": "закрытый инструмент голосового Помощника владельца Система ВКЛ не отдаёт явно назначенную владельцу задачу агенту"
+    },
+    {
+      "file": "secretaryVoiceBridge.test.ts",
+      "test": "закрытый инструмент голосового Помощника владельца создаёт карточку через штатный маршрут без внешнего ключа"
+    },
+    {
+      "file": "secretaryVoiceBridge.test.ts",
+      "test": "закрытый инструмент голосового Помощника владельца сообщение и звонок используют один разбор с тем же текстом и промптом владельца"
+    },
+    {
+      "file": "thinkingLevel.test.ts",
+      "test": "MiniMax thinking: effective model/payload work: reasoning модель → SDK не получает explicit thinkingLevel (null), миграции нет"
+    },
+    {
+      "file": "thinkingLevel.test.ts",
+      "test": "MiniMax thinking: effective model/payload work: resumed сессия с persisted 'off' у reasoning модели → мигрирует на 'medium' с persist"
+    },
+    {
+      "file": "thinkingLevel.test.ts",
+      "test": "MiniMax thinking: effective model/payload work: resumed сессия с persisted 'off' у не-reasoning модели → остаётся 'off', без миграции"
+    },
+    {
+      "file": "thinkingLevel.test.ts",
+      "test": "MiniMax thinking: effective model/payload work: не-reasoning модель → SDK получает 'off', миграции нет"
+    }
+  ],
+  "first_run_additional": [
+    {
+      "file": "jevAssist.test.ts",
+      "test": "passes report uncertainty to the critic rather than silently dropping all checks"
+    },
+    {
+      "file": "subtaskRoleFanout.test.ts",
+      "test": "умная параллелизация подзадач (subtaskRoleFanout) JEV подбирает роли подзадачам уверенный выбор JEV назначает роль даже там, где эмбеддинги молчат; мелкий пункт остаётся исполнителю"
+    }
+  ],
+  "first_run_missing": []
+}

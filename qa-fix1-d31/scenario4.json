@@ -1,0 +1,4 @@
+[
+  {"goto": "/task/1fe2d05c-540a-4032-8f9c-7ecebe78c5b1", "note": "Переход на родительскую — пробуем поймать скелетон"},
+  {"expect_visible": "[data-testid=parent-plan-pulse-skeleton]", "note": "КП №9 — скелетон при загрузке (если поймаем)"}
+]

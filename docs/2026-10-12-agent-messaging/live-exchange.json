@@ -1,0 +1,168 @@
+{
+  "directChat": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+  "directQuestion": "c70e8fef-769b-4978-8f1b-bdb83402d9f2",
+  "startedAt": "2026-10-12T14:40:53.121Z",
+  "groupChat": "0f22ca03-2db1-45c9-8ad9-810b53238923",
+  "groupContext": "5e90633c-f5f9-4abf-a26b-e367b00a932e",
+  "groupPlainQuiet": true,
+  "groupQuestion": "41a49f9d-4631-42e6-a308-9a2b6f502690",
+  "toolQuestion": "ebccf69d-13a8-4607-968d-c5867e6e7d19",
+  "messages": [
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "id": "c70e8fef-769b-4978-8f1b-bdb83402d9f2",
+      "from_user_id": "role_architect",
+      "text": "Проверка серверного обмена ролей. Короткий вопрос: корректен ли JSON {\"a\":1}? Ответь одной фразой. Это только обсуждение: не меняй файлы или задачи, не запускай работы и не отправляй новые вопросы другим ролям.",
+      "reply_to_message_id": null,
+      "created_at": "2026-10-12 14:40:53"
+    },
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "id": "c1f6c8d9-3083-41cc-b35b-72071ee7ba27",
+      "from_user_id": "role_researcher",
+      "text": "Да, это валидный JSON.",
+      "reply_to_message_id": "c70e8fef-769b-4978-8f1b-bdb83402d9f2",
+      "created_at": "2026-10-12 14:40:56"
+    },
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "id": "9b09893c-d52a-41d7-b139-3d69281949a9",
+      "from_user_id": "role_architect",
+      "text": "Принято, обмен работает.",
+      "reply_to_message_id": "c1f6c8d9-3083-41cc-b35b-72071ee7ba27",
+      "created_at": "2026-10-12 14:41:00"
+    },
+    {
+      "chat_id": "0f22ca03-2db1-45c9-8ad9-810b53238923",
+      "id": "5e90633c-f5f9-4abf-a26b-e367b00a932e",
+      "from_user_id": "role_architect",
+      "text": "Контекст проверки группового чата. Сообщение без адресного вызова.",
+      "reply_to_message_id": null,
+      "created_at": "2026-10-12 14:41:25"
+    },
+    {
+      "chat_id": "0f22ca03-2db1-45c9-8ad9-810b53238923",
+      "id": "41a49f9d-4631-42e6-a308-9a2b6f502690",
+      "from_user_id": "role_architect",
+      "text": "@researcher Проверка адресного вызова в группе: корректен ли JSON {\"a\":1}? Ответь одной фразой. Только обсуждение, без файлов, задач, запуска работы и новых вопросов коллегам.",
+      "reply_to_message_id": null,
+      "created_at": "2026-10-12 14:41:39"
+    },
+    {
+      "chat_id": "0f22ca03-2db1-45c9-8ad9-810b53238923",
+      "id": "954e0f12-3809-408e-9f97-28bc2bd94160",
+      "from_user_id": "role_researcher",
+      "text": "Да, корректен.",
+      "reply_to_message_id": "41a49f9d-4631-42e6-a308-9a2b6f502690",
+      "created_at": "2026-10-12 14:41:41"
+    },
+    {
+      "chat_id": "0f22ca03-2db1-45c9-8ad9-810b53238923",
+      "id": "79b83a74-0489-4d84-9826-72e4313ce337",
+      "from_user_id": "role_architect",
+      "text": "[не отвечаю — молчание закрывает разговор",
+      "reply_to_message_id": "954e0f12-3809-408e-9f97-28bc2bd94160",
+      "created_at": "2026-10-12 14:41:45"
+    },
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "id": "ebccf69d-13a8-4607-968d-c5867e6e7d19",
+      "from_user_id": "role_architect",
+      "text": "Последняя проверка мессенджера. Используй taskflow_chat_send и отправь QA отдельный личный вопрос: «Проверка связи. Корректен ли JSON {\"ok\":true}? Ответь одной фразой, без новых вопросов». После отправки кратко сообщи сюда, что вопрос отправлен. Только обсуждение, без изменения файлов или задач и без запуска работы.",
+      "reply_to_message_id": null,
+      "created_at": "2026-10-12 14:42:11"
+    },
+    {
+      "chat_id": "d88e52ed-ee7a-4d26-af90-71980f164dd5",
+      "id": "01727b04-64f2-42d5-be0b-5013df03bef6",
+      "from_user_id": "role_researcher",
+      "text": "Проверка связи. Корректен ли JSON {\"ok\":true}? Ответь одной фразой, без новых вопросов.",
+      "reply_to_message_id": null,
+      "created_at": "2026-10-12 14:42:14"
+    },
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "id": "b3a8c938-180a-4006-b942-75bd2d299837",
+      "from_user_id": "role_researcher",
+      "text": "Вопрос Лайф-тестировщику отправлен, жду ответа.",
+      "reply_to_message_id": "ebccf69d-13a8-4607-968d-c5867e6e7d19",
+      "created_at": "2026-10-12 14:42:15"
+    },
+    {
+      "chat_id": "d88e52ed-ee7a-4d26-af90-71980f164dd5",
+      "id": "a778f06b-7c3b-43a5-8726-f8c3f16b6ba9",
+      "from_user_id": "role_qa",
+      "text": "Да, JSON `{\"ok\":true}` синтаксически корректен.",
+      "reply_to_message_id": "01727b04-64f2-42d5-be0b-5013df03bef6",
+      "created_at": "2026-10-12 14:42:17"
+    },
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "id": "844094b7-3978-4acc-9e44-ff962e5d5261",
+      "from_user_id": "role_architect",
+      "text": "Понял, ждём.",
+      "reply_to_message_id": "b3a8c938-180a-4006-b942-75bd2d299837",
+      "created_at": "2026-10-12 14:42:18"
+    },
+    {
+      "chat_id": "d88e52ed-ee7a-4d26-af90-71980f164dd5",
+      "id": "36db8196-d142-4d20-9005-05dd2023d88f",
+      "from_user_id": "role_researcher",
+      "text": "Принято. Чат закрыт.",
+      "reply_to_message_id": "a778f06b-7c3b-43a5-8726-f8c3f16b6ba9",
+      "created_at": "2026-10-12 14:42:22"
+    }
+  ],
+  "queue": [
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "message_id": "c70e8fef-769b-4978-8f1b-bdb83402d9f2",
+      "role_id": "role_researcher",
+      "status": "done"
+    },
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "message_id": "c1f6c8d9-3083-41cc-b35b-72071ee7ba27",
+      "role_id": "role_architect",
+      "status": "done"
+    },
+    {
+      "chat_id": "0f22ca03-2db1-45c9-8ad9-810b53238923",
+      "message_id": "41a49f9d-4631-42e6-a308-9a2b6f502690",
+      "role_id": "role_researcher",
+      "status": "done"
+    },
+    {
+      "chat_id": "0f22ca03-2db1-45c9-8ad9-810b53238923",
+      "message_id": "954e0f12-3809-408e-9f97-28bc2bd94160",
+      "role_id": "role_architect",
+      "status": "done"
+    },
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "message_id": "ebccf69d-13a8-4607-968d-c5867e6e7d19",
+      "role_id": "role_researcher",
+      "status": "done"
+    },
+    {
+      "chat_id": "d88e52ed-ee7a-4d26-af90-71980f164dd5",
+      "message_id": "01727b04-64f2-42d5-be0b-5013df03bef6",
+      "role_id": "role_qa",
+      "status": "done"
+    },
+    {
+      "chat_id": "5ce6d4bc-07d5-4091-80b5-9ab8faeb4d2a",
+      "message_id": "b3a8c938-180a-4006-b942-75bd2d299837",
+      "role_id": "role_architect",
+      "status": "done"
+    },
+    {
+      "chat_id": "d88e52ed-ee7a-4d26-af90-71980f164dd5",
+      "message_id": "a778f06b-7c3b-43a5-8726-f8c3f16b6ba9",
+      "role_id": "role_researcher",
+      "status": "done"
+    }
+  ],
+  "toolChat": "d88e52ed-ee7a-4d26-af90-71980f164dd5",
+  "finishedAt": "2026-10-12T14:43:14.154Z"
+}
