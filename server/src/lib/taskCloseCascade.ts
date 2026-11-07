@@ -12,7 +12,7 @@
 
 import db from "../db.js";
 import { logEvent, releaseSubtaskWork } from "../agentState.js";
-import { setTaskTopicClosed } from "./projectTopics.js";
+import { setTaskRoomClosed } from "./projectTopics.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { releaseMissionSkills } from "./missionSkills.js";
 
@@ -45,7 +45,7 @@ export function closeTaskTree(taskId: string, actorId: string | null): { childre
 
   for (const id of children) {
     try {
-      setTaskTopicClosed(id, true);
+      setTaskRoomClosed(id, true);
       bumpContextVersion(id);
     } catch (e) {
       console.warn(`[close-cascade] ${id}:`, e);

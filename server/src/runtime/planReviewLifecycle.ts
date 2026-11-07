@@ -5,7 +5,7 @@ import {
   branchReworkRequest,
   branchCards,
 } from "./branchPlan.js";
-import { ensurePlanTopic } from "../lib/projectTopics.js";
+import { ensureTaskRoom } from "../lib/projectTopics.js";
 import { MAX_REWORK_ROUNDS, MAX_PLAN_NODES } from "./planMutations.js";
 import crypto from "node:crypto";
 import db from "../db.js";
@@ -158,7 +158,7 @@ export function ensurePlanFinalReviewer(
   ))
     addEdge(planId, n.slot_key, slot);
   bump(planId, taskId, actor, "plan_reviewer_joined", slot);
-  ensurePlanTopic(taskId);
+  ensureTaskRoom(taskId);
   return {
     id,
     task_id: taskId,
@@ -227,7 +227,7 @@ export function ensureBranchAssembler(planId: string, taskId: string): boolean {
     db.prepare("UPDATE subtasks SET agent_id=? WHERE id=?").run(actor, id);
     for (const n of terminals) addEdge(planId, n.slot_key, slot);
     bump(planId, taskId, actor, "plan_assembler_joined", slot);
-    ensurePlanTopic(taskId);
+    ensureTaskRoom(taskId);
     return true;
   })();
 }
@@ -634,7 +634,7 @@ function completePlanFinalReviewAtomic(
         toValue: member.responsible_role,
       });
     }
-    ensurePlanTopic(taskId);
+    ensureTaskRoom(taskId);
     return { planId: plan.id, managed: true };
   })();
 }
@@ -706,7 +706,7 @@ function ensureOpenOwnerReturn(
     id,
   );
   bump(planId, taskId, actor, "plan_owner_return", text.slice(0, 500));
-  ensurePlanTopic(taskId);
+  ensureTaskRoom(taskId);
   return id;
 }
 export function planReviewRouteContext(taskId: string): string {

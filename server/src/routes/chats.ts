@@ -42,14 +42,14 @@ import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topic
 import { isDiscussionChat, discussionByChatId } from "../runtime/taskDiscussion.js";
 import { runDiscussionTurn } from "../runtime/taskDiscussionSession.js";
 import { deliverTopicToWork, deliverChatToWork, slotWorkspace } from "../runtime/inProcessRun.js";
-import { topicContext, taskTopicClosedAt, rehomeEmptyTopic } from "../lib/projectTopics.js";
+import { topicContext, taskRoomClosedAt, ensureTaskRoom, roomsOfPersonalChat } from "../lib/projectTopics.js";
 import {
   archiveChat,
   archiveRight,
   chatRoomRow,
   canArchiveTaskTopic,
   cleanupCandidates,
-  isTaskTopic,
+  isTaskRoom,
   runCleanup,
 } from "../lib/chatArchive.js";
 import { nudgeTaskPlan } from "../runtime/taskNudge.js";
@@ -224,7 +224,7 @@ function memberIds(chatId: string): string[] {
 }
 
 function isMember(chatId: string, userId: string): boolean {
-  const chat = db.prepare("SELECT project_id, parent_chat_id, task_id FROM chats WHERE id = ?").get(chatId) as any;
+  const chat = db.prepare("SELECT project_id, parent_chat_id, task_id, room_kind FROM chats WHERE id = ?").get(chatId) as any;
   // Приватный проект (задача 9d583c58…): его чаты не видны никому, кроме
   // владельца трекера — иначе утечка через название группового чата
   // (оно равно имени проекта) и через task_title темы.
@@ -239,6 +239,9 @@ function isMember(chatId: string, userId: string): boolean {
     // убраны — для всех, кроме владельца.
     if (meta?.archived_at) return false;
   }
+  // Комната задачи видна тому, кому видна сама карточка: проект в доступе к
+  // ней больше не участвует (с 08.11.2026 комната задачи от проекта свободна).
+  if (chat?.room_kind === "task" && chat?.task_id && !getTaskForRead(chat.task_id, userId)) return false;
   if (chat?.parent_chat_id) {
     const task=chat.task_id ? getTaskForRead(chat.task_id,userId) : null;
     if (!task || task.project_id !== chat.project_id) return false;
@@ -287,7 +290,7 @@ function chatRow(chatId: string) {
     execution_mode: chatExecutionMode(chatId),
     slots: chat.task_id ? slotLabels(chat.task_id) : [],
     members,
-    closed_at: taskTopicClosedAt(chat as any),
+    closed_at: taskRoomClosedAt(chat as any),
     pinned_message_id: pinnedMessageId ?? null,
     pinned_message: pinned ? loadChatMessage(pinned.id) : null,
   };
@@ -304,51 +307,29 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     for (const chat of ordinary) syncChatKindFromMembers(chat.id);
   })();
 
-  function ensureProjectGroup(project: any, userId: string) {
-    let group = db.prepare("SELECT id FROM chats WHERE project_id=? AND parent_chat_id IS NULL").get(project.id) as any;
-    if (!group) {
-      group={id:uid()};
-      db.prepare("INSERT INTO chats (id,title,kind,created_by,project_id) VALUES (?,?,'group',?,?)").run(group.id,project.name,userId,project.id);
-    }
-    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(group.id,userId);
-    return group.id as string;
-  }
-  app.post("/api/projects/:projectId/chat",{preHandler:authPre},async(req:any,reply)=>{
-    const project=getProjectForWrite(req.params.projectId,req.userId);
-    if (!project) return reply.code(404).send({error:"Проект не найден"});
-    const id=db.transaction(()=>ensureProjectGroup(project,req.userId))();
-    return {chat:chatRow(id)};
-  });
+  // Проект — папка владельца, своего разговорного чата у него нет (владелец
+  // 08.11.2026): проектных чатов не существует, прежние удалены миграцией 202.
+  // Комната задачи заводится независимо от проекта и видна топиком в личной
+  // комнате каждой роли-участника (lib/projectTopics.ts).
   app.post("/api/tasks/:taskId/topic",{preHandler:authPre},async(req:any,reply)=>{
     const task=getTaskForRead(req.params.taskId,req.userId);
-    if (!task?.project_id) return reply.code(404).send({error:"Задача проекта не найдена"});
-    const project=getProjectForWrite(task.project_id,req.userId);
-    if (!project) return reply.code(403).send({error:"Нет доступа к группе проекта"});
-    const previous=db.prepare("SELECT project_id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as any;
-    const id=db.transaction(()=>{
-      const parent=ensureProjectGroup(project,req.userId);
-      if (previous && previous.project_id !== task.project_id) {
-        const moving=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as {id:string};
-        if (!rehomeEmptyTopic(moving.id,task.project_id,parent)) return null;
-      }
-      let topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as any;
-      if (!topic) {
-        topic={id:uid()};
-        db.prepare("INSERT INTO chats (id,title,kind,created_by,task_id,project_id,parent_chat_id) VALUES (?,?,'group',?,?,?,?)").run(topic.id,task.title,req.userId,task.id,task.project_id,parent);
-      }
-      db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(topic.id,req.userId);
-      return topic.id;
-    })();
-    if (!id) return reply.code(409).send({error:"Тема относится к прежнему проекту задачи"});
+    if (!task) return reply.code(404).send({error:"Задача не найдена"});
+    const id=db.transaction(()=>ensureTaskRoom(task.id))();
+    if (!id) return reply.code(404).send({error:"Задача не найдена"});
+    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(id,req.userId);
     return {chat:chatRow(id)};
   });
   app.get("/api/chats/:id/topics",{preHandler:authPre},async(req:any,reply)=>{
     if (!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
-    // Закрытые темы в списке проекта не копятся (владелец 07.10.2026); переписка остаётся
-    // доступной из карточки задачи, весь список — с include_closed=1.
+    // Топики чата: у личной комнаты — комнаты задач её роли, у остальных —
+    // вложенные чаты (ветки прежней модели). Закрытые в списке не копятся
+    // (владелец 07.10.2026); весь список — с include_closed=1.
     const includeClosed = String(req.query?.include_closed ?? "") === "1";
-    const rows=db.prepare("SELECT id,task_id,parent_chat_id,closed_at FROM chats WHERE parent_chat_id=? ORDER BY updated_at DESC,id").all(req.params.id) as Array<{id:string;task_id:string|null;parent_chat_id:string|null;closed_at:string|null}>;
-    return {chats:rows.filter(c=>isMember(c.id,req.userId) && (includeClosed || !taskTopicClosedAt(c))).map(c=>({
+    const linked = roomsOfPersonalChat(req.params.id);
+    const rows = linked.length
+      ? linked
+      : db.prepare("SELECT id,task_id,room_kind,closed_at FROM chats WHERE parent_chat_id=? ORDER BY updated_at DESC,id").all(req.params.id) as Array<{id:string;task_id:string|null;room_kind:string|null;closed_at:string|null}>;
+    return {chats:rows.filter(c=>isMember(c.id,req.userId) && (includeClosed || !taskRoomClosedAt(c))).map(c=>({
       ...chatRow(c.id),
       unread_count:(db.prepare(`SELECT COUNT(*) AS n FROM chat_messages WHERE ${visibleChatSql()} AND chat_id=? AND from_user_id != ? AND created_at > COALESCE((SELECT last_read_at FROM chat_members WHERE chat_id=? AND member_id=?),'1970-01-01')`).get(c.id,req.userId,c.id,req.userId) as {n:number}).n,
     }))};
@@ -482,7 +463,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     // а не пересобираем список ради пересчёта хеша (тот же приём, что в
     // списке задач — `routes/tasks.ts`).
     const body = {
-      chats: rows.filter((c) => isMember(c.id,req.userId) && (includeClosed || !taskTopicClosedAt(c))).map((c) => {
+      chats: rows.filter((c) => isMember(c.id,req.userId) && (includeClosed || !taskRoomClosedAt(c))).map((c) => {
         // Имя отправителя — превью группы идёт с ним («QA: проверка
         // прошла»), счётчики вложений — чтобы клиент мог показать
         // «Голосовое»/«Файл» вместо пустой строки (у голосового текста нет).
@@ -680,10 +661,14 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!hasTask && !hasTitle)
         return reply.code(400).send({ error: "нечего менять" });
 
-      const managed=db.prepare("SELECT project_id FROM chats WHERE id=?").get(req.params.id) as any;
+      const managed=db.prepare("SELECT project_id, task_id, room_kind FROM chats WHERE id=?").get(req.params.id) as any;
       if (hasTask && managed?.project_id) return reply.code(409).send({error:"Тему проекта нельзя перепривязать"});
       const rawTask = req.body?.task_id;
       const taskId = typeof rawTask === "string" && rawTask ? rawTask : null;
+      // Комната задачи принадлежит своей карточке (08.11.2026): привязать её к
+      // другой задаче нельзя — это была бы чужая история под чужим именем.
+      if (hasTask && managed?.room_kind === "task" && taskId !== (managed.task_id ?? null))
+        return reply.code(409).send({ error: "Комнату задачи нельзя перепривязать" });
       if (hasTask && taskId && !db.prepare("SELECT id FROM tasks WHERE id = ?").get(taskId))
         return reply.code(400).send({ error: "нет такой задачи" });
 
@@ -1263,8 +1248,8 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       // задачу у СВОЕГО чата; явный task_id в теле перекрывает её — этим
       // привязывается отдельное сообщение, когда чат живёт сам по себе.
       const chat = db
-        .prepare<[string], { task_id: string | null; parent_chat_id: string | null; closed_at: string | null }>(
-          "SELECT task_id, parent_chat_id, closed_at FROM chats WHERE id = ?",
+        .prepare<[string], { task_id: string | null; room_kind: string | null; closed_at: string | null }>(
+          "SELECT task_id, room_kind, closed_at FROM chats WHERE id = ?",
         )
         .get(chatId);
       if (!chat) return reply.code(404).send({ error: "Чат не найден" });
@@ -1272,7 +1257,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       if (taskDiscussion && taskDiscussion.state !== "open")
         return reply.code(409).send({ error: "Обсуждение закрывается или закрыто: новые реплики не принимаются" });
       // Закрытая тема задачи — read-only: история остаётся, новые сообщения не принимаем.
-      if (taskTopicClosedAt(chat)) return reply.code(409).send({ error: "Чат задачи закрыт" });
+      if (taskRoomClosedAt(chat)) return reply.code(409).send({ error: "Чат задачи закрыт" });
       // Общий чат: сервер сюда не пишет. Владелец и роль через инструмент — можно.
       try {
         assertCommonChatWritable(
@@ -1295,15 +1280,15 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       const inTopicBranch=(stageTask:string)=>stageTask===chatTaskId || (!!chatTaskId && !!branchMembership(chatTaskId) && branchMembership(stageTask)?.root_plan_id===branchMembership(chatTaskId)?.root_plan_id);
       if(sourceSlot){
         const source=db.prepare("SELECT task_id FROM subtasks WHERE id=? AND agent_id=?").get(sourceSlot,req.userId) as {task_id:string}|undefined;
-        if(!source || (chat.parent_chat_id && !inTopicBranch(source.task_id)))return reply.code(403).send({error:"Этап твоего хода не закреплён за тобой или относится к другой ветке — сообщение не отправлено. Дальше: проверь taskflow_my_tasks; если этап с тебя сняли — заверши ход и коротко опиши итог в ответе; если этап твой — пиши в тему его ветки (taskflow_topic_send). Повтор того же вызова даст тот же отказ."});
+        if(!source || (chat.room_kind === "task" && !inTopicBranch(source.task_id)))return reply.code(403).send({error:"Этап твоего хода не закреплён за тобой или относится к другой ветке — сообщение не отправлено. Дальше: проверь taskflow_my_tasks; если этап с тебя сняли — заверши ход и коротко опиши итог в ответе; если этап твой — пиши в тему его ветки (taskflow_topic_send). Повтор того же вызова даст тот же отказ."});
       }
       if(recipientSlot){
         const recipient=db.prepare("SELECT task_id,agent_id FROM subtasks WHERE id=?").get(recipientSlot) as {task_id:string;agent_id:string}|undefined;
-        if(!recipient || (chat.parent_chat_id ? !inTopicBranch(recipient.task_id) : !isMember(chatId,recipient.agent_id)))return reply.code(400).send({error:"Этап адресата не относится к согласованной ветке"});
+        if(!recipient || (chat.room_kind === "task" ? !inTopicBranch(recipient.task_id) : !isMember(chatId,recipient.agent_id)))return reply.code(400).send({error:"Этап адресата не относится к согласованной ветке"});
       }
       // MAK-98: быстрый отказ, когда адресата некому исполнить — лучше
       // сказать сразу с кодом причины, чем отправить вопрос в пустоту.
-      if (senderRole && recipientSlot && chat.parent_chat_id) {
+      if (senderRole && recipientSlot && chat.room_kind === "task") {
         const availability = evaluateRecipientAvailability({
           recipientSubtaskId: recipientSlot,
         });
@@ -1390,7 +1375,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       if (senderRole === "secretary" && replyTo) { cancelTelegramProgress(replyTo); captureTelegramFinal(id); }
       // Владелец написал в чат задачи — будим её план: готовые шаги стартуют, замолчавшие
       // перезапускаются той же ролью (runtime/taskNudge.ts). Ответ на сообщение этим не задерживаем.
-      if (executionMode === "card" && chatTaskId && chat.parent_chat_id && isOwner(req.userId)) {
+      if (executionMode === "card" && chatTaskId && chat.room_kind === "task" && isOwner(req.userId)) {
         void nudgeTaskPlan(chatTaskId, req.userId).catch((error) => req.log?.warn?.({ err: error, taskId: chatTaskId }, "не удалось разбудить план задачи"));
       }
 
@@ -1450,7 +1435,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       // на новое сообщение, со свежим контекстом (выжимка прежней работы).
       // В теме задачи и в теме-потоке это не делается: там сообщение идёт
       // в работу слота.
-      if (isOwner(req.userId) && !chatTaskId && !chat.parent_chat_id) {
+      if (isOwner(req.userId) && !chatTaskId && chat.room_kind !== "task") {
         try {
           const stopped = await interruptChatTurnForOwner(chatId, req.userId);
           // В чате пауза не нужна (владелец 23.10.2026: схема с паузой и
@@ -1955,7 +1940,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       const chatId = req.params.id;
       if (!isMember(chatId, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
-      if (taskTopicClosedAt(db.prepare("SELECT task_id, parent_chat_id, closed_at FROM chats WHERE id = ?").get(chatId) as any))
+      if (taskRoomClosedAt(db.prepare("SELECT task_id, room_kind, closed_at FROM chats WHERE id = ?").get(chatId) as any))
         return reply.code(409).send({ error: "Чат задачи закрыт" });
       const roleId = typeof req.body?.role_id === "string" ? req.body.role_id : "";
       if (!roleId) return reply.code(400).send({ error: "role_id обязателен" });
@@ -2181,7 +2166,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     if (!right.allowed) return reply.code(403).send({ error: right.reason });
     // Тема карточки, которая сейчас в работе, — рабочее место роли: её
     // никто не убирает, пока карточка не отдана (дефект D1).
-    if (isTaskTopic(chat) && !canArchiveTaskTopic(chat.task_id))
+    if (isTaskRoom(chat) && !canArchiveTaskTopic(chat.task_id))
       return reply.code(409).send({ error: "Чат задачи в работе убрать нельзя" });
     archiveChat(chat.id);
     await stopRoomRuns(chat.id, "owner_archive");
@@ -2369,7 +2354,7 @@ async function recoverAgentDeliveryOnce(input: {
   const trigger=db.prepare("SELECT text,recipient_subtask_id FROM chat_messages WHERE id=?").get(row.message_id) as {text:string;recipient_subtask_id:string|null}|undefined;
   const saved=JSON.parse(row.payload_json);
   const recipientSlot=saved.subtaskId ?? trigger?.recipient_subtask_id ?? undefined;
-  const topic=chatExecutionMode(chatId,row.message_id) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
+  const topic=chatExecutionMode(chatId,row.message_id) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND room_kind='task'").get(chatId) as {task_id:string}|undefined : undefined;
   const slot=topic && trigger ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),recipientSlot) : null;
   const chatOnly=row.message_id.startsWith("review-return:") && saved.chatOnly===true;
   const activeDelivery=chatOnly || chatExecutionMode(chatId,row.message_id) === "chat" ? "idle" : slot ? await deliverTopicToWork(slot.task_id,role,row.message_id,trigger!.text,slot.plan_node_key)
@@ -2890,7 +2875,7 @@ async function fanOutOwnerMessage(args: {
     ).get(args.chatId),
   );
   const fromOwner = isOwner(args.fromUserId);
-  const isTaskTopic = Boolean(chat.task_id) && Boolean(chat.parent_chat_id);
+  const isTaskTopic = isTaskRoom(chat);
   // Тема задачи: сообщение владельца идёт в работу слота (подмешивание) и
   // открывает ветку-срез, где роль сразу отвечает владельцу (23.10.2026).
   const topicSlice = shouldFanOutTaskTopic({
@@ -2907,7 +2892,7 @@ async function fanOutOwnerMessage(args: {
       direct: chat.kind === "direct",
       roleMembers: roles.length,
       isBranch: Boolean(chat.branch_of_chat_id),
-      isTaskTopic: Boolean(chat.task_id) || Boolean(chat.parent_chat_id),
+      isTaskTopic: isTaskRoom(chat),
       isCommon: chat.room_kind === "common",
       repliesToRole,
       roleBusy: busy,
@@ -3092,7 +3077,7 @@ async function dispatchRoleReplies(args: {
     targets = [];
   }
 
-  const topic=chatExecutionMode(chatId,args.messageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
+  const topic=chatExecutionMode(chatId,args.messageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND room_kind='task'").get(chatId) as {task_id:string}|undefined : undefined;
   for (const role of targets) {
     // Role selection may have awaited preparation while the author withdrew.
     if(!db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=?").get(args.messageId,chatId))return;
@@ -3395,7 +3380,7 @@ async function deliverAgentReply(args: {
   const intentGuidance=role!=="secretary" && isOwner(trigger.from_user_id) ? await chatIntentBlockForMessage(trigger.id) : "";
   const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}${intentGuidance}${(()=>{const line=crossChatNotice(trigger.id,chatId);return line?"\n"+line:"";})()}`;
 
-  const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
+  const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND room_kind='task'").get(chatId) as {task_id:string}|undefined : undefined;
   // Обсуждение карточки — изолированная комната: доставки в работу нет.
   if (isDiscussionChat(chatId)) return null;
   const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;

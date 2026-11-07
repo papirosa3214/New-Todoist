@@ -36,7 +36,7 @@ import { pickRecipientSlot } from "./roleMessageWait.js";
 import { connectRoleMcp } from "./graftMcp.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import { branchMembership } from "./branchPlan.js";
-import { ensurePlanTopic, topicContext } from "../lib/projectTopics.js";
+import { ensureTaskRoom, topicContext } from "../lib/projectTopics.js";
 import { markPlanFinalReviewerStarted, markPlanFinalReviewerWaiting, hasPendingPlanFinalReview, planReviewRouteContext } from "./planReviewLifecycle.js";
 import { instructionResources, createTaskResourceLoader } from "./instructionResources.js";
 import { ensureRoleHome, renderPromptAddendum } from "./roleHome.js";
@@ -439,7 +439,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     T("taskflow_topic_reply", "Ответить на конкретное сообщение темы своей задачи: message_id и короткий text. Сервер определяет автора вопроса и его этап; подходит для ответа человеку и коллеге.",Type.Object({message_id:Type.String(),text:Type.String()}),async(p)=>{
       if(!taskId)throw new ToolError("Нет текущей задачи");
       if(topicSends>=4)throw new ToolError("Лимит обращений в этом запуске исчерпан");
-      const original=db.prepare("SELECT m.chat_id,m.from_user_id,m.subtask_id,c.task_id,u.name,u.role_key FROM chat_messages m JOIN chats c ON c.id=m.chat_id JOIN users u ON u.id=m.from_user_id WHERE m.id=? AND c.parent_chat_id IS NOT NULL").get(p.message_id) as {chat_id:string;from_user_id:string;subtask_id:string|null;task_id:string;name:string;role_key:string|null}|undefined;
+      const original=db.prepare("SELECT m.chat_id,m.from_user_id,m.subtask_id,c.task_id,u.name,u.role_key FROM chat_messages m JOIN chats c ON c.id=m.chat_id JOIN users u ON u.id=m.from_user_id WHERE m.id=? AND c.room_kind='task'").get(p.message_id) as {chat_id:string;from_user_id:string;subtask_id:string|null;task_id:string;name:string;role_key:string|null}|undefined;
       if(!original || (original.task_id!==taskId && (!branchMembership(taskId) || branchMembership(original.task_id)?.root_plan_id!==branchMembership(taskId)?.root_plan_id)))throw new ToolError("Сообщение не относится к согласованной ветке");
       if(original.from_user_id===roleUserId(role))throw new ToolError("Не отвечай сам себе");
       const recipient=original.subtask_id && original.role_key ? resolveTopicSlot(original.task_id,original.role_key,undefined,original.subtask_id)?.id : undefined;
@@ -458,7 +458,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       if(topicSends>=4) throw new ToolError("Лимит обращений в этом запуске исчерпан; зафиксируй блок или результат");
       const target=p.task_id??taskId;
       if(target!==taskId && (!branchMembership(taskId) || branchMembership(target)?.root_plan_id!==branchMembership(taskId)?.root_plan_id)) throw new ToolError("Тема вне согласованной ветки");
-      const topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(target) as {id:string}|undefined;
+      const topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND room_kind='task'").get(target) as {id:string}|undefined;
       if(!topic) throw new ToolError("У задачи пока нет темы");
       if(!ROLE_NAMES.includes(p.to)) throw new ToolError("Укажи доступную роль");
       if(p.to===role){
@@ -1559,7 +1559,7 @@ try {
   // разработчика падали на старте, хотя задаче он не нужен. Не поднялся — роль
   // работает без его инструментов.
   const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId).catch(error => { console.warn(`[composio] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
-  if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
+  if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensureTaskRoom(taskId);
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
   const infra = await connectRoleMcp(role, cwd).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
   const toolCatalog = buildRoleToolCatalog({role,model:model.id??modelId,taskId,subtaskId:input.subtaskId,mode:"work",runId:manager.getSessionId()}, [...composio.tools,...infra.tools]);

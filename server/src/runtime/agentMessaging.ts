@@ -120,7 +120,7 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       const chat=(await asRole(role,"GET",`/api/chats/${chatId}`)).chat;
       if(recipient && !chat.members.some((m:any)=>m.id===recipient.id)) throw new ToolError("Адресат не участвует в этом чате");
       let targetSlot:string|undefined;
-      if(chat.parent_chat_id && recipientRole){
+      if(chat.room_kind==="task" && recipientRole){
         const slots=db.prepare("SELECT id FROM subtasks WHERE task_id=? AND agent_id=? AND collaboration_plan_id IN (SELECT id FROM task_collaboration_plans WHERE status='approved')").all(chat.task_id,recipient.id);
         if(slots.length>1 && !p.slot_key) throw new ToolError("Укажи slot_key: у адресата несколько этапов");
         targetSlot=resolveTopicSlot(chat.task_id,recipientRole,p.slot_key)?.id;

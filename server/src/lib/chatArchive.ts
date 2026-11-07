@@ -6,7 +6,7 @@ import { cancelQuestionsForChat } from "./chatQuestions.js";
  *
  * Три правила живут здесь, чтобы маршрут и тесты говорили об одном и том же:
  *
- *  1. ПРАВО УБИРАТЬ. Темы задач и комнаты проектов заводятся сервером при
+ *  1. ПРАВО УБИРАТЬ. Комнаты задач заводятся сервером при
  *     создании задачи (lib/projectTopics.ts: created_by = project.owner_id).
  *     Проверка «убирает только создатель» к ним неприменима: создатель у
  *     всех тем проекта один, участников — много, и по факту никто из них
@@ -42,14 +42,14 @@ export type ArchiveRight =
   | { allowed: false; reason: string };
 
 /**
- * Системная комната — тема задачи: её заводит сервер, она живёт внутри
- * комнаты проекта. Именно её убирает любой участник проекта.
+ * Системная комната — комната задачи: её заводит сервер при работе по
+ * карточке. Именно её убирает любой участник задачи, а не только автор.
  */
-export function isTaskTopic(chat: {
+export function isTaskRoom(chat: {
   task_id?: string | null;
-  parent_chat_id?: string | null;
+  room_kind?: string | null;
 }): boolean {
-  return Boolean(chat.task_id) && Boolean(chat.parent_chat_id);
+  return Boolean(chat.task_id) && chat.room_kind === "task";
 }
 
 /**
@@ -63,7 +63,7 @@ export function archiveRight(chat: ChatRoomRow, userId: string): ArchiveRight {
   if (chat.room_kind === "common")
     return { allowed: false, reason: "общую комнату убрать нельзя" };
   // Тема задачи — системная комната: убирает любой участник проекта.
-  if (isTaskTopic(chat)) return { allowed: true };
+  if (isTaskRoom(chat)) return { allowed: true };
   // Личные и групповые переписки — только создатель.
   if (chat.created_by !== userId)
     return { allowed: false, reason: "убрать чат может только его создатель" };
@@ -150,7 +150,7 @@ export const CLEANUP_MIN_IDLE_HOURS = 2;
  * Кандидаты на массовую уборку — пустые темы задач.
  *
  * Условия (все должны выполняться):
- *   • это тема задачи (родитель — комната проекта), не личная переписка;
+ *   • это комната задачи (room_kind='task'), не личная переписка;
  *   • ни одного сообщения и ни одной строки в очереди доставки;
  *   • тема не тронута последние CLEANUP_MIN_IDLE_HOURS часов;
  *   • у задачи нет живой попытки (ended_at IS NULL) — ход не идёт;
@@ -168,9 +168,8 @@ export function cleanupCandidates(limit = 500): CleanupCandidate[] {
               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS messages,
               (SELECT COUNT(*) FROM chat_message_queue q WHERE q.chat_id = c.id) AS queue
          FROM chats c
-        WHERE c.parent_chat_id IS NOT NULL
+        WHERE c.room_kind = 'task'
           AND c.task_id IS NOT NULL
-          AND c.room_kind IS NULL
           AND c.closed_at IS NULL
           AND COALESCE(c.archived_at, '') = ''
           AND c.updated_at <= datetime('now', ?)

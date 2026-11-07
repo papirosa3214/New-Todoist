@@ -241,7 +241,7 @@ describe("Чаты: общий чат, тема задачи, только @", (
     });
     expect(created.statusCode).toBe(200);
     const taskId = created.json().task.id;
-    const topic = db.prepare("SELECT id, closed_at FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(taskId) as any;
+    const topic = db.prepare("SELECT id, closed_at FROM chats WHERE task_id=? AND room_kind='task'").get(taskId) as any;
     expect(topic).toBeTruthy();
     expect(topic.closed_at).toBeNull();
 

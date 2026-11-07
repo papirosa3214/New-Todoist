@@ -5857,6 +5857,168 @@ const migrations: Migration[] = [
     },
   },
 
+  // 08.11.2026, владелец (спецификация
+  // `docs/2026-11-08-role-slot-chat-branches-spec.md`, §1–3): «чатов в рамках
+  // проектов просто не должно существовать». Комната задачи перестаёт быть
+  // темой проектного чата и становится групповой комнатой задачи — одна на
+  // задачу, независимо от проекта, и видна топиком в личной комнате каждой
+  // роли-участника. Тот же чат, а не копия: ID и переписка одни.
+  //
+  // Что делает миграция:
+  //  1. разрешает `room_kind='task'` (пересборка `chats`: CHECK-список в
+  //     SQLite не меняется через ALTER, а подделывать признак под другой
+  //     room_kind значило бы врать в схеме — так уже было с 053);
+  //  2. переводит прежние темы задач в комнаты задач: без project_id, без
+  //     parent_chat_id, уникальные на задачу;
+  //  3. заводит `chat_room_topics` — где какая комната видна топиком;
+  //  4. отвязывает от проекта ручную переписку, жившую внутри проектной группы
+  //     (её историю не теряем — она становится обычным групповым чатом);
+  //  5. удаляет сами проектные чаты. Переписка комнат задач при этом остаётся
+  //     полностью: комнаты к этому моменту уже отвязаны от групп.
+  {
+    id: "202_task_rooms",
+    description:
+      "Групповая комната задачи вместо темы проектного чата: chats.room_kind='task', " +
+      "без project_id/parent_chat_id, UNIQUE(task_id); таблица chat_room_topics " +
+      "(комната задачи топиком в личной комнате роли); проектные чаты удалены",
+    // Пересборка таблицы держит свою транзакцию: обёртка прогона сломала бы её.
+    noTransaction: true,
+    up: () => {
+      const count = (sql: string) =>
+        (db.prepare(sql).get() as { n: number }).n;
+      const roomsBefore = count(
+        "SELECT COUNT(*) AS n FROM chats WHERE task_id IS NOT NULL AND parent_chat_id IS NOT NULL",
+      );
+      const messagesBefore = count("SELECT COUNT(*) AS n FROM chat_messages");
+
+      // 1. CHECK-список room_kind: пересборка таблицы с сохранением строк.
+      const ddl = (
+        db
+          .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chats'")
+          .get() as { sql: string } | undefined
+      )?.sql;
+      if (!ddl || !ddl.includes("'handoff'")) throw new Error("202: схема chats не найдена или неожиданна");
+      if (!ddl.includes("'task'")) {
+        const columns = (
+          db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>
+        ).map((column) => column.name);
+        const indexes = (
+          db
+            .prepare(
+              "SELECT sql FROM sqlite_master WHERE tbl_name='chats' AND type='index' AND sql IS NOT NULL",
+            )
+            .all() as Array<{ sql: string }>
+        ).map((row) => row.sql);
+        const nextDdl = ddl
+          .replace("'handoff')", "'handoff','task')")
+          .replace(/CREATE TABLE\s+"?chats"?/i, 'CREATE TABLE "chats_new"');
+        if (!nextDdl.includes("'task'") || !nextDdl.includes('CREATE TABLE "chats_new"'))
+          throw new Error("202: небезопасная пересборка chats");
+        const fkBefore = (db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length;
+        db.pragma("foreign_keys = OFF");
+        try {
+          db.exec("BEGIN");
+          db.exec(nextDdl);
+          db.prepare(
+            `INSERT INTO chats_new (${columns.join(",")}) SELECT ${columns.join(",")} FROM chats`,
+          ).run();
+          db.exec("DROP TABLE chats");
+          db.exec("ALTER TABLE chats_new RENAME TO chats");
+          for (const sql of indexes) db.exec(sql);
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        } finally {
+          db.pragma("foreign_keys = ON");
+        }
+        const rowsAfter = count("SELECT COUNT(*) AS n FROM chats");
+        const fkAfter = (db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length;
+        if (fkAfter > fkBefore) throw new Error("202: пересборка chats дала FK-нарушения");
+        if (rowsAfter < 1) throw new Error("202: пересборка chats потеряла строки");
+      }
+
+      // 2. Ручная переписка внутри проектной группы — не тема задачи. Историю
+      //    сохраняем: чат перестаёт быть частью проекта и живёт как обычный
+      //    групповой. Удалять чужую переписку миграция не вправе.
+      db.prepare(
+        `UPDATE chats SET project_id = NULL, parent_chat_id = NULL
+          WHERE project_id IS NOT NULL AND parent_chat_id IS NOT NULL AND task_id IS NULL`,
+      ).run();
+
+      // 3. Прежние темы задач → комнаты задач.
+      db.exec("DROP TRIGGER IF EXISTS project_topic_insert");
+      db.prepare(
+        `UPDATE chats SET room_kind = 'task', parent_chat_id = NULL, project_id = NULL
+          WHERE task_id IS NOT NULL AND parent_chat_id IS NOT NULL`,
+      ).run();
+      db.exec(`
+        DROP INDEX IF EXISTS idx_task_topic;
+        DROP INDEX IF EXISTS idx_project_chat;
+        DROP INDEX IF EXISTS idx_chat_topics;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_room ON chats(task_id)
+          WHERE task_id IS NOT NULL AND room_kind = 'task';
+        CREATE TABLE IF NOT EXISTS chat_room_topics (
+          personal_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          room_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (personal_chat_id, room_chat_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_room_topics_room ON chat_room_topics(room_chat_id);
+        CREATE INDEX IF NOT EXISTS idx_chats_task ON chats(task_id);
+      `);
+
+      // 4. Топики в личных комнатах участников: у каждой роли-участницы
+      //    комнаты задачи — строка в своей личной комнате.
+      const rooms = db
+        .prepare("SELECT id FROM chats WHERE room_kind='task'")
+        .all() as Array<{ id: string }>;
+      const roleMembers = db.prepare(
+        `SELECT DISTINCT cm.member_id FROM chat_members cm JOIN users u ON u.id = cm.member_id
+          WHERE cm.chat_id = ? AND u.type='ai' AND u.role_key IS NOT NULL`,
+      );
+      const personalOf = db.prepare(
+        `SELECT c.id FROM chats c JOIN chat_members m ON m.chat_id = c.id
+          WHERE c.room_kind='personal' AND m.member_id = ?
+          ORDER BY c.created_at, c.id LIMIT 1`,
+      );
+      const link = db.prepare(
+        `INSERT OR IGNORE INTO chat_room_topics (personal_chat_id, room_chat_id, role_id)
+         VALUES (?, ?, ?)`,
+      );
+      for (const room of rooms) {
+        for (const member of roleMembers.all(room.id) as Array<{ member_id: string }>) {
+          const personal = personalOf.get(member.member_id) as { id: string } | undefined;
+          if (personal) link.run(personal.id, room.id, member.member_id);
+        }
+      }
+
+      // 5. Проектные чаты. Детей у них уже нет (шаг 3), поэтому удаление не
+      //    задевает комнаты задач; собственная переписка группы уходит вместе
+      //    с ней — владелец распорядился проектных чатов не иметь.
+      const doomed = db
+        .prepare(
+          `SELECT id FROM chats WHERE project_id IS NOT NULL AND parent_chat_id IS NULL
+             AND NOT EXISTS (SELECT 1 FROM chats child WHERE child.parent_chat_id = chats.id)`,
+        )
+        .all() as Array<{ id: string }>;
+      for (const chat of doomed) db.prepare("DELETE FROM chats WHERE id = ?").run(chat.id);
+
+      // 6. Проверки: ни одна комната задачи не потеряна, переписка не выросла.
+      const roomsAfter = count("SELECT COUNT(*) AS n FROM chats WHERE room_kind='task'");
+      if (roomsAfter !== roomsBefore)
+        throw new Error(`202: комнат задач было ${roomsBefore}, стало ${roomsAfter}`);
+      const messagesAfter = count("SELECT COUNT(*) AS n FROM chat_messages");
+      if (messagesAfter > messagesBefore)
+        throw new Error("202: переписка не должна расти от миграции");
+      const leftovers = count(
+        "SELECT COUNT(*) AS n FROM chats WHERE project_id IS NOT NULL AND parent_chat_id IS NULL",
+      );
+      if (leftovers !== 0) throw new Error("202: проектные чаты остались");
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.

@@ -294,7 +294,7 @@ describe("Приватные проекты: скрытие от API, задач
     expect(card.statusCode).toBe(404);
   });
 
-  it("чат приватного проекта не виден агенту, даже если он в участниках", async () => {
+  it("комната задачи приватного проекта не видна агенту, даже если он в участниках", async () => {
     const priv = await createProject(ownerToken, "Приватный с чатом", true);
     const created = await app.inject({
       method: "POST",
@@ -304,14 +304,13 @@ describe("Приватные проекты: скрытие от API, задач
     });
     const taskId = created.json().task.id;
 
-    // Владелец заводит групповой чат проекта и тему задачи.
-    const group = await app.inject({
+    // Проектных чатов больше нет (08.11.2026): у задачи своя комната задачи.
+    const noProjectChat = await app.inject({
       method: "POST",
       url: `/api/projects/${priv}/chat`,
       headers: { authorization: `Bearer ${ownerToken}` },
     });
-    expect(group.statusCode).toBe(200);
-    const groupChatId = group.json().chat.id;
+    expect(noProjectChat.statusCode).toBe(404);
 
     const topic = await app.inject({
       method: "POST",
@@ -321,11 +320,8 @@ describe("Приватные проекты: скрытие от API, задач
     expect(topic.statusCode).toBe(200);
     const topicChatId = topic.json().chat.id;
 
-    // Агента принудительно добавляем в оба чата — так проверяем именно
+    // Агента принудительно добавляем в комнату — так проверяем именно
     // скрытие по приватности, а не отсутствие членства.
-    db.prepare(
-      "INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES (?,?)",
-    ).run(groupChatId, agentId);
     db.prepare(
       "INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES (?,?)",
     ).run(topicChatId, agentId);
@@ -336,7 +332,6 @@ describe("Приватные проекты: скрытие от API, задач
       headers: { authorization: `Bearer ${agentToken}` },
     });
     const ids = list.json().chats.map((c: any) => c.id);
-    expect(ids).not.toContain(groupChatId);
     expect(ids).not.toContain(topicChatId);
 
     // Прямое открытие — 404.
@@ -347,14 +342,13 @@ describe("Приватные проекты: скрытие от API, задач
     });
     expect(direct.statusCode).toBe(404);
 
-    // Владелец видит оба чата.
+    // Владелец видит комнату задачи.
     const ownerList = await app.inject({
       method: "GET",
       url: "/api/chats",
       headers: { authorization: `Bearer ${ownerToken}` },
     });
     const ownerIds = ownerList.json().chats.map((c: any) => c.id);
-    expect(ownerIds).toContain(groupChatId);
     expect(ownerIds).toContain(topicChatId);
   });
 

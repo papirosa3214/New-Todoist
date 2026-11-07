@@ -14,7 +14,7 @@ import { beforeSlots, setNodePhase, markBranchPrep, BranchPhaseError, BRANCH_PRE
 import {branchAssignmentRole} from "../runtime/branchPlan.js";
 import { branchRoot,branchCards,branchPresentation,approveBranch,editBranchDraft } from "../runtime/branchPlan.js";
 import { unmetDependencyIds } from "../enricher.js";
-import { ensurePlanTopic } from "../lib/projectTopics.js";
+import { ensureTaskRoom } from "../lib/projectTopics.js";
 import { taskExecutionState } from "../runtime/taskExecutionState.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
@@ -221,7 +221,7 @@ function planOpFailure(reply: any, error: unknown) {
 async function afterLiveChange(planId: string, taskId: string, actorId: string): Promise<void> {
   const plan = db.prepare("SELECT status FROM task_collaboration_plans WHERE id = ?").get(planId) as { status: string } | undefined;
   if (plan?.status !== "approved") return;
-  ensurePlanTopic(taskId);
+  ensureTaskRoom(taskId);
   try {
     await unlockReadyPlanSubtasks(planId, taskId, actorId);
   } catch (error) {
@@ -455,7 +455,7 @@ export async function startSingleExecutorPlan(
           .run(subtaskId, taskId, expected, maxPos + 1, roleUserId(role), plan.id, "executor");
         db.prepare("UPDATE task_collaboration_plans SET status='superseded' WHERE task_id = ? AND status = 'approved'").run(taskId);
         db.prepare("UPDATE task_collaboration_plans SET status='approved', approved_by=?, approved_at=datetime('now') WHERE id=?").run(actorId, plan.id);
-        ensurePlanTopic(taskId);
+        ensureTaskRoom(taskId);
         return { id: subtaskId, slotKey: "executor" };
       })();
     } catch (error) {
@@ -1083,7 +1083,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       });
       db.prepare("UPDATE task_collaboration_plans SET status = 'superseded' WHERE task_id = ? AND status = 'approved'").run(task.id);
       db.prepare("UPDATE task_collaboration_plans SET status = 'approved', approved_by = ?, approved_at = datetime('now') WHERE id = ?").run(req.userId, plan.id);
-      ensurePlanTopic(task.id);
+      ensureTaskRoom(task.id);
       })();
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });

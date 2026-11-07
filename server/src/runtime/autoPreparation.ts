@@ -7,7 +7,7 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead, isOwner, isOrchestrator } from "../access.js";
 import { prepareTask, validatePreparation } from "../lib/taskPreparation.js";
-import { ensurePlanTopic, flushPlanTopicEvents } from "../lib/projectTopics.js";
+import { ensureTaskRoom, flushPlanTopicEvents } from "../lib/projectTopics.js";
 import { logEvent } from "../agentState.js";
 import { getFullTask } from "../routes/subtasks.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
@@ -83,7 +83,7 @@ export async function processOnePreparation(input:{workerId:string;analyze?:Anal
     const task=db.transaction(()=>current(job))();
     if(!task) return true;
     const project=db.prepare("SELECT id,name,owner_id FROM projects WHERE id=?").get(task.project_id) as {id:string;name:string;owner_id:string};
-    ensurePlanTopic(task.id);
+    ensureTaskRoom(task.id);
     // Imported parents already own their children: never generate another decomposition.
     const children=db.prepare("SELECT id FROM tasks WHERE parent_id=? LIMIT 1").get(task.id);
     const existing=db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=? AND status='draft' ORDER BY revision DESC LIMIT 1").get(task.id) as {id:string}|undefined;

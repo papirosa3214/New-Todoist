@@ -8,7 +8,7 @@ vi.mock("../src/runtime/PiRuntimeAdapter.js",async original=>({...await original
 vi.mock("../src/runtime/slotConversation.js",async original=>({...await original<any>(),startSlotConversation:async(input:any)=>{calls.slots.push(input);return {sessionId:"slot-session",text:"Обсудили"};}}));
 import {buildApp} from "../src/index.js";
 import db from "../src/db.js";
-import {ensurePlanTopic,topicContext} from "../src/lib/projectTopics.js";
+import {ensureTaskRoom,topicContext} from "../src/lib/projectTopics.js";
 import {canPlanSubtaskBecomeReady,startPlanSubtaskRun,unlockDependencyPlans} from "../src/runtime/planSubtaskAdmission.js";
 import {completePlanFinalReview,ensurePlanFinalReviewer} from "../src/runtime/planReviewLifecycle.js";
 import {seedRoleAccounts,demoteSeededOwner} from "./helpers/seedOwner.js";
@@ -23,13 +23,13 @@ describe("Команда в теме задачи",()=>{
   taskId=(await app.inject({method:"POST",url:"/api/tasks",headers:auth,payload:{title:"Исследование",project_id:project.id}})).json().task.id;
   const p=(await app.inject({method:"POST",url:`/api/tasks/${taskId}/collaboration-plans`,headers:auth,payload:{profile:"manual",rationale:"Обсуждение",nodes:[{slot_key:"research",role_key:"researcher",expected_result:"Документ фактов"},{slot_key:"analysis",role_key:"analyst",expected_result:"Выводы"}],edges:[{from_slot_key:"research",to_slot_key:"analysis",start_condition:"accepted"}]}})).json();planId=p.plan?.id??p.id;
   const approved=await app.inject({method:"POST",url:`/api/tasks/${taskId}/collaboration-plans/${planId}/approve`,headers:auth});expect(approved.statusCode).toBe(200);
-  topicId=(db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(taskId) as any).id;
+  topicId=(db.prepare("SELECT id FROM chats WHERE task_id=? AND room_kind='task'").get(taskId) as any).id;
  });
  afterAll(async()=>{await app.close();});
  it("утверждение включает участников; контекст описывает обязанности и зависимости",()=>{
   const ids=(db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(topicId) as any[]).map(r=>r.member_id);
   expect(ids).toContain("role_researcher");expect(ids).toContain("role_analyst");
-  expect(ensurePlanTopic(taskId)).toBe(topicId);
+  expect(ensureTaskRoom(taskId)).toBe(topicId);
   expect(topicContext(taskId)).toContain("research → analysis");expect(topicContext(taskId)).toContain("Документ фактов");
  });
  it("присоединившийся Критик включается в ту же тему",()=>{
@@ -83,10 +83,10 @@ describe("Команда в теме задачи",()=>{
   // Снимки плана живут в plan_event_journal, не в истории чата (миграция
   // 096, «Plan snapshots belong to the plan journal, never to chat history»).
   const count=()=>(db.prepare("SELECT COUNT(*) n FROM plan_event_journal WHERE plan_id=?").get(planId) as any).n;
-  const before=count();ensurePlanTopic(taskId);ensurePlanTopic(taskId);expect(count()).toBe(before);
+  const before=count();ensureTaskRoom(taskId);ensureTaskRoom(taskId);expect(count()).toBe(before);
   expect(()=>db.transaction(()=>{
     db.prepare("UPDATE task_collaboration_plans SET version=version+1 WHERE id=?").run(planId);
-    ensurePlanTopic(taskId);throw new Error("rollback");
+    ensureTaskRoom(taskId);throw new Error("rollback");
   })()).toThrow("rollback");
   expect(count()).toBe(before);
   completePlanFinalReview(taskId,"role_critic_verifier","changes_requested","Нужны источники",["research"]);
@@ -97,7 +97,7 @@ describe("Команда в теме задачи",()=>{
   expect(revised).toBeTruthy();
   expect(String(revised.added_reason)).toContain("Нужны источники");
   expect(snapshot.edges.some((e:any)=>e.to_slot_key===revised.slot_key && e.from_slot_key.startsWith("final_review_"))).toBe(true);
-  ensurePlanTopic(taskId);expect(count()).toBe(before+1);
+  ensureTaskRoom(taskId);expect(count()).toBe(before+1);
  });
 
  it("auto_template утверждается владельцем и гасит идущую подготовку",async()=>{

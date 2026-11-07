@@ -5,7 +5,7 @@ import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { logEvent } from "../src/agentState.js";
 import { criticApproved, withAgentStale } from "../src/routes/tasks.js";
-import { taskTopicClosedAt } from "../src/lib/projectTopics.js";
+import { taskRoomClosedAt } from "../src/lib/projectTopics.js";
 
 describe("critic_approved", () => {
   let owner: string;
@@ -57,13 +57,13 @@ describe("critic_approved", () => {
   });
   it("тема задачи закрыта, пока карточка на проверке с одобрением Критика; вернули в работу — открыта", () => {
     const id = task(); event(id, "state_changed", "review", "2026-10-07 10:00:00"); event(id, "review_recorded", "1:approved", "2026-10-07 10:05:00");
-    const topic = { task_id: id, parent_chat_id: "project-chat", closed_at: null };
-    expect(taskTopicClosedAt(topic)).toBeTruthy();
-    expect(taskTopicClosedAt({ ...topic, parent_chat_id: null })).toBeNull();
+    const topic = { task_id: id, room_kind: "task", closed_at: null };
+    expect(taskRoomClosedAt(topic)).toBeTruthy();
+    expect(taskRoomClosedAt({ ...topic, room_kind: null })).toBeNull();
     db.prepare("UPDATE tasks SET agent_state='in_progress' WHERE id=?").run(id);
-    expect(taskTopicClosedAt(topic)).toBeNull();
-    expect(taskTopicClosedAt({ ...topic, closed_at: "2026-10-07 12:00:00" })).toBe("2026-10-07 12:00:00");
+    expect(taskRoomClosedAt(topic)).toBeNull();
+    expect(taskRoomClosedAt({ ...topic, closed_at: "2026-10-07 12:00:00" })).toBe("2026-10-07 12:00:00");
     const plain = task();
-    expect(taskTopicClosedAt({ task_id: plain, parent_chat_id: "project-chat", closed_at: null })).toBeNull();
+    expect(taskRoomClosedAt({ task_id: plain, room_kind: "task", closed_at: null })).toBeNull();
   });
 });

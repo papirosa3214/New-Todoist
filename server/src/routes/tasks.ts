@@ -50,7 +50,7 @@ import {
   resultFromSubtasks,
 } from "../resultVersions.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
-import { ensurePlanTopic, setTaskTopicClosed } from "../lib/projectTopics.js";
+import { ensureTaskRoom, setTaskRoomClosed } from "../lib/projectTopics.js";
 import { closeTaskTree } from "../lib/taskCloseCascade.js";
 import { criticApproved } from "../lib/criticApproved.js";
 
@@ -1698,7 +1698,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // трогаем — там темы не нужны. Ошибка темы не должна ронять создание.
       if (!isPrivateProject) {
         try {
-          ensurePlanTopic(id);
+          ensureTaskRoom(id);
         } catch (error) {
           req.log?.warn?.({ err: String(error), taskId: id }, "не удалось завести тему задачи");
         }
@@ -2448,9 +2448,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Тема задачи закрывается вместе с задачей и снова открывается при
       // возврате в работу (карточка ca816271, п. 4). История остаётся.
       if (body.status === "completed" && existing.status !== "completed") {
-        setTaskTopicClosed(id, true);
+        setTaskRoomClosed(id, true);
       } else if (body.status === "active" && existing.status === "completed") {
-        setTaskTopicClosed(id, false);
+        setTaskRoomClosed(id, false);
       }
 
       // Гашение agent_state у самой задачи выше очищало только её колонку, а

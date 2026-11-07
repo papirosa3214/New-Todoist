@@ -90,8 +90,11 @@ describe("режим «Оркестратор»", () => {
     const plan = (await app.inject({ method: "POST", url: `/api/tasks/${t.id}/collaboration-plans/propose`, headers: auth, payload: { profile: "research" } })).json().plan;
     const ap = await app.inject({ method: "POST", url: `/api/tasks/${t.id}/collaboration-plans/${plan.id}/approve`, headers: auth, payload: {} });
     expect(ap.statusCode).toBe(200);
-    const topic = db.prepare("SELECT project_id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(t.id) as { project_id: string };
-    expect(topic.project_id).toBe(p2.id);
+    const room = db.prepare("SELECT id, project_id, room_kind FROM chats WHERE task_id=?").get(t.id) as { id: string; project_id: string | null; room_kind: string };
+    // Комната задачи от проекта больше не зависит (08.11.2026): перенос
+    // карточки в другой проект её не переселяет и не заводит вторую.
+    expect(room.room_kind).toBe("task");
+    expect(room.project_id ?? null).toBeNull();
     await app.close();
   });
 });
