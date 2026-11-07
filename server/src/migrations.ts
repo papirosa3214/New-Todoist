@@ -5823,34 +5823,6 @@ const migrations: Migration[] = [
   },
 
   {
-    id: "201_slot_replacement_requests",
-    description:
-      "Заявка роли на замену своего зависшего слота (владелец 07.11.2026: «без меня никто ничего не сделает»): роль просит, владелец одобряет кнопкой, сервер заменяет",
-    up: () => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS slot_replacement_requests (
-          id TEXT PRIMARY KEY,
-          subtask_id TEXT NOT NULL,
-          task_id TEXT NOT NULL,
-          role_key TEXT NOT NULL,
-          requested_by TEXT NOT NULL,
-          reason TEXT NOT NULL,
-          question_id TEXT,
-          status TEXT NOT NULL DEFAULT 'pending'
-            CHECK (status IN ('pending','approved','rejected','expired','applied','failed')),
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          decided_at TEXT,
-          decided_by TEXT,
-          error TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_slot_repl_status ON slot_replacement_requests(status, created_at);
-        CREATE INDEX IF NOT EXISTS idx_slot_repl_question ON slot_replacement_requests(question_id);
-        CREATE INDEX IF NOT EXISTS idx_slot_repl_subtask ON slot_replacement_requests(subtask_id);
-      `);
-    },
-  },
-
-  {
     id: "200_context_operation_items",
     description: "Что именно попало в контекст роли: записи, источник и объём (владелец 05.11.2026)",
     up: () => {

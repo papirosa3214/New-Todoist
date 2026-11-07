@@ -42,7 +42,6 @@ import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topic
 import { isDiscussionChat, discussionByChatId } from "../runtime/taskDiscussion.js";
 import { runDiscussionTurn } from "../runtime/taskDiscussionSession.js";
 import { deliverTopicToWork, deliverChatToWork, slotWorkspace } from "../runtime/inProcessRun.js";
-import { applySlotReplacementAnswer } from "../runtime/slotReplacementApply.js";
 import { topicContext, taskTopicClosedAt, rehomeEmptyTopic } from "../lib/projectTopics.js";
 import {
   archiveChat,
@@ -1652,17 +1651,6 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
         db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
       })();
       broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(id) });
-      // Ответ владельца на заявку самозамены слота (07.11.2026): «Заменить» —
-      // ставим замену, любой другой выбор — отказ. Проверяется именно выбранный
-      // ВАРИАНТ, а не текст. Заявки нет — ничего не происходит.
-      try {
-        await applySlotReplacementAnswer(вопрос.id, answer, req.userId);
-      } catch (error) {
-        console.warn(
-          `[chats] замена слота по ответу на вопрос не применилась chat=${chatId}:`,
-          error instanceof Error ? error.message : error,
-        );
-      }
       // Ход роли стоит на паузе на этом вопросе — ответ уходит в него, и роль
       // продолжает с того же вызова инструмента (27.10.2026).
       if (deliverAnswer(вопрос.id, answer)) return { message: loadChatMessage(id), resumed: true };
