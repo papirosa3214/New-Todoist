@@ -1,4 +1,0 @@
-[
-  {"goto": "/task/1fe2d05c-540a-4032-8f9c-7ecebe78c5b1", "note": "Открыть родительскую"},
-  {"expect_visible": "[data-testid=parent-plan-pulse-skeleton], [data-testid=parent-plan-pulse]", "note": "Скелетон или пульс — один из них должен быть сразу"}
-]

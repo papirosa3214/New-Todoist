@@ -1,8 +1,0 @@
-[
-  { "goto": "/task/451bb597-0f3d-407a-baa8-b226ce404fff", "note": "дочерняя" },
-  { "wait": 1500 },
-  { "scrollto": "[data-testid=plan-frame-divider]" },
-  { "snap": "06-child-frame" },
-  { "measure": "[data-testid=plan-frame-divider]" },
-  { "measure": "[data-testid=plan-frame-builder]" }
-]

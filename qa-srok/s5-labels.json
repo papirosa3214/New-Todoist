@@ -1,9 +1,0 @@
-[
-  { "goto": "/labels" },
-  { "wait": 1200 },
-  { "snap": "metki-spisok" },
-  { "click": "text=\"Важно\"" },
-  { "wait": 1500 },
-  { "snap": "metka-zadachi" },
-  { "expect_text": "QA-срок-завтра" }
-]

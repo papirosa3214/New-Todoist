@@ -1,8 +1,0 @@
-{
-  "comment": "Ответ POST /api/integrations/webhooks/:id/test — раздельные признаки HTTP-доставки и wake-пробуждения.",
-  "delivered": true,
-  "http_status": 200,
-  "wake_queued": true,
-  "wake_thread_id": "01a120f9-1266-7331-a4ca-81f6da2a698b",
-  "error": null
-}

@@ -1,7 +1,0 @@
-[
-  {"goto": "/task/371b2c15-48ad-4d4d-9ba0-7e9336f1aa22", "note": "Карточка без плана"},
-  {"wait": 2500, "note": "Дождаться"},
-  {"expect_no_text": "Пульс плана", "note": "Пульс не должен быть (нет дочерних)"},
-  {"expect_visible": "[data-testid=collaboration-plan-panel]", "note": "КП №7 — нет, не видна"},
-  {"snap": "no-plan-no-children"}
-]

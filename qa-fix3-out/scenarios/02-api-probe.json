@@ -1,5 +1,0 @@
-[
-  {"goto": "/", "note": "Открыть SPA для получения сессии"},
-  {"wait": 2500, "note": "Подождать SPA и LAN-вход"},
-  {"snap": "api-probe-loaded"}
-]

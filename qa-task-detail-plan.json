@@ -1,8 +1,0 @@
-[
-  {"goto": "/task/617925cc-dca1-4e0e-9e24-9cf365e3cbdd", "note": "Открываем деталь карточки с approved планом"},
-  {"wait": 2000},
-  {"snap": "01-task-detail"},
-  {"expect_no_text": "Cannot read properties", "note": "TypeError"},
-  {"expect_no_text": "TypeError", "note": "TypeError в UI"},
-  {"expect_visible": "text=План совместной работы", "note": "CollaborationPlanPanel видна, без TypeError"}
-]

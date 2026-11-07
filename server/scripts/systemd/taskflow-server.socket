@@ -1,9 +1,0 @@
-[Unit]
-Description=TaskFlow API persistent listener (:3001)
-[Socket]
-ListenStream=0.0.0.0:3001
-Service=taskflow-server.service
-NoDelay=true
-Backlog=4096
-[Install]
-WantedBy=sockets.target

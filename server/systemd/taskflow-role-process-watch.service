@@ -1,9 +1,0 @@
-[Unit]
-Description=TaskFlow role child-process lifecycle guard and functional probe
-After=network-online.target
-
-[Service]
-Type=oneshot
-Environment=XDG_RUNTIME_DIR=%t
-ExecStart=/usr/bin/python3 /home/maksim/Проекты/New-Todoist/server/scripts/role_process_watch.py
-TimeoutStartSec=90
