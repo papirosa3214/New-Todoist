@@ -16,6 +16,7 @@ import { asRole, asText, short, ToolError, unwrap } from "./inProcessRun.js";
 import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolver.js";
 import db from "../db.js";
 import { restartSlotFromOwnerChat } from "./slotRestart.js";
+import { requestSelfRestart } from "./slotSelfRestart.js";
 import { proposeWork } from "./chatWork.js";
 import { collectTaskSummary, parseSummaryRequest } from "../lib/secretaryTaskSummary.js";
 import { buildChatFile, chatFileName, CHAT_FILE_FORMATS, ChatFileError } from "../lib/chatFileExport.js";
@@ -364,6 +365,36 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
     ...(chatCtx ? [T("taskflow_slot_restart",
       "По прямой просьбе владельца заменить зависшего исполнителя свежим агентом ТОЙ ЖЕ роли в существующем слоте и запустить. Не добавляет узлы и не меняет связи. Перед вызовом прочитай карточку; укажи точный subtask_id и неизменную роль. Если слотов несколько — уточни у владельца. Не вызывай для обычного сообщения, консультации или простого назначения. Сохраняет историю и передаёт снимок работы в новую сессию.",
       Type.Object({subtask_id:Type.String(),role:Type.String(),reason:Type.String()}),p=>restartSlotFromOwnerChat(chatCtx.chatId,chatCtx.messageId ?? "",p))] : []),
+    // Своя роль — своя самозамена, но только после «да» владельца (07.11.2026).
+    // Это не перезапуск: вызов задаёт владельцу вопрос с кнопками, и слот
+    // меняется только если он выбрал «Заменить». Так владелец всегда знает и
+    // решает сам — без него не делает никто.
+    ...(chatCtx ? [T("taskflow_request_slot_replacement",
+      "Попросить владельца заменить ЗАВИСШИЙ слот своей же роли. Ничего не перезапускает само: задаёт владельцу вопрос с кнопками «Заменить»/«Не заменять», и замена выполняется только после его «да». Условия: слот твоей роли, шаг не закрыт, нет свежего heartbeat (завис), не больше трёх замен по слоту за сутки. В reason — что именно зависло и что делать новому агенту.",
+      Type.Object({subtask_id:Type.String(),reason:Type.String()}), async (p, signal) => {
+        const subtaskId = String(p.subtask_id ?? "").trim();
+        const reason = String(p.reason ?? "").trim();
+        if (!subtaskId) throw new ToolError("subtask_id — слот своей роли");
+        if (!reason) throw new ToolError("reason — что зависло и что делать новому агенту");
+        let итог;
+        try {
+          итог = await requestSelfRestart({
+            chatId: chatCtx.chatId,
+            messageId: chatCtx.messageId ?? "",
+            role,
+            roleAccountId: roleUserId(role),
+            subtaskId,
+            reason,
+            signal,
+          });
+        } catch (error) {
+          throw new ToolError(error instanceof Error ? error.message : String(error));
+        }
+        if (итог.status === "applied") return { статус: "заменено", итог: "Владелец одобрил: слот остановлен и запущен свежий агент той же роли." };
+        if (итог.status === "rejected") return { статус: "отказ", итог: "Владелец не одобрил замену. Работай с тем, что есть, или заканчивай ход." };
+        if (итог.status === "failed") return { статус: "сбой", ошибка: итог.error, итог: "Владелец одобрил, но замена не удалась: причина в errors. Не повторяй без нового разрешения." };
+        return { статус: "ждёт владельца", сообщение: итог.messageId, итог: "Владелец не ответил. Завершай ход: ответ поднимет новый ход роли." };
+      })] : []),
     // Уточнение у владельца (26.10.2026). С 27.10.2026 ход ждёт ответа
     // (пауза, как interrupt в AG-UI): вопрос записывается в БД и показывается
     // в чате, в поток хода уходит chats:live:interrupt, ответ владельца
