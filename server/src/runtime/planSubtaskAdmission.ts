@@ -1,7 +1,6 @@
 import { isOwner } from "../access.js";
 import { prepareOwnerManualRun } from "./ownerManualRun.js";
 import {isRoutineServiceComment} from "../lib/serviceNoise.js";
-import { wakeAndDeliver } from "./orchestratorWake.js";
 import {
   artifactHasEvidence,
   artifactGateSatisfied,
@@ -542,9 +541,6 @@ export async function startPlanSubtaskRun(
       field: current.plan_node_key,
       toValue: roleTitle(node.role_key),
     });
-    // Режим «Оркестратор»: повторная попытка того же шага — повод взглянуть.
-    if ((subtask(current.id)?.admission_cycle ?? 0) > 1)
-      wakeAndDeliver(current.id, actorId, "retry", null);
     return { ok: true, runId: run.runId };
   } catch (error) {
     db.prepare(
