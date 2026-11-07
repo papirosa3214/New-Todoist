@@ -48,6 +48,8 @@ import {
   archiveRight,
   chatRoomRow,
   canArchiveTaskTopic,
+  purgeChat,
+  purgeRight,
   cleanupCandidates,
   isTaskRoom,
   runCleanup,
@@ -2186,6 +2188,28 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     "/api/chats/:id/archive",
     { preHandler: authPre },
     archiveChatRoute,
+  );
+
+  // Удаление насовсем (владелец 08.11.2026: «есть архив, есть просто удалить…
+  // если удалил, уже возвращать нечего»). Только из архива, только владелец
+  // трекера или автор чата; комнату задачи — только владелец.
+  app.post<{ Params: { id: string } }>(
+    "/api/chats/:id/purge",
+    { preHandler: authPre },
+    async (req: any, reply: any) => {
+      const chat = chatRoomRow(req.params.id);
+      if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+      if (!isMember(chat.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const right = purgeRight(chat, req.userId, isOwner(req.userId));
+      if (!right.allowed) return reply.code(403).send({ error: right.reason });
+      // Сначала останавливаем ходы: удалять комнату из-под работающей роли
+      // нельзя — её ответ писать будет уже некуда.
+      await stopRoomRuns(chat.id, "owner_purge");
+      const counts = purgeChat(chat.id);
+      req.log?.info?.({ chatId: chat.id, ...counts }, "чат удалён окончательно");
+      return { ok: true, deleted: true, ...counts };
+    },
   );
 
   // Уборка лишних чатов (карточка 0b7a8b81…). Кандидаты — пустые темы

@@ -1,4 +1,6 @@
-import db from "../db.js";
+import fs from "node:fs";
+import path from "node:path";
+import db, { DB_PATH } from "../db.js";
 import { cancelQuestionsForChat } from "./chatQuestions.js";
 
 /**
@@ -218,4 +220,90 @@ export function runCleanup(limit = 500): string[] {
  */
 export function canArchiveTaskTopic(taskId: string | null): boolean {
   return taskId ? !taskIsInWork(taskId) : true;
+}
+
+/**
+ * Удалить чат насовсем (владелец 08.11.2026: «есть архив, есть просто удалить…
+ * если удалил, уже возвращать нечего»).
+ *
+ * Правила:
+ *  • сначала архив: удалять можно только убранный чат (archived_at) или
+ *    закрытый (closed_at) — «сначала в архив, захочу удалить, тогда удалю»;
+ *  • общая комната и личные комнаты ролей не удаляются: на них держится
+ *    структура комнат;
+ *  • комнату задачи удаляет только владелец трекера, остальные чаты — владелец
+ *    или тот, кто их завёл.
+ */
+export function purgeRight(
+  chat: ChatRoomRow,
+  userId: string,
+  trackerOwner: boolean,
+): ArchiveRight {
+  if (chat.room_kind === "common")
+    return { allowed: false, reason: "общую комнату удалить нельзя" };
+  if (chat.room_kind === "personal")
+    return { allowed: false, reason: "личная комната роли не удаляется" };
+  if (!chat.archived_at && !chat.closed_at)
+    return { allowed: false, reason: "сначала убери чат в архив" };
+  if (isTaskRoom(chat))
+    return trackerOwner
+      ? { allowed: true }
+      : { allowed: false, reason: "комнату задачи удаляет владелец" };
+  if (trackerOwner || chat.created_by === userId) return { allowed: true };
+  return { allowed: false, reason: "удалить чат может только его создатель" };
+}
+
+/** Каталог вложений — тот же, что у routes/attachments.ts, без лишней связи. */
+function uploadsDir(): string {
+  return process.env.UPLOAD_DIR || path.join(path.dirname(DB_PATH), "uploads");
+}
+
+export interface PurgeCounts {
+  messages: number;
+  attachments: number;
+  queue: number;
+  questions: number;
+}
+
+/**
+ * Окончательное удаление: сообщения, вложения (и их файлы), участники, сессии,
+ * очередь доставки, открытые вопросы и сам чат. Откат невозможен — в этом и
+ * смысл действия; перед вызовом ходы чата должны быть остановлены.
+ */
+export function purgeChat(chatId: string): PurgeCounts {
+  const count = (sql: string) => (db.prepare(sql).get(chatId) as { n: number }).n;
+  const counts: PurgeCounts = {
+    messages: count("SELECT COUNT(*) AS n FROM chat_messages WHERE chat_id = ?"),
+    attachments: count(
+      `SELECT COUNT(*) AS n FROM attachments a JOIN chat_messages m ON m.id = a.chat_message_id
+        WHERE m.chat_id = ?`,
+    ),
+    queue: count("SELECT COUNT(*) AS n FROM chat_message_queue WHERE chat_id = ?"),
+    questions: count("SELECT COUNT(*) AS n FROM chat_questions WHERE chat_id = ?"),
+  };
+  const files = db
+    .prepare(
+      `SELECT a.stored_name FROM attachments a JOIN chat_messages m ON m.id = a.chat_message_id
+        WHERE m.chat_id = ?`,
+    )
+    .all(chatId) as Array<{ stored_name: string }>;
+  const dir = uploadsDir();
+  const txn = db.transaction(() => {
+    // Вопросы роли держат chat_id без FK — снимаем сами.
+    db.prepare("DELETE FROM chat_questions WHERE chat_id = ?").run(chatId);
+    // Закреплённое сообщение — ссылка на сообщение, мешает каскаду.
+    db.prepare("UPDATE chats SET pinned_message_id = NULL WHERE id = ?").run(chatId);
+    // Остальное (сообщения, вложения, участники, сессии, очередь, топики,
+    // обсуждения, выжимки, настройки) уходит каскадом по FK.
+    db.prepare("DELETE FROM chats WHERE id = ?").run(chatId);
+  });
+  txn();
+  for (const file of files) {
+    try {
+      fs.rmSync(path.join(dir, file.stored_name), { force: true });
+    } catch {
+      /* файл уже удалён или недоступен — строка из базы уже ушла */
+    }
+  }
+  return counts;
 }
