@@ -33,7 +33,9 @@ export const ROLE_TOOL_INSTRUCTION = ROLE_TOOL_INSTRUCTION_LITERAL;
  *  946 из 993 (95,3%). Плюс обязательные по решению владельца: taskflow_work_item_submit,
  *  taskflow_inspect, taskflow_call_role; загрузчик taskflow_tools добавляется отдельно.
  *  Остальное подключается через taskflow_tools. В чате карточные операции по-прежнему скрывает
- *  CARD_WORK_OPERATIONS, в чате задачи — ограничение task_chat. */
+ *  CARD_WORK_OPERATIONS, в чате задачи — ограничение task_chat.
+ *  07.11.2026: загрузчик taskflow_tools снова в активном наборе — без него подключить
+ *  операцию по имени было нечем. */
 export const STARTER_TOOLS = [
   // карточки
   "taskflow_host_bash", "taskflow_work_plan", "taskflow_host_read", "taskflow_doc_read", "taskflow_recall",
@@ -45,8 +47,20 @@ export const STARTER_TOOLS = [
   "taskflow_plan_ops", "taskflow_chat_reply",
   // обязательные
   "taskflow_work_item_submit", "taskflow_inspect", "taskflow_call_role",
+  // подключение операций по требованию
+  "taskflow_tools",
 ] as const;
 const CORE_OPERATIONS = new Set<string>(STARTER_TOOLS);
+
+/** Операции внешних сервисов подключаются по требованию, а не сразу (07.11.2026).
+ *  Замер журнала запросов (сессия чата 3a1c1875): из 142 схем 46 Todoist, 5 Composio и
+ *  20 Things — 71 схема, 84 844 символа из 169 525. Роль зовёт их изредка, а платят
+ *  за них все запросы сессии. Права не меняются: операции остаются в реестре сессии,
+ *  загрузчик отдаёт только то, что роль и так имеет право вызывать. */
+export const ON_DEMAND_PREFIXES = ["todoist_", "mcp__composio__", "things_"] as const;
+const isOnDemandOperation = (name: string): boolean => ON_DEMAND_PREFIXES.some(prefix => name.startsWith(prefix));
+/** Ядро (STARTER_TOOLS) активно всегда; внешние сервисы — только через taskflow_tools. */
+const staysActive = (name: string): boolean => CORE_OPERATIONS.has(name) || !isOnDemandOperation(name);
 
 /** Текст отказа Pi: args в событие tool_execution_end не кладутся, причина
  *  живёт в тексте результата («Tool X not found», «- /command: Expected string»). */
@@ -92,8 +106,7 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const handledCalls=new Set<string>();
  const sdkMistakes=new Map<string,number>();
  // Ключ памяти подключённых по требованию операций: роль + чат/задача.
- const scope=onDemandScopeKey(input);
- // Нативный инструмент исполняется напрямую (владелец 27.10.2026): Pi
+ const scope=onDemandScopeKey(input); // Нативный инструмент исполняется напрямую (владелец 27.10.2026): Pi
  // рассчитан на обычные инструменты, а прогон через общий шлюз (конверт,
  // request_id, тренер ошибок) совпал по времени с ростом сбоев шагов.
  // Права проверяются и здесь, каждый вызов пишется в журнал аудита.
@@ -150,7 +163,7 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
   }
  }}));
  const nativeByName=new Map(aliases.map(tool=>[tool.name,tool]));
- const loader=createToolLoader({operations:aliases});
+ const loader=createToolLoader({operations:aliases,onActivated:names=>{for(const name of names)rememberOnDemandTool(scope,name);}});
  // A1: отказы, которые доходят только сюда (SDK отклонил вызов до запуска
  // операции), пишутся в учёт с той же формой события действия: область,
  // элемент, инструмент, исход и код. Успешные вызовы здесь не видны — их
@@ -239,7 +252,10 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const batch=createBatchTool(aliases);
  const hidden=new Set<string>([...grouped.members,...RETIRED_OPERATIONS]);
  const standalone=aliases.filter(tool=>!hidden.has(tool.name));
- const activeNames=[...standalone.map(tool=>tool.name),...grouped.tools.map(tool=>tool.name),batch.name];
+ // Активный набор: ядро, группы по объектам, пакетный вызов и загрузчик. Внешние
+ // сервисы (Todoist, Composio, Things) остаются в реестре сессии и подключаются
+ // через taskflow_tools — по имени или по смыслу задачи.
+ const activeNames=[...standalone.filter(tool=>staysActive(tool.name)).map(tool=>tool.name),...grouped.tools.map(tool=>tool.name),batch.name,loader.tool.name];
  return {activeNames,registeredNames:[...aliases.map(tool=>tool.name),...grouped.tools.map(tool=>tool.name),batch.name,loader.tool.name],customTools:[universal,...aliases,...grouped.tools,batch,loader.tool],operations,context,scope,loader,onToolExecutionEnd,onAgentEvent,autoConnected,
   attachSession:(session:any)=>loader.attach(session)};
 }

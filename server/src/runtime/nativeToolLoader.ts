@@ -68,6 +68,9 @@ export function createToolLoader(options: {
   operations: Tool[];
   matchLimit?: number;
   indexLimit?: number;
+  /** Куда сообщить имена, подключённые этим вызовом: память сессии должна знать
+   *  про них, иначе следующий ход снова начинает без инструмента. */
+  onActivated?: (names: string[]) => void;
 }): ToolLoader {
   const matchLimit = options.matchLimit ?? 6;
   const indexLimit = options.indexLimit ?? 120;
@@ -124,6 +127,7 @@ export function createToolLoader(options: {
         : [];
       const toActivate = [...new Set([...wanted, ...matched])].filter((name) => !isActive(name));
       const activated = activateNames(toActivate);
+      if (activated.length) options.onActivated?.(activated);
       const alreadyActive = [...new Set([...wanted, ...matched])].filter(
         (name: string) => isActive(name) && !activated.includes(name),
       );
