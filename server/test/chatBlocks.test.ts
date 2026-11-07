@@ -88,3 +88,22 @@ describe("chatBlocks: ответ готовыми блоками (правило
     expect(out.productivity_score).toBe(50);
   });
 });
+
+// Thin client: task text is prepared on the server, including the editor document.
+import * as chatBlockModule from "../src/lib/chatBlocks.js";
+describe("taskTextWithBlocks", () => {
+  it("prepares task description, marks and tables without changing source fields", () => {
+    const task = { title: "**Title**", description: "**Done**\n\n| A | B |\n|---|---|\n| 1 | 2 |" };
+    const result = (chatBlockModule as any).taskTextWithBlocks?.(task);
+    expect(result?.description_blocks?.map((block: any) => block.type)).toEqual(["doc", "table"]);
+    expect(result?.title_document?.content?.[0]?.content?.[0]?.marks).toEqual([{ type: "bold" }]);
+    expect(result?.description_document?.content?.some((node: any) => node.type === "table")).toBe(true);
+    expect(result?.title).toBe(task.title);
+    expect(result?.description).toBe(task.description);
+  });
+  it("prepares an empty description without inventing text", () => {
+    const result = (chatBlockModule as any).taskTextWithBlocks?.({ title: "A", description: null });
+    expect(result?.description_blocks).toEqual([]);
+    expect(result?.description_document?.type).toBe("doc");
+  });
+});

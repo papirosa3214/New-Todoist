@@ -1,4 +1,4 @@
-import { commentWithBlocks, ownerBlocks } from "../lib/chatBlocks.js";
+import { commentWithBlocks, ownerBlocks, taskTextWithBlocks } from "../lib/chatBlocks.js";
 import { listDescription, projectionOf } from "../lib/windowProjection.js";
 import {visibleTaskComments, isQuietSystemMessage} from "../lib/serviceNoise.js";
 import { registerIntegrationResponsibilityRoutes } from '../lib/integrationResponsibility.js';
@@ -395,7 +395,7 @@ export function hydrateTask(task: any) {
     });
 
   return {
-    ...withAgentStale(task, subtasks, children),
+    ...taskTextWithBlocks(withAgentStale(task, subtasks, children)),
     // Живое значение общего рубильника, а не сохранённый в карточке флаг:
     // решает в моменте, включён он сейчас или нет (см. reviewerPolicy.ts).
     requires_reviewer_review: reviewerFirstEnabled(),
