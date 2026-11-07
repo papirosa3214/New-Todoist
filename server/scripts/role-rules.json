@@ -21,11 +21,10 @@
   "category": "общий шаблон v2",
   "section": "Роль и цикл",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -36,11 +35,10 @@
   "category": "общий шаблон v2",
   "section": "Сверка",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -51,11 +49,10 @@
   "category": "общий шаблон v2",
   "section": "Сверка",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -96,11 +93,10 @@
   "category": "общий шаблон v2",
   "section": "Навыки",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -111,11 +107,10 @@
   "category": "общий шаблон v2",
   "section": "Скрипты вместо рук",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -126,11 +121,10 @@
   "category": "общий шаблон v2",
   "section": "Скрипты вместо рук",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -141,11 +135,10 @@
   "category": "общий шаблон v2",
   "section": "Цепочки инструментов",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -156,11 +149,10 @@
   "category": "общий шаблон v2",
   "section": "Цепочки инструментов",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -171,11 +163,10 @@
   "category": "общий шаблон v2",
   "section": "Цепочки инструментов",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -216,11 +207,10 @@
   "category": "общий шаблон v2",
   "section": "Проверка и сдача",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -231,11 +221,10 @@
   "category": "общий шаблон v2",
   "section": "Проверка и сдача",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -246,11 +235,10 @@
   "category": "общий шаблон v2",
   "section": "Проверка и сдача",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -306,11 +294,10 @@
   "category": "общий шаблон v2",
   "section": "Инструменты",
   "roles": "all",
-  "where": "везде",
+  "where": "текст и карточка",
   "channels": [
    "chat",
-   "card",
-   "voice"
+   "card"
   ],
   "enabled": true
  },
@@ -6718,8 +6705,7 @@
    "card"
   ],
   "condition": "инструменты: всегда",
-  "site": "tools:ROLE_TOOL_INSTRUCTION",
-  "text_before_shrink": "Инструменты доступны отдельными именами с точными JSON Schema. Вызывай нужный инструмент напрямую: параметры передавай ровно по его схеме, без обёртки operation/arguments и без предварительного discover/describe. Не выдумывай поля, имена инструментов и значения-заглушки. Проверка прав, контекста и аргументов выполняется до действия. Если вызов отклонён, прочитай ошибку и исправь указанный параметр; не повторяй прежний неверный вызов. После трёх одинаковых неверных вызовов ход останавливается. Старый taskflow в истории — прежний способ вызова тех же операций; в новом ходе используй показанные нативные инструменты. Нужного инструмента может не быть в списке: тогда вызови taskflow_tools — он покажет индекс операций и подключит нужные; права при этом не расширяются. Возможность не означает разрешение: соблюдай режим чата/карточки и явное поручение владельца."
+  "site": "tools:ROLE_TOOL_INSTRUCTION"
  },
  {
   "id": "R271",
