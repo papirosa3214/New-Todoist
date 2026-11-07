@@ -121,3 +121,23 @@ it("single task GET returns server-prepared reading and editor documents", async
   expect(task.description_document?.type).toBe("doc");
   expect(task.description_blocks).toEqual([]);
 });
+
+it("editor conversion returns server marks and tables without persisting a note", async () => {
+  const before = (db.prepare("SELECT count(*) AS n FROM user_notes").get() as any).n;
+  const response = await app.inject({ method: "POST", url: "/api/notes/markdown-to-doc", headers: auth(), payload: { markdown: "**Bold**\n\n| A |\n|---|\n| B |" } });
+  expect(response.statusCode).toBe(200);
+  const doc = response.json().doc;
+  expect(doc.type).toBe("doc");
+  expect(doc.content[0].content[0].marks).toEqual([{ type: "bold" }]);
+  expect(doc.content[1].type).toBe("table");
+  expect((db.prepare("SELECT count(*) AS n FROM user_notes").get() as any).n).toBe(before);
+});
+
+it("subtask editor receives its title document from the server", async () => {
+  db.prepare("INSERT INTO subtasks (id,task_id,title,done,position) VALUES (?,?,?,?,?)").run("server-editor-subtask", "batch-live", "**Step**", 0, 0);
+  const response = await app.inject({ method: "GET", url: "/api/tasks/batch-live", headers: auth() });
+  expect(response.statusCode).toBe(200);
+  const subtask = response.json().subtasks.find((item: any) => item.id === "server-editor-subtask");
+  expect(subtask.title_document?.type).toBe("doc");
+  expect(subtask.title_document?.content?.[0]?.content?.[0]?.marks).toEqual([{ type: "bold" }]);
+});

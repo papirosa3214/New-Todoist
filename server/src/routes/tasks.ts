@@ -248,6 +248,7 @@ export function withSubtaskState(s: any) {
     s.agent_state === "in_progress" && isStale(s.agent_heartbeat_at);
   return {
     ...s,
+    title_document: taskTextWithBlocks(s).title_document,
     done: !!s.done,
     agent_stale: stale,
     // Результат роли готовыми блоками для владельца (lib/chatBlocks.ts).
