@@ -43,7 +43,7 @@ describe("реестр: выбор и рендер", () => {
   it("в сборку идут только нужные категории; код-тексты и data не попадают", () => {
     const got = rulesFor("builder", "card");
     const cats = new Set(got.map((r) => r.category));
-    for (const c of cats) expect(["общий шаблон", "личные инструкции", "характер", "новое 06.11.2026", "данные (подстановка), не правило"]).toContain(c);
+    for (const c of cats) expect(["общий шаблон v2", "общий шаблон", "личные инструкции", "характер", "новое 06.11.2026", "данные (подстановка), не правило"]).toContain(c);
     expect(got.some((r) => r.category.startsWith("текст из кода"))).toBe(false);
     expect(got.filter((r) => r.kind === "data").every((r) => /^\{\{[A-Z]+\}\}$/.test(r.text.trim()))).toBe(true);
     expect(got.every((r) => r.roles === "all" || r.roles.includes("builder"))).toBe(true);

@@ -149,19 +149,18 @@ describe("Каталог операций Apple для Помощника вла
 });
 
 describe("Права роли", () => {
-  it("операции apple_* достаются только Помощнику владельца", () => {
+  it("операции apple_* разрешены всем ролям, кроме удаления у Помощника (владелец 07.11.2026)", () => {
     for (const имя of APPLE_TOOL_NAMES) {
       if (имя === "apple_reminders_delete") continue; // удаление закрыто отдельным правилом
-      expect(roleToolAllowed("secretary", имя), имя).toBe(true);
-      for (const роль of ["builder", "qa", "critic_verifier", "analyst", "designer"]) {
-        expect(roleToolAllowed(роль, имя), `${роль}:${имя}`).toBe(false);
+      for (const роль of ["secretary", "builder", "qa", "critic_verifier", "analyst", "designer"]) {
+        expect(roleToolAllowed(роль, имя), `${роль}:${имя}`).toBe(true);
       }
     }
   });
 
-  it("удаление недоступно даже Помощнику (delete в имени режется правилом роли)", () => {
+  it("удаление недоступно Помощнику (delete в имени режется правилом роли)", () => {
     expect(roleToolAllowed("secretary", "apple_reminders_delete")).toBe(false);
-    expect(roleToolAllowed("builder", "apple_reminders_delete")).toBe(false);
+    expect(roleToolAllowed("builder", "apple_reminders_delete")).toBe(true);
   });
 
   it("в наборе Помощника удаления нет, а остальные семь операций есть", () => {

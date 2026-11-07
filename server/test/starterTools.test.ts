@@ -2,23 +2,18 @@
 import { expect, it } from "vitest";
 import { migrate } from "../src/db.js";
 import { runMigrations } from "../src/migrations.js";
-import { buildRoleToolCatalog, STARTER_TOOLS } from "../src/runtime/roleToolCatalog.js";
+import { buildRoleToolCatalog } from "../src/runtime/roleToolCatalog.js";
 
 migrate(); runMigrations();
 const wire = (names: string[], tools: any[]) => JSON.stringify(tools.filter((t) => names.includes(t.name)).map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))).length;
 
-it("активны только стартовые операции (с учётом фильтра режима) и загрузчик", () => {
+it("активны группы по объектам, отдельные операции и пакетный вызов (владелец 07.11.2026)", () => {
   const cat = buildRoleToolCatalog({ role: "builder", mode: "work", runId: "r", chatId: "c1", messageId: "m1", executionMode: "chat" } as any);
-  const starter = new Set<string>(STARTER_TOOLS);
-  const active = cat.activeNames.filter((n) => n !== "taskflow_tools");
-  expect(cat.activeNames).toContain("taskflow_tools");
-  expect(active.every((n) => starter.has(n))).toBe(true);
-  for (const n of ["taskflow_work_item_submit", "taskflow_inspect", "taskflow_host_bash", "taskflow_work_plan", "taskflow_recall"]) expect(active, n).toContain(n);
-  // вне списка — не в стартовых схемах
-  for (const n of ["taskflow_claim", "taskflow_heartbeat", "taskflow_state", "taskflow_routines", "taskflow_review"]) expect(active, n).not.toContain(n);
-  // в чате карточные операции по-прежнему скрыты
-  for (const n of ["taskflow_subtask_done", "taskflow_subtask_work", "taskflow_slot_snapshot"]) expect(active, n).not.toContain(n);
-  // каталог при этом полный: вне списка зарегистрировано сильно больше
+  const active = cat.activeNames;
+  for (const n of ["taskflow_work_item_submit", "taskflow_inspect", "taskflow_host_bash", "taskflow_work_plan", "taskflow_memory", "taskflow_step", "taskflow_batch"]) expect(active, n).toContain(n);
+  // члены групп и выведенные операции — не отдельными схемами
+  for (const n of ["taskflow_claim", "taskflow_heartbeat", "taskflow_recall", "taskflow_subtask_done", "taskflow_tools"]) expect(active, n).not.toContain(n);
+  // реестр сессии полный: прежние имена подключаются автоматически
   expect(cat.registeredNames.length).toBeGreaterThan(active.length + 20);
 });
 it("операция вне стартового набора подключается через taskflow_tools", async () => {

@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { roleToolAllowed } from "../src/lib/roleToolScope.js";
 
 describe("Набор инструментов по роли", () => {
-  it("вердикт — только Критику, календарь — только Помощнику", () => {
+  it("один полный набор у всех ролей (владелец 07.11.2026)", () => {
     expect(roleToolAllowed("critic_verifier", "taskflow_review")).toBe(true);
-    expect(roleToolAllowed("builder", "taskflow_review")).toBe(false);
+    expect(roleToolAllowed("builder", "taskflow_review")).toBe(true);
     expect(roleToolAllowed("secretary", "taskflow_calendar_events")).toBe(true);
-    expect(roleToolAllowed("qa", "taskflow_calendar_events")).toBe(false);
+    expect(roleToolAllowed("qa", "taskflow_calendar_events")).toBe(true);
   });
   it("важное редкое остаётся всем рабочим ролям", () => {
     for (const role of ["builder", "qa", "critic_verifier", "analyst", "designer", "researcher", "infra_engineer"]) {

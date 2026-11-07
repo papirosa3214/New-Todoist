@@ -751,7 +751,8 @@ describe("агент роли внутри сервера", () => {
     db.prepare("UPDATE users SET reviewer = 1 WHERE id = 'role_critic_verifier'").run();
     const { taskId, stepId } = builderTask("Цепочка без будильника");
     script.steps = async (tools, prompt) => {
-      if (!tools.has("taskflow_claim") && tools.has("taskflow_review")) {
+      // Набор один у всех (владелец 07.11.2026): Критика узнаём по папке роли в инструкции.
+      if (String(script.systemPrompts.at(-1) ?? "").includes("роли critic_verifier")) {
         await call(tools, "taskflow_review", { id: taskId, verdict: "approved", findings: "Работа подтверждена.", report_markdown: roleReport });
         return;
       }

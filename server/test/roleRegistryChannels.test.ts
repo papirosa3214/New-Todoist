@@ -74,7 +74,8 @@ it("голос secretary: без правил про git/тесты/код/ка�
   expect(voice.some((r) => r.category === "характер")).toBe(true);
   // из «all» в голос попало немного: основной объём — chat+card
   expect(voice.length).toBeLessThan(70);
-  expect(voice.map((r) => r.id)).toEqual(expect.arrayContaining(["R064", "R523"]));
+  // Делегирование — общий шаблон v2 (07.11.2026).
+  expect(voice.map((r) => r.id)).toEqual(expect.arrayContaining(["C18", "R523"]));
   const chat = rulesFor("secretary", "chat").length;
   expect(chat).toBeGreaterThan(voice.length);
 });

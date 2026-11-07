@@ -22,9 +22,10 @@ it('registers precise routine operations and exposes discovery in the secretary 
  expect(c.activeNames).toContain('taskflow_routines');expect(c.activeNames).toContain('taskflow_routine_read');
  expect(c.customTools.find(t=>t.name==='taskflow_routine_create')!.parameters.required).toContain('task_payload');
 });
-it('allows only secretary, keeping unrelated deletion forbidden',()=>{
- for(const name of names){expect(roleToolAllowed('secretary',name)).toBe(true);for(const role of ['builder','researcher','code_orchestrator'])expect(roleToolAllowed(role,name)).toBe(false);}
- expect(roleToolAllowed('secretary','taskflow_delete')).toBe(false);expect(roleToolAllowed('secretary','apple_reminders_delete')).toBe(false);
+it("routines are available to every role; secretary deletion stays forbidden",()=>{
+ for(const name of names)for(const role of ["builder","researcher","code_orchestrator"])expect(roleToolAllowed(role,name)).toBe(true);
+ for(const name of names)if(!/delete|purge|remove/i.test(name))expect(roleToolAllowed("secretary",name)).toBe(true);
+ expect(roleToolAllowed("secretary","taskflow_delete")).toBe(false);expect(roleToolAllowed("secretary","apple_reminders_delete")).toBe(false);
 });
 it('read operations work in plan mode; mutations remain restricted',()=>{
  for(const name of ['taskflow_routines','taskflow_routine_read','taskflow_routine_runs','taskflow_routine_preview']){

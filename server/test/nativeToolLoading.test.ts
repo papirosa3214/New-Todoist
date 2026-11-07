@@ -18,15 +18,14 @@ function fakeSession(){
   };
 }
 
-it("в модель уходит ядро, а не весь каталог",()=>{
+it("в модель уходят группы по объектам и отдельные операции, а не весь каталог",()=>{
   const catalog=buildRoleToolCatalog({role:"builder",mode:"work",runId:"loading"});
-  expect(catalog.activeNames).toContain(TOOL_LOADER_NAME);
-  expect(catalog.activeNames).toContain("taskflow_task");
-  expect(catalog.activeNames).toContain("taskflow_work_plan");
-  expect(catalog.activeNames).not.toContain("taskflow");
-  // Ядро — меньше половины операций: остальное подключается по требованию.
-  expect(catalog.activeNames.length).toBeLessThan(catalog.registeredNames.length/2);
-  // Всё, что роль имеет право, остаётся в реестре сессии.
+  for(const name of ["taskflow_tasks","taskflow_step","taskflow_memory","taskflow_batch","taskflow_work_plan"])expect(catalog.activeNames).toContain(name);
+  // Члены групп и выведенные операции не активны отдельными схемами.
+  for(const name of ["taskflow","taskflow_task","taskflow_recall",TOOL_LOADER_NAME,"taskflow_heartbeat"])expect(catalog.activeNames).not.toContain(name);
+  expect(catalog.activeNames.length).toBeLessThan(catalog.registeredNames.length);
+  // Прежние имена остаются в реестре сессии и подключаются автоматически.
+  expect(catalog.registeredNames).toContain("taskflow_recall");
   expect(catalog.registeredNames).toContain(TOOL_LOADER_NAME);
   expect(catalog.customTools.map(tool=>tool.name)).toContain("taskflow");
 });
@@ -59,18 +58,14 @@ it("загрузчик подбирает операцию по смыслу з�
   expect(session.names()).toContain("taskflow_doc_write");
 });
 
-it("загрузчик не предлагает закрытые роли операции",async()=>{
+it("загрузчик подключает любую операцию набора — урезания по ролям нет (владелец 07.11.2026)",async()=>{
   const catalog=buildRoleToolCatalog({role:"critic_verifier",mode:"work",runId:"loading",taskId:"task"});
   const session=fakeSession();
   catalog.attachSession(session);
   const loader=catalog.customTools.find(tool=>tool.name===TOOL_LOADER_NAME)!;
-  const out=await loader.execute("call-3",{});
+  const out=await loader.execute("call-4",{names:["taskflow_subtask_done"]});
   const payload=JSON.parse(out.content[0].text);
-  expect(payload.available.map((row:any)=>row.name)).not.toContain("taskflow_subtask_done");
-  const denied=await loader.execute("call-4",{names:["taskflow_subtask_done"]});
-  const deniedPayload=JSON.parse(denied.content[0].text);
-  expect(deniedPayload.activated).not.toContain("taskflow_subtask_done");
-  expect(deniedPayload.unknown).toContain("taskflow_subtask_done");
+  expect(payload.activated).toContain("taskflow_subtask_done");
 });
 
 it("загрузчик умеет подключать операцию без вызова модели",async()=>{

@@ -26,10 +26,10 @@ it("every configured role exposes native schemas from the common registry in cha
   const discussion=make("discussion",{taskId:"task",subtaskId:"slot",chatId:"chat",messageId:"msg"});
   for(const c of [chat,work,discussion]){
    expect(c.activeNames).not.toContain("taskflow");
-   // Активно ядро и загрузчик; полный каталог живёт в реестре и подключается
-   // по требованию (setActiveToolsByName) — в каждый запрос он не уходит.
-   expect(c.activeNames).toContain("taskflow_tools");
-   expect(c.activeNames.length).toBeLessThan(c.registeredNames.length);
+    // Активны группы, отдельные операции и пакетный вызов; прежние имена — в реестре.
+    expect(c.activeNames).toContain("taskflow_batch");
+    expect(c.activeNames).not.toContain("taskflow_tools");
+    expect(c.activeNames.length).toBeLessThan(c.registeredNames.length);
    expect(c.registeredNames).toEqual(c.customTools.filter(t=>t.name!=="taskflow").map(t=>t.name));
    expect(new Set(c.operations.map(t=>t.name)).size).toBe(c.operations.length);
   }

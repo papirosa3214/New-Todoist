@@ -5,14 +5,14 @@ import path from "node:path";
 import {chatSystemPrompt,createTaskResourceLoader} from "../src/runtime/instructionResources.js";
 import {ensureRoleHome} from "../src/runtime/roleHome.js";
 const expected=fs.readFileSync(new URL("../scripts/secretary-chat-system.md",import.meta.url),"utf8");
-it("secretary text chat uses only the owner selected file, with no role or SDK resources appended",async()=>{
+it("secretary text chat starts with the owner selected file; role folder and skills are appended for the pre-work check (owner 07.11.2026)",async()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),"secretary-single-"));const old=process.env.TASKFLOW_ROLES_DIR;process.env.TASKFLOW_ROLES_DIR=root;
  try{
   const home=ensureRoleHome("secretary");fs.writeFileSync(home.agents,"OLD_AGENTS_SENTINEL");fs.writeFileSync(home.role,"OLD_PERSONA_SENTINEL");
   const prompt=await chatSystemPrompt("secretary","work",home.workspace);
   expect(prompt).toBe(expected);
   const loader=await createTaskResourceLoader("secretary",home.workspace,prompt,undefined,true);
-  try{expect(loader.getSystemPrompt()).toBe(expected);expect(loader.getSkills().skills).toHaveLength(0);expect(loader.getAgentsFiles().agentsFiles).toHaveLength(0);expect(loader.getAppendSystemPrompt()).toHaveLength(0);}finally{loader.disposeResources();}
+  try{expect(loader.getSystemPrompt().startsWith(expected)).toBe(true);expect(loader.getSystemPrompt()).toContain("Постоянная папка роли secretary");expect(loader.getSkills().skills.map(s=>s.name)).toContain("role-work-cycle");expect(loader.getAgentsFiles().agentsFiles).toHaveLength(0);expect(loader.getAppendSystemPrompt()).toHaveLength(0);}finally{loader.disposeResources();}
  }finally{if(old===undefined)delete process.env.TASKFLOW_ROLES_DIR;else process.env.TASKFLOW_ROLES_DIR=old;fs.rmSync(root,{recursive:true,force:true});}
 });
 

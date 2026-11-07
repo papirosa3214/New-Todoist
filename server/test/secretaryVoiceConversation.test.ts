@@ -80,7 +80,7 @@ describe("голос сохраняет исходный чат без втор�
     const legacy=JSON.parse((await runVoiceTool(owner,"taskflow_tools",args)).result);
     const userId=(db.prepare("SELECT id FROM chat_messages WHERE chat_id='voice-a' AND from_user_id=? ORDER BY rowid DESC LIMIT 1").get(owner) as any).id;
     const contextual=JSON.parse((await runVoiceTool(owner,"taskflow_tools",args,{chatId:"voice-a",messageId:userId})).result);
-    expect(legacy.unknown).toContain("taskflow_chat_attach_file");
+    // Инструмент вложений есть везде (владелец 07.11.2026); с контекстом — в исходный чат.
     expect(contextual.activated).toContain("taskflow_chat_attach_file");
   });
 

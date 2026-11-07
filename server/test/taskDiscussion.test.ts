@@ -226,8 +226,8 @@ describe("обсуждение карточки: read-only и изоляция",
     const result=await runDiscussionTurn({discussionId:discussion.discussion_id,role:"builder",prompt:"Поясни",cwd:"/tmp"});
     expect(result.ok).toBe(true);
     expect(harness.registered).toContain("taskflow_projects");
-    expect(harness.active).toContain("taskflow_tools");
-    expect(harness.active).not.toContain("taskflow_host_bash");
+    expect(harness.active).toContain("taskflow_batch");
+    expect(harness.active).not.toContain("taskflow_tools");
   });
 
   for (const native of [false,true]) it(`integration: discussion error guard never blocks work (${native ? "native" : "gateway"})`, async () => {

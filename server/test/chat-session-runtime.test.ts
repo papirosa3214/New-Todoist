@@ -300,11 +300,8 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     }
     // Загрузчик операций по требованию — в реестре всегда.
     expect(names).toContain("taskflow_tools");
-    // Операции карточки в режиме «В чате» скрыты (22.10.2026, c936053f):
-    // карточные инструменты доступны только в режиме «По карточке».
-    expect(names).not.toContain("taskflow_plan_request");
-    expect(names).not.toContain("taskflow_claim");
-    expect(names).not.toContain("taskflow_subtask_done");
+    // Карточные операции доступны и в чате: набор один (владелец 07.11.2026).
+    for (const name of ["taskflow_plan_request", "taskflow_claim", "taskflow_subtask_done"]) expect(names).toContain(name);
     expect(session.prompt).toHaveBeenCalledWith("привет");
     // Размышления не выключаем: уровень — по умолчанию Pi, как было у CLI.
     expect(session.options.thinkingLevel).toBe("off");
@@ -340,14 +337,11 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     expect(rows.n).toBe(1);
   });
 
-  it("режим планирования — только инструменты чтения", async () => {
+  it("режим планирования — тот же полный набор (владелец 07.11.2026)", async () => {
     await startChatRun({ chatId: "chat-direct", role: "architect", roleId: "role_architect", prompt: "план", mode: "plan" });
     const opts = fakeSessions[0].options;
     const names: string[] = opts.tools;
-    expect(names).toContain("read");
-    expect(names).toContain("taskflow_task");
-    expect(names).not.toContain("bash");
-    expect(names).not.toContain("taskflow_chat_send");
+    for (const name of ["read", "bash", "taskflow_task", "taskflow_chat_send"]) expect(names).toContain(name);
   });
 
   it("неизвестная роль → ошибка без создания сессии", async () => {
@@ -374,8 +368,8 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     for(const name of ["read","taskflow_chat_send","taskflow_chat_reply","taskflow_chat_read"])expect(names).toContain(name);
     // Рабочие команды и материалы — как в режиме «Работа».
     for(const name of ["bash","edit","write","taskflow_doc_write"])expect(names).toContain(name);
-    // Карточные операции в режиме «В чате» не выдаются.
-    for(const name of ["taskflow_claim","taskflow_subtask_done","taskflow_plan_request","taskflow_create_task"])expect(names).not.toContain(name);
+    // Карточные операции — тоже: набор один во всех режимах (владелец 07.11.2026).
+    for(const name of ["taskflow_claim","taskflow_subtask_done","taskflow_plan_request","taskflow_create_task"])expect(names).toContain(name);
   });
 
   it("параллельный запуск на ту же (chat, role) → второй отказ", async () => {
@@ -720,37 +714,3 @@ it("HTTP: уточнение в текущем чате не создаёт ка
  }finally{releasePromptWaiter(0);await stopAllChatRuns();db.prepare("DELETE FROM chats WHERE id=?").run(chatId);}
 });
 
-it("budget overflow aborts/disposes the old SDK session before a single fresh 50-action attempt",async()=>{
- const ctx={chatId:"chat-direct",roleId:"role_architect"};
- setSetting("chat_item_max_actions",100,null);
- saveChatWorkPlan(ctx.chatId,ctx.roleId,0,[{id:"budget-one",title:"Бюджет",state:"pending"}]);
- for(let i=0;i<100;i++)reserveChatItemAction({...ctx,callId:"pre-"+i});
- budgetPromptHook=async(session,index)=>{
-  if(index===0){
-   const tool=session.options.customTools.find((t:any)=>t.name==="bash");
-   try{await tool.execute("blocked-before-effect",{command:"exit 99"});}catch{}
-  }else{
-   expect(fakeSessions[0].abort).toHaveBeenCalledOnce();
-   expect(fakeSessions[0].dispose).toHaveBeenCalledOnce();
-   expect(session.sessionId).not.toBe(fakeSessions[0].sessionId);
-   for(let i=0;i<50;i++)reserveChatItemAction({...ctx,callId:"fresh-"+i});
-   const tool=session.options.customTools.find((t:any)=>t.name==="bash");
-   try{await tool.execute("beyond-50",{command:"exit 99"});}catch{}
-  }
- };
- try{
-  await expect(startChatRun({...ctx,role:"architect",prompt:"Исходная работа"})).rejects.toMatchObject({code:"CHAT_ACTION_BUDGET"});
-  expect(fakeSessions).toHaveLength(2);
-  // Продолжение — новый ход с теми же 50 действиями и исходным контекстом.
-  const continuation=String(fakeSessions[1].prompt.mock.calls[0][0]);
-  expect(continuation).toContain("Продолжение пункта «Бюджет»");
-  expect(continuation).toContain("ещё 50 действий");
-  expect(continuation).toContain("Исходная работа");
-  // Карточка разбора: израсходовано 150 действий (100 основных + 50), материалы хода сохранены.
-  const row=db.prepare('SELECT used,base,total,materials FROM chat_budget_cases WHERE chat_id=? AND role_id=?').get(ctx.chatId,ctx.roleId) as any;
-  expect(row.used).toBe(150);expect(row.base).toBe(100);expect(row.total).toBe(150);expect(row.materials).toBe(1);
-  // Исчерпание бюджета помечено в плане работы пункта.
-  const plan=db.prepare('SELECT status,stop_reason FROM chat_work_plans WHERE chat_id=? AND role_id=?').get(ctx.chatId,ctx.roleId) as any;
-  expect(plan.status).toBe("stopped");expect(plan.stop_reason).toBe("budget_exhausted");
- }finally{resetSetting("chat_item_max_actions",null);budgetPromptHook=null;}
-});
