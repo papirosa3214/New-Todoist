@@ -27,7 +27,7 @@ export type RoleRule = {
 };
 export const ALL_CHANNELS: RuleChannel[] = ["chat", "card", "voice"];
 /** Категории, которые идут в инструкцию. «Текст из кода*» код подставляет сам — не задваиваем. */
-export const INCLUDED_CATEGORIES = ["общий шаблон", "личные инструкции", "характер", "новое 06.11.2026"];
+export const INCLUDED_CATEGORIES = ["общий шаблон v2", "общий шаблон", "личные инструкции", "характер", "новое 06.11.2026"];
 
 export function rulesFile(): string {
   const explicit = process.env.TASKFLOW_ROLE_RULES;
