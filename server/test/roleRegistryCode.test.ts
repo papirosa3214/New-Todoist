@@ -42,7 +42,7 @@ describe("правила из кода в реестре", () => {
   it("AGENT_RULES и контракт постановки берутся из реестра, массив и текст те же", () => {
     const arr = both(() => [...AGENT_RULES]);
     expect(arr.on).toEqual(arr.off);
-    expect(arr.on).toHaveLength(10);
+    expect(arr.on).toHaveLength(9);
     expect(Array.isArray(AGENT_RULES)).toBe(true);
     expect(JSON.parse(JSON.stringify(AGENT_RULES))).toEqual(arr.off);
     const tb = both(taskBriefText);
