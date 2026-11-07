@@ -43,6 +43,7 @@ import { isDiscussionChat, discussionByChatId } from "../runtime/taskDiscussion.
 import { runDiscussionTurn } from "../runtime/taskDiscussionSession.js";
 import { deliverTopicToWork, deliverChatToWork, slotWorkspace } from "../runtime/inProcessRun.js";
 import { topicContext, taskRoomClosedAt, ensureTaskRoom, roomsOfPersonalChat } from "../lib/projectTopics.js";
+import { assignmentsOf } from "../lib/chatChildren.js";
 import {
   archiveChat,
   archiveRight,
@@ -321,6 +322,13 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(id,req.userId);
     return {chat:chatRow(id)};
   });
+  // Дочерние сессии комнаты (08.11.2026): у личной комнаты роли — карточки
+  // назначений по её слотам, каждая со своей комнатой задачи для разговора.
+  app.get("/api/chats/:id/children", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+    return { children: assignmentsOf(req.params.id) };
+  });
+
   app.get("/api/chats/:id/topics",{preHandler:authPre},async(req:any,reply)=>{
     if (!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
     // Топики чата: у личной комнаты — комнаты задач её роли, у остальных —

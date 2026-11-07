@@ -443,6 +443,9 @@ export async function startPlanSubtaskRun(
   }
 
   const attemptId = crypto.randomUUID();
+  // Номер попытки слота: растёт с каждым допуском и уходит в карточку
+  // назначения — попытка продолжает ту же дочернюю связь, а не создаёт новую.
+  let claimedCycle = 1;
   const acquired = db.transaction(() => {
     const latest = subtask(current.id);
     if (
@@ -485,6 +488,7 @@ export async function startPlanSubtaskRun(
     // closeOpenCriticPlanNode(changes_requested) рядом с инкрементом
     // admission_cycle.
     const expectedFingerprint = latest.admission_fingerprint ?? null;
+    claimedCycle = (latest.admission_cycle ?? 0) + 1;
     const newFingerprint = computeAdmissionFingerprint({
       taskId: current.task_id,
       planId: current.collaboration_plan_id,
@@ -513,6 +517,21 @@ export async function startPlanSubtaskRun(
       ok: false,
       error: "Слот уже запущен или его входные данные изменились",
     };
+
+  // Личная комната роли получает карточку назначения этого слота, а работа
+  // идёт в общей комнате задачи (08.11.2026). Идемпотентно: повторный запуск
+  // продолжает ту же дочернюю связь; ошибка карточки не срывает работу.
+  try {
+    const { ensureSlotAssignment } = await import("../lib/chatChildren.js");
+    ensureSlotAssignment({
+      taskId: current.task_id,
+      slotId: current.id,
+      role: node.role_key,
+      attemptNo: claimedCycle,
+    });
+  } catch (error) {
+    console.warn("[plan-admission] карточка назначения не создана:", error);
+  }
 
   try {
     const run = await withObservationContext({taskId:current.task_id,subtaskId:current.id,role:node.role_key,runId:attemptId},async()=>runRoleInProcess({
@@ -1476,6 +1495,13 @@ function closeNodeWithVerdict(
   db.prepare(
     "UPDATE subtasks SET done = 1, agent_state = NULL, current_attempt_id = NULL, agent_heartbeat_at = NULL, result = ? WHERE id = ?",
   ).run(`${verdict}: ${findings}`, row.id);
+  // Карточка назначения в личной комнате роли получает подтверждение «ответ
+  // получен» (08.11.2026) — только по факту вердикта, а не по факту доставки.
+  void import("../lib/chatChildren.js")
+    .then(({ markAssignmentAnswered }) => markAssignmentAnswered(row.id))
+    .catch((error) =>
+      console.warn("[plan-admission] подтверждение карточки назначения не записано:", error),
+    );
   logEvent({
     taskId,
     actorId: null,

@@ -6019,6 +6019,44 @@ const migrations: Migration[] = [
     },
   },
 
+  // 08.11.2026 (спецификация `docs/2026-11-08-role-slot-chat-branches-spec.md`,
+  // §1–2, §4–6): дочерние сессии личной комнаты роли. Личная комната —
+  // родитель, работа по слоту — её ребёнок; разговор идёт в общей комнате
+  // задачи (`talk_chat_id`). Карточка назначения живёт здесь, а не в
+  // `chat_messages`: отображаемая карточка не должна попадать во вход модели
+  // ни через историю, ни через выжимку, ни через кэш (§5).
+  {
+    id: "203_chat_child_sessions",
+    description:
+      "Дочерние сессии личной комнаты роли: chat_child_sessions(kind, parent_chat_id, " +
+      "talk_chat_id, role_id, task_id, slot_id, attempt_no, context_generation, status); " +
+      "UNIQUE(kind, slot_id) — повтор назначения не создаёт вторую связь",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_child_sessions (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('branch', 'assignment')),
+          parent_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          talk_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          slot_id TEXT REFERENCES subtasks(id) ON DELETE CASCADE,
+          attempt_no INTEGER NOT NULL DEFAULT 1,
+          context_generation INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'assigned'
+            CHECK (status IN ('assigned', 'delivered', 'answered', 'waiting', 'failed')),
+          title TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (kind, slot_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_child_parent ON chat_child_sessions(parent_chat_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_child_talk ON chat_child_sessions(talk_chat_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_child_task ON chat_child_sessions(task_id);
+      `);
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.
