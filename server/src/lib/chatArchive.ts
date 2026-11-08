@@ -88,6 +88,17 @@ export function archiveChat(chatId: string): void {
   cancelQuestionsForChat(chatId);
 }
 
+/**
+ * Вернуть чат из архива: снимаем и уборку, и отметку закрытия — комната снова
+ * обычная и принимает сообщения. Владелец 08.11.2026: «заархивировать, чтобы
+ * если что, потом когда-нибудь вернуть».
+ */
+export function unarchiveChat(chatId: string): void {
+  db.prepare(
+    `UPDATE chats SET archived_at = NULL, closed_at = NULL WHERE id = ?`,
+  ).run(chatId);
+}
+
 /** Убран ли чат человеком (в отличие от темы, закрытой вместе с задачей). */
 export function isArchived(chat: { archived_at?: string | null }): boolean {
   return Boolean(chat.archived_at);
@@ -234,6 +245,11 @@ export function canArchiveTaskTopic(taskId: string | null): boolean {
  *  • комнату задачи удаляет только владелец трекера, остальные чаты — владелец
  *    или тот, кто их завёл.
  */
+/**
+ * Право на удаление. Владелец 08.11.2026: «заархивировать чат либо удалить
+ * насовсем — понятно, максимально», поэтому требование «сначала в архив»
+ * снято: удалять можно сразу, но вернуть будет нечего.
+ */
 export function purgeRight(
   chat: ChatRoomRow,
   userId: string,
@@ -243,8 +259,6 @@ export function purgeRight(
     return { allowed: false, reason: "общую комнату удалить нельзя" };
   if (chat.room_kind === "personal")
     return { allowed: false, reason: "личная комната роли не удаляется" };
-  if (!chat.archived_at && !chat.closed_at)
-    return { allowed: false, reason: "сначала убери чат в архив" };
   if (isTaskRoom(chat))
     return trackerOwner
       ? { allowed: true }

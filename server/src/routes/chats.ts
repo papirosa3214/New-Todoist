@@ -53,6 +53,7 @@ import {
   canArchiveTaskTopic,
   purgeChat,
   purgeRight,
+  unarchiveChat,
   cleanupCandidates,
   isTaskRoom,
   runCleanup,
@@ -2206,6 +2207,23 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     "/api/chats/:id/archive",
     { preHandler: authPre },
     archiveChatRoute,
+  );
+
+  // Вернуть из архива (владелец 08.11.2026: «заархивировать, чтобы если что,
+  // потом когда-нибудь вернуть»). Права те же, что на уборку.
+  app.post<{ Params: { id: string } }>(
+    "/api/chats/:id/unarchive",
+    { preHandler: authPre },
+    async (req: any, reply: any) => {
+      const chat = chatRoomRow(req.params.id);
+      if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+      if (!isMember(chat.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const right = archiveRight(chat, req.userId);
+      if (!right.allowed) return reply.code(403).send({ error: right.reason });
+      unarchiveChat(chat.id);
+      return { ok: true, archived: false, chat: chatRow(chat.id) };
+    },
   );
 
   // Удаление насовсем (владелец 08.11.2026: «есть архив, есть просто удалить…

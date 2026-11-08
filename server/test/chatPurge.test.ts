@@ -65,12 +65,32 @@ describe("Удаление чата насовсем", () => {
     if (app) await app.close();
   });
 
-  it("без архива не удаляет: сначала «В архив»", async () => {
-    const chat = await newChat("Ещё не в архиве");
+  it("удаляет сразу, без «В архив»: как в GPT — архив или насовсем", async () => {
+    const chat = await newChat("Удаляю сразу");
     const res = await post(`/api/chats/${chat.id}/purge`, ownerAuth);
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe("сначала убери чат в архив");
-    expect(db.prepare("SELECT 1 FROM chats WHERE id = ?").get(chat.id)).toBeTruthy();
+    expect(res.statusCode).toBe(200);
+    expect(db.prepare("SELECT 1 FROM chats WHERE id = ?").get(chat.id)).toBeFalsy();
+  });
+
+  it("из архива возвращается: снимаются уборка и закрытие", async () => {
+    const chat = await newChat("Вернуть из архива");
+    const archived = await post(`/api/chats/${chat.id}/archive`, ownerAuth);
+    expect(archived.statusCode).toBe(200);
+    let row = db.prepare("SELECT archived_at, closed_at FROM chats WHERE id = ?").get(chat.id) as
+      | { archived_at: string | null; closed_at: string | null }
+      | undefined;
+    expect(row?.archived_at).toBeTruthy();
+
+    const back = await post(`/api/chats/${chat.id}/unarchive`, ownerAuth);
+    expect(back.statusCode).toBe(200);
+    row = db.prepare("SELECT archived_at, closed_at FROM chats WHERE id = ?").get(chat.id) as
+      | { archived_at: string | null; closed_at: string | null }
+      | undefined;
+    expect(row?.archived_at).toBeFalsy();
+    expect(row?.closed_at).toBeFalsy();
+    // Вернувшийся чат снова принимает сообщения.
+    const sent = await post(`/api/chats/${chat.id}/messages`, ownerAuth, { text: "снова на связи" });
+    expect(sent.statusCode).toBe(200);
   });
 
   it("из архива удаляет комнату, переписку, очередь и вопросы", async () => {
