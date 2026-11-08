@@ -38,6 +38,7 @@ import { teamStructureText } from "../lib/teamStructure.js";
 import { branchMembership } from "./branchPlan.js";
 import { ensureTaskRoom, taskRoomOf, topicContext } from "../lib/projectTopics.js";
 import { conversationDigest, handoffText as slotHandoffText } from "../lib/slotHandoff.js";
+import { handoffDigest as handoffDigestOf } from "../lib/slotHandoffDigest.js";
 import { markPlanFinalReviewerStarted, markPlanFinalReviewerWaiting, hasPendingPlanFinalReview, planReviewRouteContext } from "./planReviewLifecycle.js";
 import { instructionResources, createTaskResourceLoader } from "./instructionResources.js";
 import { ensureRoleHome, renderPromptAddendum } from "./roleHome.js";
@@ -1875,7 +1876,17 @@ try {
       const reportAdvice=role==="critic_verifier" && mode==="review" ? await reportReviewBlockForTask(taskId,input.subtaskId) : "";
       // Передача работы (08.11.2026, спецификация §7): слот получает итог
       // предыдущих слотов и сжатую часть разговора, а не весь сырой лог.
-      const handoff = slotHandoffText(taskId);
+      const handoffRaw = slotHandoffText(taskId);
+      // Выжимка передачи (спецификация §7, критерии 8–10): предел считается
+      // от окна модели принимающей роли, граница фиксируется в slot_handoffs,
+      // повтор отдаёт тот же текст. Сбой сжатия — передача без правки.
+      const handoffDigest = handoffRaw
+        ? handoffDigestOf(taskId, { roomId: taskRoomOf(taskId) ?? '', roleKey: role })
+        : null;
+      const handoff =
+        handoffDigest && handoffDigest.state === 'ready' && handoffDigest.text
+          ? handoffDigest.text
+          : handoffRaw;
       const digest = conversationDigest(taskId, taskRoomOf(taskId) ?? "");
       const prompt = `${task}${reportAdvice}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId, { conversation: "digest" })}${handoff ? `\n\n${handoff}` : ""}${digest ? `\n\n${digest}` : ""}${memory ? `\n\n${memory}` : ""}`;
       // Чек-лист идёт ПЕРЕД задачей (13.10.2026, владелец: «подсунуть ему

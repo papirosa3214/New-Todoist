@@ -6114,6 +6114,34 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    id: "205_slot_handoffs",
+    description:
+      "slot_handoffs — выжимка передачи работы по границе комнаты задачи: предел считается " +
+      "от окна модели, повтор с той же границей отдаёт тот же текст, сбой сжатия фиксируется с причиной",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS slot_handoffs (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          boundary_message_id TEXT,
+          window_tokens INTEGER,
+          budget_chars INTEGER NOT NULL,
+          digest TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('ready', 'failed')),
+          reason TEXT,
+          evidence TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec("DROP INDEX IF EXISTS idx_slot_handoffs_boundary");
+      db.exec(
+        "CREATE UNIQUE INDEX idx_slot_handoffs_boundary ON slot_handoffs(task_id, boundary_message_id)",
+      );
+      db.exec("CREATE INDEX IF NOT EXISTS idx_slot_handoffs_task ON slot_handoffs(task_id, created_at)");
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.
