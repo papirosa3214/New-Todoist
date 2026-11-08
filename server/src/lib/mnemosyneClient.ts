@@ -158,7 +158,17 @@ async function rpc(method: string, params: unknown, retry = true): Promise<unkno
 }
 
 function callTool<T>(name: string, args: Record<string, unknown>): Promise<T> {
-  return withLock(() => callToolUnlocked<T>(name, args));
+  return withLock(async () => {
+    try {
+      return await callToolUnlocked<T>(name, args);
+    } catch (err) {
+      // После перезапуска службы сессия мертва: первая операция памяти иначе
+      // проваливается, а успешной становится только следующая.
+      if (!(err instanceof MnemosyneError) || !/сесси|session|404|410/i.test(err.message + err.detail)) throw err;
+      session = null;
+      return callToolUnlocked<T>(name, args);
+    }
+  });
 }
 
 async function callToolUnlocked<T>(name: string, args: Record<string, unknown>): Promise<T> {

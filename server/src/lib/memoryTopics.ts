@@ -101,6 +101,7 @@ export function reindexAllTopics(): number {
 
 interface TopicHit {
   memory_id: string;
+  strong: number;
   score: number;
 }
 
@@ -119,6 +120,7 @@ export function topicMatches(topics: string[], limit = 8): TopicHit[] {
       `WITH totals AS (SELECT topic, COUNT(*) AS c FROM memory_topics GROUP BY topic)
        SELECT mt.memory_id AS memory_id,
               COUNT(*) AS hits,
+              SUM(CASE WHEN mt.weight > 1 THEN 1 ELSE 0 END) AS strong,
               SUM(mt.weight * (1.0 / (1.0 + t.c))) AS score
          FROM memory_topics mt JOIN totals t ON t.topic = mt.topic
         WHERE mt.topic IN (${marks})

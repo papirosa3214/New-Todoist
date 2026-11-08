@@ -6304,6 +6304,26 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    // Очередь забывания: удаление и правка записи не теряют тело в Mnemosyne,
+    // если служба в этот момент недоступна.
+    id: "211_memory_forget_queue",
+    description: "Очередь забывания частей записи в банках Mnemosyne",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_forget_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          bank TEXT NOT NULL,
+          mnemo_id TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_forget_once
+          ON memory_forget_queue(bank, mnemo_id);
+      `);
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.

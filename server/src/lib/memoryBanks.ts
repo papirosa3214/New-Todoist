@@ -7,8 +7,11 @@
 // раньше служил scope в таблице memories:
 //   tf-team            — память команды (видят все роли)
 //   tf-role-<role_key> — своя память роли (чужие роли её не видят)
-//   tf-project-<id>    — память проекта
-// Роль ищет в трёх банках сразу и получает объединённый список.
+// Проектных банок нет: проектная запись видна команде (владелец 08.11.2026,
+// «достаточно двух — командная и ролевая»). Роль ищет в двух банках сразу.
+//
+// Префикс банок берётся из MNEMOSYNE_BANK_PREFIX: прогоны тестов ставят свой
+// (tf-test-…), иначе тестовые записи падали бы в живую память команды.
 //
 // Длина. Mnemosyne отдаёт из поиска не больше ~400 знаков на запись и
 // полное тело по `get` для свежей записи не находит, поэтому длинный урок
@@ -19,6 +22,18 @@ import { mnemoForget, mnemoRecall, mnemoRemember, type MnemosyneHit } from "./mn
 /** Предел одной записи в банке (Mnemosyne обрезает вывод около 400 знаков). */
 export const MAX_RECORD_CHARS = 350;
 
+/** Префикс банок: тесты подменяют его, чтобы не писать в живую память. */
+export function bankPrefix(): string {
+  const raw = (process.env.MNEMOSYNE_BANK_PREFIX ?? "").trim();
+  return raw || "tf-";
+}
+
+/** Командная банка — та, что видна всем ролям. */
+export function teamBank(): string {
+  return `${bankPrefix()}team`;
+}
+
+/** Значение по умолчанию — для сравнений и документации. */
 export const TEAM_BANK = "tf-team";
 
 function slug(value: string): string {
@@ -31,11 +46,12 @@ function slug(value: string): string {
 }
 
 export function roleBank(roleKey: string): string {
-  return `tf-role-${slug(roleKey)}`;
+  return `${bankPrefix()}role-${slug(roleKey)}`;
 }
 
-export function projectBank(projectId: string): string {
-  return `tf-project-${slug(projectId)}`;
+/** Проектных банок нет: проектная запись идёт в командную. */
+export function projectBank(_projectId: string): string {
+  return teamBank();
 }
 
 export type MemoryScopeName = "team" | "role" | "project";
@@ -48,21 +64,21 @@ export function bankForScope(
 ): string {
   if (scope === "role" && roleKey) return roleBank(roleKey);
   // Проектных банок нет: проектная запись видна команде (владелец 08.11.2026).
-  if (scope === "project") return TEAM_BANK;
-  return TEAM_BANK;
+  return teamBank();
 }
 
 /** Где роль имеет право искать: командная банка + своя ролевая. */
 export function banksFor(input: { roleKey?: string | null }): string[] {
-  const banks = [TEAM_BANK];
+  const banks = [teamBank()];
   if (input.roleKey) banks.push(roleBank(input.roleKey));
   return [...new Set(banks)];
 }
 
 /** Область по имени банка — для подписи найденной записи. */
 export function scopeOfBank(bank: string): MemoryScopeName {
-  if (bank.startsWith("tf-role-")) return "role";
-  if (bank.startsWith("tf-project-")) return "project";
+  const p = bankPrefix();
+  if (bank.startsWith(`${p}role-`)) return "role";
+  if (bank.startsWith(`${p}project-`)) return "project";
   return "team";
 }
 
@@ -104,6 +120,12 @@ export interface MemoryRecordInput {
   importance?: number;
   /** id записи в локальной таблице — чтобы связать части между собой. */
   memoryId?: string;
+  /**
+   * Занят ли этот id записи банка другой памятью TaskFlow. Mnemosyne
+   * дедуплицирует одинаковый текст и отдаёт тот же id — вторая связь не
+   * вставилась бы, и запись молча выпала бы из выдачи.
+   */
+  isUsed?: (mnemoId: string, bank: string) => boolean;
 }
 
 export interface MemoryRecordWritten {
@@ -138,16 +160,52 @@ export async function writeRecord(input: MemoryRecordInput): Promise<MemoryRecor
       },
     });
     const id = stored.memory_id ?? stored.id ?? "";
-    if (!id) throw new Error("Mnemosyne не вернула id записи");
+    if (!id) {
+      // Mnemosyne отвечает {"status":"filtered"}, когда классификатор не
+      // пропускает запись: служба жива, запись отклонена.
+      const status = String((stored as { status?: string }).status ?? "");
+      throw new Error(
+        status === "filtered" ? "запись отклонена фильтром памяти" : "Mnemosyne не вернула id записи",
+      );
+    }
+    if (ids.includes(id) || input.isUsed?.(id, bank)) {
+      // Повтор: та же часть с пометкой, чтобы у записи был свой id.
+      const unique = await mnemoRemember({
+        content: `${heading}${parts[i]} [${i + 1}/${parts.length} · ${(input.memoryId ?? "").slice(0, 8)}]`,
+        importance: input.importance ?? 0.6,
+        source: input.kind === "lesson" ? "insight" : input.kind === "preference" ? "preference" : "fact",
+        veracity: "stated",
+        bank,
+        metadata: {
+          memory_id: input.memoryId ?? "",
+          scope: input.scope,
+          role_key: input.roleKey ?? "",
+          project_id: input.projectId ?? "",
+          kind: input.kind,
+          chunk_no: i,
+          chunks: parts.length,
+          title: input.title ?? "",
+        },
+      });
+      const uniqueId = unique.memory_id ?? unique.id ?? "";
+      if (!uniqueId || uniqueId === id) throw new Error("Mnemosyne не различила повтор записи");
+      ids.push(uniqueId);
+      continue;
+    }
     ids.push(id);
   }
   return { bank, ids };
 }
 
 /** Удалить части урока из банка (при правке/удалении записи). */
-export async function forgetIds(bank: string, ids: string[]): Promise<number> {
+export async function forgetIds(
+  bank: string,
+  ids: string[],
+  opts?: { isShared?: (mnemoId: string, bank: string) => boolean },
+): Promise<number> {
   let removed = 0;
   for (const id of ids) {
+    if (opts?.isShared?.(id, bank)) continue;
     try {
       await mnemoForget(id, bank);
       removed += 1;
@@ -183,7 +241,7 @@ export async function recallAcrossBanks(input: {
       } catch (err) {
         // Первый банк — команда. Если он недоступен, это поломка памяти, а
         // не «ничего не нашлось»: пусть вызов падает с причиной.
-        if (bank === TEAM_BANK) throw err;
+        if (bank === teamBank()) throw err;
         return [] as BankHit[];
       }
     }),

@@ -340,6 +340,12 @@ async function writeToBank(input: {
       kind: input.kind,
       importance: input.importance,
       memoryId: input.memoryId,
+      isUsed: (mnemoId, bank) =>
+        Boolean(
+          db
+            .prepare(`SELECT 1 FROM memory_mnemo_ids WHERE bank = ? AND mnemo_id = ? AND memory_id <> ?`)
+            .get(bank, mnemoId, input.memoryId),
+        ),
     });
   } catch (err) {
     throw new MemoryError(
@@ -403,6 +409,9 @@ export async function remember(
           WHERE id = ?`,
       ).run(text, title, kind, toBlob(vec), author.id, best.id);
       reindexTopicOf(best.id, title, text);
+      const previous = db
+        .prepare(`SELECT bank, mnemo_id FROM memory_mnemo_ids WHERE memory_id = ?`)
+        .all(best.id) as Array<{ bank: string; mnemo_id: string }>;
       await writeToBank({
         memoryId: best.id,
         text,
@@ -412,6 +421,10 @@ export async function remember(
         projectId: where.project_id ?? null,
         kind,
       });
+      // Прежнюю редакцию убираем только после удачной записи новой, и только
+      // если её не использует другая память.
+      queueForget(previous.map((row) => ({ bank: row.bank, mnemoId: row.mnemo_id })));
+      await drainForgetQueue();
       return { memory: getMemory(best.id)!, updated: true };
     }
   }
@@ -535,8 +548,9 @@ export async function updateMemory(
   const fresh = getMemory(id)!;
   if (fresh.kind !== "file") reindexTopicOf(id, fresh.title, fresh.text);
   if (fresh.kind !== "file") {
+    // Старые связи снимаем только после того, как новые части записаны:
+    // иначе сбой службы оставляет запись без тела и без выдачи.
     const links = mnemoIdsOf(id);
-    if (links.ids.length) await forgetIds(links.bank, links.ids);
     db.prepare(`DELETE FROM memory_mnemo_ids WHERE memory_id = ?`).run(id);
     await writeToBank({
       memoryId: id,
@@ -547,6 +561,8 @@ export async function updateMemory(
       projectId: fresh.project_id,
       kind: fresh.kind,
     });
+    queueForget(links.ids.map((mnemoId) => ({ bank: links.bank, mnemoId })));
+    await drainForgetQueue();
   }
   return fresh;
 }
@@ -558,10 +574,53 @@ export function deleteMemory(id: string, author: Author): void {
     throw new MemoryError("роль удаляет только свои записи", 403);
   }
   const links = mnemoIdsOf(id);
-  void forgetIds(links.bank, links.ids);
+  queueForget(links.ids.map((mnemoId) => ({ bank: links.bank, mnemoId })));
   db.prepare(`DELETE FROM memory_mnemo_ids WHERE memory_id = ?`).run(id);
   db.prepare("DELETE FROM memories WHERE id = ?").run(id);
   db.prepare("DELETE FROM memory_topics WHERE memory_id = ?").run(id);
+  // Мгновенная попытка, а если служба недоступна — очередь доделает позже.
+  void drainForgetQueue();
+}
+
+/**
+ * Забывание в банке через очередь: удаление и правка записи не должны терять
+ * тело в Mnemosyne, если служба в этот момент недоступна (перезапуск, таймаут).
+ */
+function queueForget(items: Array<{ bank: string; mnemoId: string }>): void {
+  if (!items.length) return;
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO memory_forget_queue (bank, mnemo_id) VALUES (?, ?)`,
+  );
+  for (const item of items) stmt.run(item.bank, item.mnemoId);
+}
+
+/** Доделать забывание: вызывается после удаления/правки и раз в час сторожем. */
+export async function drainForgetQueue(limit = 50): Promise<number> {
+  const rows = db
+    .prepare(`SELECT id, bank, mnemo_id, attempts FROM memory_forget_queue ORDER BY id LIMIT ?`)
+    .all(limit) as Array<{ id: number; bank: string; mnemo_id: string; attempts: number }>;
+  if (!rows.length) return 0;
+  const shared = db.prepare(
+    `SELECT 1 FROM memory_mnemo_ids WHERE bank = ? AND mnemo_id = ? LIMIT 1`,
+  );
+  const drop = db.prepare(`DELETE FROM memory_forget_queue WHERE id = ?`);
+  const bump = db.prepare(`UPDATE memory_forget_queue SET attempts = attempts + 1 WHERE id = ?`);
+  let done = 0;
+  for (const row of rows) {
+    if (shared.get(row.bank, row.mnemo_id)) {
+      // Часть ещё нужна другой записи — просто снимаем задание.
+      drop.run(row.id);
+      continue;
+    }
+    try {
+      await forgetIds(row.bank, [row.mnemo_id]);
+      drop.run(row.id);
+      done += 1;
+    } catch {
+      bump.run(row.id);
+    }
+  }
+  return done;
 }
 
 /** Нарезать текст файла на куски по абзацам, около CHUNK_TARGET символов. */
@@ -715,7 +774,9 @@ export async function recall(args: {
   // команда, своя роль, проект задачи. Локальная таблица хранит только
   // связь с частями записи и признаки (закрепление, кто записал).
   const banks = banksFor({ roleKey: args.roleKey });
-  const found = await recallAcrossBanks({ banks, query, limit });
+  // Пустой запрос не ищет в банке: Mnemosyne вернул бы «свежее», а это не
+  // ответ на вопрос роли.
+  const found = query.trim() ? await recallAcrossBanks({ banks, query, limit }) : [];
   if (!found.length && !query) {
     finishObservation(memoryObservation, { status: "skipped", reason: "empty" });
     return [];
@@ -740,9 +801,25 @@ export async function recall(args: {
     return [];
   }
 
+  // Гейт релевантности: Mnemosyne отдаёт «похожее» даже когда совпадений нет
+  // (score — это RRF-позиция, а не близость), поэтому хит без слова вопроса
+  // памятью не считается.
+  const gateWords = query
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length >= 4)
+    .slice(0, 8);
+  const hitIsRelevant = (content: string): boolean => {
+    if (!gateWords.length) return false;
+    const body = content.toLowerCase().replace(/ё/g, "е");
+    return gateWords.some((word) => body.includes(word));
+  };
+
   const items: RecallItem[] = [];
   const takenLocal = new Set<string>();
   for (const hit of found) {
+    if (!hitIsRelevant(String(hit.content ?? ""))) continue;
     const link = linkOf.get(hit.bank, hit.id) as { memory_id: string } | undefined;
     const score = hit.score ?? 0;
     if (link) {
@@ -812,12 +889,14 @@ export async function recall(args: {
     });
   }
 
+  // Позиция в выдаче Mnemosyne — это RRF (1/(60+rank)), разброс в пределах
+  // тысячных, поэтому бонус владельца не прибавляем к score, а держим
+  // отдельным ключом сортировки.
   items.sort(
     (a, b) =>
       Number(b.pinned) - Number(a.pinned) ||
-      b.score +
-        (b.source === "owner" ? 0.05 : 0) -
-        (a.score + (a.source === "owner" ? 0.05 : 0)),
+      Number(b.source === "owner") - Number(a.source === "owner") ||
+      b.score - a.score,
   );
   const ordered = (await withObservationContext({role:args.roleKey??undefined},()=>filterMemoryByJev(query, items))) ?? items;
   const picked: RecallItem[] = [];
@@ -985,12 +1064,18 @@ export function memoryTopicHint(args: {
 }): string {
   const topics = queryTopics(args.query ?? "");
   if (topics.length < 2) return "";
-  let matched: Array<{ memory_id: string; score: number }>;
+  let matched: Array<{ memory_id: string; score: number; hits?: number; strong?: number }>;
   try {
-    matched = topicMatches(topics, 12);
+    matched = topicMatches(topics, 12) as Array<{ memory_id: string; score: number; hits?: number; strong?: number }>;
   } catch {
     return "";
   }
+  if (!matched.length) return "";
+  // Совпадения по 5-символьным основам дают сотни записей на любой запрос
+  // («прове», «правк»), поэтому подсказку получает только запись, где
+  // совпало слово из заголовка (strong) либо не меньше трёх тем.
+  const strong = matched.filter((row) => (row.strong ?? 0) > 0);
+  matched = strong.length ? strong : matched.filter((row) => (row.hits ?? 0) >= 3);
   if (!matched.length) return "";
   const vis = visibleWhere(args.roleKey, args.projectId ?? null);
   const placeholders = matched.map(() => "?").join(", ");
