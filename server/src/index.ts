@@ -34,7 +34,7 @@ import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
 import { closeOrphanedAttempts, startOrphanedAttemptSweep } from "./runtime/orphanedAttempts.js";
 import { startProviderProbe } from "./runtime/providerProbe.js";
 import { startLinearAutoImport } from "./lib/linearAutoImport.js";
-import { startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
+import { orchestratorWebhookEnabled, startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
 import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
@@ -1162,7 +1162,7 @@ if (isMain) {
     // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
     // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
     if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();
-    if (process.env.ORCHESTRATOR_WEBHOOK_DISABLED !== "1") startOrchestratorWebhook();
+    if (orchestratorWebhookEnabled()) startOrchestratorWebhook();
     // Подписочный мост: durable delivery iOS-подпискам + wake-очередь
     // для пробуждения Codex-чата. Карточка c3c0c199… (hook_server).
     // Карточка 905db3e3-… (webhook V2): секреты HMAC обязаны переживать
