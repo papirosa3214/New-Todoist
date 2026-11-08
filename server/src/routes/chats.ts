@@ -327,6 +327,81 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   });
   // Дочерние сессии комнаты (08.11.2026): у личной комнаты роли — карточки
   // назначений по её слотам, каждая со своей комнатой задачи для разговора.
+  // Поиск по чатам (владелец 08.11.2026: «а поиск бы обязательно ещё бы
+  // сделал»). Ищем по названию комнаты, по имени роли и по тексту сообщений —
+  // один ответ на все три источника, чтобы человеку не думать, где искать.
+  // Слова соединяются через И, как в /api/search: «подрядчик аудит» находит
+  // «Договор с подрядчиком по аудиту».
+  app.get<{ Querystring: { q?: string; limit?: string } }>(
+    "/api/chats/search",
+    { preHandler: authPre },
+    async (req: any) => {
+      const query = String(req.query.q ?? "").trim();
+      if (query.length < 2) return { results: [] };
+      const userId = req.userId as string;
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 30) || 30, 1), 100);
+      const words = query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((w: string) => w.length > 0)
+        .slice(0, 6);
+
+      const MEMBERS = `(SELECT group_concat(u.name, ', ') FROM chat_members cm
+        JOIN users u ON u.id = cm.member_id WHERE cm.chat_id = c.id)`;
+      const SUBJECT = `COALESCE((SELECT t.title FROM tasks t WHERE t.id = c.task_id),
+        (SELECT p.name FROM projects p WHERE p.id = c.project_id), '')`;
+      const ALIVE = `COALESCE(m.message_type, '') != 'system'`;
+
+      const wordConditions: string[] = [];
+      const params: any[] = [];
+      for (const _word of words) {
+        wordConditions.push(
+          `(lower_uni(c.title) LIKE ? OR lower_uni(${SUBJECT}) LIKE ?
+            OR lower_uni(COALESCE(${MEMBERS}, '')) LIKE ?
+            OR EXISTS (SELECT 1 FROM chat_messages m
+                        WHERE m.chat_id = c.id AND ${ALIVE} AND lower_uni(m.text) LIKE ?))`,
+        );
+        params.push("%" + _word + "%", "%" + _word + "%", "%" + _word + "%", "%" + _word + "%");
+      }
+
+      // Подсветка: первое живое сообщение с самым длинным словом запроса.
+      const snippetWord = words.slice().sort((a: string, b: string) => b.length - a.length)[0] ?? query;
+      const rows = db
+        .prepare(
+          `SELECT c.id AS chat_id, c.title, c.kind, c.room_kind, c.task_id, c.project_id,
+                  ${SUBJECT} AS subject,
+                  c.updated_at AS last_at,
+                  (SELECT m.text FROM chat_messages m
+                    WHERE m.chat_id = c.id AND ${ALIVE} AND lower_uni(m.text) LIKE ?
+                    ORDER BY m.created_at DESC LIMIT 1) AS hit_text,
+                  (SELECT m.created_at FROM chat_messages m
+                    WHERE m.chat_id = c.id AND ${ALIVE} AND lower_uni(m.text) LIKE ?
+                    ORDER BY m.created_at DESC LIMIT 1) AS hit_at
+             FROM chats c
+            WHERE ${wordConditions.join("\n              AND ")}
+            ORDER BY last_at DESC
+            LIMIT ?`,
+        )
+        .all("%" + snippetWord + "%", "%" + snippetWord + "%", ...params, limit) as any[];
+
+      // Кому что видно — тот же isMember, что у списка чатов: поиск не должен
+      // показывать комнату, которую человек не открыл бы и руками.
+      const results = rows
+        .filter((row) => isMember(row.chat_id, userId))
+        .map((row) => ({
+          chat_id: row.chat_id,
+          title: row.title ?? row.subject ?? "Чат",
+          subject: row.subject || null,
+          kind: row.kind,
+          room_kind: row.room_kind,
+          hit_text: row.hit_text ? String(row.hit_text).slice(0, 240) : null,
+          hit_at: row.hit_at ?? null,
+          last_at: row.last_at ?? null,
+        }));
+      return { results };
+    },
+  );
+
   app.get("/api/chats/:id/children", { preHandler: authPre }, async (req: any, reply) => {
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
     return { children: assignmentsOf(req.params.id) };
