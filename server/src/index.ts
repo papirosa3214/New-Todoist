@@ -5,6 +5,7 @@ import {startBudgetCaptureWatcher} from "./runtime/chatBudgetCases.js";
 import { serverListenOptions } from "./runtime/systemdSocket.js";
 import {startToolRequestWatcher} from "./runtime/toolRequestStore.js";
 import {startChatCoordinationWatcher} from "./runtime/chatCoordination.js";
+import {startChatTopologyWatcher} from "./lib/chatTopologyWatcher.js";
 import { startRoleLoadWatcher } from "./lib/roleLoadWatcher.js";
 import { startReviewHistoryWatcher } from "./lib/reviewHistory.js";
 import { startWorkPlanWatcher } from "./lib/workPlanWatcher.js";
@@ -688,6 +689,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     app.addHook("onClose",async()=>stopToolRequestWatcher());
     const stopCoordinationWatcher=startChatCoordinationWatcher();
     app.addHook("onClose",async()=>stopCoordinationWatcher());
+    // Топология чатов: ребёнок без комнаты задачи, чужой адресат, зависшая
+    // передача, доставка в архив (docs/watchers.md).
+    const stopChatTopologyWatcher = startChatTopologyWatcher();
+    app.addHook("onClose", async () => stopChatTopologyWatcher());
     const stopBudgetCaptureWatcher=startBudgetCaptureWatcher();
     app.addHook("onClose",async()=>stopBudgetCaptureWatcher());
     const stopWorkPlanWatcher = startWorkPlanWatcher();
