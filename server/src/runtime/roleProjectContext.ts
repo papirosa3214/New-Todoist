@@ -1,7 +1,7 @@
 import { withObservationContext, startObservation, finishObservation } from "../lib/contextObservability.js";
 import db from "../db.js";
 import {searchNotes} from "../lib/noteSearch.js";
-import {memoryBlock,recall} from "../lib/memory.js";
+import {memoryBlock,memoryTopicHint,recall} from "../lib/memory.js";
 import {roleTitle,roleUserId} from "../roleRouting.js";
 
 /** Stable role identity; every session receives current facts, never an old session's authority. */
@@ -35,6 +35,7 @@ export async function roleProjectContext(input:{role:string;projectId?:string|nu
   finishObservation(libraryObservation,{status:"error",reason:"source_unavailable"});
   knowledge=input.dataOnly ? "Библиотека TaskFlow: источник недоступен." : "Библиотека TaskFlow: поиск не удалось выполнить. Не считай это отсутствием знаний; повтори taskflow_kb_search или прочитай известный документ через taskflow_doc_read.";
  }
- const policy="Память этой роли — TaskFlow: taskflow_recall читает, taskflow_remember сохраняет; документы и рецепты — taskflow_docs/taskflow_doc_read/taskflow_kb_search. Личные папки памяти Claude (.claude), Codex и других агентов не являются памятью роли: не сохраняй и не дублируй там знания TaskFlow. Перед поиском кода используй полученные память и выдержки, а при нехватке — уточни поиск в этих источниках. Нашёл документ — прочитай его целиком. Выдержки могут устареть; сверяй только относящиеся к изменению факты.";
- return roleProjectSnapshot(input.role,projectId,input.taskId,input.dataOnly)+(memory ? "\n\n"+memory : "")+(input.dataOnly ? "" : "\n\n"+policy)+"\n\n"+knowledge;
+ const policy="Память этой роли — TaskFlow: taskflow_recall читает, taskflow_remember сохраняет; документы и рецепты — taskflow_docs/taskflow_doc_read/taskflow_kb_search. Личные папки памяти Claude (.claude), Codex и других агентов не являются памятью роли: не сохраняй и не дублируй там знания TaskFlow. Перед поиском кода используй полученные память и выдержки, а при нехватке — уточни поиск в этих источниках. Нашёл документ — прочитай его целиком. Выдержки могут устареть; сверяй только относящиеся к изменению факты. Если подсказка памяти назвала похожие записи — сначала прочитай их (taskflow_recall), потом решай: эти темы уже разбирали, повторять разбор с нуля нельзя. Записал новое устойчивое знание — оно тоже попадёт в темы и всплывёт у следующей роли автоматически.";
+ const hint=input.dataOnly ? "" : memoryTopicHint({roleKey:input.role,projectId,taskId:input.taskId,query:input.query});
+ return roleProjectSnapshot(input.role,projectId,input.taskId,input.dataOnly)+(memory ? "\n\n"+memory : "")+(hint ? "\n\n"+hint : "")+(input.dataOnly ? "" : "\n\n"+policy)+"\n\n"+knowledge;
 }

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { queryTopics, reindexTopicOf, topicMatches } from "./memoryTopics.js";
 import { getSetting } from "./serverSettings.js";
 // Память ролей внутри приложения (владелец 02.10.2026): «с чистого листа;
 // пусть сами пишут, а я вижу и редактирую; и чтобы файлы можно было
@@ -19,6 +21,7 @@ import { getSetting } from "./serverSettings.js";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { toFtsQuery } from "./ftsQuery.js";
+import { banksFor, forgetIds, recallAcrossBanks, writeRecord } from "./memoryBanks.js";
 export { toFtsQuery } from "./ftsQuery.js";
 import { startObservation, finishObservation, withObservationContext } from "./contextObservability.js";
 import type { ContextItem } from "./contextObservability.js";
@@ -298,6 +301,54 @@ export interface Author {
  * Записать факт/урок/предпочтение. Похожая запись в той же области уже
  * есть — она обновляется (возвращается с updated: true), дубль не плодится.
  */
+/** Связать локальную запись с частями, записанными в банк Mnemosyne. */
+function linkMnemo(memoryId: string, bank: string, ids: string[]): void {
+  if (!ids.length) return;
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO memory_mnemo_ids (memory_id, bank, mnemo_id, chunk_no) VALUES (?, ?, ?, ?)`,
+  );
+  ids.forEach((mnemoId, i) => stmt.run(memoryId, bank, mnemoId, i));
+}
+
+/** Части записи в банке: банк и id (по порядку). */
+export function mnemoIdsOf(memoryId: string): { bank: string; ids: string[] } {
+  const rows = db
+    .prepare(`SELECT bank, mnemo_id FROM memory_mnemo_ids WHERE memory_id = ? ORDER BY chunk_no`)
+    .all(memoryId) as Array<{ bank: string; mnemo_id: string }>;
+  return { bank: rows[0]?.bank ?? "", ids: rows.map((r) => r.mnemo_id) };
+}
+
+/** Записать тело в банк Mnemosyne; при неудаче — понятная ошибка, а не тихий успех. */
+async function writeToBank(input: {
+  memoryId: string;
+  text: string;
+  title: string | null;
+  scope: "team" | "role" | "project";
+  roleKey: string | null;
+  projectId: string | null;
+  kind: MemoryKind;
+  importance?: number;
+}): Promise<void> {
+  let written;
+  try {
+    written = await writeRecord({
+      text: input.text,
+      title: input.title,
+      scope: input.scope,
+      roleKey: input.roleKey,
+      projectId: input.projectId,
+      kind: input.kind,
+      importance: input.importance,
+      memoryId: input.memoryId,
+    });
+  } catch (err) {
+    throw new MemoryError(
+      `память Mnemosyne недоступна: запись не сохранена (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  linkMnemo(input.memoryId, written.bank, written.ids);
+}
+
 export async function remember(
   input: WriteInput,
   author: Author,
@@ -322,6 +373,7 @@ export async function remember(
       throw err;
     }
   }
+  const id = uid();
   const vec = await embed(title ? `${title}\n${text}` : text);
 
   if (vec) {
@@ -350,16 +402,36 @@ export async function remember(
         `UPDATE memories SET text = ?, title = COALESCE(?, title), kind = ?, embedding = ?, updated_by = ?, updated_at = datetime('now')
           WHERE id = ?`,
       ).run(text, title, kind, toBlob(vec), author.id, best.id);
+      reindexTopicOf(best.id, title, text);
+      await writeToBank({
+        memoryId: best.id,
+        text,
+        title,
+        scope: where.scope,
+        roleKey: where.role_key ?? null,
+        projectId: where.project_id ?? null,
+        kind,
+      });
       return { memory: getMemory(best.id)!, updated: true };
     }
   }
 
-  const id = uid();
+  const localId = id;
+  await writeToBank({
+    memoryId: localId,
+    text,
+    title,
+    scope: where.scope,
+    roleKey: where.role_key ?? null,
+    projectId: where.project_id ?? null,
+    kind,
+    importance: input.pinned === true ? 0.9 : undefined,
+  });
   db.prepare(
     `INSERT INTO memories (id, scope, role_key, project_id, kind, title, text, source_kind, source_ref, created_by, updated_by, pinned, embedding)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    id,
+    localId,
     where.scope,
     where.role_key,
     where.project_id,
@@ -373,6 +445,7 @@ export async function remember(
     input.pinned === true ? 1 : 0,
     toBlob(vec),
   );
+  reindexTopicOf(localId, title, text);
   return { memory: getMemory(id)!, updated: false };
 }
 
@@ -459,7 +532,23 @@ export async function updateMemory(
     ...args,
     id,
   );
-  return getMemory(id)!;
+  const fresh = getMemory(id)!;
+  if (fresh.kind !== "file") reindexTopicOf(id, fresh.title, fresh.text);
+  if (fresh.kind !== "file") {
+    const links = mnemoIdsOf(id);
+    if (links.ids.length) await forgetIds(links.bank, links.ids);
+    db.prepare(`DELETE FROM memory_mnemo_ids WHERE memory_id = ?`).run(id);
+    await writeToBank({
+      memoryId: id,
+      text: fresh.text,
+      title: fresh.title,
+      scope: fresh.scope as "team" | "role" | "project",
+      roleKey: fresh.role_key,
+      projectId: fresh.project_id,
+      kind: fresh.kind,
+    });
+  }
+  return fresh;
 }
 
 export function deleteMemory(id: string, author: Author): void {
@@ -468,7 +557,11 @@ export function deleteMemory(id: string, author: Author): void {
   if (author.kind === "role" && current.created_by !== author.id) {
     throw new MemoryError("роль удаляет только свои записи", 403);
   }
+  const links = mnemoIdsOf(id);
+  void forgetIds(links.bank, links.ids);
+  db.prepare(`DELETE FROM memory_mnemo_ids WHERE memory_id = ?`).run(id);
   db.prepare("DELETE FROM memories WHERE id = ?").run(id);
+  db.prepare("DELETE FROM memory_topics WHERE memory_id = ?").run(id);
 }
 
 /** Нарезать текст файла на куски по абзацам, около CHUNK_TARGET символов. */
@@ -618,97 +711,106 @@ export async function recall(args: {
     return items;
   }
 
-  const anyRow = db.prepare(`SELECT 1 AS ok FROM memories m WHERE ${vis.sql} LIMIT 1`).get(...vis.args);
-  if (!anyRow) {
-    finishObservation(memoryObservation,{status:"skipped",reason:"empty"});
+  // Поиск — в Mnemosyne (владелец 08.11.2026). Банки держат приватность:
+  // команда, своя роль, проект задачи. Локальная таблица хранит только
+  // связь с частями записи и признаки (закрепление, кто записал).
+  const banks = banksFor({ roleKey: args.roleKey });
+  const found = await recallAcrossBanks({ banks, query, limit });
+  if (!found.length && !query) {
+    finishObservation(memoryObservation, { status: "skipped", reason: "empty" });
+    return [];
+  }
+  const linkOf = db.prepare(`SELECT memory_id FROM memory_mnemo_ids WHERE bank = ? AND mnemo_id = ?`);
+  const pinnedRows = db
+    .prepare(`SELECT m.id, m.kind, m.scope, m.title, m.text, m.pinned, m.source_kind, u.name AS author_name
+                FROM memories m LEFT JOIN users u ON u.id = m.created_by
+               WHERE ${vis.sql} AND m.pinned = 1 AND m.kind <> 'file' LIMIT 8`)
+    .all(...vis.args) as Array<{
+    id: string;
+    kind: MemoryKind;
+    scope: "team" | "role" | "project";
+    title: string | null;
+    text: string;
+    pinned: number;
+    source_kind: "owner" | "role";
+    author_name: string | null;
+  }>;
+  if (!found.length && !pinnedRows.length) {
+    finishObservation(memoryObservation, { status: "skipped", reason: "empty" });
     return [];
   }
 
-  const ranked = new Map<string, number>();
-  const addRank = (id: string, rank: number, weight = 1) => {
-    ranked.set(id, (ranked.get(id) ?? 0) + weight / (60 + rank));
-  };
-  const match = query ? toFtsQuery(query) : null;
-  if (match && ftsReady()) {
-    ftsRankedIds(
-      "memories_fts",
-      "JOIN memories m ON m.rowid = f.rowid",
-      vis,
-      match,
-      40,
-    ).forEach((id, i) => addRank(id, i + 1));
-    ftsRankedIds(
-      "memory_chunks_fts",
-      "JOIN memory_chunks c ON c.rowid = f.rowid JOIN memories m ON m.id = c.memory_id",
-      vis,
-      match,
-      20,
-    ).forEach((id, i) => addRank(id, i + 1, 0.8));
+  const items: RecallItem[] = [];
+  const takenLocal = new Set<string>();
+  for (const hit of found) {
+    const link = linkOf.get(hit.bank, hit.id) as { memory_id: string } | undefined;
+    const score = hit.score ?? 0;
+    if (link) {
+      const [item] = loadRecallItems(vis, [link.memory_id], mode);
+      if (item && !takenLocal.has(item.id)) {
+        takenLocal.add(item.id);
+        item.score = Math.max(score, item.score);
+        items.push(item);
+      }
+      continue;
+    }
+    // Без локальной строки запись не отдаём: значит локальную запись удалили,
+    // а части в банке остались. Такие хвосты чистит уборка, а не пользователь.
   }
 
-  const vecNotes = db
-    .prepare(
-      `SELECT m.id, m.title, m.embedding FROM memories m WHERE ${vis.sql} AND m.kind <> 'file' AND m.embedding IS NOT NULL`,
-    )
-    .all(...vis.args) as Array<{ id: string; title: string | null; embedding: Buffer | null }>;
-  const vecChunks = db
-    .prepare(
-      `SELECT m.id, c.embedding FROM memory_chunks c JOIN memories m ON m.id = c.memory_id WHERE ${vis.sql} AND c.embedding IS NOT NULL`,
-    )
-    .all(...vis.args) as Array<{ id: string; embedding: Buffer | null }>;
-  const hasVectors = vecNotes.some((n) => n.embedding) || vecChunks.some((c) => c.embedding);
-  const qvec = query && hasVectors ? await embed(query) : null;
-  const vecHits: Array<{ id: string; score: number; title?: string | null }> = [];
-  const vecScore = (blob: Buffer | null, text = ""): number => {
-    const vec = fromBlob(blob);
-    if (qvec && vec) return cosine(qvec, vec);
-    return query ? wordScore(query, text) * 0.6 : 0;
-  };
-  for (const n of vecNotes) {
-    const s = vecScore(n.embedding, n.title ?? "");
-    if (s >= RECALL_MIN_SIMILARITY) vecHits.push({ id: n.id, score: s, title: n.title });
-  }
-  for (const c of vecChunks) {
-    const s = vecScore(c.embedding);
-    if (s >= RECALL_MIN_SIMILARITY) vecHits.push({ id: c.id, score: s });
-  }
-  vecHits
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 40)
-    .forEach((h, i) => addRank(h.id, i + 1));
-
-  const tokens = query.toLowerCase().split(/[^\p{L}\p{N}._-]+/u).filter((t) => t.length > 1);
-  for (const n of vecNotes) {
-    const title = (n.title ?? "").toLowerCase();
-    if (tokens.some((t) => title.includes(t))) addRank(n.id, 1, 8);
-  }
-
-  const pinned = db
-    .prepare(`SELECT m.id FROM memories m WHERE ${vis.sql} AND m.pinned = 1`)
-    .all(...vis.args) as Array<{ id: string }>;
-  for (const p of pinned) addRank(p.id, 1, 20);
-
-  const candidateIds = [...ranked.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([id]) => id)
-    .slice(0, 40);
-  if (!candidateIds.length && !match) {
-    // Нет FTS-хитов и векторов — запасной обход по словам только по title/text без эмбеддингов.
-    const fallback = db
-      .prepare(`SELECT m.id, m.title, m.text FROM memories m WHERE ${vis.sql} AND m.kind <> 'file' LIMIT 80`)
-      .all(...vis.args) as Array<{ id: string; title: string | null; text: string }>;
-    for (const row of fallback) {
-      const s = wordScore(query, `${row.title ?? ""} ${row.text}`);
-      if (s > 0) ranked.set(row.id, s);
+  // Файлы памяти живут кусками локально (в банк их не кладём: там предел
+  // записи), поэтому ищем их по кускам отдельно.
+  // Для кусков файлов берём слова вопроса напрямую: в запросе бывает
+  // двоеточие и прочая пунктуация, на которой MATCH отказывается работать.
+  const matchText = query
+    ? query
+        .split(/[^\p{L}\p{N}]+/u)
+        .filter((word) => word.length >= 4)
+        .slice(0, 6)
+        .map((word) => `"${word}"`)
+        .join(" OR ") || null
+    : null;
+  if (matchText) {
+    // Имя таблицы, а не псевдоним: FTS5 на `f MATCH ?` отвечает «no such column».
+    const fileIds = (() => {
+      try {
+        const rows = db
+          .prepare(
+            `SELECT m.id AS id
+               FROM memory_chunks_fts
+               JOIN memory_chunks c ON c.rowid = memory_chunks_fts.rowid
+               JOIN memories m ON m.id = c.memory_id
+              WHERE memory_chunks_fts MATCH ? AND ${vis.sql}
+              ORDER BY bm25(memory_chunks_fts)
+              LIMIT 4`,
+          )
+          .all(matchText, ...vis.args) as Array<{ id: string }>;
+        return rows.map((row) => row.id);
+      } catch {
+        return [];
+      }
+    })().filter((id) => !takenLocal.has(id));
+    for (const item of loadRecallItems(vis, fileIds, mode)) {
+      if (takenLocal.has(item.id)) continue;
+      takenLocal.add(item.id);
+      items.push(item);
     }
   }
-  const ids = [...new Set([...pinned.map((p) => p.id), ...candidateIds, ...[...ranked.keys()]])].slice(0, 40);
-  let items = loadRecallItems(vis, ids, mode);
-  for (const item of items) {
-    item.score = ranked.get(item.id) ?? item.score;
-    if (tokens.some((t) => (item.title ?? "").toLowerCase().includes(t))) item.score += 0.15;
+  for (const row of pinnedRows) {
+    if (takenLocal.has(row.id)) continue;
+    takenLocal.add(row.id);
+    items.push({
+      id: row.id,
+      kind: row.kind,
+      scope: row.scope,
+      title: row.title,
+      text: row.text,
+      score: 1,
+      pinned: true,
+      source: row.source_kind,
+      author: row.author_name,
+    });
   }
-  items = items.filter((i) => i.pinned || (ranked.has(i.id) && (ranked.get(i.id) ?? 0) > 0) || i.score >= RECALL_MIN_SIMILARITY);
 
   items.sort(
     (a, b) =>
@@ -729,7 +831,7 @@ export async function recall(args: {
     picked.push(item);
     if (picked.length >= limit) break;
   }
-  if (countUsage && picked.length) bumpUse([...new Set(picked.map((p) => p.id))]);
+  if (countUsage && picked.length) bumpUse([...new Set(picked.map((p) => p.id).filter((id) => !id.startsWith("mnemo:")))]);
   finishObservation(memoryObservation,{status:picked.length?"ok":"skipped",reason:picked.length?undefined:"empty",inputCount:items.length,outputCount:picked.length,details:picked.map(p=>p.title??p.id),items:contextItems(picked)});
   return picked;
   } catch(error) {
@@ -743,7 +845,7 @@ function contextItems(picked: RecallItem[]): ContextItem[] {
   const scopes = db.prepare("SELECT scope FROM memories WHERE id = ?");
   return picked.map((item) => {
     const text = String((item as { text?: unknown }).text ?? "");
-    const scope = (scopes.get(item.id) as { scope?: string } | undefined)?.scope ?? "team";
+    const scope = (scopes.get(item.id) as { scope?: string } | undefined)?.scope ?? item.scope ?? "team";
     return { title: item.title ?? item.id, source: scope, chars: text.length, excerpt: text.slice(0, 400) };
   });
 }
@@ -855,5 +957,75 @@ export async function memoryBlock(args: {
     "Память команды (то, что уже известно; записи владельца важнее твоих). Тела — по запросу: taskflow_recall mode=detail и ids.",
     ...lines,
     "Устарело или неверно — поправь своей записью (taskflow_remember); новое устойчивое знание — запомни.",
+  ].join("\n");
+}
+
+interface HintRow {
+  id: string;
+  title: string | null;
+  text: string;
+  scope: string;
+  pinned: number;
+}
+
+/**
+ * Подсказка «эта тема уже записана» (владелец 08.11.2026).
+ *
+ * Считается детерминированно: темы вопроса сравниваются с темами записей
+ * (см. lib/memoryTopics.ts), никакой модели и никакой семантики. Подсказка
+ * нарочно короткая — роль должна пойти в память за телом, а не прочитать
+ * его в подсказке.
+ */
+export function memoryTopicHint(args: {
+  roleKey: string | null;
+  projectId?: string | null;
+  query: string;
+  chatId?: string | null;
+  taskId?: string | null;
+}): string {
+  const topics = queryTopics(args.query ?? "");
+  if (topics.length < 2) return "";
+  let matched: Array<{ memory_id: string; score: number }>;
+  try {
+    matched = topicMatches(topics, 12);
+  } catch {
+    return "";
+  }
+  if (!matched.length) return "";
+  const vis = visibleWhere(args.roleKey, args.projectId ?? null);
+  const placeholders = matched.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `SELECT m.id AS id, m.title AS title, m.text AS text, m.scope AS scope, m.pinned AS pinned
+         FROM memories m
+        WHERE ${vis.sql} AND m.id IN (${placeholders})`,
+    )
+    .all(...vis.args, ...matched.map((m) => m.memory_id)) as HintRow[];
+  if (!rows.length) return "";
+  const order = new Map(matched.map((m, i) => [m.memory_id, i]));
+  rows.sort((a, b) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99));
+  const picked = rows.slice(0, 3);
+  const names = picked.map((row) => {
+    const head = row.title?.trim() || row.text.replace(/\s+/g, " ").trim().slice(0, 60);
+    const where = row.scope === "role" ? "твоё" : row.scope === "project" ? "проект" : "общее";
+    return `«${head}» (${where}${row.pinned ? ", закреплено" : ""}, id ${row.id})`;
+  });
+  const matchedTopics = topics.slice(0, 5).join(", ");
+  db.prepare(
+    `INSERT INTO memory_hint_log (id, role_key, chat_id, task_id, query_text, matched_topics, hit_count, memory_ids)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    randomUUID(),
+    args.roleKey,
+    args.chatId ?? null,
+    args.taskId ?? null,
+    (args.query ?? "").slice(0, 500),
+    matchedTopics,
+    picked.length,
+    picked.map((row) => row.id).join(","),
+  );
+  return [
+    `Подсказка по памяти: темы «${matchedTopics}» уже записаны — ${picked.length === 1 ? "запись" : "записи"} ${names.join("; ")}.`,
+    "Прежде чем решать заново, посмотри их: taskflow_recall с mode=detail по этим id (или запрос по теме).",
   ].join("\n");
 }

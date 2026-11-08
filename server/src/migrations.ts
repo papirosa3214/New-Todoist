@@ -1,3 +1,4 @@
+import { reindexAllTopics, topicsOf } from "./lib/memoryTopics.js";
 import crypto from "node:crypto";
 import { BUDGET_CASE_SCHEMA } from "./runtime/chatBudgetCases.js";
 import { ROLE_TOOL_REQUEST_SCHEMA } from "./routes/role-tool-requests.js";
@@ -6223,6 +6224,83 @@ const migrations: Migration[] = [
              AND talk_chat_id IN (SELECT id FROM chats WHERE room_kind = 'task' AND archived_at IS NOT NULL)
         `);
       })();
+    },
+  },
+
+  {
+    id: "208_memory_mnemosyne",
+    description:
+      "Память ролей переезжает в Mnemosyne (владелец 08.11.2026: «чтобы всё записывалось в Mnemosyne и пользовались им»): " +
+      "таблица memory_mnemo_ids связывает локальную запись с частями, лежащими в банке Mnemosyne. " +
+      "Тело записи живёт в банке, локальная строка остаётся кэшем для списка памяти в приложении",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_mnemo_ids (
+          memory_id TEXT NOT NULL,
+          bank TEXT NOT NULL,
+          mnemo_id TEXT NOT NULL,
+          chunk_no INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (bank, mnemo_id)
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_mnemo_memory ON memory_mnemo_ids(memory_id);`);
+    },
+  },
+
+  {
+    id: "209_memory_topics",
+    description:
+      "Темы памяти для детерминированной подсказки (владелец 08.11.2026: «темы были, иди ищи там ещё»): " +
+      "memory_topics — нормализованные слова каждой записи, memory_hint_log — журнал выданных подсказок. " +
+      "Темы считаются без модели, поэтому совпадение с записанным буквальное",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_topics (
+          topic TEXT NOT NULL,
+          memory_id TEXT NOT NULL,
+          PRIMARY KEY (topic, memory_id)
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_topics_memory ON memory_topics(memory_id);`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_hint_log (
+          id TEXT NOT NULL PRIMARY KEY,
+          role_key TEXT,
+          chat_id TEXT,
+          task_id TEXT,
+          query_text TEXT NOT NULL,
+          matched_topics TEXT NOT NULL,
+          hit_count INTEGER NOT NULL,
+          memory_ids TEXT NOT NULL,
+          shown_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_hint_log_shown ON memory_hint_log(shown_at);`);
+      const rows = db
+        .prepare(`SELECT id, title, text FROM memories WHERE kind <> 'file'`)
+        .all() as Array<{ id: string; title: string | null; text: string }>;
+      const del = db.prepare(`DELETE FROM memory_topics WHERE memory_id = ?`);
+      const ins = db.prepare(`INSERT OR IGNORE INTO memory_topics (topic, memory_id) VALUES (?, ?)`);
+      for (const row of rows) {
+        del.run(row.id);
+        for (const topic of topicsOf(`${row.title ?? ""} ${row.text}`.slice(0, 4000))) ins.run(topic, row.id);
+      }
+    },
+  },
+
+  {
+    id: "210_memory_topic_weights",
+    description:
+      "Вес темы: слово из заголовка записи весит вдвое — подсказка должна звать ту запись, " +
+      "которая про эту тему, а не ту, где слово случайно встретилось. Индекс тем пересчитывается тем же кодом",
+    up: () => {
+      const columns = db.prepare(`PRAGMA table_info(memory_topics)`).all() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === "weight")) {
+        db.exec(`ALTER TABLE memory_topics ADD COLUMN weight REAL NOT NULL DEFAULT 1;`);
+      }
+      const count = reindexAllTopics();
+      console.log(`[210] темы пересчитаны: ${count} записей`);
     },
   },
 
