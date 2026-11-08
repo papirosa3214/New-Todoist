@@ -72,7 +72,10 @@ describe("правила из кода в реестре", () => {
   // Код-запасной литерал убран, чтобы у одного правила не было второй копии;
   // выключатель реестра эту инструкцию кодом не подменяет.
   it("у инструкции инструментов один источник — реестр", async () => {
-    const registry = registryText("инструменты: всегда");
+    // Место в реестре — своё: строка универсального инструмента (R271) в этот
+    // блок не попадает, иначе роль получила бы её дважды за один промпт.
+    expect(roleToolInstruction()).not.toContain("Каждый отказ содержит поле hint");
+    const registry = registryText("инструменты: всегда", undefined, "tools:ROLE_TOOL_INSTRUCTION");
     expect(registry.length).toBeGreaterThan(100);
     expect(roleToolInstruction()).toBe(registry);
     process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED = "false";

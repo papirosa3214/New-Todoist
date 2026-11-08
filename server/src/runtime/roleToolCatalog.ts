@@ -24,7 +24,7 @@ export {UNIVERSAL_INSTRUCTION};
  *  удалили — это видно в журнале, а не молчит. */
 let emptyToolInstructionWarned = false;
 export const roleToolInstruction = (): string => {
-  const text = registryText("инструменты: всегда");
+  const text = registryText("инструменты: всегда", undefined, "tools:ROLE_TOOL_INSTRUCTION");
   if (!text && !emptyToolInstructionWarned) {
     emptyToolInstructionWarned = true;
     console.warn("[role-tools] в реестре нет строки «инструменты: всегда» — роли останутся без инструкции по инструментам");
