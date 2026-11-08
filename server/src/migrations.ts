@@ -6142,6 +6142,49 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    id: "206_child_session_archived",
+    description:
+      "chat_child_sessions.status — состояние 'archived' для рабочих дочерних связей, " +
+      "которые стали неактивными вместе с окончательным закрытием задачи (спецификация §8)",
+    up: () => {
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.exec(`
+        CREATE TABLE chat_child_sessions_new (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('branch', 'assignment')),
+          parent_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          talk_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          slot_id TEXT REFERENCES subtasks(id) ON DELETE CASCADE,
+          attempt_no INTEGER NOT NULL DEFAULT 1,
+          context_generation INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'assigned'
+            CHECK (status IN ('assigned', 'delivered', 'answered', 'waiting', 'failed', 'archived')),
+          title TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (kind, slot_id)
+        )
+      `);
+      db.exec(
+        `INSERT INTO chat_child_sessions_new
+           (id, kind, parent_chat_id, talk_chat_id, role_id, task_id, slot_id, attempt_no,
+            context_generation, status, title, created_at, updated_at)
+         SELECT id, kind, parent_chat_id, talk_chat_id, role_id, task_id, slot_id, attempt_no,
+                context_generation, status, title, created_at, updated_at
+           FROM chat_child_sessions`,
+      );
+      db.exec("DROP TABLE chat_child_sessions");
+      db.exec("ALTER TABLE chat_child_sessions_new RENAME TO chat_child_sessions");
+      db.exec("CREATE INDEX idx_chat_child_parent ON chat_child_sessions(parent_chat_id)");
+      db.exec("CREATE INDEX idx_chat_child_talk ON chat_child_sessions(talk_chat_id)");
+      db.exec("CREATE INDEX idx_chat_child_task ON chat_child_sessions(task_id)");
+      db.exec("PRAGMA foreign_keys = ON");
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.

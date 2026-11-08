@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import db from "../db.js";
 import { ensurePersonalRoom } from "./chatRooms.js";
 import { ensureTaskRoom, taskRoomOf } from "./projectTopics.js";
+import { roomArchivedAt } from "./taskRoomArchive.js";
 import { roleUserId } from "../roleRouting.js";
 
 /**
@@ -80,6 +81,8 @@ export function ensureSlotAssignment(args: {
   const personal = ensurePersonalRoom(roleId);
   const talk = taskRoomOf(args.taskId) ?? ensureTaskRoom(args.taskId);
   if (!personal || !talk) return null;
+  // Комната задачи в архиве — работа больше не доставляется (спецификация §8).
+  if (roomArchivedAt(talk)) return null;
   const slot = db
     .prepare("SELECT title FROM subtasks WHERE id = ?")
     .get(args.slotId) as { title: string | null } | undefined;

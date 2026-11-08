@@ -44,6 +44,7 @@ import { runDiscussionTurn } from "../runtime/taskDiscussionSession.js";
 import { deliverTopicToWork, deliverChatToWork, slotWorkspace } from "../runtime/inProcessRun.js";
 import { topicContext, taskRoomClosedAt, ensureTaskRoom, roomsOfPersonalChat } from "../lib/projectTopics.js";
 import { assignmentsOf } from "../lib/chatChildren.js";
+import { roomArchivedAt } from "../lib/taskRoomArchive.js";
 import { HISTORY_SELECT, historyBefore, historySince } from "../lib/chatHistoryModel.js";
 import {
   archiveChat,
@@ -1190,6 +1191,14 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     async (req: any, reply) => {
       if (!isMember(req.params.id, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
+      // Архивная комната содержимое не принимает: явный отказ, а текст
+      // (спецификация §8) остаётся в поле у отправителя — клиент его не стирает.
+      if (roomArchivedAt(req.params.id))
+        return reply.code(409).send({
+          error: "Комната в архиве: отправка не выполнена, текст остался у тебя",
+          code: "chat_archived",
+          draft_kept: true,
+        });
       if (isDirectRoom(req.params.id) && !db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(req.params.id, req.userId))
         return reply.code(403).send({ error: "Это личная переписка ролей: её можно читать, писать — в личной комнате роли" });
       let mode: ChatWorkMode;

@@ -51,6 +51,7 @@ import {
 } from "../resultVersions.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
 import { ensureTaskRoom, setTaskRoomClosed } from "../lib/projectTopics.js";
+import { archiveTaskRoom, restoreTaskRoom } from "../lib/taskRoomArchive.js";
 import { closeTaskTree } from "../lib/taskCloseCascade.js";
 import { criticApproved } from "../lib/criticApproved.js";
 
@@ -2448,8 +2449,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Тема задачи закрывается вместе с задачей и снова открывается при
       // возврате в работу (карточка ca816271, п. 4). История остаётся.
       if (body.status === "completed" && existing.status !== "completed") {
-        setTaskRoomClosed(id, true);
+        // Спецификация §8: окончательное закрытие уводит комнату в архив и
+        // снимает фоновую доставку, а не только закрывает её.
+        archiveTaskRoom(id, { reason: "задача выполнена" });
       } else if (body.status === "active" && existing.status === "completed") {
+        // Возврат в работу поднимает и комнату из архива: та же дочерняя связь
+        // продолжается, новой не заводится (решение владельца).
+        restoreTaskRoom(id);
         setTaskRoomClosed(id, false);
       }
 

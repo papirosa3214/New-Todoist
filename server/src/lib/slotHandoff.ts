@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import db from "../db.js";
 import { slotLabels } from "./slotResolution.js";
+import { roomArchivedAt } from "./taskRoomArchive.js";
 
 /**
  * Передача работы от слота к слоту (владелец 08.11.2026; спецификация
@@ -129,6 +130,7 @@ export function conversationDigest(taskId: string, roomId: string): string {
 
 /** Карточка передачи в комнате задачи: человеку видно, кто кому что передал. */
 export function insertHandoffCard(taskId: string, roomId: string, slotId: string): void {
+  if (roomArchivedAt(roomId)) return;
   const record = handoffRecords(taskId).find((item) => item.subtask_id === slotId);
   if (!record) return;
   const summary = record.artifact_summary || record.result || "без итога";
