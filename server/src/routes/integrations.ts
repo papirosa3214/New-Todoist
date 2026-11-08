@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { wealthfolioStatus } from "../runtime/wealthfolioMcp.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -95,6 +96,12 @@ async function getFreshGoogleToken(userId: string): Promise<string | null> {
 
 export function registerIntegrationRoutes(app: FastifyInstance) {
   // ═══════════ Статус интеграций ═══════════
+  /** Финансовый трекер владельца: подключён или нет, сколько инструментов.
+   *  Адрес и токен наружу не отдаются — экрану они не нужны. */
+  app.get("/api/integrations/wealthfolio", { preHandler: authOrApiToken }, async () => {
+    return wealthfolioStatus();
+  });
+
   app.get("/api/integrations/status", { preHandler: authOrApiToken }, async (req) => {
     const userId = getUserId(req);
     const google = db

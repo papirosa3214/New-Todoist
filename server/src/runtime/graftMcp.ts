@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Type } from "typebox";
 import { connectInfraPanel } from "./infraPanelMcp.js";
+import { connectWealthfolio } from "./wealthfolioMcp.js";
 
 // Граф кода для ролей (владелец 20.10.2026): роли искали код вслепую по
 // дискам — десятки шагов на ответ. Теперь у каждой роли инструменты `graft_*`
@@ -179,10 +180,11 @@ export async function connectGraft(cwd?: string) {
   };
 }
 
-/** Внешние MCP роли одним вызовом: Пульт .110 (только инженер) и граф кода
- *  (все роли). Сбой одного не лишает роль другого. */
+/** Внешние MCP роли одним вызовом: Пульт .110 (только инженер), граф кода
+ *  (все роли) и финансовый трекер (только помощник владельца). Сбой одного не
+ *  лишает роль другого. */
 export async function connectRoleMcp(role: string, cwd?: string) {
-  const [infra, graft] = await Promise.all([
+  const [infra, graft, finance] = await Promise.all([
     connectInfraPanel(role).catch((error) => {
       console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`);
       return empty();
@@ -191,11 +193,19 @@ export async function connectRoleMcp(role: string, cwd?: string) {
       console.warn(`[graft] ${role}: ${error instanceof Error ? error.message : error}`);
       return empty();
     }),
+    connectWealthfolio(role).catch((error) => {
+      console.warn(`[wealthfolio] ${role}: ${error instanceof Error ? error.message : error}`);
+      return empty();
+    }),
   ]);
   return {
-    tools: [...infra.tools, ...graft.tools],
+    tools: [...infra.tools, ...graft.tools, ...finance.tools],
     close: async () => {
-      await Promise.all([infra.close().catch(() => {}), graft.close().catch(() => {})]);
+      await Promise.all([
+        infra.close().catch(() => {}),
+        graft.close().catch(() => {}),
+        finance.close().catch(() => {}),
+      ]);
     },
   };
 }

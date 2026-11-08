@@ -67,8 +67,11 @@ const CORE_OPERATIONS = new Set<string>(STARTER_TOOLS);
  *  20 Things — 71 схема, 84 844 символа из 169 525. Роль зовёт их изредка, а платят
  *  за них все запросы сессии. Права не меняются: операции остаются в реестре сессии,
  *  загрузчик отдаёт только то, что роль и так имеет право вызывать. */
-export const ON_DEMAND_PREFIXES = ["todoist_", "mcp__composio__", "things_"] as const;
-const isOnDemandOperation = (name: string): boolean => ON_DEMAND_PREFIXES.some(prefix => name.startsWith(prefix));
+export const ON_DEMAND_PREFIXES = ["todoist_", "mcp__composio__", "things_", "wealthfolio_"] as const;
+/** Что грузится по требованию, а не висит в каждом запросе. Экспорт — чтобы
+ *  правило можно было проверить тестом: цена ошибки — 65 схем финансового
+ *  трекера в каждом запросе роли. */
+export const isOnDemandOperation = (name: string): boolean => ON_DEMAND_PREFIXES.some(prefix => name.startsWith(prefix));
 /** Ядро (STARTER_TOOLS) активно всегда; внешние сервисы — только через taskflow_tools. */
 const staysActive = (name: string): boolean => CORE_OPERATIONS.has(name) || !isOnDemandOperation(name);
 
