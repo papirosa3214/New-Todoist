@@ -63,10 +63,22 @@ describe("правила из кода в реестре", () => {
       const { on, off } = both(() => chatModeInstruction(mode));
       expect(norm(on), mode).toBe(norm(off));
     }
-    for (const [name, fn] of [["tools", roleToolInstruction], ["universal", universalInstruction], ["planHelp", planRoleHelpPolicy]] as const) {
+    for (const [name, fn] of [["universal", universalInstruction], ["planHelp", planRoleHelpPolicy]] as const) {
       const { on, off } = both(fn);
       expect(norm(on), name).toBe(norm(off));
     }
+  });
+  // Владелец 08.11.2026: у инструкции инструментов один источник — реестр.
+  // Код-запасной литерал убран, чтобы у одного правила не было второй копии;
+  // выключатель реестра эту инструкцию кодом не подменяет.
+  it("у инструкции инструментов один источник — реестр", async () => {
+    const registry = registryText("инструменты: всегда");
+    expect(registry.length).toBeGreaterThan(100);
+    expect(roleToolInstruction()).toBe(registry);
+    process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED = "false";
+    expect(roleToolInstruction()).toBe(registry);
+    const mod: any = await import("../src/runtime/roleToolCatalog.js");
+    expect(mod.ROLE_TOOL_INSTRUCTION).toBeUndefined();
   });
   it("способ выполнения: одна правка смысла — его определяет задача чата, остальное дословно", () => {
     const chat = both(() => chatExecutionInstruction("chat"));

@@ -19,7 +19,6 @@ import {
   buildRoleToolCatalog,
   installNativeToolCore,
   installNativeToolSchemas,
-  ROLE_TOOL_INSTRUCTION,
   roleToolInstruction,
 } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";

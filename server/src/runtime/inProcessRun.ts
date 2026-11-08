@@ -8,7 +8,7 @@ import {installSteeringBoundary} from "./steeringBoundary.js";
 import {queueWorkCoordination,markDeliveredToWork,traceCoordination} from "./chatCoordination.js";
 import { reserveReviewRun, assertReviewRunAllowed, finishReviewRun } from "./reviewRunBudget.js";
 import { chatTools } from "./chatTools.js";
-import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION, roleToolInstruction } from "./roleToolCatalog.js";
+import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, roleToolInstruction } from "./roleToolCatalog.js";
 import { teamReadTools } from "./teamReadTools.js";
 import { allRoles } from "../roleRouting.js";
 import { roleToolAllowed } from "../lib/roleToolScope.js";

@@ -1,4 +1,4 @@
-import { registryTextOr } from "../lib/roleRules.js";
+import { registryText } from "../lib/roleRules.js";
 import {chatExecutionMode,type ChatExecutionMode} from "./chatExecutionMode.js";
 import {roleHostAccessTools} from "./roleHostAccess.js";
 import {createHostRoleTools} from "./hostRoleTools.js";
@@ -18,9 +18,19 @@ import {createToolLoader,onDemandScopeKey,onDemandTools,rememberOnDemandTool,TOO
 import {createRoleSubagentCallTool,createRoleSubagentSteerTool,isSubagentRun,resetSubagentCallCounters,ROLE_SUBAGENT_CALL_TOOL,ROLE_SUBAGENT_STEER_TOOL} from "./roleSubagentCall.js";
 import {createSecretaryOpenBranchTool} from "./secretaryVoiceBranch.js";
 export {UNIVERSAL_INSTRUCTION};
-const ROLE_TOOL_INSTRUCTION_LITERAL = "Инструменты TaskFlow сгруппированы по объектам: taskflow_tasks, taskflow_step, taskflow_plans, taskflow_slot, taskflow_chats, taskflow_knowledge, taskflow_memory, taskflow_mail, taskflow_team. Вызов: {\"action\": \"<действие>\", \"args\": {поля действия}}; действия и их поля перечислены в описании группы, поле с «?» необязательно. Несколько операций за один раунд — taskflow_batch. Отдельными именами: taskflow_work_plan, taskflow_ask_user_question, taskflow_consult. Не выдумывай поля, имена и значения-заглушки. Если вызов отклонён, исправь указанный параметр; тот же неверный вызов не повторяй. После трёх одинаковых неверных вызовов ход останавливается. Прежние отдельные имена (taskflow_recall и т. п.) тоже принимаются. Долгая команда на маке — сборка, тесты, выкладка — идёт через taskflow_host_bg: она не держит ход, а итог приходит сообщением и поднимает ход. Короткое (ls, grep, git status) — taskflow_host_bash.";
-export const roleToolInstruction = (): string => registryTextOr("инструменты: всегда", "tools:ROLE_TOOL_INSTRUCTION", ROLE_TOOL_INSTRUCTION_LITERAL);
-export const ROLE_TOOL_INSTRUCTION = ROLE_TOOL_INSTRUCTION_LITERAL;
+/** Текст инструкции инструментов. Единственный источник — реестр инструкций
+ *  (владелец 08.11.2026): код-запасной литерал убран, чтобы у одного правила
+ *  не было второй копии. Пустая строка означает, что строку из реестра
+ *  удалили — это видно в журнале, а не молчит. */
+let emptyToolInstructionWarned = false;
+export const roleToolInstruction = (): string => {
+  const text = registryText("инструменты: всегда");
+  if (!text && !emptyToolInstructionWarned) {
+    emptyToolInstructionWarned = true;
+    console.warn("[role-tools] в реестре нет строки «инструменты: всегда» — роли останутся без инструкции по инструментам");
+  }
+  return text;
+};
 /** Ядро: операции, без которых ход не начинается (сориентироваться, взять
  * слот) и не закрывается (план, комментарий, сдача шага). Отбор — по частоте
  * за 14 дней (role_tool_audit) и по обязательности шага. Остальное подключает

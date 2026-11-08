@@ -1,7 +1,7 @@
 import {registerProviderSession, observeProviderRetries} from "./providerDiagnostics.js";
 import { roleInstructionText } from "./roleHome.js";
 import {connectRoleMcp} from "./graftMcp.js";
-import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION, roleToolInstruction } from "./roleToolCatalog.js";
+import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, roleToolInstruction } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import crypto from "node:crypto";
 import { createAgentSession,createCodingTools,createReadOnlyTools,SettingsManager } from "@earendil-works/pi-coding-agent";
