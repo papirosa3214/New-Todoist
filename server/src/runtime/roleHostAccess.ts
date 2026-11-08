@@ -13,7 +13,10 @@ import {HOSTS_CONFIG} from "./roleWorkspace.js";
 import {hostOperations,withHostToolExecution} from "./hostOperations.js";
 import {местаОшибок, type Tool} from "./universalTaskflow.js";
 import {asText,captureBash,captureFile,q,withFileChanges,type CaptureIO} from "../lib/toolFileCapture.js";
-type Context={role:string;taskId?:string};
+import {backgroundStartError} from "./backgroundJobs.js";
+import {backgroundJobs} from "./backgroundJobsLive.js";
+import {startActivityHeartbeat} from "./runActivityHeartbeat.js";
+type Context={role:string;taskId?:string;chatId?:string;runId?:string};
 const native=()=>[...new Map([...createCodingTools("/"),...createReadOnlyTools("/")].map(t=>[t.name,t])).values()];
 const bindings=()=>JSON.parse(fs.readFileSync(HOSTS_CONFIG,"utf8")).projects as Record<string,Record<string,string>>;
 function projectForRole(id:string,role:string){
@@ -30,11 +33,12 @@ export function roleHostTargets(role:string){
   })
  })).filter(m=>m.projects.length);
 }
-export async function executeRoleHostTool(c:Context,p:any,signal?:AbortSignal,onUpdate?:any){
- const selected=native().find(t=>t.name===p.tool);
- if(!selected)throw new Error("Неизвестная операция хоста: "+String(p.tool));
- const аргументы=p.arguments??{};
- if(!Check(selected.parameters,аргументы))throw new Error("Неверные параметры операции "+String(p.tool)+":"+местаОшибок(selected.parameters,аргументы));
+/**
+ * Машина, проект и рабочая копия для вызова хоста — общая часть обычных
+ * операций и фоновых команд (08.11.2026): фон обязан попадать в то же дерево,
+ * что и синхронный bash, иначе две сборки топчут одну папку.
+ */
+async function resolveHostTarget(c:Context,p:any,signal?:AbortSignal){
  // Пустая строка от модели — не задача. В чате без задачи чужой или несуществующий task_id не блокирует
  // работу (06.11.2026): инструмент идёт в контексте чата, права роли и машины проверяются как обычно.
  let taskId:string|undefined=(p.task_id||c.taskId)||undefined;
@@ -59,6 +63,31 @@ export async function executeRoleHostTool(c:Context,p:any,signal?:AbortSignal,on
  if(!worktree.ok)throw new Error(worktree.error);
  const cwd=(worktree.data as any)?.path??JSON.parse(worktree.stdout??"{}").path;
  if(typeof cwd!=="string")throw new Error("Хост не вернул рабочую папку");
+ return {target,machine,cwd,key,taskId,projectId};
+}
+
+/**
+ * Пока команда идёт, ход не считается молчащим: сторож тишины видел только
+ * старт инструмента, и 40-минутная сборка обрывалась зачисткой на 30-й минуте.
+ * Импорт динамический — inProcessRun тянет каталог ролей, а тот этот модуль.
+ */
+let activityModule:Promise<{touchRunActivity:(runId:string)=>void;touchTaskActivity:(taskId:string)=>void}>|null=null;
+function keepActivityAlive(c:Context,taskId?:string){
+ return startActivityHeartbeat({onBeat:()=>{
+  activityModule??=import("./inProcessRun.js");
+  void activityModule.then(m=>{
+   if(taskId)m.touchTaskActivity(taskId);
+   if(c.runId)m.touchRunActivity(c.runId);
+  }).catch(()=>{});
+ }});
+}
+
+export async function executeRoleHostTool(c:Context,p:any,signal?:AbortSignal,onUpdate?:any){
+ const selected=native().find(t=>t.name===p.tool);
+ if(!selected)throw new Error("Неизвестная операция хоста: "+String(p.tool));
+ const аргументы=p.arguments??{};
+ if(!Check(selected.parameters,аргументы))throw new Error("Неверные параметры операции "+String(p.tool)+":"+местаОшибок(selected.parameters,аргументы));
+ const {target,machine,cwd,taskId}=await resolveHostTarget(c,p,signal);
  const args={...(p.arguments??{})};
  if(typeof args.path==="string"){
   const resolved=path.posix.resolve(cwd,args.path);
@@ -80,8 +109,13 @@ export async function executeRoleHostTool(c:Context,p:any,signal?:AbortSignal,on
   return withFileChanges(result,machine.name,files);
  }
  if(p.tool==="bash"){
-  const {result,files}=await captureBash(io,cwd,run);
-  return withFileChanges(result,machine.name,files);
+  const stopHeartbeat=keepActivityAlive(c,taskId);
+  try{
+   const {result,files}=await captureBash(io,cwd,run);
+   return withFileChanges(result,machine.name,files);
+  }finally{
+   stopHeartbeat();
+  }
  }
  return run();
 }
@@ -99,11 +133,54 @@ function hostCaptureIO(machineId:string,signal?:AbortSignal):CaptureIO{
   },
  };
 }
+const text=(value:unknown)=>({content:[{type:"text" as const,text:typeof value==="string"?value:JSON.stringify(value,null,1)}]});
+
+/** Предел фоновой команды: тот же, что у синхронного bash роли (40 минут). */
+const BG_MAX_SECONDS=40*60;
+
+/**
+ * Фоновая команда роли (08.11.2026): долгая команда не держит ход. Хост про
+ * фон не знает — реестр живёт в сервере поверх runOperation со потоком.
+ */
+async function executeBackgroundTool(c:Context,p:any,signal?:AbortSignal){
+ const jobs=backgroundJobs();
+ const action=String(p.action??"status");
+ const jobId=typeof p.job_id==="string"?p.job_id.trim():"";
+ if(action==="list")return text(jobs.list({role:c.role}));
+ if(action==="output")return text(jobs.output(jobId,Number(p.offset??0)||0));
+ if(action==="stop")return text(jobs.stop(jobId));
+ if(action==="status")return text(jobs.status(jobId));
+ if(action!=="start")throw new Error("Неизвестное действие фоновой задачи: "+action+". Доступно: start, status, output, stop, list");
+ const {target,machine,cwd,key,taskId}=await resolveHostTarget(c,p,signal);
+ // Своя папка допустима только внутри дерева проекта или разрешённых корней машины:
+ // фон не должен давать роль право бегать по всей файловой системе мака.
+ const rawCwd=typeof p.cwd==="string"?p.cwd.trim():"";
+ const workdir=rawCwd?path.posix.resolve(rawCwd.startsWith("/")?rawCwd:cwd,rawCwd):cwd;
+ const roots=[...(machine.allowed_roots??[]) as string[],target.repo,cwd].filter(Boolean) as string[];
+ const refusal=backgroundStartError({command:p.command,cwd:workdir,allowedRoots:roots});
+ if(refusal)throw new Error(refusal);
+ const seconds=Math.max(10,Math.min(Math.floor(Number(p.timeout??BG_MAX_SECONDS))||BG_MAX_SECONDS,BG_MAX_SECONDS));
+ const job=jobs.start({role:c.role,worktreeKey:key,machineId:machine.id,cwd:workdir,command:String(p.command),timeoutMs:seconds*1000,taskId,chatId:c.chatId});
+ return text({...job,hint:"Задача идёт без блокировки хода: можно закончить ход. Итог придёт сообщением в эту переписку, а ход роли поднимется сам. Статус — taskflow_host_bg action=status job_id="+job.id});
+}
+
 export function roleHostAccessTools(context:Context):Tool[]{
  const target={machine:Type.Optional(Type.String({description:"Имя или id из taskflow_hosts; при одной машине можно не указывать"})),project_id:Type.Optional(Type.String()),task_id:Type.Optional(Type.String())};
  return [{
   name:"taskflow_hosts",description:"Удалённые host: доступные машины и проекты, онлайн и пути. Доступно каждой роли в чате и задаче без согласования плана.",parameters:Type.Object({}),
   execute:async()=>({content:[{type:"text",text:JSON.stringify(roleHostTargets(context.role))}]})
+ },{
+  name:"taskflow_host_bg",
+  description:"Фоновая команда на удалённом host (Mac): сборка, тесты, выкладка — всё, что идёт дольше нескольких секунд. Запуск НЕ держит ход: роль получает id задачи и может закончить ход, итог придёт сообщением в переписку и ход поднимется сам. В одном рабочем дереве идёт одна команда: вторая встаёт в очередь и стартует после первой. Для коротких команд (ls, grep, git status) используй taskflow_host_bash.",
+  parameters:Type.Object({...target,
+   action:Type.Union([Type.Literal("start"),Type.Literal("status"),Type.Literal("output"),Type.Literal("stop"),Type.Literal("list")],{description:"start — запустить, status — состояние и хвост, output — страница вывода, stop — остановить, list — свои задачи"}),
+   command:Type.Optional(Type.String({description:"Команда для action=start"})),
+   cwd:Type.Optional(Type.String({description:"Папка внутри рабочего дерева (по умолчанию — корень дерева проекта)"})),
+   job_id:Type.Optional(Type.String({description:"id задачи из ответа start или list"})),
+   offset:Type.Optional(Type.Number({description:"Смещение в байтах для action=output"})),
+   timeout:Type.Optional(Type.Number({description:"Предел команды в секундах, не больше 2400 (по умолчанию 2400)"})),
+  }),
+  execute:async(_id:string,p:any,signal?:AbortSignal)=>executeBackgroundTool(context,p,signal)
  },...native().map(tool=>({
   name:"taskflow_host_"+tool.name,
   description:"Выполнить "+tool.name+" на удалённом host (Mac) в песочнице проекта. Доступно всем ролям без назначения этапа и согласования плана. Рабочая копия создаётся автоматически. Проект по умолчанию — проект карточки; для другого проекта (например, iOS-репозитория из веб-карточки) передай project_id из taskflow_hosts. "+(tool.name==="bash"?"Сборка, тесты, симулятор (xcodebuild, xcrun simctl) идут здесь; для долгих команд передай timeout в секундах (без него — 40 минут). Прямой ssh на Mac не нужен и не используется. ":"")+tool.description,
