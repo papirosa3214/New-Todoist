@@ -1502,6 +1502,17 @@ function closeNodeWithVerdict(
     .catch((error) =>
       console.warn("[plan-admission] подтверждение карточки назначения не записано:", error),
     );
+  // Карточка передачи в комнате задачи (08.11.2026, спецификация §7): человеку
+  // видно, кто закрыл этап и что сдал. Карточка отображаемая — в историю
+  // модели не идёт (`message_type='system'`), преемник получает передачу
+  // строкой в постановке этапа (`lib/slotHandoff.ts`).
+  void import("../lib/slotHandoff.js")
+    .then(async ({ insertHandoffCard }) => {
+      const { taskRoomOf } = await import("../lib/projectTopics.js");
+      const room = taskRoomOf(taskId);
+      if (room) insertHandoffCard(taskId, room, row.id);
+    })
+    .catch((error) => console.warn("[plan-admission] карточка передачи не записана:", error));
   logEvent({
     taskId,
     actorId: null,
