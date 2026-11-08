@@ -22,6 +22,7 @@ import crypto from "node:crypto";
 import db from "../db.js";
 import { toFtsQuery } from "./ftsQuery.js";
 import { banksFor, forgetIds, recallAcrossBanks, writeRecord } from "./memoryBanks.js";
+import { logMemoryAccess } from "./memoryAccessLog.js";
 export { toFtsQuery } from "./ftsQuery.js";
 import { startObservation, finishObservation, withObservationContext } from "./contextObservability.js";
 import type { ContextItem } from "./contextObservability.js";
@@ -567,6 +568,35 @@ export async function updateMemory(
   return fresh;
 }
 
+/**
+ * Обращение к памяти с журналом (владелец 08.11.2026: «хочу видеть, кто туда
+ * обращается и сколько раз»). Журнал пишется в `finally`: упавший поиск —
+ * тоже обращение, и владельцу полезно его видеть.
+ */
+export async function recall(args: {
+  roleKey: string | null;
+  projectId?: string | null;
+  query: string;
+  limit?: number;
+  mode?: RecallMode;
+  ids?: string[];
+  countUsage?: boolean;
+}): Promise<RecallItem[]> {
+  let hits = 0;
+  try {
+    const items = await recallInner(args);
+    hits = items.length;
+    return items;
+  } finally {
+    logMemoryAccess({
+      roleKey: args.roleKey,
+      query: args.query ?? "",
+      hits,
+      kind: (args.mode ?? "full") === "detail" ? "detail" : "recall",
+    });
+  }
+}
+
 export function deleteMemory(id: string, author: Author): void {
   const current = getMemory(id);
   if (!current) throw new MemoryError("запись не найдена", 404);
@@ -741,7 +771,7 @@ function visibleWhere(
  */
 export type RecallMode = "full" | "index" | "detail";
 
-export async function recall(args: {
+async function recallInner(args: {
   roleKey: string | null;
   projectId?: string | null;
   query: string;

@@ -114,6 +114,7 @@ import { resumePendingHandoffs } from "./runtime/taskDiscussion.js";
 import { ensureCommonChat } from "./lib/chatCommon.js";
 import { registerWidgetsRoutes } from "./routes/widgets.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
+import { registerMemoryWatchRoutes } from "./routes/memoryWatch.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerCompassRoutes } from "./routes/compass.js";
 import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
@@ -651,6 +652,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerRunToolsRoutes(app);
   registerWidgetsRoutes(app);
   registerMemoryRoutes(app);
+  registerMemoryWatchRoutes(app);
   registerTranscribeRoutes(app);
   // Архив диктовок (18.08.2026): аудио выгружается с телефона и хранится
   // бессрочно — прямое решение владельца.

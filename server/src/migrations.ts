@@ -6324,6 +6324,32 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    // Журнал обращений к памяти (владелец 08.11.2026: «хочу видеть, кто
+    // туда обращается и сколько раз»). Пишется на каждый recall роли и на
+    // каждый ручной поиск из приложения. Тело записи здесь не хранится —
+    // только вопрос, кто спросил и сколько нашлось.
+    id: "212_memory_access_log",
+    description: "Журнал обращений к памяти: кто, о чём и сколько нашлось",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_access_log (
+          id TEXT PRIMARY KEY,
+          role_key TEXT,
+          chat_id TEXT,
+          query TEXT NOT NULL,
+          hits INTEGER NOT NULL DEFAULT 0,
+          kind TEXT NOT NULL DEFAULT 'recall',
+          at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_access_role
+          ON memory_access_log(role_key, at);
+        CREATE INDEX IF NOT EXISTS idx_memory_access_at
+          ON memory_access_log(at);
+      `);
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.
