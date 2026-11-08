@@ -25,6 +25,28 @@ import { taskRoomOf } from "./projectTopics.js";
  * Личные комнаты ролей не трогаются: архив — только у комнаты задачи.
  */
 
+/**
+ * Работа по слоту не началась, потому что комната задачи в архиве. Владелец
+ * (08.11.2026): восстанавливать архивную комнату не надо — пусть будет сказано
+ * прямо, что делать дальше, вместо тихого молчания.
+ */
+export function refuseArchivedWork(taskId: string): void {
+  const task = db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title?: string } | undefined;
+  const text = `Сессия не создалась: комната задачи «${task?.title ?? taskId}» в архиве. Пересоздайте задачу заново.`;
+  const stmt = db.prepare(
+    "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, ?, ?, ?, NULL)",
+  );
+  for (const userId of owners()) {
+    const exists = db
+      .prepare(
+        `SELECT 1 FROM notifications WHERE user_id = ? AND type = ? AND task_id = ? AND text = ? AND read = 0 LIMIT 1`,
+      )
+      .get(userId, TASK_ROOM_ARCHIVED_TYPE, taskId, text);
+    if (exists) continue;
+    stmt.run(crypto.randomUUID(), userId, TASK_ROOM_ARCHIVED_TYPE, taskId, text);
+  }
+}
+
 export interface TaskRoomArchive {
   roomId: string | null;
   archived: boolean;
@@ -72,31 +94,6 @@ function notifyArchived(taskId: string, roomId: string, reason: string | null): 
   }
   void roomId;
   return count;
-}
-
-/**
- * Возврат задачи в работу (решение владельца: переоткрытие продолжает ту же
- * дочернюю связь). Комната возвращается из архива, рабочие дочерние связи
- * снова готовы к доставке: `ensureSlotAssignment` переведёт их в `delivered`
- * на первом же заходе слота.
- */
-export function restoreTaskRoom(taskId: string): boolean {
-  const roomId = taskRoomOf(taskId);
-  if (!roomId) return false;
-  return db.transaction(() => {
-    const row = db.prepare("SELECT archived_at, closed_at FROM chats WHERE id = ?").get(roomId) as
-      | { archived_at: string | null; closed_at: string | null }
-      | undefined;
-    if (!row || (!row.archived_at && !row.closed_at)) return false;
-    db.prepare(
-      `UPDATE chats SET archived_at = NULL, closed_at = NULL, updated_at = datetime('now') WHERE id = ?`,
-    ).run(roomId);
-    db.prepare(
-      `UPDATE chat_child_sessions SET status = 'assigned', updated_at = datetime('now')
-        WHERE talk_chat_id = ? AND status = 'archived'`,
-    ).run(roomId);
-    return true;
-  })();
 }
 
 /**

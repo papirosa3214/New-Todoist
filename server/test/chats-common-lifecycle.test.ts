@@ -263,10 +263,12 @@ describe("Чаты: общий чат, тема задачи, только @", (
     const write = await app.inject({ method: "POST", url: `/api/chats/${topic.id}/messages`, headers: ownerAuth, payload: { text: "ещё вопрос" } });
     expect(write.statusCode).toBe(409);
 
-    // Возврат в работу открывает тему снова.
+    // Возврат в работу комнату из архива не поднимает (владелец 08.11.2026):
+    // закрытая работа остаётся закрытой, новую заводят новой задачей.
     await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}`, headers: ownerAuth, payload: { status: "active" } });
-    const reopened = db.prepare("SELECT closed_at FROM chats WHERE id=?").get(topic.id) as any;
-    expect(reopened.closed_at).toBeNull();
+    const reopened = db.prepare("SELECT closed_at, archived_at FROM chats WHERE id=?").get(topic.id) as any;
+    expect(reopened.closed_at).not.toBeNull();
+    expect(reopened.archived_at).not.toBeNull();
   });
 
   it("в групповом чате без @ никто не просыпается, с @ — отвечает", async () => {

@@ -6185,6 +6185,47 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    id: "207_archive_old_task_rooms",
+    description:
+      "Разово: комнаты задач, которые уже закрыты (или чья задача выполнена), уходят в архив — " +
+      "до появления архива закрытие ставило только closed_at, и такие комнаты продолжали получать " +
+      "фоновую доставку. Рассылки нет: это приведение истории к новому контракту (спецификация §8)",
+    up: () => {
+      const before = db
+        .prepare(
+          `SELECT count(*) AS c FROM chats
+            WHERE room_kind = 'task' AND archived_at IS NULL
+              AND (closed_at IS NOT NULL OR task_id IN (SELECT id FROM tasks WHERE status = 'completed'))`,
+        )
+        .get() as { c: number };
+      if (!before.c) return;
+
+      db.transaction(() => {
+        db.exec(`
+          UPDATE chats
+             SET archived_at = datetime('now'),
+                 closed_at = COALESCE(closed_at, datetime('now')),
+                 updated_at = datetime('now')
+           WHERE room_kind = 'task' AND archived_at IS NULL
+             AND (closed_at IS NOT NULL OR task_id IN (SELECT id FROM tasks WHERE status = 'completed'))
+        `);
+        db.exec(`
+          UPDATE chat_message_queue
+             SET status = 'superseded', finished_at = datetime('now')
+           WHERE status IN ('pending', 'picked')
+             AND chat_id IN (SELECT id FROM chats WHERE room_kind = 'task' AND archived_at IS NOT NULL)
+        `);
+        db.exec(`
+          UPDATE chat_child_sessions
+             SET status = 'archived', updated_at = datetime('now')
+           WHERE status != 'archived'
+             AND talk_chat_id IN (SELECT id FROM chats WHERE room_kind = 'task' AND archived_at IS NOT NULL)
+        `);
+      })();
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.

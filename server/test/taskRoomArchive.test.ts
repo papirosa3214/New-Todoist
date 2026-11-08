@@ -9,7 +9,7 @@ import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { ensureSlotAssignment } from "../src/lib/chatChildren.js";
 import { ensureTaskRoom, setTaskRoomClosed } from "../src/lib/projectTopics.js";
-import { archiveTaskRoom, restoreTaskRoom, roomArchivedAt } from "../src/lib/taskRoomArchive.js";
+import { archiveTaskRoom, refuseArchivedWork, roomArchivedAt } from "../src/lib/taskRoomArchive.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
 vi.mock("../src/lib/embeddingClient.js", () => ({
@@ -156,13 +156,18 @@ describe("Архив комнаты задачи по окончательном
     expect(report.queue).toBe(1);
     expect(roomArchivedAt(secondRoom)).toBeTruthy();
 
-    // Возврат в работу поднимает комнату из архива: связь та же, новой не создаётся.
-    restoreTaskRoom("archive-task-2");
-    expect(roomArchivedAt(secondRoom)).toBeNull();
-    expect(
-      db.prepare("SELECT closed_at FROM chats WHERE id = ?").get(secondRoom),
-    ).toEqual({ closed_at: null });
+    // Возврат в работу архив не поднимает (владелец 08.11.2026): в комнате
+    // уже ничего не продолжить, работу заводят новой задачей.
     setTaskRoomClosed("archive-task-2", false);
+    expect(roomArchivedAt(secondRoom)).toBeTruthy();
+
+    // А работа по слоту в архивной комнате объясняется словами, не молчанием.
+    refuseArchivedWork("archive-task-2");
+    const refused = db
+      .prepare("SELECT text FROM notifications WHERE task_id = 'archive-task-2' AND text LIKE 'Сессия не создалась%'")
+      .all() as Array<{ text: string }>;
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused[0].text).toContain("Пересоздайте задачу заново");
     db.prepare("DELETE FROM chat_messages WHERE chat_id = ?").run(secondRoom);
     db.prepare("DELETE FROM chat_members WHERE chat_id = ?").run(secondRoom);
     db.prepare("DELETE FROM chats WHERE id = ?").run(secondRoom);

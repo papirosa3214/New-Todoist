@@ -523,12 +523,20 @@ export async function startPlanSubtaskRun(
   // продолжает ту же дочернюю связь; ошибка карточки не срывает работу.
   try {
     const { ensureSlotAssignment } = await import("../lib/chatChildren.js");
-    ensureSlotAssignment({
+    const assignment = ensureSlotAssignment({
       taskId: current.task_id,
       slotId: current.id,
       role: node.role_key,
       attemptNo: claimedCycle,
     });
+    // Комната задачи в архиве — дочерней связи уже не будет. Молчать нельзя:
+    // владелец решает сам, поднимать ли задачу заново (08.11.2026).
+    if (!assignment) {
+      const { roomArchivedAt, refuseArchivedWork } = await import("../lib/taskRoomArchive.js");
+      const { taskRoomOf } = await import("../lib/projectTopics.js");
+      const room = taskRoomOf(current.task_id);
+      if (room && roomArchivedAt(room)) refuseArchivedWork(current.task_id);
+    }
   } catch (error) {
     console.warn("[plan-admission] карточка назначения не создана:", error);
   }
