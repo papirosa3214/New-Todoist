@@ -1,4 +1,5 @@
 import { recordModelUsage } from "../lib/modelUsage.js";
+import { translateThinkingRu } from "../lib/thinkingTranslation.js";
 import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 // Живой ход роли в чате (владелец 27.09.2026): пока роль отвечает, окно
 // чата показывает то же, что окно сессии Claude Code, — текст ответа
@@ -83,6 +84,11 @@ export type LiveItem =
       id: string;
       tool: "thinking";
       text: string;
+      /// Исходный текст модели, если показан перевод (владелец 08.11.2026:
+      /// «хочу видеть раздумья по-русски»). Оригинал не теряем: перевод
+      /// бывает грубым, а по исходнику видно, что модель поняла.
+      original?: string;
+      translated?: string;
       status: "running" | "done";
       started_at: string;
       ended_at?: string;
@@ -650,6 +656,31 @@ export class LiveTurn {
     item.status = "done";
     item.ended_at = new Date().toISOString();
     this.thinkingItem = null;
+    this.translateThinking(item);
+  }
+
+  /**
+   * Перевести блок размышлений на русский (владелец 08.11.2026). Модель
+   * думает по-английски, а читать это владельцу приходится каждый ход.
+   *
+   * Перевод идёт фоном и не держит ход: пока он считается, в ленте лежит
+   * исходник. Сбой перевода ничего не меняет — остаётся оригинал. Кэш живёт
+   * в `thinkingTranslation.ts`, повторные куски не переводятся заново.
+   */
+  private translateThinking(item: Extract<LiveItem, { kind: "thinking" }>): void {
+    if (this.closed || item.text.length < 30) return;
+    const text = item.text;
+    void translateThinkingRu(text)
+      .then((ru) => {
+        if (!ru || this.closed || item.text !== text) return;
+        item.original = text;
+        item.translated = ru;
+        item.text = ru;
+        this.schedule(true);
+      })
+      .catch(() => {
+        // Перевод — удобство, а не условие. Молчим и оставляем исходник.
+      });
   }
 
   private appendText(delta: string): void {
