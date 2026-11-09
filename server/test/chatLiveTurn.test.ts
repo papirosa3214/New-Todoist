@@ -20,6 +20,7 @@ import {
   chatRunFailureText,
   lastThinkingPhrase,
   liveTurnsOfChat,
+  presentedToolCall,
   redactSecrets,
   startLiveTurn,
   stepDetail,
@@ -27,6 +28,14 @@ import {
   stripQuickRepliesLine,
   unwrapRoleEnvelope,
 } from "../src/runtime/chatLiveTurn.js";
+
+describe("grouped memory presentation", () => {
+  it("distinguishes recall and remember without changing other operations", () => {
+    expect(presentedToolCall("taskflow_memory", { action: "recall", args: { query: "test" } })).toEqual({ tool: "taskflow_recall", args: { query: "test" } });
+    expect(presentedToolCall("taskflow_memory", { action: "remember", args: { text: "test" } })).toEqual({ tool: "taskflow_remember", args: { text: "test" } });
+    expect(presentedToolCall("taskflow_memory", { action: "other" })).toEqual({ tool: "taskflow_memory", args: { action: "other" } });
+  });
+});
 
 const text = (delta: string) => ({
   type: "message_update",
@@ -62,6 +71,15 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("живой ход", () => {
+  it("показывает фактическую операцию сгруппированного вызова памяти", () => {
+    const turn = newTurn();
+    turn.onEvent({ type: "message_update", assistantMessageEvent: { type: "toolcall_start", contentIndex: 0,
+      partial: { content: [{ type: "toolCall", id: "memory1", name: "taskflow_memory" }] } } });
+    turn.onEvent(toolStart("memory1", "taskflow_memory", { action: "recall", args: { query: "время" } }));
+    expect(liveTurnsOfChat("c1")[0].items).toMatchObject([{ id: "memory1", tool: "taskflow_recall", status: "running" }]);
+    turn.onEvent(toolEnd("memory1"));
+    expect(liveTurnsOfChat("c1")[0].items).toMatchObject([{ id: "memory1", tool: "taskflow_recall", status: "done" }]);
+  });
   it("REST snapshot and live event identify the triggering message", () => {
     const turn = startLiveTurn({chatId:"c1", userId:"role_qa", name:"QA", audience:()=>["u1"], triggerMessageId:"question-1"});
     turn.onEvent(toolStart("step-1", "read", {path:"a"}));

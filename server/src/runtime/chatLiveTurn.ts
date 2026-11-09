@@ -206,6 +206,10 @@ export function presentedToolCall(tool:string,args:unknown):{tool:string;args:un
   if(a.action==="describe")return {tool:"taskflow_describe",args:{name:a.operation}};
  }
  if(tool==="mcp" && typeof a.tool==="string")return {tool:a.tool,args:a.args};
+ // Grouped memory calls carry their actual operation in action, not the tool name.
+ if(tool==="taskflow_memory" && (a.action==="recall" || a.action==="remember")){
+  return {tool:`taskflow_${a.action}`,args:a.args && typeof a.args==="object"?a.args:{}};
+ }
  return {tool,args};
 }
 function gatewayResult(result:unknown):{ok?:boolean;data?:{state?:string}}|null{
