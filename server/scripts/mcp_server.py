@@ -1344,17 +1344,23 @@ def t_youtube(args):
     import subprocess
     import tempfile
 
+    # Debian package can lag YouTube extractor fixes by years. Prefer the
+    # user-managed current binary, while retaining PATH fallback for clean hosts.
+    yt_dlp = os.path.expanduser("~/.local/bin/yt-dlp")
+    if not os.path.isfile(yt_dlp):
+        yt_dlp = shutil.which("yt-dlp") or "yt-dlp"
+
     work = tempfile.mkdtemp(prefix="tf-yt-")
     try:
         meta = subprocess.run(
-            ["yt-dlp", "--skip-download", "--extractor-args",
+            [yt_dlp, "--skip-download", "--extractor-args",
              "youtube:player_client=web,mweb", "--print", "%(title)s", url],
             capture_output=True, text=True, timeout=60,
         )
         title = (meta.stdout or "").strip().splitlines()[0] if meta.stdout.strip() else ""
 
         subs = subprocess.run(
-            ["yt-dlp", "--skip-download", "--extractor-args",
+            [yt_dlp, "--skip-download", "--extractor-args",
              "youtube:player_client=web,mweb",
              "--write-subs", "--write-auto-subs",
              "--sub-langs", langs, "--sub-format", "vtt", "--convert-subs", "vtt",
