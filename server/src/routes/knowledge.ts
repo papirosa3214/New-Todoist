@@ -21,6 +21,7 @@ import {
   deleteDocuments,
   docIdFromName,
   documentStatus,
+  documentText,
   frontmatter,
   isConfigured,
   listDatasets,
@@ -270,7 +271,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { q?: string; top_k?: string; dataset_id?: string } }>(
     "/api/knowledge/search",
     { preHandler: authPre },
-    async (req, reply) => {
+    async (req: any, reply) => {
       if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
       const question = (req.query.q || "").trim();
       if (!question) return reply.code(400).send({ error: "Пустой запрос" });
@@ -384,17 +385,14 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
     { preHandler: authPre },
     async (req, reply) => {
       if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
-      let text: string;
+      const dataset = req.query.dataset_id || ragflowDataset();
+      let text: string | null;
       try {
-        const res = await fetch(
-          `${ragflowApi()}/api/v1/datasets/${req.query.dataset_id || ragflowDataset()}/documents/${req.params.ragflowId}`,
-          { headers: { Authorization: "Bearer " + ragflowToken() } },
-        );
-        if (!res.ok) return reply.code(res.status === 404 ? 404 : 502).send({ error: "Документ не отдан" });
-        text = await res.text();
+        text = await documentText(dataset, req.params.ragflowId);
       } catch (e: any) {
         return reply.code(502).send({ error: "База знаний недоступна", detail: String(e?.message || e) });
       }
+      if (text === null) return reply.code(404).send({ error: "Документ не отдан" });
       const meta = frontmatter(text);
       // Тело без шапки: шапка — служебная, показывать её в приложении незачем.
       const body = text.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, "");

@@ -84,7 +84,9 @@ export async function uploadDocument(
   contentType = "application/octet-stream",
 ): Promise<{ id: string | null; name: string }> {
   const form = new FormData();
-  form.append("file", new Blob([bytes], { type: contentType }), name);
+  // tsc 5.x: Uint8Array<ArrayBufferLike> не считается BlobPart, хотя байты
+  // те же — приведение типа без копирования буфера.
+  form.append("file", new Blob([bytes as unknown as BlobPart], { type: contentType }), name);
   const res = await fetch(`${ragflowApi()}/api/v1/datasets/${datasetId}/documents`, {
     method: "POST",
     headers: { Authorization: "Bearer " + ragflowToken() },
