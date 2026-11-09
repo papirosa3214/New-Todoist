@@ -44,6 +44,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -1331,6 +1332,40 @@ def _vtt_to_text(vtt: str) -> str:
     return text.strip()
 
 
+def _youtube_transcript_api(url: str, languages: list[str], cap: int) -> dict:
+    """Получает готовые субтитры без плеера, форматов и JS-задач yt-dlp."""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    video_id = ""
+    if host in {"youtu.be", "www.youtu.be"}:
+        video_id = parsed.path.strip("/").split("/", 1)[0]
+    elif host == "youtube.com" or host.endswith(".youtube.com"):
+        if parsed.path == "/watch":
+            video_id = (urllib.parse.parse_qs(parsed.query).get("v") or [""])[0]
+        else:
+            parts = [part for part in parsed.path.split("/") if part]
+            if len(parts) >= 2 and parts[0] in {"embed", "shorts", "live"}:
+                video_id = parts[1]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise TaskFlowError("не удалось определить идентификатор ролика YouTube")
+
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    cues = YouTubeTranscriptApi().fetch(video_id, languages=languages)
+    text = re.sub(r"\s+", " ", " ".join((cue.text or "").strip() for cue in cues)).strip()
+    if not text:
+        raise TaskFlowError("API субтитров YouTube вернул пустой текст")
+    return {
+        "title": "",
+        "url": url,
+        "transcript": text[:cap],
+        "chars": len(text),
+        "truncated": len(text) > cap,
+        "source": "youtube-transcript-api",
+        "sub_file": None,
+    }
+
+
 def _youtube_cookie_file(work: str) -> str | None:
     """Copies the broker-held Netscape cookie jar into this one invocation only."""
     token_path = os.environ.get("TASKFLOW_SECRET_BROKER_TOKEN_PATH", os.path.expanduser("~/.config/taskflow/secret-broker-owner.token"))
@@ -1518,6 +1553,16 @@ def t_youtube(args):
         raise TaskFlowError("нужен url")
     langs = str(args.get("langs") or "ru,en")
     cap = int(args.get("max_chars") or 24000)
+
+    # Основной путь: API отдаёт текстовые дорожки напрямую и не требует
+    # ни браузерной сессии, ни скачивания плеера/аудио. yt-dlp + Whisper
+    # остаются резервом для роликов без доступной дорожки.
+    try:
+        return _youtube_transcript_api(
+            url, [lang.strip() for lang in langs.split(",") if lang.strip()], cap
+        )
+    except Exception:
+        pass
 
     import shutil
     import subprocess

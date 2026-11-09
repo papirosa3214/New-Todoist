@@ -30,7 +30,7 @@ class TestYoutubeWhisperFallback(unittest.TestCase):
     def tearDown(self):
         m.subprocess.run = self._orig_run
         m._youtube_cookie_file = self._orig_cookies
-        for name in ("_youtube_subs_text", "_youtube_whisper_text"):
+        for name in ("_youtube_transcript_api", "_youtube_subs_text", "_youtube_whisper_text"):
             if hasattr(m, name):
                 delattr(m, name)
 
@@ -38,6 +38,24 @@ class TestYoutubeWhisperFallback(unittest.TestCase):
         """Без JS-рантайма yt-dlp 2026.x не отдаёт ни одного формата."""
         self.assertIn("--js-runtimes", m.YTDLP_JS_ARGS)
         self.assertIn("--remote-components", m.YTDLP_JS_ARGS)
+
+    def test_prefers_transcript_api_before_ytdlp(self):
+        """Прямой API субтитров не должен запускать хрупкий yt-dlp путь."""
+        m._youtube_transcript_api = lambda url, languages, cap: {
+            "title": "Из API",
+            "url": url,
+            "transcript": "текст из прямого API",
+            "chars": 22,
+            "truncated": False,
+            "source": "youtube-transcript-api",
+            "sub_file": None,
+        }
+        m._youtube_subs_text = lambda *args: self.fail("yt-dlp не должен вызываться")
+
+        result = m.t_youtube({"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+
+        self.assertEqual(result["source"], "youtube-transcript-api")
+        self.assertEqual(result["transcript"], "текст из прямого API")
 
     def test_falls_back_to_whisper_when_no_subtitles(self):
         m._youtube_subs_text = lambda url, langs, work, cookie_args: (None, "субтитров нет", None)
