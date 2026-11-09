@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { callUnifiedAi } from "../lib/aiClient.js";
 import { deleteDocs, noteDocument, rememberUploaded, uploadDocs } from "../lib/knowledgeSync.js";
 import { isOwner } from "../access.js";
 import {
@@ -25,6 +26,7 @@ import {
   listDatasets,
   listDocuments,
   parseDocuments,
+  retrieval,
   ragflow,
   ragflowDataset,
   ragflowToken,
@@ -601,4 +603,115 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
       }
     },
   );
+  // ── «Спросить базу»: ответ по найденным кускам ──────────────────────────
+  //
+  // 09.11.2026. Владелец выбрал «ответ + куски»: модель формулирует ответ,
+  // под ним источники, на которые она опиралась. Отвечает МОДЕЛЬ СЕРВЕРА, а
+  // не ассистент RAGFlow: ассистентов пришлось бы держать по одному на
+  // датасет и у каждого своя правда о промпте и о правах ролей.
+  const ASK_MAX_CHUNKS = 8;
+  const ASK_MAX_CHARS = 12_000;
+  const askModel = () => process.env.KB_ASK_MODEL || "qwen3:8b";
+
+  app.post<{
+    Body: { question?: string; dataset_ids?: string[]; document_ids?: string[] };
+  }>("/api/knowledge/ask", { preHandler: authPre }, async (req: any, reply) => {
+    if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
+    const question = String(req.body?.question ?? "").trim();
+    if (!question) return reply.code(400).send({ error: "Пустой вопрос" });
+
+    // Область — та же, что у поиска: только включённые датасеты, роль — только
+    // выданные ей. Даже «спросить» не должно видеть того, чего не видно.
+    const caller = db
+      .prepare("SELECT type, role, role_key FROM users WHERE id = ?")
+      .get(req.userId) as any;
+    const requested = Array.isArray(req.body?.dataset_ids) ? req.body.dataset_ids.map(String) : [];
+    // Чипсы датасетов обязательны: «ответ по всему сразу» подмешивал бы в
+    // ответ чужие тематики — ровно то, на что владелец жаловался в поиске.
+    if (!requested.length) return reply.code(400).send({ error: "Выберите датасет" });
+    const scope = searchDatasetIds(caller, requested);
+    if (!scope.ids.length)
+      return scope.reason === "no-scope"
+        ? reply.code(403).send({ error: "Доступ ни к одному датасету базы знаний не выдан" })
+        : reply.code(400).send({ error: "Выберите датасет — искать по всем сразу не получится" });
+
+    // Внутренняя фильтрация: конкретные документы внутри датасета.
+    const documentIds = Array.isArray(req.body?.document_ids)
+      ? req.body.document_ids.map(String).filter(Boolean)
+      : [];
+    let data: any;
+    try {
+      data = await retrieval({
+        question,
+        dataset_ids: scope.ids,
+        document_ids: documentIds.length ? documentIds : undefined,
+        page_size: ASK_MAX_CHUNKS,
+        similarity_threshold: 0.15,
+      });
+    } catch (e: any) {
+      return reply.code(502).send({ error: "Поиск недоступен", detail: String(e?.message || e) });
+    }
+
+    // Куски — в общий вид и с потолком: модель не должна получить мегабайты
+    // (контекст кончится, ответ будет обрезан на середине).
+    const raw = (data?.chunks ?? []) as any[];
+    const found: Array<{ text: string; score: number | null; document_name: string; doc_id: string | null; title: string }> = [];
+    let budget = ASK_MAX_CHARS;
+    for (const chunk of raw.slice(0, ASK_MAX_CHUNKS)) {
+      const text = String(chunk.content ?? chunk.content_with_weight ?? "").trim();
+      if (!text) continue;
+      if (text.length > budget) break;
+      budget -= text.length;
+      const name = String(chunk.document_name ?? chunk.document_keyword ?? "");
+      const docId = docIdFromName(name);
+      found.push({ text, score: chunk.similarity ?? chunk.score ?? null, document_name: name, doc_id: docId, title: "" });
+    }
+    // Заголовки заметок — из TaskFlow: в индексе документ зовётся
+    // `taskflow-<uuid>.md`, человеку это имя ничего не говорит.
+    const ids = found.map((c) => c.doc_id).filter(Boolean) as string[];
+    if (ids.length) {
+      const rows = db
+        .prepare(`SELECT id, title FROM user_notes WHERE id IN (${ids.map(() => "?").join(",")})`)
+        .all(...ids) as Array<{ id: string; title: string }>;
+      const titles = new Map(rows.map((r) => [r.id, r.title || ""]));
+      for (const c of found) if (c.doc_id) c.title = titles.get(c.doc_id) ?? "";
+    }
+
+    if (!found.length) {
+      return {
+        question,
+        answer: null,
+        model: null,
+        chunks: [],
+        hint: "В выбранных датасетах ничего не нашлось — попробуйте другой вопрос или другие датасеты",
+      };
+    }
+
+    const context = found
+      .map((c, i) => `[${i + 1}] ${c.title || c.document_name}\n${c.text}`)
+      .join("\n\n");
+    const systemPrompt = [
+      "Ты отвечаешь на вопрос по базе знаний TaskFlow.",
+      "Отвечай ТОЛЬКО по приведённым кускам. Если в них нет ответа — скажи, что в выбранных датасетах этого не нашлось, и не додумывай.",
+      "После утверждения ставь номер куска в квадратных скобках, например [1].",
+      "Пиши коротко и по делу, на языке вопроса.",
+    ].join("\n");
+
+    let answer: string | null = null;
+    const model = askModel();
+    try {
+      answer = await callUnifiedAi({
+        systemPrompt,
+        userPrompt: `Вопрос: ${question}\n\nКуски базы знаний:\n${context}`,
+        aiModel: model,
+        temperature: 0.2,
+        predictTokens: 700,
+      });
+    } catch {
+      // Модель упала — куски всё равно полезны: человек прочитает источник сам.
+      answer = null;
+    }
+
+    return { question, answer, model: answer === null ? null : model, chunks: found };
+  });
 }
