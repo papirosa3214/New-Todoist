@@ -1355,74 +1355,205 @@ def _youtube_cookie_file(work: str) -> str | None:
         return None
 
 
+# Владелец 09.11.2026: субтитры есть не у всех роликов, а на части видео
+# yt-dlp вообще не отдаёт форматы. Поэтому путь двухшаговый: сначала
+# субтитры (секунды), а если их нет или извлечение сломалось — качаем звук и
+# отдаём его локальному ASR (faster-whisper на .110:1235). Текст возвращается
+# тем же контрактом плюс `source`, чтобы роль видела, откуда он взялся.
+#
+# yt-dlp 2026.x без JS-рантайма не решает n-challenge и печатает
+# «No video formats found» — это НЕ отсутствие субтитров и НЕ сеть.
+YTDLP_JS_ARGS = ["--js-runtimes", "deno", "--remote-components", "ejs:github"]
+YTDLP_PLAYER = ["--extractor-args", "youtube:player_client=web,mweb"]
+ASR_URL = os.environ.get("TASKFLOW_ASR_URL", "http://127.0.0.1:1235").rstrip("/")
+ASR_CHUNK_SECONDS = int(os.environ.get("TASKFLOW_ASR_CHUNK_SECONDS", "600"))
+ASR_TIMEOUT = int(os.environ.get("TASKFLOW_ASR_TIMEOUT", "900"))
+
+
+def _ytdlp_binary():
+    """Debian package can lag YouTube extractor fixes by years. Prefer the
+    user-managed current binary, while retaining PATH fallback for clean hosts."""
+    import shutil
+
+    path = os.path.expanduser("~/.local/bin/yt-dlp")
+    if os.path.isfile(path):
+        return path
+    return shutil.which("yt-dlp") or "yt-dlp"
+
+
+def _ytdlp_env():
+    """deno ставится в ~/.deno/bin, а юнита PATH его не знает."""
+    env = dict(os.environ)
+    deno_bin = os.path.expanduser("~/.deno/bin")
+    if os.path.isdir(deno_bin):
+        env["PATH"] = deno_bin + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def _ffmpeg_binary():
+    import shutil
+
+    local = os.path.expanduser("~/asr-service/bin/ffmpeg")
+    if os.path.isfile(local):
+        return local
+    return shutil.which("ffmpeg") or "ffmpeg"
+
+
+def _youtube_subs_text(url, langs, work, cookie_args):
+    """Субтитры YouTube → (текст, причина отказа, имя файла)."""
+    import glob
+    import subprocess
+
+    subs = subprocess.run(
+        [_ytdlp_binary(), *cookie_args, *YTDLP_JS_ARGS, *YTDLP_PLAYER,
+         "--skip-download", "--write-subs", "--write-auto-subs",
+         "--sub-langs", langs, "--sub-format", "vtt", "--convert-subs", "vtt",
+         "-o", os.path.join(work, "s.%(ext)s"), url],
+        capture_output=True, text=True, timeout=240, env=_ytdlp_env(),
+    )
+    files = sorted(glob.glob(os.path.join(work, "*.vtt")))
+    if not files:
+        # Владелец 30.09.2026: раньше здесь молча врали «нет субтитров»
+        # на ЛЮБОЙ сбой yt-dlp — бан за бота, сеть, что угодно — потому
+        # что код result скачивания вообще не смотрел. Найдено живьём:
+        # видео Стива Джобса (Stanford, точно с субтитрами) тоже давало
+        # эту же фразу — настоящая причина была в stderr, которую никто
+        # не читал. Теперь при пустом files разбираем stderr сами: если
+        # похоже на антибот-блок YouTube — говорим прямо, не выдаём его
+        # за «у видео нет субтитров» (это разные, несмежные причины и
+        # разные действия в ответ — ждать не поможет прокси починить).
+        stderr = (subs.stderr or "").strip()
+        last = stderr.splitlines()[-1][:300] if stderr else ""
+        if "Sign in to confirm" in stderr or "not a bot" in stderr:
+            return None, "YouTube требует подтверждения «я не бот» (антибот-блок): " + last, None
+        if subs.returncode != 0 and stderr:
+            return None, f"yt-dlp не смог получить субтитры (код {subs.returncode}): {last}", None
+        return None, "у видео нет субтитров (ни ручных, ни авто)", None
+    with open(files[0], encoding="utf-8", errors="ignore") as f:
+        return _vtt_to_text(f.read()), "", os.path.basename(files[0])
+
+
+def _youtube_audio_wav(url, work, cookie_args):
+    """Звук ролика → mono 16 kHz wav (формат, который ждёт ASR)."""
+    import glob
+    import subprocess
+
+    audio_dir = os.path.join(work, "audio")
+    os.makedirs(audio_dir, exist_ok=True)
+    res = subprocess.run(
+        [_ytdlp_binary(), *cookie_args, *YTDLP_JS_ARGS, *YTDLP_PLAYER,
+         "-f", "bestaudio/best", "-o", os.path.join(audio_dir, "%(id)s.%(ext)s"), url],
+        capture_output=True, text=True, timeout=900, env=_ytdlp_env(),
+    )
+    sources = [p for p in sorted(glob.glob(os.path.join(audio_dir, "*")))
+               if not p.endswith((".part", ".ytdl"))]
+    if not sources:
+        stderr = (res.stderr or "").strip()
+        raise TaskFlowError("не удалось скачать звук: " + (
+            stderr.splitlines()[-1][:300] if stderr else f"yt-dlp код {res.returncode}"))
+    wav = os.path.join(work, "speech.wav")
+    conv = subprocess.run(
+        [_ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error", "-i", sources[0],
+         "-vn", "-ac", "1", "-ar", "16000", wav],
+        capture_output=True, text=True, timeout=600,
+    )
+    if conv.returncode != 0 or not os.path.isfile(wav):
+        raise TaskFlowError("ffmpeg не смог извлечь дорожку: " + (conv.stderr or "").strip()[:300])
+    return wav
+
+
+def _wav_chunks(wav_path, out_dir):
+    """ASR принимает один файл за запрос — режем на куски, чтобы длинные
+    ролики не упирались в таймаут."""
+    import glob
+    import subprocess
+
+    os.makedirs(out_dir, exist_ok=True)
+    pattern = os.path.join(out_dir, "chunk-%03d.wav")
+    res = subprocess.run(
+        [_ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error", "-i", wav_path,
+         "-f", "segment", "-segment_time", str(ASR_CHUNK_SECONDS),
+         "-ac", "1", "-ar", "16000", pattern],
+        capture_output=True, text=True, timeout=900,
+    )
+    chunks = sorted(glob.glob(os.path.join(out_dir, "chunk-*.wav")))
+    if not chunks:
+        raise TaskFlowError("не удалось нарезать аудио: " + (res.stderr or "").strip()[:300])
+    return chunks
+
+
+def _asr_transcribe(wav_path):
+    """Один кусок → текст через локальный ASR (.110)."""
+    with open(wav_path, "rb") as f:
+        payload = f.read()
+    req = urllib.request.Request(
+        ASR_URL + "/asr", data=payload, method="POST",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=ASR_TIMEOUT) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        raise TaskFlowError(f"ASR недоступен ({ASR_URL}): {e}")
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise TaskFlowError("ASR вернул пустой текст")
+    return text
+
+
+def _youtube_whisper_text(url, work, cookie_args):
+    """Ролик → текст распознаванием звука локальным Whisper."""
+    wav = _youtube_audio_wav(url, work, cookie_args)
+    parts = [_asr_transcribe(chunk) for chunk in _wav_chunks(wav, os.path.join(work, "chunks"))]
+    text = " ".join(p for p in parts if p).strip()
+    if not text:
+        raise TaskFlowError("распознавание вернуло пустой текст")
+    return text
+
+
 def t_youtube(args):
-    """Транскрипт видео YouTube в текст (ручные субтитры, иначе авто)."""
+    """Транскрипт видео YouTube в текст: субтитры, иначе локальный Whisper."""
     url = str(args.get("url") or "").strip()
     if not url:
         raise TaskFlowError("нужен url")
     langs = str(args.get("langs") or "ru,en")
     cap = int(args.get("max_chars") or 24000)
 
-    import glob
     import shutil
     import subprocess
     import tempfile
 
-    # Debian package can lag YouTube extractor fixes by years. Prefer the
-    # user-managed current binary, while retaining PATH fallback for clean hosts.
-    yt_dlp = os.path.expanduser("~/.local/bin/yt-dlp")
-    if not os.path.isfile(yt_dlp):
-        yt_dlp = shutil.which("yt-dlp") or "yt-dlp"
-
+    yt_dlp = _ytdlp_binary()
     work = tempfile.mkdtemp(prefix="tf-yt-")
     try:
         cookies = _youtube_cookie_file(work)
         cookie_args = ["--cookies", cookies] if cookies else []
         meta = subprocess.run(
-            [yt_dlp, *cookie_args, "--skip-download", "--extractor-args",
-             "youtube:player_client=web,mweb", "--print", "%(title)s", url],
-            capture_output=True, text=True, timeout=60,
+            [yt_dlp, *cookie_args, *YTDLP_JS_ARGS, *YTDLP_PLAYER,
+             "--skip-download", "--print", "%(title)s", url],
+            capture_output=True, text=True, timeout=60, env=_ytdlp_env(),
         )
-        title = (meta.stdout or "").strip().splitlines()[0] if meta.stdout.strip() else ""
+        title = (meta.stdout or "").strip().splitlines()[0] if (meta.stdout or "").strip() else ""
 
-        subs = subprocess.run(
-            [yt_dlp, *cookie_args, "--skip-download", "--extractor-args",
-             "youtube:player_client=web,mweb",
-             "--write-subs", "--write-auto-subs",
-             "--sub-langs", langs, "--sub-format", "vtt", "--convert-subs", "vtt",
-             "-o", os.path.join(work, "s.%(ext)s"), url],
-            capture_output=True, text=True, timeout=240,
-        )
-        files = sorted(glob.glob(os.path.join(work, "*.vtt")))
-        if not files:
-            # Владелец 30.09.2026: раньше здесь молча врали «нет субтитров»
-            # на ЛЮБОЙ сбой yt-dlp — бан за бота, сеть, что угодно — потому
-            # что код result скачивания вообще не смотрел. Найдено живьём:
-            # видео Стива Джобса (Stanford, точно с субтитрами) тоже давало
-            # эту же фразу — настоящая причина была в stderr, которую никто
-            # не читал. Теперь при пустом files разбираем stderr сами: если
-            # похоже на антибот-блок YouTube — говорим прямо, не выдаём его
-            # за «у видео нет субтитров» (это разные, несмежные причины и
-            # разные действия в ответ — ждать не поможет прокси починить).
-            stderr = (subs.stderr or "").strip()
-            if "Sign in to confirm" in stderr or "not a bot" in stderr:
-                raise TaskFlowError(
-                    "YouTube требует подтверждения «я не бот» с этого IP/сети — "
-                    "не про субтитры конкретного видео, антибот-блок. "
-                    f"yt-dlp: {stderr.splitlines()[-1][:300] if stderr else ''}"
-                )
-            if subs.returncode != 0 and stderr:
-                raise TaskFlowError(f"yt-dlp не смог получить субтитры (код {subs.returncode}): {stderr.splitlines()[-1][:300]}")
-            raise TaskFlowError("у видео нет субтитров (ни ручных, ни авто)")
-        with open(files[0], encoding="utf-8", errors="ignore") as f:
-            text = _vtt_to_text(f.read())
+        text, subs_reason, sub_file = _youtube_subs_text(url, langs, work, cookie_args)
+        source = "subtitles"
+        if not text:
+            # Субтитров нет — это не повод отдавать роль пустоту: тот же
+            # ролик распознаём локально и возвращаем текст с пометкой источника.
+            try:
+                text = _youtube_whisper_text(url, work, cookie_args)
+                source = "whisper"
+            except TaskFlowError as e:
+                raise TaskFlowError(f"субтитры не получены ({subs_reason}); распознавание не удалось: {e}")
+            sub_file = None
         return {
             "title": title,
             "url": url,
             "transcript": text[:cap],
             "chars": len(text),
             "truncated": len(text) > cap,
-            "sub_file": os.path.basename(files[0]),
+            "source": source,
+            "sub_file": sub_file,
         }
     finally:
         shutil.rmtree(work, ignore_errors=True)
