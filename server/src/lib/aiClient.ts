@@ -139,7 +139,7 @@ export async function callUnifiedAi(opts: {
         ...keepAliveFor(targetModel),
         think: opts.think ?? false,
         options: {
-          num_ctx: opts.numCtx ?? 8192,
+          num_ctx: opts.numCtx ?? (targetModel === LOCAL_DEFAULT_MODEL ? 81920 : 8192),
           // С выключенным think реальный ответ укладывается в ~200 токенов
           // (замер), 2048 — щедрый запас. С включённым (Дневник) бюджет
           // должен вместить и <think>, и сам текст — поэтому больше.
