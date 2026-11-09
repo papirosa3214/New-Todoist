@@ -6392,6 +6392,27 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "214_knowledge_index_jobs",
+    description:
+      "Очередь индексации заметок в базу знаний: сохранённая заметка уезжает в RAGFlow через секунды, а не суточным прогоном",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_index_jobs (
+          note_id TEXT PRIMARY KEY,
+          dataset_id TEXT,
+          queued_at TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'queued',
+          error TEXT,
+          ragflow_doc_id TEXT,
+          finished_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_index_jobs_due
+          ON knowledge_index_jobs(status, queued_at);
+      `);
+    },
+  },
 
 ];
 /**

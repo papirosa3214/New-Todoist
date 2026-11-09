@@ -15,6 +15,7 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import db from "../db.js";
 import { KB_CATEGORIES, KB_DROP_MARK, KB_COLUMNS } from "../lib/kbCategories.js";
+import { enqueueNoteIndex, forgetNoteIndex } from "../lib/knowledgeIndexQueue.js";
 
 export { KB_CATEGORIES, KB_DROP_MARK, KB_COLUMNS };
 
@@ -156,6 +157,9 @@ export function registerNoteRoutes(app: FastifyInstance) {
         `INSERT INTO user_notes (id, title, content, folder_id, updated_by, search_text)
          VALUES (?, ?, ?, ?, ?, ?)`,
       ).run(id, title, content, folderId, req.userId, noteSearchText(content));
+      // Заметка рождается, а индекс нужен уже сейчас: очередь сама выждет
+      // дебаунс, чтобы серия автосохранений не заливала документ десять раз.
+      enqueueNoteIndex(id);
 
       // Схема базы знаний (cfa5cdcd): заметка, рождённая в папке задачи,
       // сразу получает ВРЕМЕННУЮ метку «Из задачи: …» и источник. Иначе
@@ -313,6 +317,9 @@ export function registerNoteRoutes(app: FastifyInstance) {
     db.prepare(`UPDATE user_notes SET ${sets.join(", ")} WHERE id = ?`).run(
       ...params,
     );
+    // Служебная разметка базы знаний (категории, метки) текст документа не
+    // меняет — перезаливать из-за неё незачем.
+    if (!kbOnly) enqueueNoteIndex(id);
     return db.prepare("SELECT * FROM user_notes WHERE id = ?").get(id);
   });
 
@@ -406,6 +413,7 @@ export function registerNoteRoutes(app: FastifyInstance) {
       const res = db.prepare("DELETE FROM user_notes WHERE id = ?").run(req.params.id);
       if (res.changes === 0)
         return reply.code(404).send({ error: "Заметка не найдена" });
+      forgetNoteIndex(req.params.id);
       return reply.code(204).send();
     },
   );

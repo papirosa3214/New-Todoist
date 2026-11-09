@@ -28,6 +28,7 @@ import { startChatQueueRecovery, scheduleChatQueueRecovery } from "./runtime/cha
 import { recoverLiveDrafts } from "./runtime/chatLiveDraft.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
+import { startKnowledgeIndexWorker } from "./lib/knowledgeIndexQueue.js";
 import { startModelUsageRetention } from "./lib/modelUsageRetention.js";
 import { startScheduler } from "./runtime/scheduler.js";
 import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
@@ -1036,6 +1037,7 @@ if (isMain) {
     let stopRoleRuns: (() => Promise<void>) | null = null;
     let stopVoiceBridge: (() => Promise<void>) | null = null;
     let stopKnowledgeSync: (() => void) | null = null;
+    let stopKnowledgeIndex: (() => void) | null = null;
     let stopModelUsageRetention: (() => void) | null = null;
     let stopDataRetention: (() => void) | null = null;
     let stopScheduler: (() => void) | null = null;
@@ -1051,6 +1053,7 @@ if (isMain) {
     let stopChatQueueSweep: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
+      stopKnowledgeIndex?.();
       stopModelUsageRetention?.();
       stopDataRetention?.();
       stopScheduler?.();
@@ -1152,6 +1155,8 @@ if (isMain) {
     }
     if(process.env.TASKFLOW_AUTO_PREPARATION!=="0") stopPreparation=startPreparationWorker();
     // Документация проектов → база знаний раз в сутки (lib/knowledgeSync.ts).
+    // В тестах очередь не крутится сама: тик раз в 5 с мешал бы прогонам.
+    if (!process.env.VITEST) stopKnowledgeIndex = startKnowledgeIndexWorker();
     if (!sandbox) stopKnowledgeSync = startKnowledgeSyncSchedule();
     // Планировщик доски раз в 5 минут — внутри сервера (runtime/scheduler.ts).
     if (!sandbox) stopScheduler = startScheduler(app);

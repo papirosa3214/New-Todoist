@@ -228,6 +228,53 @@ export async function uploadDocs(dataset: string, docs: KnowledgeDocument[]): Pr
   return ids;
 }
 
+/**
+ * Перезалить ОДНУ заметку сейчас (09.11.2026, очередь индексации).
+ *
+ * Отличие от `pushNoteToKnowledge` (кнопка «В базу знаний»): здесь снимаются
+ * копии и в прежнем датасете. Заметка переехала в другой проект — значит, у
+ * неё другой датасет, и старая копия иначе осталась бы в чужом индексе
+ * навсегда: суточный прогон убирает такое только по своему состоянию, а
+ * состояние знает лишь один «текущий» датасет на имя.
+ *
+ * Пустая заметка — не сбой: индексировать нечего, копии убираем.
+ */
+export async function reindexNote(
+  noteId: string,
+): Promise<{ dataset: string; document_id: string | null; empty: boolean }> {
+  const name = `${PREFIX}${noteId}.md`;
+  const doc = noteDocument(noteId);
+  const state = loadState();
+  const previous = state[name];
+  const previousDataset = previous?.includes("@") ? previous.slice(previous.lastIndexOf("@") + 1) : "";
+
+  const datasets = new Set<string>();
+  if (previousDataset) datasets.add(previousDataset);
+  if (doc) datasets.add(doc.dataset);
+
+  for (const dataset of datasets) {
+    const listed = await ragflow(
+      `/api/v1/datasets/${dataset}/documents?name=${encodeURIComponent(name)}&page=1&page_size=10`,
+    );
+    const old = ((listed?.data?.docs ?? []) as Array<{ id: string; name: string }>)
+      .filter((d) => d.name === name)
+      .map((d) => d.id);
+    if (old.length) await deleteDocs(dataset, old);
+  }
+
+  if (!doc) {
+    if (state[name]) {
+      delete state[name];
+      saveState(state);
+    }
+    return { dataset: "", document_id: null, empty: true };
+  }
+
+  const [documentId] = await uploadDocs(doc.dataset, [doc]);
+  rememberUploaded(doc);
+  return { dataset: doc.dataset, document_id: documentId ?? null, empty: false };
+}
+
 // ── Прогон ───────────────────────────────────────────────────────────────
 
 export type SyncReport = { documents: number; uploaded: number; deleted: number };
