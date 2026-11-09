@@ -6,6 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { Type } from "typebox";
 import { connectInfraPanel } from "./infraPanelMcp.js";
 import { connectWealthfolio } from "./wealthfolioMcp.js";
+import { connectChangedetection } from "./changedetectionMcp.js";
 
 // Граф кода для ролей (владелец 20.10.2026): роли искали код вслепую по
 // дискам — десятки шагов на ответ. Теперь у каждой роли инструменты `graft_*`
@@ -184,7 +185,7 @@ export async function connectGraft(cwd?: string) {
  *  (все роли) и финансовый трекер (только помощник владельца). Сбой одного не
  *  лишает роль другого. */
 export async function connectRoleMcp(role: string, cwd?: string) {
-  const [infra, graft, finance] = await Promise.all([
+  const [infra, graft, finance, pages] = await Promise.all([
     connectInfraPanel(role).catch((error) => {
       console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`);
       return empty();
@@ -197,14 +198,19 @@ export async function connectRoleMcp(role: string, cwd?: string) {
       console.warn(`[wealthfolio] ${role}: ${error instanceof Error ? error.message : error}`);
       return empty();
     }),
+    connectChangedetection(role).catch((error) => {
+      console.warn(`[changedetection] ${role}: ${error instanceof Error ? error.message : error}`);
+      return empty();
+    }),
   ]);
   return {
-    tools: [...infra.tools, ...graft.tools, ...finance.tools],
+    tools: [...infra.tools, ...graft.tools, ...finance.tools, ...pages.tools],
     close: async () => {
       await Promise.all([
         infra.close().catch(() => {}),
         graft.close().catch(() => {}),
         finance.close().catch(() => {}),
+        pages.close().catch(() => {}),
       ]);
     },
   };
