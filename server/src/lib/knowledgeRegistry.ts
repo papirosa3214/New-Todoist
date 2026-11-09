@@ -228,3 +228,35 @@ export function roleDatasetIds(roleKey: string): string[] {
       .all(roleKey) as Array<{ dataset_id: string }>
   ).map((r) => r.dataset_id);
 }
+
+export type SearchCaller = {
+  type?: string | null;
+  role?: string | null;
+  role_key?: string | null;
+};
+
+/**
+ * Область поиска (09.11.2026): по каким датасетам вызывающему можно искать.
+ *
+ * Правила владельца: исключённый датасет не ищется никому, даже по прямому
+ * указанию в запросе; роль ищет только по выданным ей. Пустой список — это
+ * не «искать везде», а отказ: иначе роль без доступов подмешивала бы в ответ
+ * весь индекс TaskFlow.
+ */
+export function searchDatasetIds(
+  caller: SearchCaller | undefined,
+  requested: string[] = [],
+): { ids: string[]; reason: "no-scope" | "unavailable" | null } {
+  const enabled = new Set(enabledDatasetIds());
+  const roleKey =
+    caller?.type === "ai" && caller.role !== "owner" && caller.role_key && caller.role_key !== "secretary"
+      ? caller.role_key
+      : null;
+  const allowed = roleKey ? new Set(roleDatasetIds(roleKey)) : enabled;
+  const scoped = (id: string) => allowed.has(id) && enabled.has(id);
+  const ids = requested.length ? requested.filter(scoped) : [...allowed].filter(scoped);
+  if (ids.length) return { ids, reason: null };
+  // Роли не хватило прав; владельцу просто нечего искать — разные ответы
+  // нужны и клиенту: «нет доступов» и «датасет исключён» это разные беды.
+  return { ids: [], reason: roleKey ? "no-scope" : "unavailable" };
+}

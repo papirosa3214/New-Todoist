@@ -11,6 +11,7 @@ import {
   ensureDatasetRows,
   listSections,
   patchDataset,
+  searchDatasetIds,
   setDatasetRoles,
   updateSection,
 } from "../lib/knowledgeRegistry.js";
@@ -269,6 +270,21 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
       // 30 — потолок: выше RAGFlow на CPU отвечает заметно дольше, а витрине
       // столько и не нужно.
       const topK = Math.min(Math.max(Number(req.query.top_k) || 8, 1), 30);
+      // Область поиска: только включённые в TaskFlow датасеты, а роль — только
+      // по выданным ей датасетам (см. searchDatasetIds).
+      const caller = db
+        .prepare("SELECT type, role, role_key FROM users WHERE id = ?")
+        .get(req.userId) as any;
+      const requested = String(req.query.dataset_id ?? "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
+      const scope = searchDatasetIds(caller, requested);
+      if (!scope.ids.length) {
+        return scope.reason === "no-scope"
+          ? reply.code(403).send({ error: "Доступ ни к одному датасету базы знаний не выдан" })
+          : reply.code(400).send({ error: "Датасет исключён из TaskFlow или не указан" });
+      }
       let data: any;
       try {
         data = await ragflow("/api/v1/retrieval", {
@@ -276,7 +292,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             question,
-            dataset_ids: req.query.dataset_id ? [req.query.dataset_id] : allDatasetIds(),
+            dataset_ids: scope.ids,
             page_size: topK,
             similarity_threshold: 0.15,
           }),
