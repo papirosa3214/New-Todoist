@@ -15,7 +15,12 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import db from "../db.js";
 import { KB_CATEGORIES, KB_DROP_MARK, KB_COLUMNS } from "../lib/kbCategories.js";
-import { enqueueNoteIndex, forgetNoteIndex } from "../lib/knowledgeIndexQueue.js";
+import {
+  enqueueNoteIndex,
+  forgetNoteIndex,
+  indexStates,
+  noteIndexLabel,
+} from "../lib/knowledgeIndexQueue.js";
 
 export { KB_CATEGORIES, KB_DROP_MARK, KB_COLUMNS };
 
@@ -63,6 +68,9 @@ export function registerNoteRoutes(app: FastifyInstance) {
            FROM user_notes ${where} ORDER BY updated_at DESC, created_at DESC`,
         )
         .all(...params) as NoteRow[];
+      // Индексация — одним запросом на весь список: рядом с заметкой дневник
+      // показывает, попала ли она в поиск.
+      const states = indexStates(rows.map((r) => r.id));
       return {
         notes: rows.map((r) => ({
           id: r.id,
@@ -71,6 +79,8 @@ export function registerNoteRoutes(app: FastifyInstance) {
           preview: journalPreview(r.content),
           created_at: r.created_at,
           updated_at: r.updated_at,
+          index_state: states.get(r.id)?.state ?? "indexed",
+          index_error: states.get(r.id)?.error ?? null,
         })),
       };
     },
@@ -102,10 +112,12 @@ export function registerNoteRoutes(app: FastifyInstance) {
       } catch {
         // Учёт — вспомогательный: его поломка не должна ронять чтение заметки.
       }
+      const index = noteIndexLabel(row.id);
+      const withIndex = { index_state: index.state, index_error: index.error };
       if (req.query?.format === "markdown") {
-        return { ...row, markdown: tiptapToMarkdown(row.content) };
+        return { ...row, ...withIndex, markdown: tiptapToMarkdown(row.content) };
       }
-      return row;
+      return { ...row, ...withIndex };
     },
   );
 

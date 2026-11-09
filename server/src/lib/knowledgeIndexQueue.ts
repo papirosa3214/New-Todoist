@@ -64,6 +64,49 @@ export function indexState(noteId: string): IndexState | null {
   );
 }
 
+/** Что показать рядом с заметкой в списке: «индексируется», «в очереди»,
+ *  «ошибка» или «в поиске». Заметка без задания считается проиндексированной:
+ *  её залил суточный прогон (или она пустая — индексировать нечего). */
+export type NoteIndexLabel = "indexed" | "queued" | "indexing" | "error";
+
+const LABEL: Record<IndexStatus, NoteIndexLabel> = {
+  queued: "queued",
+  running: "indexing",
+  done: "indexed",
+  error: "error",
+};
+
+/**
+ * Состояния для СПИСКА заметок — одним запросом. Отдельная ручка на каждую
+ * заметку не годится: в папке бывает сотня, и дневник сделал бы сто запросов
+ * ради значков.
+ */
+export function indexStates(
+  noteIds: string[],
+): Map<string, { state: NoteIndexLabel; error: string | null }> {
+  const out = new Map<string, { state: NoteIndexLabel; error: string | null }>();
+  if (!noteIds.length) return out;
+  const rows = db
+    .prepare(
+      `SELECT note_id, status, error FROM knowledge_index_jobs
+        WHERE note_id IN (${noteIds.map(() => "?").join(",")})`,
+    )
+    .all(...noteIds) as Array<{ note_id: string; status: IndexStatus; error: string | null }>;
+  for (const row of rows) {
+    out.set(row.note_id, {
+      state: LABEL[row.status] ?? "queued",
+      error: row.status === "error" ? row.error : null,
+    });
+  }
+  return out;
+}
+
+/** Состояние одной заметки тем же языком, что и в списке. */
+export function noteIndexLabel(noteId: string): { state: NoteIndexLabel; error: string | null } {
+  const one = indexStates([noteId]).get(noteId);
+  return one ?? { state: "indexed", error: null };
+}
+
 /**
  * Заметку удалили — задание больше не нужно. Документ из RAGFlow уберёт
  * суточный прогон: он умеет удалять своё (по имени `taskflow-<id>.md`), а
