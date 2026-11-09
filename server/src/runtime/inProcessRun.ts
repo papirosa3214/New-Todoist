@@ -69,6 +69,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import db from "../db.js";
+import { ragSearchForRole } from "../lib/roleRagSearch.js";
 import { AGENT_RULES, logEvent } from "../agentState.js";
 import { loadRoleRouting, providerOfModel, rolePromptText, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
@@ -809,6 +810,19 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const n = await asRole(role, "POST", "/api/notes", { markdown: p.markdown, folder_id: folderId });
         if (taskId) recordTaskDocument(taskId, n.id, roleUserId(role));
         return { готово: "заметка создана", id: n.id, material: {kind:"document",title:n.title || "Документ",ref:`note://${n.id}`}, подсказка:"Для чтения в чате отправь через taskflow_chat_share_material. В materials/artifacts используй material, не голый ID." };
+      }),
+    // Поиск по датасетам RAGFlow, выданным этой роли (владелец 09.11.2026).
+    // Отдельный инструмент, а не расширение taskflow_kb_search: тот ищет по
+    // заметкам TaskFlow (FTS5) и остаётся как есть — у них разные источники,
+    // и смешивать «мои заметки» с «датасетом, который мне выдали» нельзя.
+    T("taskflow_rag_search", "Поиск по датасетам базы знаний, доступ к которым выдан этой роли. Отвечает кусками с названием документа и датасета. Для поиска по заметкам TaskFlow есть taskflow_kb_search. Если доступа не выдано, инструмент так и скажет — не выдумывай содержимое базы.",
+      Type.Object({ query: Type.String(), top_k: Type.Optional(Type.Number()) }),
+      async (p) => {
+        try {
+          return await ragSearchForRole(String(role ?? ""), String(p.query ?? ""), p.top_k);
+        } catch (e: any) {
+          throw new ToolError(`база знаний недоступна: ${String(e?.message || e)}`);
+        }
       }),
     T("taskflow_kb_search", "Поиск по внутренней базе знаний TaskFlow: заметки и документация всех проектов. Отвечает отрывками с id заметки; целиком заметку читает taskflow_doc_read. Не нашлось — повтори короче, ключевыми словами.",
       Type.Object({ query: Type.String(), top_k: Type.Optional(Type.Number()) }),

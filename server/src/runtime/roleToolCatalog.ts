@@ -373,7 +373,7 @@ export const TOOL_GROUPS:Record<string,{title:string;ops:string[]}>={
  taskflow_plans:{title:"План совместной работы",ops:["plan_read","plan_create","plan_edit","plan_ops","plan_propose","plan_approve","plan_proposal_decide","plan_from_subtasks","plan_request","node_run","assign","mission_contract"]},
  taskflow_slot:{title:"Слоты плана",ops:["slot_status","slot_reset","slot_restart","slot_cancel","slot_snapshot"]},
  taskflow_chats:{title:"Чаты и темы",ops:["chat_read","chat_reply","chat_send","chat_archive","chat_close","chats_cleanup","chats_cleanup_preview","topic_read","topic_reply","topic_send","chat_attach_file","chat_share_material","checklist_state"]},
- taskflow_knowledge:{title:"Документы и база знаний",ops:["docs","doc_read","doc_write","library","kb_search","kb_categorize"]},
+ taskflow_knowledge:{title:"Документы и база знаний",ops:["docs","doc_read","doc_write","library","kb_search","kb_categorize","rag_search"]},
  taskflow_memory:{title:"Память роли",ops:["recall","remember"]},
  taskflow_mail:{title:"Почта",ops:["mail_accounts","mail_list","mail_read","mail_attachment","mail_draft","mail_archive","mail_spam","mail_trusted","mail_send_to_owner"]},
  taskflow_team:{title:"Команда и состояние",ops:["agents","team_read","status","my_stats","runtime","weather","calendar_events"]},
