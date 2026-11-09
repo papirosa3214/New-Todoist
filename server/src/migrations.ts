@@ -6350,6 +6350,49 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    // Реестр датасетов базы знаний (09.11.2026, владелец: «нужно как-то базу
+    // знаний нашу с TaskFlow сшить»). Здесь то, чего в RAGFlow нет: включён ли
+    // датасет в TaskFlow, в каком он разделе-тематике, как он назван в
+    // приложении и каким ролям выдан доступ. Сам список датасетов по-прежнему
+    // берётся из RAGFlow — он источник правды о существовании и размерах.
+    //
+    // «Память — заметки» заводится выключенной: её наполняет синк Mnemosyne,
+    // это память агентов, а не база знаний приложения.
+    id: "213_knowledge_registry",
+    description:
+      "Реестр датасетов базы знаний: разделы-тематики, включение в TaskFlow, доступы ролям",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_dataset_sections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          position INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS knowledge_datasets (
+          dataset_id TEXT PRIMARY KEY,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          section_id INTEGER,
+          title TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS knowledge_dataset_roles (
+          dataset_id TEXT NOT NULL,
+          role_key TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (dataset_id, role_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_datasets_section
+          ON knowledge_datasets(section_id);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_dataset_roles_role
+          ON knowledge_dataset_roles(role_key);
+        INSERT OR IGNORE INTO knowledge_datasets (dataset_id, enabled)
+          VALUES ('aad90ec0901f11f1be69a9ef96f0a9d6', 0);
+      `);
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.
