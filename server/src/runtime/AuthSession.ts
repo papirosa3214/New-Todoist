@@ -317,7 +317,7 @@ export class AuthSessionManager {
   private readonly sessions = new Map<string, AuthSession>();
 
   /** Стартует OAuth login Pi в фоне и сразу возвращает сессию. */
-  startOAuth(provider: string, rt: ModelRuntime): AuthSession {
+  startOAuth(provider: string, rt: ModelRuntime, onConnected?: (credential: unknown) => Promise<void>): AuthSession {
     this.prune();
     const session = new AuthSession(provider);
     this.sessions.set(session.id, session);
@@ -329,7 +329,10 @@ export class AuthSessionManager {
     };
 
     rt.login(provider, "oauth", interaction as never)
-      .then(() => session.markConnected())
+      .then(async (credential) => {
+        await onConnected?.(credential);
+        session.markConnected();
+      })
       .catch((error: unknown) => {
         // Если пользователь отменил сессию — cancel() уже проставил статус
         // cancelled; не перетираем его failed'ом от abort'а.

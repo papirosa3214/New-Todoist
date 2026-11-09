@@ -1,4 +1,5 @@
 import {prepareSecretBrokerRuntime,secretBrokerBindings} from "./secretBrokerRuntime.js";
+import {storeBrokerOAuthCredential} from "./brokerOAuth.js";
 import { roleBashKillError } from "./roleBashGuard.js";
 import { TASK_CHAT_FILE_TOOLS, TASK_CHAT_MODE } from "./taskChatTools.js";
 import {chatTurnSystemText,installSecretarySystem,chatUserTurnText,chatRuntimeGuidanceEnabled} from "./secretaryChatPrompt.js";
@@ -859,7 +860,7 @@ export const piRuntime: RuntimeAdapter = {
 
   async startAuthSession(provider: string): Promise<AuthSessionView> {
     const rt = await getModelRuntime();
-    const session = authSessionManager.startOAuth(provider, rt);
+    const session = authSessionManager.startOAuth(provider, rt, async (credential) => { await storeBrokerOAuthCredential(provider, credential as any); });
     return session.toView();
   },
 
