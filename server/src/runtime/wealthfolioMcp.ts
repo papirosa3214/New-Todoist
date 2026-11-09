@@ -1,3 +1,4 @@
+import {secretBrokerService,secretBrokerConnectionToken} from "./secretBrokerRuntime.js";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,7 @@ export const wealthfolioToolName = (name: string): string => WEALTHFOLIO_PREFIX 
 export const wealthfolioRoleAllowed = (role: string): boolean => role === WEALTHFOLIO_ROLE;
 
 export function wealthfolioUrl(): string {
+ const b=secretBrokerService("wealthfolio");if(b)return new URL("/proxy/"+encodeURIComponent(b.alias)+"/",b.brokerUrl).toString();
   return process.env.TASKFLOW_WEALTHFOLIO_MCP_URL ?? DEFAULT_URL;
 }
 
@@ -43,6 +45,7 @@ export function wealthfolioUrl(): string {
 let cachedToken: string | undefined;
 
 export async function wealthfolioToken(): Promise<string> {
+ const b=secretBrokerService("wealthfolio");if(b)return secretBrokerConnectionToken(b.tokenPath);
   const direct = process.env.TASKFLOW_WEALTHFOLIO_TOKEN;
   if (direct) return direct;
   if (cachedToken) return cachedToken;

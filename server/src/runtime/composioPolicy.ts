@@ -1,3 +1,4 @@
+import {secretBrokerBindings} from "./secretBrokerRuntime.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +48,8 @@ export function composioCommand(policy: ComposioPolicy, mode: string, context: s
     // окружении, но Node их не использует (замер 28.10.2026).
     NODE_USE_ENV_PROXY: "0",
   };
+  const broker=secretBrokerBindings().find(b=>b.provider==="composio");
+  if(broker)return {command:process.execPath,args:[script],env:{...env,COMPOSIO_API_KEY:"",TASKFLOW_COMPOSIO_BROKER_URL:new URL("/proxy/"+encodeURIComponent(broker.alias),broker.brokerUrl).toString(),TASKFLOW_COMPOSIO_BROKER_TOKEN_PATH:broker.tokenPath}};
   if (process.env.COMPOSIO_API_KEY) return { command: process.execPath, args: [script], env };
   return {
     command: "python3",

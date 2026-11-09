@@ -1,3 +1,4 @@
+import {secretBrokerService,fetchWithSecretBroker} from "../runtime/secretBrokerRuntime.js";
 import { LOCAL_DEFAULT_MODEL, keepAliveFor } from "./localModels.js";
 // Общий AI-транспорт; маршруты и подготовка задач используют один клиент.
 const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11500").replace(/\/+$/, "");
@@ -45,15 +46,15 @@ export async function callUnifiedAi(opts: {
   }
 
   // 1. Claude Code / Anthropic
-  if (provider === "claude" && process.env.ANTHROPIC_API_KEY) {
+  if (provider === "claude" && (process.env.ANTHROPIC_API_KEY||secretBrokerService("anthropic"))) {
     const claudeModel =
       requestedModel || process.env.CLAUDE_MODEL || "claude-sonnet-4.6";
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetchWithSecretBroker("anthropic","https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": process.env.ANTHROPIC_API_KEY,
+          "x-api-key": process.env.ANTHROPIC_API_KEY??"",
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
@@ -69,17 +70,19 @@ export async function callUnifiedAi(opts: {
         const text = d?.content?.[0]?.text;
         if (text) return text;
       }
+      if(secretBrokerService("anthropic"))throw new Error("broker model response failed");
     } catch (e) {
+      if(secretBrokerService("anthropic"))throw new Error("broker model request failed");
       console.warn("Claude API error, falling back to local Ollama:", e);
     }
   }
 
   // 2. DeepSeek API
-  if (provider === "deepseek" && process.env.DEEPSEEK_API_KEY) {
+  if (provider === "deepseek" && (process.env.DEEPSEEK_API_KEY||secretBrokerService("deepseek"))) {
     const deepseekModel =
       requestedModel || process.env.DEEPSEEK_MODEL || "deepseek-chat";
     try {
-      const res = await fetch("https://api.deepseek.com/chat/completions", {
+      const res = await fetchWithSecretBroker("deepseek","https://api.deepseek.com/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -99,7 +102,9 @@ export async function callUnifiedAi(opts: {
         const text = d?.choices?.[0]?.message?.content;
         if (text) return text;
       }
+      if(secretBrokerService("deepseek"))throw new Error("broker model response failed");
     } catch (e) {
+      if(secretBrokerService("deepseek"))throw new Error("broker model request failed");
       console.warn("DeepSeek error, falling back to local Ollama:", e);
     }
   }

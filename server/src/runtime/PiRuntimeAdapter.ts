@@ -1,3 +1,4 @@
+import {prepareSecretBrokerRuntime,secretBrokerBindings} from "./secretBrokerRuntime.js";
 import { roleBashKillError } from "./roleBashGuard.js";
 import { TASK_CHAT_FILE_TOOLS, TASK_CHAT_MODE } from "./taskChatTools.js";
 import {chatTurnSystemText,installSecretarySystem,chatUserTurnText,chatRuntimeGuidanceEnabled} from "./secretaryChatPrompt.js";
@@ -180,7 +181,9 @@ export async function getModelRuntime(): Promise<ModelRuntime> {
   if (modelRuntime) return modelRuntime;
   modelRuntimePending ??= (async () => {
     try {
+      const bindings=secretBrokerBindings();
       const rt = await ModelRuntime.create();
+      await prepareSecretBrokerRuntime(rt,bindings);
       installProviderDiagnostics(rt);
       installProxyAwareGlobalFetch();
       modelRuntime = rt;

@@ -279,10 +279,27 @@ async function toolkitsBySlugs(composio, userId, options, slugs) {
   } finally { await session.delete(); }
 }
 
+// Kept dormant until an explicit binding is configured by the owner.
+export async function composioClientConfig(env=process.env,io=fs){
+ const baseURL=env.TASKFLOW_COMPOSIO_BROKER_URL;
+ if(!baseURL)return {apiKey:env.COMPOSIO_API_KEY,logLevel:"silent",allowTracking:false};
+ try{
+  const u=new URL(baseURL);
+  if(u.username||u.password||u.hash||u.search||!/^\/proxy\/[-a-zA-Z0-9._]+$/.test(u.pathname)||!((u.protocol==="http:"&&["127.0.0.1","localhost","[::1]"].includes(u.hostname))||u.protocol==="https:"))throw new Error();
+  const stat=await io.stat(env.TASKFLOW_COMPOSIO_BROKER_TOKEN_PATH);
+  if(!stat.isFile()||(stat.mode&0o077)!==0)throw new Error();
+  const token=(await io.readFile(env.TASKFLOW_COMPOSIO_BROKER_TOKEN_PATH,"utf8")).trim();
+  if(!token||/[\r\n\0]/.test(token))throw new Error();
+  return {apiKey:token,baseURL,logLevel:"silent",allowTracking:false};
+ }catch{throw new Error("Broker connection credential unavailable")}
+}
+
 export async function main() {
   const userId = process.env.TASKFLOW_COMPOSIO_USER_ID;
-  if (!userId || !process.env.COMPOSIO_API_KEY) throw new Error("credential_missing");
-  const composio = new Composio({ apiKey: process.env.COMPOSIO_API_KEY, logLevel: "silent", allowTracking: false });
+  if (!userId) throw new Error("credential_missing");
+  const config=await composioClientConfig();
+  if(!config.apiKey)throw new Error("credential_missing");
+  const composio = new Composio(config);
   const options = await withOwnAuthConfigs(composio, userId, JSON.parse(process.env.TASKFLOW_COMPOSIO_OPTIONS ?? "{}"));
   phase = "session";
   if (process.argv.includes("--slugs")) {
