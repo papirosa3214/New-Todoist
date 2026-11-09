@@ -46,6 +46,14 @@ describe("broker configuration and installed SDK compatibility",()=>{
    expect(()=>secretBrokerBindings({TASKFLOW_SECRET_BROKER_BINDINGS:JSON.stringify([{provider:"minimax",alias:"minimax",brokerUrl,tokenPath:"/unused",authKind:"api_key"}])})).toThrow();
   }
  });
+ it("adds the TaskFlow session ID for OpenCode gateway requests",async()=>{
+  let options:any;const runtime={streamSimple:(_m:any,_c:any,o:any)=>{options=o;return "stream";}};
+  const fetch=vi.fn().mockResolvedValue(new Response("{}"));
+  installSecretBrokerRuntime(runtime,[{provider:"opencode-go",alias:"opencode-go",brokerUrl:"http://127.0.0.1:28443",tokenPath:"unused",authKind:"api_key",upstreamBaseUrl:"https://opencode.ai/inference/go"}],{readToken:()=>"connection-fixture",fetch});
+  runtime.streamSimple({provider:"opencode-go",id:"deepseek-v4.1-flash",baseUrl:"https://opencode.ai/inference/go/openai/v1"},{},{sessionId:"taskflow-session-fixture"});
+  await options.fetch("http://127.0.0.1:28443/proxy/opencode-go/openai/v1/chat/completions",{method:"POST",body:"{}"});
+  expect(new Headers(fetch.mock.calls[0][1].headers).get("x-opencode-session")).toBe("taskflow-session-fixture");
+ });
  it("runs the installed Anthropic SDK through the adapter using only fixture credentials",async()=>{
   const {ModelRuntime}=await import("@earendil-works/pi-coding-agent");
   const {mkdtemp,rm}=await import("node:fs/promises");const {tmpdir}=await import("node:os");const {join}=await import("node:path");

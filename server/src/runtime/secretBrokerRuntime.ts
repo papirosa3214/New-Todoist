@@ -79,6 +79,10 @@ export function installSecretBrokerRuntime(runtime:any,bindings:BrokerBinding[],
     if(u.origin!==expected.origin||!(u.pathname===expected.pathname||u.pathname.startsWith(expected.pathname+"/")))throw new Error("Broker request escaped configured service");
     const headers=new Headers(request.headers);const authHeader=headers.has("x-api-key")?"X-Api-Key":headers.has("x-goog-api-key")?"X-Goog-Api-Key":"Authorization";headers.set("x-broker-auth-header",authHeader);headers.delete("x-api-key");headers.delete("api-key");headers.delete("cookie");headers.delete("x-goog-api-key");
     headers.set("authorization","Bearer "+read(b.tokenPath));
+    if(["opencode","opencode-go"].includes(b.provider)&&!headers.has("x-opencode-session")){
+     const session=typeof options?.sessionId==="string"&&options.sessionId.trim()?options.sessionId.trim():crypto.randomUUID();
+     headers.set("x-opencode-session",session);
+    }
     // Use direct undici fetch so the local broker does not inherit the model's
     // proxy dispatcher. The broker owns its explicit outbound egress policy.
     return fetchImpl(u,{method:request.method,headers,body:["GET","HEAD"].includes(request.method)?undefined:request.body,signal:request.signal,redirect:"error",duplex:"half"});
