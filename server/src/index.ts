@@ -96,6 +96,7 @@ import { registerOwnerCommandRoutes } from "./routes/owner-commands.js";
 import { registerAdminServerSettingsRoutes } from "./routes/admin-server-settings.js";
 import { registerSecretsRoutes } from "./routes/secrets.js";
 import { registerJevRoutes } from "./routes/jev.js";
+import { registerOpenCodeUsageRoutes } from "./routes/opencodeUsage.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerEscalationRoutes } from "./routes/escalation.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
@@ -616,6 +617,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAdminServerSettingsRoutes(app);
   registerSecretsRoutes(app);
   registerJevRoutes(app);
+  registerOpenCodeUsageRoutes(app);
   registerServerEventsRoutes(app);
   registerOwnerCommandRoutes(app);
   registerSubtaskArtifactRoutes(app);
