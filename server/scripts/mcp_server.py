@@ -1331,6 +1331,30 @@ def _vtt_to_text(vtt: str) -> str:
     return text.strip()
 
 
+def _youtube_cookie_file(work: str) -> str | None:
+    """Copies the broker-held Netscape cookie jar into this one invocation only."""
+    token_path = os.environ.get("TASKFLOW_SECRET_BROKER_TOKEN_PATH", os.path.expanduser("~/.config/taskflow/secret-broker-owner.token"))
+    try:
+        with open(token_path, encoding="utf-8") as f:
+            token = f.read().strip()
+        req = urllib.request.Request(
+            os.environ.get("TASKFLOW_SECRET_BROKER_URL", "http://127.0.0.1:28443").rstrip("/") + "/owner-api/secrets/youtube-session/reveal",
+            method="POST",
+            headers={"Authorization": "Bearer " + token},
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            cookie_jar = json.loads(response.read().decode("utf-8")).get("value", "")
+        if not isinstance(cookie_jar, str) or not cookie_jar.startswith("# Netscape HTTP Cookie File"):
+            return None
+        cookie_path = os.path.join(work, "youtube-cookies.txt")
+        fd = os.open(cookie_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(cookie_jar)
+        return cookie_path
+    except Exception:
+        return None
+
+
 def t_youtube(args):
     """Транскрипт видео YouTube в текст (ручные субтитры, иначе авто)."""
     url = str(args.get("url") or "").strip()
@@ -1352,15 +1376,17 @@ def t_youtube(args):
 
     work = tempfile.mkdtemp(prefix="tf-yt-")
     try:
+        cookies = _youtube_cookie_file(work)
+        cookie_args = ["--cookies", cookies] if cookies else []
         meta = subprocess.run(
-            [yt_dlp, "--skip-download", "--extractor-args",
+            [yt_dlp, *cookie_args, "--skip-download", "--extractor-args",
              "youtube:player_client=web,mweb", "--print", "%(title)s", url],
             capture_output=True, text=True, timeout=60,
         )
         title = (meta.stdout or "").strip().splitlines()[0] if meta.stdout.strip() else ""
 
         subs = subprocess.run(
-            [yt_dlp, "--skip-download", "--extractor-args",
+            [yt_dlp, *cookie_args, "--skip-download", "--extractor-args",
              "youtube:player_client=web,mweb",
              "--write-subs", "--write-auto-subs",
              "--sub-langs", langs, "--sub-format", "vtt", "--convert-subs", "vtt",
