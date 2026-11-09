@@ -2,6 +2,27 @@ import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { deleteDocs, noteDocument, rememberUploaded, uploadDocs } from "../lib/knowledgeSync.js";
+import { isOwner } from "../access.js";
+import {
+  createSection,
+  datasetRegistryRow,
+  datasetRoles,
+  deleteSection,
+  ensureDatasetRows,
+  listSections,
+  patchDataset,
+  setDatasetRoles,
+  updateSection,
+} from "../lib/knowledgeRegistry.js";
+import {
+  docIdFromName,
+  frontmatter,
+  isConfigured,
+  listDatasets,
+  ragflow,
+  ragflowDataset,
+  ragflowToken,
+} from "../lib/ragflowClient.js";
 
 // База знаний — тонкий прокси к RAGFlow (:9380 на .110), где лежит датасет
 // «TaskFlow — документация». Документы туда синкает
@@ -20,63 +41,6 @@ import { deleteDocs, noteDocument, rememberUploaded, uploadDocs } from "../lib/k
 // (env.ts) вызывается из `main()`, то есть ПОЗЖЕ, чем выполняются импорты, и
 // константы модуля успели бы застыть пустыми — ручка отвечала бы «не
 // настроено» при полностью заполненном `.env` (проверено 08.09.2026).
-const ragflowApi = () => process.env.RAGFLOW_API || "http://127.0.0.1:9380";
-const ragflowDataset = () => process.env.RAGFLOW_TASKFLOW_DATASET || "";
-const ragflowToken = () => process.env.RAGFLOW_TOKEN || "";
-
-/** Поля YAML-шапки, которую кладёт синк. Нужны, чтобы вернуть клиенту проект
- *  и заголовок, не ходя лишний раз в базу. */
-function frontmatter(text: string): Record<string, string> {
-  const match = /^---\s*\n([\s\S]*?)\n---\s*(\n|$)/.exec(text || "");
-  if (!match) return {};
-  const out: Record<string, string> = {};
-  for (const line of match[1].split("\n")) {
-    const kv = /^\s*([A-Za-z_]+):\s*(.*)$/.exec(line);
-    if (!kv) continue;
-    out[kv[1]] = kv[2].trim().replace(/^"(.*)"$/, "$1").replace(/\\"/g, '"');
-  }
-  return out;
-}
-
-/** Имя документа в датасете — `taskflow-<note_id>.md` (см. PREFIX в синке). */
-function docIdFromName(name: string): string | null {
-  const m = /^taskflow-(.+)\.md$/.exec(name || "");
-  return m ? m[1] : null;
-}
-
-/** Все датасеты, куда TaskFlow складывает документы: общий плюс собственные
- *  датасеты проектов (`projects.knowledge_dataset_id`).
- *
- *  Разделение по датасетам — про ЗАПИСЬ: документы бизнесового проекта не
- *  подмешиваются к рабочим. Поиск же по умолчанию идёт по всем сразу, иначе
- *  документ, лежащий в своём датасете, стал бы ненаходимым; сузить выдачу
- *  можно параметром `dataset_id`. */
-function allDatasetIds(): string[] {
-  const ids = new Set<string>();
-  const fallback = ragflowDataset();
-  if (fallback) ids.add(fallback);
-  const rows = db
-    .prepare(
-      "SELECT DISTINCT knowledge_dataset_id AS id FROM projects WHERE knowledge_dataset_id IS NOT NULL AND knowledge_dataset_id <> ''",
-    )
-    .all() as Array<{ id: string }>;
-  for (const r of rows) ids.add(r.id);
-  return [...ids];
-}
-
-async function ragflow(path: string, init?: RequestInit): Promise<any> {
-  const res = await fetch(ragflowApi() + path, {
-    ...init,
-    headers: {
-      Authorization: "Bearer " + ragflowToken(),
-      ...(init?.headers as Record<string, string> | undefined),
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`RAGFlow ответил ${res.status}`);
-  }
-  return res.json();
-}
 
 /**
  * Заметка → в базу знаний сейчас, не дожидаясь суточного прогона (владелец
@@ -124,26 +88,140 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
   // Датасеты RAGFlow — витрине нужен выбор при заведении проекта: «складывать
   // в общий или в свой». Владелец 08.09.2026: специфический бизнесовый проект
   // не должен подмешивать документацию туда, где ищут рабочее.
-  app.get("/api/knowledge/datasets", { preHandler: authPre }, async (_req, reply) => {
-    if (!ragflowToken()) return unconfigured(reply);
-    let data: any;
-    try {
-      data = await ragflow("/api/v1/datasets?page=1&page_size=100");
-    } catch (e: any) {
-      return reply.code(502).send({ error: "База знаний недоступна", detail: String(e?.message || e) });
-    }
-    const list = data?.data || [];
-    return {
-      // Датасет по умолчанию: проект без своего выбора едет сюда.
-      default_dataset_id: ragflowDataset(),
-      datasets: list.map((d: any) => ({
-        id: d.id,
-        name: d.name,
-        document_count: d.document_count,
-        is_default: d.id === ragflowDataset(),
-      })),
-    };
+  app.get<{ Querystring: { include_disabled?: string } }>(
+    "/api/knowledge/datasets",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!ragflowToken()) return unconfigured(reply);
+      let list: any[];
+      try {
+        list = await listDatasets();
+      } catch (e: any) {
+        return reply.code(502).send({ error: "База знаний недоступна", detail: String(e?.message || e) });
+      }
+      // Реестр заводит строки для датасетов, которых он ещё не видел: список
+      // живёт в RAGFlow, а решения владельца — здесь.
+      ensureDatasetRows(list.map((d) => d.id));
+      const sections = new Map(listSections().map((sec) => [sec.id, { id: sec.id, title: sec.title }]));
+      const projectDatasets = new Set(
+        (
+          db
+            .prepare(
+              "SELECT DISTINCT knowledge_dataset_id AS id FROM projects WHERE knowledge_dataset_id IS NOT NULL AND knowledge_dataset_id <> ''",
+            )
+            .all() as Array<{ id: string }>
+        ).map((r) => r.id),
+      );
+      const includeDisabled = req.query?.include_disabled === "1";
+      return {
+        // Датасет по умолчанию: проект без своего выбора едет сюда.
+        default_dataset_id: ragflowDataset(),
+        datasets: list
+          .map((d) => {
+            const row = datasetRegistryRow(d.id) as any;
+            return {
+              id: d.id,
+              name: row?.title || d.name,
+              ragflow_name: d.name,
+              document_count: d.document_count,
+              chunk_count: d.chunk_count ?? null,
+              is_default: d.id === ragflowDataset(),
+              // `owner: taskflow` — только по id: по имени «Память — заметки»
+              // и «База знаний — уроки» похожи на наши, но это чужие синки.
+              owner: d.id === ragflowDataset() || projectDatasets.has(d.id) ? "taskflow" : "other",
+              enabled: row ? row.enabled === 1 : true,
+              section: row?.section_id ? sections.get(row.section_id) ?? null : null,
+              roles: datasetRoles(d.id),
+            };
+          })
+          .filter((d) => d.enabled || includeDisabled),
+      };
+    },
+  );
+
+  // ── Реестр: разделы-тематики, включение в TaskFlow, доступы ролям ───────
+  // Настраивает только владелец. Роли ничего не настраивают — они видят ровно
+  // выданное им, иначе чужой датасет засорял бы их поиск.
+
+  app.get("/api/knowledge/sections", { preHandler: authPre }, async (_req, reply) => {
+    if (!isConfigured()) return unconfigured(reply);
+    return { sections: listSections() };
   });
+
+  app.post<{ Body: { title?: string } }>(
+    "/api/knowledge/sections",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "Разделы базы знаний настраивает владелец" });
+      }
+      try {
+        return { section: createSection(String(req.body?.title ?? "")) };
+      } catch (e: any) {
+        return reply.code(400).send({ error: String(e?.message || e) });
+      }
+    },
+  );
+
+  app.patch<{ Params: { id: string }; Body: { title?: string; position?: number } }>(
+    "/api/knowledge/sections/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "Разделы базы знаний настраивает владелец" });
+      }
+      try {
+        const ok = updateSection(Number(req.params.id), req.body || {});
+        if (!ok) return reply.code(404).send({ error: "Раздел не найден" });
+        return { ok: true };
+      } catch (e: any) {
+        return reply.code(400).send({ error: String(e?.message || e) });
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    "/api/knowledge/sections/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "Разделы базы знаний настраивает владелец" });
+      }
+      const ok = deleteSection(Number(req.params.id));
+      if (!ok) return reply.code(404).send({ error: "Раздел не найден" });
+      return { ok: true };
+    },
+  );
+
+  app.patch<{
+    Params: { id: string };
+    Body: { enabled?: boolean; section_id?: number | null; title?: string | null };
+  }>("/api/knowledge/datasets/:id", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) {
+      return reply.code(403).send({ error: "Датасетами базы знаний управляет владелец" });
+    }
+    try {
+      ensureDatasetRows([req.params.id]);
+      patchDataset(req.params.id, req.body || {});
+      return { ok: true, dataset: { id: req.params.id, ...datasetRegistryRow(req.params.id) } };
+    } catch (e: any) {
+      return reply.code(400).send({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put<{ Params: { id: string }; Body: { role_keys?: string[] } }>(
+    "/api/knowledge/datasets/:id/roles",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "Доступ ролям выдаёт владелец" });
+      }
+      const keys = Array.isArray(req.body?.role_keys) ? req.body.role_keys.map(String) : [];
+      ensureDatasetRows([req.params.id]);
+      setDatasetRoles(req.params.id, keys);
+      return { roles: datasetRoles(req.params.id) };
+    },
+  );
 
   // Новый датасет под проект. Настройки — как у соседних датасетов на этой
   // машине (bge-m3 через Ollama, naive-разбиение): другой эмбеддинг означал бы
