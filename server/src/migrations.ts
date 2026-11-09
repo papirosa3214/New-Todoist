@@ -6413,6 +6413,24 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "215_knowledge_uploads",
+    description:
+      "Загруженные вручную документы базы знаний: кто залил — тот и удаляет",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_uploads (
+          ragflow_doc_id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          uploaded_by TEXT,
+          uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_uploads_dataset
+          ON knowledge_uploads(dataset_id, uploaded_at);
+      `);
+    },
+  },
 
 ];
 /**

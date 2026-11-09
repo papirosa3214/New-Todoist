@@ -8,6 +8,7 @@ import {
   datasetRegistryRow,
   datasetRoles,
   deleteSection,
+  enabledDatasetIds,
   ensureDatasetRows,
   listSections,
   patchDataset,
@@ -16,13 +17,18 @@ import {
   updateSection,
 } from "../lib/knowledgeRegistry.js";
 import {
+  deleteDocuments,
   docIdFromName,
+  documentStatus,
   frontmatter,
   isConfigured,
   listDatasets,
+  listDocuments,
+  parseDocuments,
   ragflow,
   ragflowDataset,
   ragflowToken,
+  uploadDocument,
 } from "../lib/ragflowClient.js";
 
 // База знаний — тонкий прокси к RAGFlow (:9380 на .110), где лежит датасет
@@ -351,6 +357,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
   // Список документов датасета. Нужен витрине «что вообще есть», в том числе
   // по закрытым проектам: удаление проекта в TaskFlow индекс не трогает,
   // документ остаётся с именем проекта в шапке — это и есть архив.
+  // С 09.11.2026 — делегат к documentsPage: то же самое отдаёт
+  // `/api/knowledge/datasets/:id/documents`, и двух правд о документе нет.
   app.get<{ Querystring: { page?: string; page_size?: string; dataset_id?: string } }>(
     "/api/knowledge/documents",
     { preHandler: authPre },
@@ -358,61 +366,11 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
       if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
       const page = Math.max(Number(req.query.page) || 1, 1);
       const pageSize = Math.min(Math.max(Number(req.query.page_size) || 50, 1), 200);
-      let data: any;
       try {
-        // RAGFlow перечисляет документы одного датасета за раз; по умолчанию
-        // показываем общий, конкретный проектный — по dataset_id.
-        const dataset = req.query.dataset_id || ragflowDataset();
-        data = await ragflow(
-          `/api/v1/datasets/${dataset}/documents?page=${page}&page_size=${pageSize}`,
-        );
+        return await documentsPage(req.query.dataset_id || ragflowDataset(), page, pageSize);
       } catch (e: any) {
         return reply.code(502).send({ error: "База знаний недоступна", detail: String(e?.message || e) });
       }
-      const docs = data?.data?.docs || [];
-
-      // Имя документа в индексе — `taskflow-<uuid>.md`, человеку показывать
-      // нечего. Заголовок и проект берём из самого TaskFlow по doc_id: одним
-      // запросом на страницу, без похода за каждым документом.
-      const ids = docs.map((d: any) => docIdFromName(d.name)).filter(Boolean) as string[];
-      const titles = new Map<string, { title: string; project: string | null }>();
-      if (ids.length) {
-        const rows = db
-          .prepare(
-            `SELECT un.id, un.title,
-                    (SELECT p.name FROM projects p
-                      WHERE p.notes_folder_id = un.folder_id
-                      ORDER BY p.created_at LIMIT 1) AS project_name
-             FROM user_notes un
-             WHERE un.id IN (${ids.map(() => "?").join(",")})`,
-          )
-          .all(...ids) as any[];
-        for (const r of rows) titles.set(r.id, { title: r.title || "", project: r.project_name || null });
-      }
-
-      return {
-        total: data?.data?.total ?? docs.length,
-        documents: docs.map((d: any) => {
-          const docId = docIdFromName(d.name);
-          const known = docId ? titles.get(docId) : undefined;
-          return {
-            name: d.name,
-            title: known?.title || "",
-            project: known?.project || null,
-            doc_id: docId,
-            ragflow_id: d.id,
-            chunk_count: d.chunk_count,
-            size: d.size,
-            updated_at: d.update_date,
-            // «parsed» — документ уже в поиске; «running» — ещё индексируется.
-            indexed: d.run === "DONE",
-            // Заметки в TaskFlow уже нет, а в индексе она осталась — это и
-            // есть архив закрытого проекта. Открывать её нужно из индекса
-            // (`/api/knowledge/documents/:ragflowId`), оригинала больше нет.
-            archived: docId != null && !titles.has(docId),
-          };
-        }),
-      };
     },
   );
 
@@ -446,6 +404,201 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
         updated_at: meta.updated_at || null,
         markdown: body,
       };
+    },
+  );
+  // ── Документы датасета: загрузка, ход разбора, удаление, переразбор ──────
+  //
+  // 09.11.2026. Владелец: «могу сам загружать туда документы для чанкования».
+  // Файл приходит СЫРЫМИ БАЙТАМИ, как вложения задач (routes/attachments.ts):
+  // имя в `?name=`, тип в Content-Type. Разборщики буфера для этих типов уже
+  // зарегистрированы в index.ts, второй раунд упаковки в multipart не нужен.
+  const MAX_UPLOAD = 15 * 1024 * 1024;
+
+  /** Право трогать документ: владелец — любой, остальные — только свой залитый.
+   *  Документы заметок (`taskflow-<id>.md`) — не «свои» никому, кроме владельца:
+   *  их судьба решается сохранением заметки, а не меню в приложении. */
+  function canTouchDocument(userId: string, ragflowDocId: string): boolean {
+    if (isOwner(userId)) return true;
+    const row = db
+      .prepare("SELECT uploaded_by FROM knowledge_uploads WHERE ragflow_doc_id = ?")
+      .get(ragflowDocId) as { uploaded_by: string | null } | undefined;
+    return Boolean(row && row.uploaded_by === userId);
+  }
+
+  /** Страница документов датасета — общая для обеих витрин. */
+  async function documentsPage(dataset: string, page: number, pageSize: number) {
+    const data = await listDocuments(dataset, page, pageSize);
+    const docs = data?.docs || [];
+    const ids = docs.map((d: any) => docIdFromName(d.name)).filter(Boolean) as string[];
+    const titles = new Map<string, { title: string; project: string | null }>();
+    if (ids.length) {
+      const rows = db
+        .prepare(
+          `SELECT un.id, un.title,
+                  (SELECT p.name FROM projects p
+                    WHERE p.notes_folder_id = un.folder_id
+                    ORDER BY p.created_at LIMIT 1) AS project_name
+           FROM user_notes un
+           WHERE un.id IN (${ids.map(() => "?").join(",")})`,
+        )
+        .all(...ids) as any[];
+      for (const r of rows) titles.set(r.id, { title: r.title || "", project: r.project_name || null });
+    }
+    const uploads = new Map<string, string>();
+    if (docs.length) {
+      const rows = db
+        .prepare(
+          `SELECT ragflow_doc_id, uploaded_by FROM knowledge_uploads
+            WHERE ragflow_doc_id IN (${docs.map(() => "?").join(",")})`,
+        )
+        .all(...docs.map((d: any) => d.id)) as Array<{ ragflow_doc_id: string; uploaded_by: string | null }>;
+      for (const r of rows) uploads.set(r.ragflow_doc_id, r.uploaded_by || "");
+    }
+    return {
+      total: data?.total ?? docs.length,
+      documents: docs.map((d: any) => {
+        const docId = docIdFromName(d.name);
+        const known = docId ? titles.get(docId) : undefined;
+        const uploadedBy = uploads.get(d.id) ?? "";
+        return {
+          name: d.name,
+          // Заголовок заметки важнее её имени в индексе; у залитых вручную
+          // файлов заголовок — это их собственное имя.
+          title: known?.title || (uploadedBy !== "" ? d.name : ""),
+          project: known?.project || null,
+          doc_id: docId,
+          ragflow_id: d.id,
+          chunk_count: d.chunk_count,
+          size: d.size,
+          updated_at: d.update_date,
+          run: d.run ?? null,
+          progress: typeof d.progress === "number" ? d.progress : null,
+          indexed: d.run === "DONE",
+          archived: docId != null && !titles.has(docId),
+          uploaded_by: uploadedBy || null,
+        };
+      }),
+    };
+  }
+
+  // Документы конкретного датасета — экран датасета в приложении.
+  app.get<{ Params: { id: string }; Querystring: { page?: string; page_size?: string } }>(
+    "/api/knowledge/datasets/:id/documents",
+    { preHandler: authPre },
+    async (req, reply) => {
+      if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
+      const page = Math.max(Number(req.query.page) || 1, 1);
+      const pageSize = Math.min(Math.max(Number(req.query.page_size) || 50, 1), 200);
+      try {
+        return await documentsPage(req.params.id, page, pageSize);
+      } catch (e: any) {
+        return reply.code(502).send({ error: "База знаний недоступна", detail: String(e?.message || e) });
+      }
+    },
+  );
+
+  // Загрузка файла в датасет. Ограничения — те же, что у вложений:
+  // 15 МБ и понятный ответ вместо сырой ошибки Fastify.
+  app.post<{ Params: { id: string }; Querystring: { name?: string } }>(
+    "/api/knowledge/datasets/:id/documents",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
+      const dataset = req.params.id;
+      // Исключённый датасет — не «место хранения»: владелец сказал, что в
+      // TaskFlow его нет. Загрузка туда противоречила бы его же решению.
+      if (!enabledDatasetIds().includes(dataset))
+        return reply.code(400).send({ error: "Датасет исключён из TaskFlow" });
+
+      // Имя из query: пользовательское имя может быть каким угодно, поэтому
+      // в путь оно не попадает, а слэши и обратные слэши заменяются.
+      const name = String(req.query.name ?? "")
+        .trim()
+        .replace(/[\\/]+/g, "_")
+        .slice(0, 200);
+      if (!name) return reply.code(400).send({ error: "Не указано имя файла (?name=)" });
+      if (!/\.[A-Za-z0-9]{1,8}$/.test(name))
+        return reply.code(400).send({ error: "Имя файла без расширения — RAGFlow не поймёт, чем разбирать" });
+
+      const body = req.body;
+      const bytes = Buffer.isBuffer(body) ? body : null;
+      if (!bytes || bytes.length === 0) return reply.code(400).send({ error: "Пустой файл" });
+      if (bytes.length > MAX_UPLOAD) return reply.code(413).send({ error: "Файл больше 15 МБ" });
+
+      try {
+        const uploaded = await uploadDocument(
+          dataset,
+          name,
+          new Uint8Array(bytes),
+          req.headers["content-type"] || "application/octet-stream",
+        );
+        if (!uploaded?.id) return reply.code(502).send({ error: "RAGFlow не принял файл" });
+        db.prepare(
+          `INSERT OR REPLACE INTO knowledge_uploads (ragflow_doc_id, dataset_id, name, uploaded_by)
+           VALUES (?, ?, ?, ?)`,
+        ).run(uploaded.id, dataset, name, req.userId);
+        // Разбор сразу: файл без разбора в поиске не участвует, и человек
+        // иначе ждал бы непонятно чего.
+        await parseDocuments(dataset, [uploaded.id]);
+        return { ok: true, ragflow_id: uploaded.id, name, dataset, status: "parsing" };
+      } catch (e: any) {
+        return reply.code(502).send({ error: "Загрузка не удалась", detail: String(e?.message || e) });
+      }
+    },
+  );
+
+  // Ход разбора документа: приложение спрашивает, пока не готово.
+  app.get<{ Params: { ragflowId: string }; Querystring: { dataset_id?: string } }>(
+    "/api/knowledge/documents/:ragflowId/status",
+    { preHandler: authPre },
+    async (req, reply) => {
+      if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
+      try {
+        const status = await documentStatus(req.query.dataset_id || ragflowDataset(), req.params.ragflowId);
+        if (!status) return reply.code(404).send({ error: "Документ не найден" });
+        return status;
+      } catch (e: any) {
+        return reply.code(502).send({ error: "База знаний недоступна", detail: String(e?.message || e) });
+      }
+    },
+  );
+
+  // Удаление документа: владелец — что угодно, остальные — только своё.
+  app.delete<{ Params: { ragflowId: string }; Querystring: { dataset_id?: string } }>(
+    "/api/knowledge/documents/:ragflowId",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
+      if (!canTouchDocument(req.userId, req.params.ragflowId))
+        return reply.code(403).send({ error: "Это документ не ваш — удалить его нельзя" });
+      const dataset = req.query.dataset_id || ragflowDataset();
+      try {
+        await deleteDocuments(dataset, [req.params.ragflowId]);
+        db.prepare("DELETE FROM knowledge_uploads WHERE ragflow_doc_id = ?").run(req.params.ragflowId);
+        return { ok: true };
+      } catch (e: any) {
+        return reply.code(502).send({ error: "Удаление не удалось", detail: String(e?.message || e) });
+      }
+    },
+  );
+
+  // Переразбор: после замены файла или смены модели эмбеддингов.
+  app.post<{ Params: { id: string }; Body: { document_ids?: string[] } }>(
+    "/api/knowledge/datasets/:id/documents/reparse",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
+      const ids = Array.isArray(req.body?.document_ids) ? req.body.document_ids.map(String) : [];
+      if (!ids.length) return reply.code(400).send({ error: "Не указаны документы" });
+      const foreign = ids.filter((id: string) => !canTouchDocument(req.userId, id));
+      if (foreign.length)
+        return reply.code(403).send({ error: "Часть документов не ваша", ragflow_ids: foreign });
+      try {
+        await parseDocuments(req.params.id, ids);
+        return { ok: true, documents: ids.length };
+      } catch (e: any) {
+        return reply.code(502).send({ error: "Переразбор не удался", detail: String(e?.message || e) });
+      }
     },
   );
 }
