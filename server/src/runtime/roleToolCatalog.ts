@@ -2,6 +2,7 @@ import { registryText } from "../lib/roleRules.js";
 import {chatExecutionMode,type ChatExecutionMode} from "./chatExecutionMode.js";
 import {roleHostAccessTools} from "./roleHostAccess.js";
 import {createHostRoleTools} from "./hostRoleTools.js";
+import {createArchifyTools} from "./archifyTools.js";
 import {isToolNotInCatalogText,serviceRefusalCodeOf,TOOL_NOT_CONNECTED} from "./toolRefusalCodes.js";
 import {Check,Errors} from "typebox/value";
 import {Type} from "typebox";
@@ -67,7 +68,7 @@ const CORE_OPERATIONS = new Set<string>(STARTER_TOOLS);
  *  20 Things — 71 схема, 84 844 символа из 169 525. Роль зовёт их изредка, а платят
  *  за них все запросы сессии. Права не меняются: операции остаются в реестре сессии,
  *  загрузчик отдаёт только то, что роль и так имеет право вызывать. */
-export const ON_DEMAND_PREFIXES = ["todoist_", "mcp__composio__", "things_", "wealthfolio_", "changedetection_"] as const;
+export const ON_DEMAND_PREFIXES = ["todoist_", "mcp__composio__", "things_", "wealthfolio_", "changedetection_", "archify_"] as const;
 /** Что грузится по требованию, а не висит в каждом запросе. Экспорт — чтобы
  *  правило можно было проверить тестом: цена ошибки — 65 схем финансового
  *  трекера в каждом запросе роли. */
@@ -99,6 +100,10 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const taskflowOperations=taskflowTools(input.role,input.model??null,input.taskId,input.subtaskId,true,{chatId:input.chatId??"",messageId:input.messageId??""});
  const adapterNames=new Set(adapters.map(tool=>tool.name));
  const hostTools=createHostRoleTools(input.role,input.taskId,input.subtaskId);
+ // Схемы по коду (владелец 09.11.2026): Archify на .110. Файл ложится в
+ // артефакты проекта или серверные артефакты, в чате — вложением. Операции
+ // подключены по требованию (префикс archify_ в ON_DEMAND_PREFIXES).
+ const archifyTools=createArchifyTools({role:input.role,chatId:input.chatId,messageId:input.messageId});
  // Вызов роли как субагента: только Помощник и Оркестратор (правило доступа
  // в roleToolScope). В каталоге СУБАГЕНТА инструмента нет — иначе роли
  // вызывают друг друга цепочкой (роль → роль → роль).
@@ -111,7 +116,7 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  ? [createRoleSubagentSteerTool(context)] : [];
  // Новый ход роли — счётчик вызовов субагента сбрасывается: лимит «3 за ход».
  if(subagentCallTools.length)resetSubagentCallCounters(input.role,input.chatId??"");
- const allOperations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...hostTools,...openBranchTools,...subagentCallTools,...subagentSteerTools,...adapters];
+ const allOperations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...hostTools,...archifyTools,...openBranchTools,...subagentCallTools,...subagentSteerTools,...adapters];
  // Чат задачи: чужую карточку, документ и коллегу пускает только слово владельца.
  // Один набор во всех режимах (владелец 07.11.2026): чат задачи больше не урезается.
  const operations=allOperations;
