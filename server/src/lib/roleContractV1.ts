@@ -571,8 +571,9 @@ function salvageStructured(original: Record<string, unknown>): StructuredRoleEnv
   return checked.valid ? checked.envelope : null;
 }
 
-/** Сообщение вместо сырого JSON, когда конверт битый и текста вытащить нечего. */
-const BROKEN_CONTRACT_NOTE = "⚠️ Ответ роли не прошёл проверку контракта JSON — запроси повтор.";
+/** Внутренний маркер: сервер не смог извлечь содержимое. Владельцу он не отображается;
+ *  обычный маршрут отправляет роль на однократное исправление. */
+const BROKEN_CONTRACT_NOTE = "";
 
 /** Из битого JSON-конверта вытащить текст `output` (или `error`), чтобы владелец
  *  видел содержимое, а не сырой объект с ключами. null — текста нет. */
@@ -841,10 +842,10 @@ export interface NormalizedRoleReplyV1 {
  * прежде чем сервер покажет владельцу безопасно нормализованный fallback.
  */
 export function shouldRetryRoleReply(normalized: NormalizedRoleReplyV1): boolean {
-  return normalized.normalizedByServer && !(
-    normalized.validationErrors.length === 1 &&
-    normalized.validationErrors[0] === "Ответ не содержит JSON v1 конверт"
-  );
+  // Сервер сам строит канонический конверт, когда смог извлечь смысл ответа.
+  // Повтор роли нужен только при пустом результате: ему не место в чате владельца.
+  const hasRecoverableContent = normalized.displayText.trim().length > 0;
+  return normalized.normalizedByServer && !hasRecoverableContent;
 }
 
 export function roleReplyCorrectionPrompt(errors: string[]): string {

@@ -64,14 +64,35 @@ describe("нормализация финального ответа в JSON v1"
     expect(validateStructuredRoleContractV1(normalized.envelope).valid).toBe(true);
   });
 
-  // Сырой конверт владельцу не показывается (владелец 27.10.2026): вместо
-  // него — что вынулось из полей text, иначе пометка о сбое контракта.
-  it("битый JSON не доходит владельцу сырым: пометка о сбое", () => {
+  it("сервер достраивает неполный структурированный конверт без повтора роли", () => {
+    const normalized = normalizeRoleReplyV1(JSON.stringify({
+      schema_version: 1,
+      ok: "true",
+      output: [{ type: "text", text: "Смысловой ответ сохранён." }],
+    }));
+    expect(normalized.envelope).toMatchObject({
+      schema_version: 1,
+      ok: true,
+      output: [{ type: "text", text: "Смысловой ответ сохранён." }],
+      artifacts: [],
+      plan_artifact: null,
+      error: null,
+      next_hint: null,
+      needs_human: false,
+    });
+    expect(normalized.displayText).toBe("Смысловой ответ сохранён.");
+    expect(normalized.displayText).not.toContain("не прошёл проверку контракта");
+    expect(shouldRetryRoleReply(normalized)).toBe(false);
+    expect(validateStructuredRoleContractV1(normalized.envelope).valid).toBe(true);
+  });
+
+  it("нераспознаваемый конверт не показывает владельцу ошибку контракта и идёт роли на повтор", () => {
     const raw = '{"schema_version":1,"output":';
     const normalized = normalizeRoleReplyV1(raw);
     expect(normalized.normalizedByServer).toBe(true);
     expect(normalized.displayText).not.toContain("schema_version");
-    expect(normalized.displayText).toContain("не прошёл проверку контракта");
+    expect(normalized.displayText).not.toContain("не прошёл проверку контракта");
+    expect(shouldRetryRoleReply(normalized)).toBe(true);
     expect(validateStructuredRoleContractV1(normalized.envelope).valid).toBe(true);
   });
 
