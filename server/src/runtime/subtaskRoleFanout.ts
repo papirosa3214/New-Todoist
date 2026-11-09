@@ -99,13 +99,21 @@ export async function suggestFanoutFromSubtasks(taskId: string): Promise<FanoutS
   const used = new Set<string>();
   const nodes: Array<{ slot_key: string; role_key: string; expected_result: string; source_subtask_id: string }> = [];
 
-  // Галочка «Роли для подзадач» в разделе JEV: один запрос на всю карточку.
-  // Где JEV уверен — его роль; где нет (или он выключен/не ответил) —
-  // прежний подбор по эмбеддингам ниже.
-  const jevPicks = await pickRolesForSubtasksByJev(task, openSubtasks).catch(() => new Map());
+  // BGE — первый, локальный и уже откалиброванный путь. JEV вызываем лишь
+  // для подзадач, которым BGE не смог уверенно подобрать роль.
+  const localPicks = new Map<string, { role: string; score: number }>();
+  for (const subtask of openSubtasks) {
+    const { matched } = await matchRoleForText(subtask.title, { topK: 1 });
+    if (matched[0] && matched[0].score >= FANOUT_CONFIDENCE) localPicks.set(subtask.id, matched[0]);
+  }
+  const unresolved = openSubtasks.filter((subtask) => !localPicks.has(subtask.id));
+  const jevPicks = unresolved.length
+    ? await pickRolesForSubtasksByJev(task, unresolved).catch(() => new Map())
+    : new Map();
   let byJev = 0;
 
   for (const subtask of openSubtasks) {
+    const local = localPicks.get(subtask.id);
     const jev = jevPicks.get(subtask.id);
     let top: { role: string; score: number } | undefined;
     // Подзадача, которую раньше оставляли «текущему исполнителю» (мелкий
@@ -113,11 +121,12 @@ export async function suggestFanoutFromSubtasks(taskId: string): Promise<FanoutS
     // основной роли. После утверждения карточку ведёт план, и подзадача вне
     // плана оставалась ничьей: 19.10.2026 из пяти подзадач план взял две,
     // три разработческие повисли (владелец: «болтаются, хуй по никак»).
-    if (jev) {
+    if (local) {
+      top = local;
+    } else if (jev) {
       top = jev.separate < 0.5 && primary ? { role: primary, score: 1 } : { role: jev.role, score: jev.confidence };
     } else {
-      const { matched } = await matchRoleForText(subtask.title, { topK: 1 });
-      top = matched[0] && matched[0].score >= FANOUT_CONFIDENCE ? matched[0] : primary ? { role: primary, score: 0 } : undefined;
+      top = primary ? { role: primary, score: 0 } : undefined;
       if (!top) continue; // нет ни уверенной роли, ни основной — оставить как есть
     }
     if (!ROLE_NAMES.includes(top.role)) continue; // роль сейчас выключена — не назначать на неё узел

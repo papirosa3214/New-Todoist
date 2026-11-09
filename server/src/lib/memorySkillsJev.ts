@@ -53,6 +53,41 @@ async function selectYoutubeSkillByBge(
   }
 }
 
+
+async function rankByBge(query: string, candidates: string[], purpose: string): Promise<number[] | null> {
+  if (!query.trim() || !candidates.length) return null;
+  try {
+    const out = await getEmbeddings([query, ...candidates], { purpose, maxBatch: candidates.length + 1 });
+    const vectors = out.embeddings;
+    if (!Array.isArray(vectors) || !Array.isArray(vectors[0])) return null;
+    const queryVector = vectors[0] as number[];
+    const scores = (vectors as number[][]).slice(1).map((vector) => cosineSimilarity(queryVector, vector));
+    return scores.every(Number.isFinite) ? scores : null;
+  } catch { return null; }
+}
+
+async function selectSkillsByBge(
+  work: { title: string; description: string | null; step?: string | null },
+  skills: Array<{ name: string; description: string }>, requiredNames: readonly string[],
+): Promise<Set<string> | null> {
+  const query = [work.title, work.description, work.step].filter(Boolean).join("\n");
+  const scores = await rankByBge(query, skills.map((skill) => skill.name + ": " + skill.description), "skill_selection_bge");
+  if (!scores) return null;
+  const keep = new Set(requiredNames);
+  scores.forEach((score, index) => { if (score >= 0.42) keep.add(skills[index].name); });
+  return keep.size ? keep : null;
+}
+
+async function filterMemoryByBge<T extends { text: string; title: string | null; pinned: boolean }>(query: string, items: T[]): Promise<T[] | null> {
+  const candidates = items.filter((item) => !item.pinned).slice(0, MEMORY_CANDIDATES);
+  const scores = await rankByBge(query, candidates.map((item) => (item.title ? item.title + "\n" : "") + item.text), "memory_recall_bge");
+  if (!scores || Math.max(...scores) < 0.42) return null;
+  const ranked = candidates.map((item, index) => ({ item, score: scores[index] })).sort((a,b) => b.score - a.score).map((entry) => entry.item);
+  const pinned = items.filter((item) => item.pinned);
+  const rest = items.filter((item) => !item.pinned && !candidates.includes(item));
+  return [...pinned, ...ranked, ...rest];
+}
+
 /**
  * Отбор памяти для роли. На вход — найденные по сходству записи (уже
  * отсортированные), на выход — тот же список без уверенно ненужных и в
@@ -62,8 +97,11 @@ async function selectYoutubeSkillByBge(
 export async function filterMemoryByJev<
   T extends { text: string; title: string | null; pinned: boolean },
 >(query: string, items: T[]): Promise<T[] | null> {
+  if (!query.trim()) {skippedObservation("memoryRecall","empty_query");return null;}
+  const byBge = await filterMemoryByBge(query, items);
+  if (byBge) return byBge;
   const cfg = jevScenario("memoryRecall");
-  if (!cfg || !query.trim()) {skippedObservation("memoryRecall",!cfg?jevSkipReason("memoryRecall"):"empty_query");return null;}
+  if (!cfg) {skippedObservation("memoryRecall",jevSkipReason("memoryRecall"));return null;}
   const candidates = items.filter((i) => !i.pinned).slice(0, MEMORY_CANDIDATES);
   if (candidates.length === 0) {skippedObservation("memoryRecall","no_candidates");return null;}
 
@@ -152,6 +190,8 @@ export async function selectSkillsByJev(
   if (skills.length && skills.every(s => requiredNames.includes(s.name))) {
     skippedObservation("skills","required_skills");return null;
   }
+  const byBge = await selectSkillsByBge(work, skills, requiredNames);
+  if (byBge) return byBge;
   const cfg = jevScenario("skills");
   if (!cfg) {
     skippedObservation("skills", jevSkipReason("skills"));

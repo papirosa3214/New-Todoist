@@ -254,11 +254,11 @@ function answers(a: Record<string, unknown>) {
 describe("сценарий: отбор памяти для роли", () => {
   const mem = (text: string, pinned = false) => ({ text, title: null, pinned });
 
-  it("выключено — null, JEV не зовётся", async () => {
+  it("выключено — BGE пробуется, а без уверенного ответа возвращает null", async () => {
     saveJevSettings({ apiKey: "apik_test-1234567890" });
     const spy = vi.fn(); globalThis.fetch = spy as any;
     expect(await filterMemoryByJev("задача", [mem("a")])).toBeNull();
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
   });
 
   it("уверенно ненужное выкинуто, полезное вперёд, закреплённое не трогается", async () => {
@@ -302,11 +302,11 @@ describe("сценарий: проверка записи в память", () =
 describe("сценарий: навыки под задачу", () => {
   const sk = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `s${i}`, description: `навык ${i}` }));
 
-  it("навыков мало (<7) — выбирать не из чего, JEV не зовётся", async () => {
+  it("навыков мало — BGE пробуется, а без уверенного ответа возвращает null", async () => {
     saveJevSettings({ apiKey: "apik_test-1234567890", skillsEnabled: true });
     const spy = vi.fn(); globalThis.fetch = spy as any;
     expect(await selectSkillsByJev({ title: "t", description: null }, sk(6))).toBeNull();
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
   });
 
   it("оставляет нужные; навык без ответа — оставляет", async () => {

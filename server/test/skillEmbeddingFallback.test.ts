@@ -37,6 +37,6 @@ it("выбирает youtube-research локальным BGE при недост
   expect(selected?.has("youtube-research")).toBe(true);
   expect(getEmbeddings).toHaveBeenCalledWith(
     expect.arrayContaining([expect.stringContaining("YouTube")]),
-    expect.objectContaining({ purpose: "skill_youtube_fallback" }),
+    expect.objectContaining({ purpose: "skill_selection_bge" }),
   );
 });
