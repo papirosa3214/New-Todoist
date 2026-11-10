@@ -1,4 +1,8 @@
 import {compactChatReportMaterials} from "./chatReportMaterials.js";
+// Готовая разметка таблиц, графиков и схем — кладётся сервером в блоки
+// (`server_html`), см. chatTemplates.ts. Клиент, который вид знает, продолжает
+// рисовать нативно; поле серверное, от модели оно не принимается.
+import {attachServerHtml} from "./chatTemplates.js";
 // JSON-контракт роли v1 (карточка 237d6f34, 17.10.2026).
 //
 // Что это. Промпты ролей (scripts/role-prompts/*.md) и паспорта ролей
@@ -891,8 +895,12 @@ export function exhaustedRoleReplyFallback(normalized: NormalizedRoleReplyV1): N
 export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
   const parsed = parseRoleContractV1(text);
   if (parsed.structuredEnvelope) {
+    // Разметку таблиц/графиков/схем собирает сервер: блок остаётся с данными,
+    // рядом ложится `server_html`. Так новый вид блока не требует пересборки
+    // приложения, а клиент, который вид знает, продолжает рисовать нативно.
+    const envelope = attachServerHtml(compactChatReportMaterials(parsed.structuredEnvelope).envelope);
     return {
-      envelope: compactChatReportMaterials(parsed.structuredEnvelope).envelope,
+      envelope,
       displayText: structuredOutputText(parsed.structuredEnvelope.output),
       // Спасённый конверт (кривые блоки отброшены) — тоже правка сервера:
       // претензии уходят в журнал, а не теряются.
