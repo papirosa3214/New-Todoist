@@ -136,15 +136,34 @@ function documentOf(row: NoteRow): KnowledgeDocument | null {
   return { name: `${PREFIX}${row.id}.md`, dataset: (row.dataset_id ?? "").trim() || defaultDataset(), text };
 }
 
+/** Отчёт сдачи работы — рассказ роли, не знание. В индекс базы он не входит. */
+export function isDeliveryReport(noteId: string): boolean {
+  return Boolean(
+    db.prepare(
+      "SELECT 1 AS ok FROM task_events WHERE kind = 'role_result_report' AND to_value = ? LIMIT 1",
+    ).get(noteId),
+  );
+}
+
 export function noteDocument(noteId: string): KnowledgeDocument | null {
   const row = db.prepare(`${NOTE_SQL} WHERE un.id = ?`).get(noteId) as NoteRow | undefined;
   if (!row) throw new Error("Заметка не найдена");
+  if (isDeliveryReport(noteId)) return null;
   return documentOf(row);
 }
 
+function deliveryReportIds(): Set<string> {
+  const rows = db.prepare(
+    "SELECT DISTINCT to_value AS id FROM task_events WHERE kind = 'role_result_report' AND to_value IS NOT NULL",
+  ).all() as Array<{ id: string }>;
+  return new Set(rows.map((row) => row.id));
+}
+
 function allDocuments(): Map<string, KnowledgeDocument> {
+  const reports = deliveryReportIds();
   const out = new Map<string, KnowledgeDocument>();
   for (const row of db.prepare(NOTE_SQL).all() as NoteRow[]) {
+    if (reports.has(row.id)) continue;
     const doc = documentOf(row);
     if (doc) out.set(doc.name, doc);
   }

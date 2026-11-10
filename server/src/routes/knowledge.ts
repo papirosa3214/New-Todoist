@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { callUnifiedAi } from "../lib/aiClient.js";
-import { deleteDocs, noteDocument, rememberUploaded, uploadDocs } from "../lib/knowledgeSync.js";
+import { readEmbedReadiness } from "../lib/embedReadiness.js";
+import { deleteDocs, isDeliveryReport, noteDocument, rememberUploaded, uploadDocs } from "../lib/knowledgeSync.js";
 import { isOwner } from "../access.js";
 import {
   createSection,
@@ -61,6 +62,7 @@ import {
  */
 export async function pushNoteToKnowledge(noteId: string): Promise<{ dataset: string; document_id: string | null }> {
   if (!ragflowToken() || !ragflowDataset()) throw new Error("База знаний не настроена");
+  if (isDeliveryReport(noteId)) throw new Error("Отчёт о сдаче работы в базу знаний не кладётся");
   const doc = noteDocument(noteId);
   if (!doc) throw new Error("Заметка пустая — в базе знаний от неё толку нет");
   const listed = await ragflow(`/api/v1/datasets/${doc.dataset}/documents?name=${encodeURIComponent(doc.name)}&page=1&page_size=10`);
@@ -81,9 +83,16 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
       return { ok: true, ...(await pushNoteToKnowledge(req.params.id)) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return reply.code(message === "Заметка не найдена" ? 404 : 502).send({ error: message });
+      const status = message === "Заметка не найдена" ? 404
+        : message === "Отчёт о сдаче работы в базу знаний не кладётся" ? 400
+        : 502;
+      return reply.code(status).send({ error: message });
     }
   });
+
+  // Модель эмбеддингов: загружена ли и не занята ли видеокарта.
+  // Экран базы показывает это сразу, до вопроса.
+  app.get("/api/knowledge/embed-status", { preHandler: authPre }, async () => readEmbedReadiness());
 
   /** Не настроено — честный 503, а не пустой список: пустой список клиент
    *  показал бы как «документов нет», и никто бы не понял, что дело в ключе. */

@@ -9,7 +9,7 @@
 // правок в одно задание, а один прогон за раз не даёт двум заданиям
 // одновременно перезаливать один и тот же датасет.
 import db from "../db.js";
-import { reindexNote } from "./knowledgeSync.js";
+import { isDeliveryReport, reindexNote } from "./knowledgeSync.js";
 
 /** Правка «устоялась» — столько ждём после сохранения. */
 export const DEBOUNCE_MS = 10_000;
@@ -43,6 +43,9 @@ const iso = (at: number) => new Date(at).toISOString();
  * ждать, что она уедет в индекс.
  */
 export function enqueueNoteIndex(noteId: string): void {
+  // Отчёт сдачи уже записан событием. Повторное сохранение не должно
+  // заново класть его в поиск.
+  if (isDeliveryReport(noteId)) return;
   db.prepare(
     `INSERT INTO knowledge_index_jobs (note_id, dataset_id, queued_at, attempts, status, error, ragflow_doc_id, finished_at)
      VALUES (?, NULL, ?, 0, 'queued', NULL, NULL, NULL)
