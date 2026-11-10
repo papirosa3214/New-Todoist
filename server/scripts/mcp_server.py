@@ -1899,7 +1899,6 @@ TOOLS = [
                 "subtasks": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["title"],
-            "anyOf": [{"required": ["brief"]}, {"required": ["description"]}],
         },
         "fn": t_create_task,
     },
