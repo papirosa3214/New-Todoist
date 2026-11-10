@@ -29,14 +29,15 @@ const both = <T>(fn: () => T): { on: T; off: T } => {
 };
 
 describe("правила из кода в реестре", () => {
-  it("в реестре 162 строки из кода: 151 правило, 3 смешанных (данные отдельно), 8 данных; составы 16 шаблонов", () => {
+  it("в реестре 160 строк из кода: 150 правил, 2 смешанных (данные отдельно), 8 данных; составы 16 шаблонов", () => {
     const all = loadRoleRules();
     const rows = all.filter((r) => r.category === "из кода" && r.kind !== "compose" && /^R\d+$/.test(r.id) && !["R123", "R214"].includes(r.id));
-    expect(rows).toHaveLength(162);
+    // R124 и R217 вынесены в «новое 06.11.2026» (11f7fc7b), чтобы формат доходил до роли.
+    expect(rows).toHaveLength(160);
     expect(rows.every((r) => r.condition && r.site)).toBe(true);
     expect(rows.filter((r) => r.kind === "data")).toHaveLength(8);
-    expect(rows.filter((r) => r.kind === "rule" && r.data_part)).toHaveLength(3);
-    expect(rows.filter((r) => r.kind === "rule" && !r.data_part)).toHaveLength(151);
+    expect(rows.filter((r) => r.kind === "rule" && r.data_part)).toHaveLength(2);
+    expect(rows.filter((r) => r.kind === "rule" && !r.data_part)).toHaveLength(150);
     expect(all.filter((r) => r.kind === "compose")).toHaveLength(16);
   });
   it("AGENT_RULES и контракт постановки берутся из реестра, массив и текст те же", () => {

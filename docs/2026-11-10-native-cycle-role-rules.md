@@ -28,6 +28,8 @@ R407 (qa) и R345 (builder) противоречили циклу: требов�
 
 ## Проверка
 
-`npx vitest run test/roleRegistryPrompt.test.ts test/roleRegistryChannels.test.ts test/roleRegistryCode.test.ts --maxWorkers=4` из `server/`: 22 прошло. Два падения в `roleRegistryCode.test.ts` уже были на main до этой правки: счётчик строк «из кода» 160 вместо 162 и расхождение `chat.wrapper` с литералом кода. Сборка инструкции: C23–C27 есть в чате builder, в голосе секретаря их нет, заголовок «Цикл нативного клиента» рисуется.
+`npx vitest run test/roleRegistryPrompt.test.ts test/roleRegistryChannels.test.ts test/roleRegistryCode.test.ts --maxWorkers=4` из `server/`. Сборка инструкции: C23–C27 есть в чате builder, в голосе секретаря их нет, заголовок «Цикл нативного клиента» рисуется.
+
+Запасные строки в коде приведены к реестру: чат говорит то же, что R217, у секретаря убрана старая фраза про Markdown. Счётчик «из кода» в тесте — 160, потому что R124 и R217 лежат в «новое 06.11.2026». `roleRegistryCode.test.ts` — 9/9. Роли по-прежнему читают R217.
 
 Реестр читается с диска по времени файла (`WorkingDirectory` сервера — этот `server/`). Перезапуск не делался.
