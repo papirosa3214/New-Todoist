@@ -84,7 +84,7 @@ beforeAll(() => {
   );
   for (const [key] of stashedGitConfig) delete process.env[key];
 
-  db.exec(`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, merged_at TEXT, merged_into_commit TEXT, merged_into_branch TEXT, status TEXT DEFAULT 'active', agent_state TEXT)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, merged_at TEXT, merged_into_commit TEXT, merged_into_branch TEXT, host_branch_cleared_at TEXT, status TEXT DEFAULT 'active', agent_state TEXT)`);
   db.exec(`CREATE TABLE IF NOT EXISTS task_events (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, actor_id TEXT, kind TEXT NOT NULL, field TEXT, from_value TEXT, to_value TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
   db.exec(`CREATE TABLE IF NOT EXISTS worktree_merge_queue (
     task_id TEXT PRIMARY KEY, trigger TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued',

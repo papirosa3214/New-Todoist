@@ -6432,6 +6432,28 @@ const migrations: Migration[] = [
     },
   },
 
+  // Ветку роли убирают и с хостов (GitHub, Gitea), не только локально:
+  // до 10.11.2026 `cleanupWorktree` удалял ветку в живом дереве, а на хостах
+  // `roles/*` копились сотнями. Отметка нужна обходу
+  // `sweepClosedRoleBranches` (runtime/worktreeMergeQueue.ts), чтобы не
+  // ходить по сети к одной и той же карточке каждый проход.
+  {
+    id: "216_task_host_branch_cleared",
+    description:
+      "Ветка роли убрана с хостов после слияния: tasks.host_branch_cleared_at " +
+      "(владелец 10.11.2026 — сервер сам закрывает ветку, когда роль закончила работу)",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!cols.has("host_branch_cleared_at")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN host_branch_cleared_at TEXT");
+      }
+    },
+  },
+
 ];
 /**
  * Опции прогона миграций.

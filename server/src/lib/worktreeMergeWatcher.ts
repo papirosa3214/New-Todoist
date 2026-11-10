@@ -18,6 +18,7 @@ import db from "../db.js";
 import { getSetting } from "./serverSettings.js";
 import { raiseIncident, incidentRaisedRecently } from "./incidents.js";
 import { loadPushStatus } from "./worktree/pushHosts.js";
+import { loadBranchCleanup } from "./worktree/branchCleanup.js";
 import {
   dirtyFiles,
   gitOrNull,
@@ -167,6 +168,25 @@ export function checkWorktreeMerge(): MergeWatchResult {
     );
   }
 
+  // Ветка роли на хостах (владелец 10.11.2026: сервер закрывает её сам).
+  // Отказ снова оставил бы хвост `roles/*` на GitHub и в Gitea — а снаружи
+  // это выглядит как «сервер слил, а ветку не убрал».
+  const closeJournal = loadBranchCleanup();
+  const lastClose = closeJournal?.entries[closeJournal.entries.length - 1];
+  const stalledBranch =
+    lastClose?.results.filter((r) => r.state === "failed" || r.state === "skipped") ?? [];
+  if (lastClose && stalledBranch.length) {
+    problems.push(
+      `ветка ${lastClose.branch} не закрыта на хостах: ` +
+        stalledBranch
+          .map(
+            (r) =>
+              `${r.remote} — ${r.state === "skipped" ? "на хосте коммиты вне main" : "отказ"} (${r.detail ?? ""})`,
+          )
+          .join("; "),
+    );
+  }
+
   return { ok: problems.length === 0, problems };
 }
 
@@ -184,6 +204,7 @@ export const MERGE_WATCH_ACTIONS: readonly string[] = [
   "- Грязная копия роли — закоммитить в самой копии, строка вернётся в очередь сама.",
   "- Конфликт / красные тесты — работа уже вернулась автору шагом плана; нет шага — смотреть событие merge_return_failed.",
   "- main не доехал до хоста — `~/.local/state/taskflow-runs/worktrees/push-status.json`; после починки `~/infra-ops/git-sync/git-sync.sh ~/Проекты/New-Todoist`. Расхождение без слова владельца не форсить.",
+  "- Ветка роли не закрыта на хосте — `~/.local/state/taskflow-runs/worktrees/branch-cleanup.json`: там причина по каждому хосту. Отказ прав (Permission denied) снимается доступом, а «коммиты вне main» — ручным разбором: ветку с неслитой работой сервер не удаляет намеренно.",
 ];
 
 function raise(problems: string[]) {
