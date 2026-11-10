@@ -265,6 +265,171 @@ export function renderDiagramHtml(block: Record<string, unknown>): string | null
 // ── Публичный вход ────────────────────────────────────────────────────────
 
 /**
+ * Разложить свободный ответ роли в блоки конверта.
+ *
+ * Зачем. Роль часто пишет обычный markdown вместо JSON-конверта, и тогда
+ * владелец получал один блок `text` целиком: заголовки, таблицы и команды
+ * внутри одного абзаца, кнопки «Запустить» нет, таблица не таблица. Здесь
+ * детерминированный разбор без модели и без догадок: что в тексте лежит
+ * разметкой — становится блоком, всё остальное остаётся текстом.
+ *
+ * Границы, которые важно не переступить:
+ *   - ничего не выдумываем: блок появляется только из явной разметки
+ *     (заголовок `#`, список `-`/`1.`, таблица с разделителем, чекбокс,
+ *     эмодзи статуса в начале строки, ссылка отдельной строкой, фенс кода);
+ *   - смысл строк не угадываем: «ждёт ответа» останется текстом, пока роль
+ *     не напишет его чекбоксом или эмодзи;
+ *   - порядок строк сохраняется, исходный текст не теряется: всё, что не
+ *     стало блоком, остаётся текстовыми блоками в том же порядке;
+ *   - пределы контракта соблюдаются при сборке (заголовок ≤1000, колонок ≤12,
+ *     строк таблицы ≤100, команда ≤8000 и без ```, ссылка http(s) или note://),
+ *     поэтому такой конверт проходит валидатор, а не падает на нём.
+ */
+export function blocksFromMarkdown(text: string): Record<string, unknown>[] {
+  const source = text.replace(/\r\n?/g, "\n");
+  const lines = source.split("\n");
+  const blocks: Record<string, unknown>[] = [];
+  let paragraph: string[] = [];
+
+  const flush = () => {
+    const joined = paragraph.join("\n").trim();
+    paragraph = [];
+    if (!joined) return;
+    // Длинный текст режем по пределу блока, а не отбрасываем.
+    for (let at = 0; at < joined.length; at += 60000) {
+      blocks.push({ type: "text", text: joined.slice(at, at + 60000) });
+    }
+  };
+
+  const STATUS_EMOJI: [string, string][] = [
+    ["✅", "passed"], ["☑️", "passed"], ["✔️", "passed"],
+    ["❌", "failed"], ["⛔", "failed"],
+    ["⚠️", "blocked"], ["🚫", "blocked"],
+    ["⏳", "in_progress"], ["🔄", "in_progress"],
+  ];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    const trimmed = line.trim();
+
+    if (!trimmed) { flush(); continue; }
+
+    // Фенс кода: bash и оболочки — команда с кнопкой, остальное — текст как есть.
+    const fence = /^```([\w+-]*)\s*$/.exec(trimmed);
+    if (fence) {
+      flush();
+      const body: string[] = [];
+      let cursor = index + 1;
+      while (cursor < lines.length && !/^```/.test(lines[cursor]!.trim())) {
+        body.push(lines[cursor]!);
+        cursor += 1;
+      }
+      const code = body.join("\n").trim();
+      const lang = (fence[1] ?? "").toLowerCase();
+      if (code && ["bash", "sh", "shell", "zsh", "console"].includes(lang) && code.length <= 8000 && !code.includes("```")) {
+        blocks.push({ type: "command", command: code });
+      } else if (code) {
+        // Чужой код не переписываем в команду: он остаётся текстом с фенсом.
+        blocks.push({ type: "text", text: "```" + (lang ? lang + "\n" : "\n") + code + "\n```" });
+      }
+      index = cursor;
+      continue;
+    }
+
+    // Заголовок 1–3 уровня.
+    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
+    if (heading) {
+      flush();
+      blocks.push({ type: "heading", text: heading[2]!.slice(0, 1000), level: heading[1]!.length });
+      continue;
+    }
+
+    // Таблица: строка с `|` и следующая за ней — разделитель из дефисов.
+    if (trimmed.includes("|") && index + 1 < lines.length && /^[\s|:-]*-[\s|:-]*$/.test(lines[index + 1]!.trim())) {
+      const cells = (row: string) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+      const columns = cells(trimmed).slice(0, 12);
+      const rows: string[][] = [];
+      let cursor = index + 2;
+      while (cursor < lines.length && lines[cursor]!.includes("|") && lines[cursor]!.trim() && rows.length < 100) {
+        rows.push(cells(lines[cursor]!).slice(0, columns.length));
+        cursor += 1;
+      }
+      flush();
+      blocks.push({ type: "table", columns, rows });
+      index = cursor - 1;
+      continue;
+    }
+
+    // Список и чекбоксы.
+    const bullet = /^[-*•]\s+(.*)$/.exec(trimmed);
+    const numbered = /^\d+[.)]\s+(.*)$/.exec(trimmed);
+    if (bullet || numbered) {
+      flush();
+      const ordered = Boolean(numbered);
+      const items: string[] = [];
+      let cursor = index;
+      while (cursor < lines.length) {
+        const current = lines[cursor]!.trim();
+        const match = ordered ? /^\d+[.)]\s+(.*)$/.exec(current) : /^[-*•]\s+(.*)$/.exec(current);
+        if (!match) break;
+        const body = match[1]!;
+        const checkbox = /^\[([ xX])\]\s*(.*)$/.exec(body);
+        if (checkbox) {
+          // Чекбокс — не пункт списка, а проверка: так его и показываем.
+          blocks.push({
+            type: "status",
+            code: checkbox[1]!.trim() ? "passed" : "skipped",
+            title: checkbox[2]!.slice(0, 1000),
+          });
+        } else if (items.length < 200) {
+          items.push(body.slice(0, 1000));
+        }
+        cursor += 1;
+      }
+      if (items.length) blocks.push({ type: "list", items, ordered });
+      index = cursor - 1;
+      continue;
+    }
+
+    // Эмодзи статуса в начале строки.
+    const emoji = STATUS_EMOJI.find(([symbol]) => trimmed.startsWith(symbol));
+    if (emoji) {
+      flush();
+      const rest = trimmed.slice(emoji[0].length).trim();
+      if (rest) blocks.push({ type: "status", code: emoji[1], title: rest.slice(0, 1000) });
+      continue;
+    }
+
+    // Ссылка отдельной строкой — блоком, с ярлычком на клиенте.
+    const link = /^\[([^\]]{1,300})\]\((https?:\/\/\S+|note:\/\/[\w-]+)\)$/.exec(trimmed);
+    if (link) {
+      flush();
+      blocks.push({ type: "link", title: link[1]!, url: link[2]! });
+      continue;
+    }
+    const bare = /^(https?:\/\/\S+|note:\/\/[\w-]+)$/.exec(trimmed);
+    if (bare) {
+      flush();
+      blocks.push({ type: "link", title: bare[1]!.replace(/^https?:\/\//, "").slice(0, 300), url: bare[1]!.slice(0, 2048) });
+      continue;
+    }
+
+    paragraph.push(line);
+  }
+  flush();
+
+  // Контракт разрешает не больше 200 блоков: остаток склеиваем в один текст,
+  // а не выбрасываем — ответ роли не должен терять содержимое.
+  if (blocks.length > 200) {
+    const head = blocks.slice(0, 199);
+    const tail = blocks.slice(199).map((block) => String((block as any).text ?? (block as any).title ?? "")).join("\n").trim();
+    if (tail) head.push({ type: "text", text: tail.slice(0, 60000) });
+    return head;
+  }
+  return blocks.length ? blocks : [{ type: "text", text: source.trim().slice(0, 60000) }];
+}
+
+/**
  * Готовая разметка одного блока или null. null означает «сервер этот вид не
  * рисует» либо «не влезло в предел» — в обоих случаях клиент рисует нативно,
  * как раньше, и ничего не теряется.

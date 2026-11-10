@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   attachServerHtml,
+  blocksFromMarkdown,
   CHAT_TEMPLATES_VERSION,
   renderBlockHtml,
   SERVER_HTML_FIELD,
@@ -124,6 +125,86 @@ describe("серверные шаблоны блоков", () => {
     expect(html).toBeNull();
     // И заведомо влезающий блок не отбрасывается: предел не мешает обычным.
     expect(Buffer.byteLength(renderBlockHtml(tableBlock)!, "utf8")).toBeLessThan(SERVER_HTML_MAX);
+  });
+});
+
+describe("разметка свободного ответа", () => {
+  const markdown = [
+    "## Итог",
+    "",
+    "Сделал три вещи, две проверены.",
+    "",
+    "| Роль | Закрыто |",
+    "| --- | --- |",
+    "| Исследователь | 2 |",
+    "",
+    "- [x] сборка",
+    "- [ ] прогон на телефоне",
+    "",
+    "✅ тесты зелёные",
+    "⚠️ нет доступа к .110",
+    "",
+    "```bash",
+    "npm run build",
+    "```",
+    "",
+    "https://github.com/maksim/taskflow-server/pull/87",
+  ].join("\n");
+
+  it("заголовок, текст, таблица, чекбоксы, статусы, команда и ссылка — разными блоками", () => {
+    const blocks = blocksFromMarkdown(markdown);
+    const types = blocks.map((block) => block.type);
+    expect(types).toEqual([
+      "heading", "text", "table", "status", "status", "status", "status", "command", "link",
+    ]);
+    expect(blocks[0]).toMatchObject({ type: "heading", text: "Итог", level: 2 });
+    expect(blocks[2]).toMatchObject({ type: "table", columns: ["Роль", "Закрыто"], rows: [["Исследователь", "2"]] });
+    expect(blocks[3]).toMatchObject({ code: "passed", title: "сборка" });
+    expect(blocks[4]).toMatchObject({ code: "skipped", title: "прогон на телефоне" });
+    expect(blocks[5]).toMatchObject({ code: "passed", title: "тесты зелёные" });
+    expect(blocks[6]).toMatchObject({ code: "blocked", title: "нет доступа к .110" });
+    expect(blocks[7]).toMatchObject({ type: "command", command: "npm run build" });
+  });
+
+  it("собранный конверт проходит валидатор, а не падает на нём", () => {
+    const checked = validateStructuredRoleContractV1({
+      schema_version: 1, ok: true, output: blocksFromMarkdown(markdown),
+      artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: false,
+    });
+    expect(checked.errors).toEqual([]);
+    expect(checked.valid).toBe(true);
+  });
+
+  it("список нумерованный и маркированный различаются", () => {
+    expect(blocksFromMarkdown("- раз\n- два")).toEqual([{ type: "list", items: ["раз", "два"], ordered: false }]);
+    expect(blocksFromMarkdown("1. раз\n2. два")).toEqual([{ type: "list", items: ["раз", "два"], ordered: true }]);
+  });
+
+  it("чужой фенс кода остаётся текстом, а не превращается в команду", () => {
+    const blocks = blocksFromMarkdown("```python\nprint(1)\n```");
+    expect(blocks[0]!.type).toBe("text");
+    expect(String(blocks[0]!.text)).toContain("print(1)");
+  });
+
+  it("обычный ответ остаётся одним текстовым блоком", () => {
+    const blocks = blocksFromMarkdown("Просто две строки\nи всё.");
+    expect(blocks).toEqual([{ type: "text", text: "Просто две строки\nи всё." }]);
+  });
+
+  it("ссылка внутри предложения не выдёргивается из текста", () => {
+    const blocks = blocksFromMarkdown("Смотри https://example.com/статья и всё.");
+    expect(blocks).toEqual([{ type: "text", text: "Смотри https://example.com/статья и всё." }]);
+  });
+
+  it("на границе чата свободный ответ раскладывается, а текст для показа не меняется", () => {
+    const normalized = normalizeRoleReplyV1(markdown);
+    expect(normalized.envelope.output.length).toBe(9);
+    expect(normalized.displayText).toBe(markdown.trim());
+    expect(normalized.normalizedByServer).toBe(true);
+    // Таблица получила и данные, и готовую разметку от сервера.
+    const table = normalized.envelope.output[2] as any;
+    expect(table.type).toBe("table");
+    expect(table.server_html).toContain("<table>");
   });
 });
 
