@@ -76,6 +76,26 @@ export const isOnDemandOperation = (name: string): boolean => ON_DEMAND_PREFIXES
 /** Ядро (STARTER_TOOLS) активно всегда; внешние сервисы — только через taskflow_tools. */
 const staysActive = (name: string): boolean => CORE_OPERATIONS.has(name) || !isOnDemandOperation(name);
 
+/** Активные имена при уже известном списке операций: та же логика, что в
+ *  buildRoleToolCatalog, но без сборки самих инструментов. Нужна там, где есть
+ *  только имена: список «/» в чате и отчёты. Операция, попавшая в группу по
+ *  объекту, отдельным именем не дублируется (владелец 10.11.2026). */
+export function activeToolNamesFor(names: string[]): string[] {
+ const present = new Set(names);
+ const groups: {group: string; ops: string[]}[] = [];
+ for (const [group, spec] of Object.entries(TOOL_GROUPS)) {
+  if (present.has(group)) continue;
+  const ops = spec.ops.filter((op) => present.has("taskflow_" + op));
+  if (ops.length) groups.push({group, ops});
+ }
+ const hidden = new Set<string>([
+  ...groups.flatMap((item) => item.ops.map((op) => "taskflow_" + op)),
+  ...RETIRED_OPERATIONS,
+ ]);
+ const standalone = names.filter((name) => !hidden.has(name) && staysActive(name));
+ return [...standalone, ...groups.map((item) => item.group), BATCH_TOOL_NAME, TOOL_LOADER_NAME];
+}
+
 /** Текст отказа Pi: args в событие tool_execution_end не кладутся, причина
  *  живёт в тексте результата («Tool X not found», «- /command: Expected string»). */
 function toolResultText(result:any):string{
