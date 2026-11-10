@@ -256,9 +256,16 @@ export function lanOwnerId(req: FastifyRequest): string | null {
   // важно лишь наличие.
   if (req.headers["x-taskflow-relay"]) return null;
 
-  if (process.env.TASKFLOW_LAN_NO_AUTH !== "1") return null;
   if (!isLanRequest(req)) return null;
-  if (!looksLikeBrowser(req)) return null;
+  // Прототип нового чата (NewChatTF): своя метка и свой флаг, чтобы не
+  // включать домашний вход остальным клиентам. Домашний вход
+  // (TASKFLOW_LAN_NO_AUTH) при этом остаётся в прежнем состоянии.
+  if (String(req.headers["x-taskflow-client"] || "") === "newchat") {
+    if (process.env.TASKFLOW_NEWCHAT_NO_AUTH !== "1") return null;
+  } else {
+    if (process.env.TASKFLOW_LAN_NO_AUTH !== "1") return null;
+    if (!looksLikeBrowser(req)) return null;
+  }
   const row = db
     .prepare(
       "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
