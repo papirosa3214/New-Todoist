@@ -191,9 +191,15 @@ export function broadcast(userId: string | null | undefined, event: unknown) {
   // телефон, у которого открыт один сокет устройства, не получает ничего
   // (журнал 06.11.2026: sockets=1 sent=0 device_skipped=1, затем
   // user_sockets=0 — приложение выглядит как «нет связи»).
-  const hasSessionSocket = [...set].some(socket => !deviceOnlySockets.has(socket));
+  // Сокет устройства получает события наравне с сокетом сессии (10.11.2026).
+  // Телефон входит привязкой по QR и держит ТОЛЬКО токен устройства, поэтому
+  // каждый его сокет считается «устройским» (ws.ts:104). Пока рядом открыт
+  // сокет сессии (браузер на маке), правило «пропустить устройский сокет, если
+  // есть сессия» (c194149a) глушило живой ход роли на телефоне: в журнале
+  // sent=1 device_skipped=1, а в клиенте ни одного live:start. Повтор на
+  // телефоне безвреден: дельты клиент отбрасывает по (turn_id, seq), снимок
+  // chats:live идемпотентен.
   for (const socket of set) {
-    if (hasSessionSocket && deviceOnlySockets.has(socket)) { outcome.deviceSkipped += 1; continue; }
     if (socket.readyState === 1) {
       try {
         socket.send(payload);
