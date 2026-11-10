@@ -3189,7 +3189,7 @@
   "old_id": "R0124",
   "text": "ФОРМАТ ОТВЕТА (один во всём приложении). Текст — Markdown. Данные,\nкоторые нагляднее таблицей или графиком, подавай блоком ```widget с JSON,\nа не текстом: таблица Markdown и ряд «название: число» сервер заменяет на\nблок сам, остальное возвращает с понятной ошибкой и образцом — перепиши и\nсдай заново. Типы и поля (в корне блока; у элемента — свои поля):\ntable (rows[][]: строки по числу колонок из columns; в корне: columns, title?) — сравнение по строкам;\nmetrics (items[]: label, value, delta?, trend? (up|down|flat); в корне: title?) — несколько чисел рядом;\nprogress (items[]: label, value, note?; в корне: title?) — доля выполнения по строкам;\nchecklist (items[]: text, done?; в корне: title?) — список пунктов с галочками;\ncard (rows[]: label, value; в корне: title?, subtitle?, body?, link?) — карточка с пар подпись-значение;\nchart (points[]: x, y; в корне: title?, kind? (bar|line), unit?) — значения по точкам или датам;\nweather (forecast[]: day, icon, high, low; в корне: location, temperature, condition, icon, feels_like?, humidity?, wind?, is_day?, high?, low?, updated_at?) — только готовый блок из taskflow_weather;",
   "kind": "rule",
-  "category": "из кода",
+  "category": "новое 06.11.2026",
   "roles": "all",
   "where": "карточка: start",
   "sources": [
@@ -5477,9 +5477,9 @@
  {
   "id": "R217",
   "old_id": "R0218",
-  "text": "Оформление — блоками output (владелец 20.10.2026: только JSON).\nТаблица — блок table, график — chart, остальные виджеты — блок widget\nс объектом виджета внутри; команда для .110 — блок command, ссылка —\nблок link. Не вставляй их текстом и не пиши ```-блоки. Типы виджетов:\ntable (rows[][]: строки по числу колонок из columns; в корне: columns, title?) — сравнение по строкам;\nmetrics (items[]: label, value, delta?, trend? (up|down|flat); в корне: title?) — несколько чисел рядом;\nprogress (items[]: label, value, note?; в корне: title?) — доля выполнения по строкам;\nchecklist (items[]: text, done?; в корне: title?) — список пунктов с галочками;\ncard (rows[]: label, value; в корне: title?, subtitle?, body?, link?) — карточка с пар подпись-значение;\nchart (points[]: x, y; в корне: title?, kind? (bar|line), unit?) — значения по точкам или датам;\nweather (forecast[]: day, icon, high, low; в корне: location, temperature, condition, icon, feels_like?, humidity?, wind?, is_day?, high?, low?, updated_at?) — только готовый блок из taskflow_weather;\nВиджет дополняет\nответ, а не заменяет его; цифры в нём — только настоящие.\nССЫЛКА НА МАТЕРИАЛ (владелец 23.10.2026: «ссылку правильную давай на\nматериал... чтобы по падении мог сразу прочитать»): на заметку из\ntaskflow_doc_read или taskflow_kb_search давай ссылку\n`note://<id заметки>` — на телефоне тап открывает заметку в\nприложении. Адрес веб-приложения владелец с телефона не откроет.\nВ отчёте о работе такая ссылка идёт в секции materials блока report\n(см. «ОТЧЁТ О РАБОТЕ» ниже) — отдельно виджет card с link владелец\nне принимает («не такие виджеты»).",
+  "text": "Оформление — блоками output: обычный текст пиши Markdown (абзацы, списки, **жирный**, `код`), а данные и действия — блоками.\nТаблица — блок table, график — chart, остальные виджеты — блок widget\nс объектом виджета внутри; команда для .110 — блок command, ссылка —\nблок link. Не вставляй их текстом и не пиши ```-блоки. Типы виджетов:\ntable (rows[][]: строки по числу колонок из columns; в корне: columns, title?) — сравнение по строкам;\nmetrics (items[]: label, value, delta?, trend? (up|down|flat); в корне: title?) — несколько чисел рядом;\nprogress (items[]: label, value, note?; в корне: title?) — доля выполнения по строкам;\nchecklist (items[]: text, done?; в корне: title?) — список пунктов с галочками;\ncard (rows[]: label, value; в корне: title?, subtitle?, body?, link?) — карточка с пар подпись-значение;\nchart (points[]: x, y; в корне: title?, kind? (bar|line), unit?) — значения по точкам или датам;\nweather (forecast[]: day, icon, high, low; в корне: location, temperature, condition, icon, feels_like?, humidity?, wind?, is_day?, high?, low?, updated_at?) — только готовый блок из taskflow_weather;\nВиджет дополняет\nответ, а не заменяет его; цифры в нём — только настоящие.\nССЫЛКА НА МАТЕРИАЛ (владелец 23.10.2026: «ссылку правильную давай на\nматериал... чтобы по падении мог сразу прочитать»): на заметку из\ntaskflow_doc_read или taskflow_kb_search давай ссылку\n`note://<id заметки>` — на телефоне тап открывает заметку в\nприложении. Адрес веб-приложения владелец с телефона не откроет.\nВ отчёте о работе такая ссылка идёт в секции materials блока report\n(см. «ОТЧЁТ О РАБОТЕ» ниже) — отдельно виджет card с link владелец\nне принимает («не такие виджеты»).",
   "kind": "rule",
-  "category": "из кода",
+  "category": "новое 06.11.2026",
   "roles": "all",
   "where": "чат: каждое сообщение",
   "sources": [
@@ -12192,7 +12192,7 @@
  {
   "id": "R457",
   "old_id": "R0478",
-  "text": "Оформление — Markdown, таблицы можно. Погода — вызови taskflow_weather",
+  "text": "Погода — вызови taskflow_weather",
   "kind": "rule",
   "category": "из кода",
   "roles": [
@@ -15566,7 +15566,7 @@
    "card"
   ]
  },
-{
+ {
   "id": "R578",
   "text": "- Ссылки и файлы давай так, чтобы у владельца был значок и понятный путь: внешний адрес — полным URL (`https://github.com/o/r/pull/12`) или блоком `link`, не сокращай и не маскируй; путь к файлу — полным путём со строкой через двоеточие (`Sources/Chat/Feed/ChatFeedVirtualList.swift:42`), не «файл рендера»; заметка в приложении — `note://<id>`. Свою подпись у ссылки ставь, только если она понятнее адреса. Ссылку не выдумывай.",
   "kind": "rule",
@@ -15577,7 +15577,7 @@
    "chat",
    "card",
    "voice"
- ],
+  ],
   "enabled": true
-}
+ }
 ]
