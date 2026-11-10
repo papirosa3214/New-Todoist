@@ -2,7 +2,7 @@ import {compactChatReportMaterials} from "./chatReportMaterials.js";
 // Готовая разметка таблиц, графиков и схем — кладётся сервером в блоки
 // (`server_html`), см. chatTemplates.ts. Клиент, который вид знает, продолжает
 // рисовать нативно; поле серверное, от модели оно не принимается.
-import {attachServerHtml} from "./chatTemplates.js";
+import {attachServerHtml, blocksFromMarkdown} from "./chatTemplates.js";
 // JSON-контракт роли v1 (карточка 237d6f34, 17.10.2026).
 //
 // Что это. Промпты ролей (scripts/role-prompts/*.md) и паспорта ролей
@@ -936,15 +936,18 @@ export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
   const preservedText = rawEnvelope
     ? partialStructuredText(text) ?? BROKEN_CONTRACT_NOTE
     : text.trim() || "Ответ не содержит текста.";
-  const envelope: StructuredRoleEnvelopeV1 = {
-    schema_version: 1,
-    ok: true,
-    output: [{ type: "text", text: preservedText }],
-    artifacts: [],
-    plan_artifact: null,
-    error: null,
-    next_hint: null,
-    needs_human: false,
-  };
+  // Разметка в свободном ответе роли становится блоками: заголовки, списки,
+  // таблицы, чекбоксы, эмодзи-статусы, команды и ссылки. Иначе владелец видит
+  // один сплошной текст — без кнопки «Запустить» и без таблицы.
+  const envelope: StructuredRoleEnvelopeV1 = attachServerHtml({
+      schema_version: 1,
+      ok: true,
+      output: blocksFromMarkdown(preservedText),
+      artifacts: [],
+      plan_artifact: null,
+      error: null,
+      next_hint: null,
+      needs_human: false,
+    });
   return { envelope, displayText: preservedText, normalizedByServer: true, validationErrors };
 }
