@@ -44,6 +44,30 @@ export function projectRepo(taskId: string): string {
   }
 }
 
+/**
+ * Где живёт репозиторий проекта, если не на этой машине (10.11.2026).
+ *
+ * Нужно уборке ветвей: у iOS-проекта рабочая папка на маке, и закрыть ветку
+ * `roles/<карточка>` сервер может только через host, зная и машину, и путь.
+ */
+export function projectHostRepo(taskId: string): { machineId: string; repo: string } | null {
+  try {
+    const projectId = (db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(taskId) as
+      | { project_id?: string | null }
+      | undefined)?.project_id;
+    if (!projectId) return null;
+    const карта: Record<string, Record<string, string>> =
+      JSON.parse(fs.readFileSync(HOSTS_CONFIG, "utf8")).projects ?? {};
+    for (const [machineId, проекты] of Object.entries(карта)) {
+      const repo = проекты?.[projectId];
+      if (typeof repo === "string" && repo) return { machineId, repo };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function worktreesBase(): string {
   return (
     process.env.TASKFLOW_ROLE_WORKTREES ||

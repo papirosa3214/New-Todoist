@@ -30,8 +30,10 @@ import { pushMainToHosts, type PushStatus } from "../lib/worktree/pushHosts.js";
 import {
   branchClosedEverywhere,
   closeRoleBranchOnHosts,
+  type BranchCloseResult,
 } from "../lib/worktree/branchCleanup.js";
-import { projectRepo } from "./roleWorkspace.js";
+import { runOperation, type OperationResult } from "../host/gateway.js";
+import { projectHostRepo, projectRepo } from "./roleWorkspace.js";
 import {
   GitError,
   dirtyFiles,
@@ -811,11 +813,40 @@ export async function sweepClosedRoleBranches(limit = 5): Promise<number> {
   let closed = 0;
   for (const row of rows) {
     try {
-      // Ветку закрываем только у своего репозитория: у карточек iOS-проекта
-      // рабочая папка живёт на маке, и `roles/<id>` в этом репозитории просто
-      // нет — пометить её «закрытой» значило бы соврать, а настоящая ветка на
-      // GitHub осталась бы жить.
-      if (!sameRepo(projectRepo(row.id), live)) continue;
+      // Репозиторий карточки может жить не здесь: у iOS-проекта рабочая папка
+      // на маке. Тогда ветку снимает операция хоста, а сервер только просит и
+      // запоминает итог — иначе `roles/<id>` в этом репозитории просто нет, и
+      // «закрыто» было бы враньём при живой ветке на GitHub.
+      if (!sameRepo(projectRepo(row.id), live)) {
+        const хост = projectHostRepo(row.id);
+        if (!хост) continue;
+        const ветка = roleBranch(row.id);
+        let итог: OperationResult | null = null;
+        try {
+          итог = await runOperation(хост.machineId, "git_delete_branch", {
+            repo: хост.repo,
+            branch: ветка,
+          });
+        } catch (err) {
+          journal({
+            task_id: row.id,
+            state: "branch_close",
+            branch: ветка,
+            results: [{ remote: "host", branch: ветка, state: "failed", detail: String(err) }],
+          });
+          continue;
+        }
+        const данные = (итог?.ok ? итог.data : null) as { results?: BranchCloseResult[] } | null;
+        const результаты = данные?.results ?? [];
+        journal({ task_id: row.id, state: "branch_close", branch: ветка, results: результаты });
+        if (итог?.ok && branchClosedEverywhere(результаты)) {
+          db.prepare(
+            "UPDATE tasks SET host_branch_cleared_at = datetime('now') WHERE id = ?",
+          ).run(row.id);
+          closed += 1;
+        }
+        continue;
+      }
       const results = closeRoleBranchOnHosts(live, roleBranch(row.id));
       if (!branchClosedEverywhere(results)) continue;
       db.prepare(
