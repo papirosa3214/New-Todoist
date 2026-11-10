@@ -9,6 +9,7 @@ import {
   COMPACTION_INSTRUCTIONS,
   DEFAULT_COMPACTION_LIMITS,
   buildLocalSummary,
+  compactByMessageCount,
   compactSessionSafely,
   measureMessages,
   planHistoryTrim,
@@ -244,5 +245,36 @@ describe("пары «вызов — результат» (провайдер о�
   it("сообщение без вызовов и результатов не теряется", () => {
     const messages = [{ role: "user", content: [{ type: "text", text: "привет" }] }];
     expect(repairToolPairs(messages)).toHaveLength(1);
+  });
+});
+
+describe("порог по числу сообщений (владелец 10.11.2026)", () => {
+  const many = (count: number) =>
+    Array.from({ length: count }, (_, i) =>
+      i % 2 === 0 ? user(`вопрос ${i}`) : assistant(`ответ ${i}`));
+
+  it("до порога не трогает историю и не зовёт модель", async () => {
+    const session = makeSession(many(50));
+    const outcome = await compactByMessageCount(session, { label: "тест", log: () => {} });
+    expect(outcome).toBeNull();
+    expect(session.compactCalls).toBe(0);
+  });
+
+  it("больше порога — сжимает перед ходом", async () => {
+    const session = makeSession(many(52));
+    const outcome = await compactByMessageCount(session, { label: "тест", log: () => {} });
+    expect(outcome).not.toBeNull();
+    expect(outcome!.messagesBefore).toBe(52);
+    expect(session.compactCalls).toBe(1);
+  });
+
+  it("порог можно задать другим числом", async () => {
+    const session = makeSession(many(12));
+    const outcome = await compactByMessageCount(session, {
+      label: "тест",
+      limits: { ...LIMITS, maxContextMessages: 10 },
+      log: () => {},
+    });
+    expect(outcome?.messagesBefore).toBe(12);
   });
 });

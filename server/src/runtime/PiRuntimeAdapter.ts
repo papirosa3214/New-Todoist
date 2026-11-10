@@ -45,6 +45,7 @@ import {
 import { parseModelRef } from "../lib/attemptModel.js";
 import { resolveCatalogModel } from "./modelCatalog.js";
 import { closeChatSession, measureChatSession, openChatSession } from "./chatContextUsage.js";
+import { compactByMessageCount } from "./compactionFallback.js";
 import { providerAvailable } from "../lib/modelLadder.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import {
@@ -1687,8 +1688,19 @@ async function startChatRunOnce(
     if (roleThinking && session.thinkingLevel !== roleThinking && typeof session.setThinkingLevel === "function") {
       session.setThinkingLevel(roleThinking);
     }
-    // Restoring a session is not a reason to compact. Pi checks the model's
-    // token window itself before prompts and between tool turns.
+    // Восстановление сессии само по себе — не повод сжимать: окно модели Pi
+    // проверяет сам. Но владелец 10.11.2026 попросил свой порог по числу
+    // сообщений: больше пятидесяти реплик в контексте — сжимаем перед ходом,
+    // иначе история растёт незаметно и роль платит за неё каждый ход.
+    await compactByMessageCount(session, {
+      label: `${role} chat ${input.chatId}`,
+      log: (message) => console.warn(message),
+    }).catch((error) => {
+      // Сжатие — улучшение, а не условие хода: не вышло — работаем как раньше.
+      console.warn("[chats] сжатие по числу сообщений не прошло:", error);
+      return null;
+    });
+
 
     const run: ActiveChatRun = {
       runId,
