@@ -38,4 +38,16 @@ describe("host tools in the shared role catalog", () => {
     expect(names(catalog).filter((name) => name === "taskflow_host_push")).toHaveLength(1);
     expect(names(catalog).filter((name) => name === "taskflow_host_attach")).toHaveLength(1);
   });
+
+  it("изменяющие команды на машине живут одной группой действий", () => {
+    const catalog = buildRoleToolCatalog({ role: "builder", mode: "work", runId: "host-group", chatId: "chat-3" });
+    const active = catalog.activeNames;
+    expect(active).toContain("taskflow_host");
+    for (const name of ["taskflow_host_bg", "taskflow_host_bash", "taskflow_host_write", "taskflow_host_edit", "taskflow_host_push", "taskflow_host_attach"]) {
+      expect(active).not.toContain(name);
+    }
+    // Только чтение остаётся отдельным: в режиме «План» меняющая группа запрещена целиком.
+    expect(active).toContain("taskflow_host_read");
+    expect(active).toContain("taskflow_host_grep");
+  });
 });

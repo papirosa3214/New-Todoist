@@ -377,6 +377,10 @@ export const TOOL_GROUPS:Record<string,{title:string;ops:string[]}>={
  taskflow_memory:{title:"Память роли",ops:["recall","remember"]},
  taskflow_mail:{title:"Почта",ops:["mail_accounts","mail_list","mail_read","mail_attachment","mail_draft","mail_archive","mail_spam","mail_trusted","mail_send_to_owner"]},
  taskflow_team:{title:"Команда и состояние",ops:["agents","team_read","status","my_stats","runtime","weather","calendar_events"]},
+ // Изменяющие команды на машине — одна группа действий (владелец 10.11.2026:
+ // «одним инструментом сделать другой инструмент»). Чтение (read/grep/find/ls/hosts)
+ // остаётся отдельными именами: в режиме «План» группа запрещена целиком.
+ taskflow_host:{title:"Машины и команды на них",ops:["host_bash","host_write","host_edit","host_push","host_attach","host_bg"]},
 };
 /** Операции, которые роли больше не вызывают сами: пульс ставит сервер, набор полный
  *  (подгружать и просить нечего). Имена остаются в реестре. Протокол правил
