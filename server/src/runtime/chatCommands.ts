@@ -9,7 +9,7 @@ import { skillCard, toolCard } from "./chatCommandCard.js";
 import { listRoleSkills } from "./instructionResources.js";
 import { taskflowTools } from "./inProcessRun.js";
 import { roleToolAllowed } from "../lib/roleToolScope.js";
-import { CARD_WORK_OPERATIONS, type ChatExecutionMode } from "./chatExecutionMode.js";
+import type { ChatExecutionMode } from "./chatExecutionMode.js";
 import { PLANNING_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
 
 export type ChatCommand = {
@@ -51,12 +51,9 @@ function nativeAllowed(name: string, mode: ChatWorkMode): boolean {
 function roleToolAllowedInChat(
   role: string,
   name: string,
-  executionMode: ChatExecutionMode,
   mode: ChatWorkMode,
 ): boolean {
   if (!roleToolAllowed(role, name)) return false;
-  // В режиме «в чате» карточные операции скрыты — как и в самом ходе роли.
-  if (executionMode === "chat" && CARD_WORK_OPERATIONS.has(name)) return false;
   if (mode === "plan" && !PLANNING_TOOLS.includes(name)) return false;
   return true;
 }
@@ -114,7 +111,7 @@ export async function listChatCommands(params: {
     { chatId: params.chatId ?? "", messageId: params.messageId ?? "" },
   );
   for (const tool of registry) {
-    if (!roleToolAllowedInChat(params.role, tool.name, params.executionMode, params.mode)) continue;
+    if (!roleToolAllowedInChat(params.role, tool.name, params.mode)) continue;
     const description = (tool.description ?? "").split("\n")[0].slice(0, 300);
     const card = toolCard(tool.name, tool.name, description);
     commands.push({
