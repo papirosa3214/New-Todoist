@@ -1,4 +1,5 @@
 import { crossChatNotice } from "../lib/crossChatNotice.js";
+import { appendSkillsNote } from "../lib/skillCatalog.js";
 import { isTaskChatRestrictedRole } from "../runtime/taskChatTools.js";
 import { syncChecklistMarkWithPlan, resolveChecklistItem } from "../lib/chatChecklistPlanSync.js";
 import { observeChatMemory } from "../runtime/chatMemoryObserver.js";
@@ -3802,6 +3803,15 @@ async function deliverAgentReply(args: {
     } else {
       replyText = partial || "Ход завершился без текста ответа. Отправьте сообщение ещё раз.";
       if (!partial) failure = Object.assign(new Error("модель завершила ход без текста ответа"), { code: "CHAT_RUN_EMPTY" });
+    }
+  }
+  // Навыки хода дописывает сервер: строку видит любой клиент, правок в
+  // приложении не нужно (владелец 10.11.2026). Заголовки — по-русски.
+  if (replyText && !failure && !cancelled) {
+    const turnSkills = live.usedSkills();
+    if (turnSkills.length) {
+      replyText = appendSkillsNote(replyText, turnSkills, Boolean(storedRoleEnvelope));
+      if (storedRoleEnvelope) storedRoleEnvelope = replyText;
     }
   }
   if (!failure && !cancelled) live.replaceFinalText(replyText);

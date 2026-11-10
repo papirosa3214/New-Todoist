@@ -49,3 +49,34 @@ export function skillLabels(items: Array<{ name: string; filePath?: string | nul
   }
   return out;
 }
+
+/**
+ * Строка для владельца: «_навыки: Диагностика багов · Ревью правки_».
+ * Русские заголовки, без латинских имён папок — они ему ничего не говорят.
+ */
+export function skillsLine(skills: SkillLabel[]): string {
+  const titles = [...new Set(skills.map((s) => s.title).filter(Boolean))];
+  if (!titles.length) return "";
+  return `_навыки: ${titles.join(" · ")}_`;
+}
+
+/**
+ * Дописать строку навыков в ответ. Ответ роли бывает двух видов: обычный текст
+ * и разметка блоков v1 (там JSON, и строка добавляется блоком `text`). Строку
+ * дописывает сервер, чтобы её видел любой клиент без своих правок.
+ */
+export function appendSkillsNote(text: string, skills: SkillLabel[], asEnvelope: boolean): string {
+  const line = skillsLine(skills);
+  if (!line) return text;
+  if (asEnvelope) {
+    try {
+      const parsed = JSON.parse(text) as { blocks?: Array<{ type?: string; text?: string }> };
+      if (!Array.isArray(parsed.blocks)) return text;
+      parsed.blocks.push({ type: "text", text: line });
+      return JSON.stringify(parsed);
+    } catch {
+      return text;
+    }
+  }
+  return `${text.trimEnd()}\n\n${line}`;
+}

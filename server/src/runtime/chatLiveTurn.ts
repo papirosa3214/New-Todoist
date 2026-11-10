@@ -857,6 +857,11 @@ export class LiveTurn {
   /** Навыки хода, приходят от загрузчика ресурсов (instructionResources). */
   private skillsOfTurn: Array<{ name: string; title: string }> = [];
 
+  /** Навыки этого хода — для строки в ответе (см. lib/skillCatalog). */
+  usedSkills(): Array<{ name: string; title: string }> {
+    return this.skillsOfTurn;
+  }
+
   /** Запомнить навыки, подключённые к этому ходу. Звать один раз, до finish. */
   setSkills(list: Array<{ name: string; title: string }> | null | undefined): void {
     this.skillsOfTurn = Array.isArray(list) ? list : [];
