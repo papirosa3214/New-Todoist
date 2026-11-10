@@ -817,9 +817,11 @@ export async function sweepClosedRoleBranches(limit = 5): Promise<number> {
       // на маке. Тогда ветку снимает операция хоста, а сервер только просит и
       // запоминает итог — иначе `roles/<id>` в этом репозитории просто нет, и
       // «закрыто» было бы враньём при живой ветке на GitHub.
-      if (!sameRepo(projectRepo(row.id), live)) {
-        const хост = projectHostRepo(row.id);
-        if (!хост) continue;
+      // Сначала — есть ли репозиторий проекта на машине. `projectRepo` для
+      // незаведённого проекта откатывается на репозиторий сервера, поэтому
+      // сравнивать пути первыми нельзя: iOS-карточки выглядели бы «своими».
+      const хост = projectHostRepo(row.id);
+      if (хост && !sameRepo(хост.repo, live)) {
         const ветка = roleBranch(row.id);
         let итог: OperationResult | null = null;
         try {
@@ -847,6 +849,9 @@ export async function sweepClosedRoleBranches(limit = 5): Promise<number> {
         }
         continue;
       }
+      // Дальше — только свой репозиторий: без этого «ветки нет» ничего не
+      // доказывает (путь мог указывать в никуда).
+      if (!sameRepo(projectRepo(row.id), live)) continue;
       const results = closeRoleBranchOnHosts(live, roleBranch(row.id));
       if (!branchClosedEverywhere(results)) continue;
       db.prepare(
