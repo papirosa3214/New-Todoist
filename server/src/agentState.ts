@@ -2,7 +2,7 @@
 // "what state can follow what, who's allowed to cause it, and is the lease
 // still alive" lives in this one file — routes/agent-state.ts and
 // routes/tasks.ts only call into it, they never re-derive the rules.
-import { registryTextOr } from "./lib/roleRules.js";
+import { registryText } from "./lib/roleRules.js";
 import { queueOrchestratorEvent } from "./lib/orchestratorWebhook.js";
 import crypto from "crypto";
 import db from "./db.js";
@@ -181,28 +181,14 @@ export function commentRequiredFor(
  *  • «неужели нужно было дублировать информацию из аудита, а не написать,
  *    с какой проблемой мы столкнулись в рамках этой задачи?».
  */
-const AGENT_RULES_LITERAL = [
-  "РЕЖИМ КАРТОЧКИ. Это правила работы по карточке; в чате они не действуют. Прочитай карточку через taskflow_task. Прежде чем работать — taskflow_claim или taskflow_heartbeat, чтобы не пересечься с другой ролью. В слоте работай молча: инструменты, чек-лист, итог при сдаче. Результат сдаёшь через taskflow_subtask_done (шаг) или taskflow_report.",
-  "Статус шага живой: перед началом — in_progress; сделал — закрываешь done сам, с result. Упёрся и нужно решение владельца — blocked с причиной и конкретным вопросом (инструмента вопроса владельцу в карточке нет). Мелочь, которую можешь решить на своём уровне, решай сам или спроси Оркестратора. Ждёшь другую роль, а не владельца — оставайся in_progress.",
-  "Упёрся (blocked) — приложи снимок работы к taskflow_subtask_work(state=\"blocked\") или вызови taskflow_slot_snapshot: что сделано (done), что осталось (left), блок (blocker), следующий шаг (next_step), артефакты. Пока работаешь, технический снимок сервер пишет сам. Снимок — запись, а не команда: прав и статусов он не даёт.",
-  "result шага — одно-два предложения по-человечески: что в итоге сделано, чтобы владелец мог оценить факт выполнения. Технические детали, числа и выдержки из аудита в карточку не переносить — им место в базе знаний.",
-  "Шаг уже отмечен выполненным (done: true) — статус не откатывать ради правки отчёта. Дописать или исправить можно поле result через PATCH /api/subtasks/:id.",
-  "Название задачи — суть проблемы; описание — та же проблема подробнее: с чем столкнулись и почему мешает, не копия аудита. Название шага — решение этой проблемы, а не ярлык: не «Единая левая кромка», а что сделать, чтобы проблемы не стало.",
-  "Карточка — только ход работы: за что взялся, что сделал. Обсуждения, вопросы коллегам и согласования — в чат координации, а не в ленту карточки.",
-  "ДРОБЛЕНИЕ РАБОТЫ (владелец 12.10.2026). По умолчанию — одна карточка с планом командной работы: роли и параллельные шаги внутри неё. Дочерняя карточка — только для самостоятельного результата со своей жизнью: его принимают отдельно, его делает другая цепочка специалистов, его может понадобиться остановить или закрыть независимо, ему нужны свои документы и обсуждение. Одинаковая работа по нескольким областям — одна карточка с параллельными шагами. Ни число шагов, ни параллельность, ни разные инструменты сами по себе дочерних карточек не требуют. Нарезает оркестратор; исполнитель дочерние сам не заводит — нужен ещё специалист, просит шаг в плане (request_help / add_step).",
-  "Создаёшь задачу — обязательно с projectId. Уверен — выбери существующий проект по смыслу. Не уверен — задачу без проекта не создавай: предложи владельцу существующий проект (какой и почему), новый (с названием) или спроси, куда отнести.",
-];
-/** Правила карточки: текст берётся из реестра, литерал — запасной путь при role_registry_enabled=false.
- *  Массив вычисляется при каждом обращении, чтобы API и потребители видели правку реестра без рестарта. */
+/** Правила карточки. Текст только из реестра, массив перечитывается без рестарта. */
 let agentRulesCache: { text: string; items: string[] } | null = null;
 const liveAgentRules = (): string[] => {
-  const literalText = AGENT_RULES_LITERAL.join("\n");
-  const text = registryTextOr("карточка: все шаги", "agentState:AGENT_RULES", literalText);
-  if (text === literalText) return AGENT_RULES_LITERAL;
-  if (agentRulesCache?.text !== text) agentRulesCache = { text, items: text.split("\n") };
+  const text = registryText("карточка: все шаги", undefined, "agentState:AGENT_RULES");
+  if (agentRulesCache?.text !== text) agentRulesCache = { text, items: text ? text.split("\n") : [] };
   return agentRulesCache.items;
 };
-export const AGENT_RULES: string[] = new Proxy(AGENT_RULES_LITERAL, {
+export const AGENT_RULES: string[] = new Proxy([] as string[], {
   get: (_target, prop) => { const live = liveAgentRules(); return Reflect.get(live, prop, live); },
 });
 

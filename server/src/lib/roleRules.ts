@@ -124,10 +124,9 @@ export function registryText(condition: string, role?: string, site?: string): s
     .filter((x) => x.length)
     .join("\n");
 }
-/** Выборка из реестра; при выключенном реестре, отсутствии файла или правил — прежний текст из кода. */
-export function registryTextOr(condition: string, site: string | undefined, fallback: string, role?: string): string {
-  if (!registryEnabled()) return fallback;
-  try { return registryText(condition, role, site) || fallback; } catch { return fallback; }
+/** Выборка из реестра. Второй копии в коде нет: пустой результат так и остаётся пустым. */
+export function registryTextOr(condition: string, site: string | undefined, _fallback: string, role?: string): string {
+  return registryText(condition, role, site);
 }
 /** Есть ли в реестре строки этого места кода (для привязки при импорте). */
 export function hasRegistrySite(site: string): boolean {

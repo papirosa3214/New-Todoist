@@ -43,7 +43,7 @@ describe("общая инструкция ролей: ритм работы", ()
   it("во всех режимах требуется короткий прогресс в чате, а не молчание", () => {
     for (const mode of modes) {
       const text = String(INSTRUCTION_DEFAULTS[mode]);
-      expect(text, mode).toContain("ПОКАЖИ ХОД РАБОТЫ В ЧАТЕ");
+      expect(text, mode).toContain("В начале хода напиши одно короткое сообщение в чат");
       expect(text, mode).toMatch(/одно короткое сообщение/);
       expect(text, mode).toMatch(/Молчание и рассуждения вслух/);
       expect(text, mode).toContain("taskflow_chat_reply");

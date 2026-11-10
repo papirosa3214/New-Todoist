@@ -487,8 +487,8 @@ function rootFieldList(spec: NewWidgetTypeSpec): string {
 /**
  * Перечисляемое поле блока или элемента: к имени добавляется список
  * допустимых значений. Список берётся из полей самого типа (spec.enums):
- * у восьми новых типов tone и state перечислены общей строкой инструкции,
- * поэтому в их строках перечислений нет — иначе строка перестала бы
+ * у восьми новых типов tone и state лежат в NEW_WIDGET_TONES и
+ * NEW_WIDGET_STATES, а не внутри строки типа — иначе строка перестала бы
  * разбираться тестом контракта в прежнем виде.
  */
 function enumSuffix(spec: NewWidgetTypeSpec, field: string): string {

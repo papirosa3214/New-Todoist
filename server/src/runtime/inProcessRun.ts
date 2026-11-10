@@ -30,7 +30,7 @@ import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import { secretaryAppleTools } from "./secretaryAppleTools.js";
 import { openMidPlanCritic } from "./planSubtaskAdmission.js";
 import { ensureResultVersionForReview } from "../resultVersions.js";
-import { PLAN_ROLE_HELP_POLICY, planRoleHelpPolicy } from "./instructionDefaults.js";
+import { planRoleHelpPolicy } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { pickRecipientSlot } from "./roleMessageWait.js";
 import { connectRoleMcp } from "./graftMcp.js";
