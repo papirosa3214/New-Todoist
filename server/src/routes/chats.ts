@@ -3698,6 +3698,7 @@ async function deliverAgentReply(args: {
       sessionId: staleSession ? undefined : previousSessionId,
       onStep: (tool) => typing(true, tool),
       onEvent: (event) => { observeDeliveryActivity(chatId,roleUserId,event); live.onEvent(event); },
+      onSkills: (skills) => live.setSkills(skills),
       // «Цель»: промежуточный итог роли сразу ложится в чат отдельным
       // сообщением (владелец 20.10.2026). Без reply_to — иначе клиент
       // принял бы его за конец живого хода.
@@ -3733,6 +3734,7 @@ async function deliverAgentReply(args: {
             sessionId: reply?.sessionId ?? undefined,
             onStep: (tool) => typing(true, tool),
             onEvent: (event) => { observeDeliveryActivity(chatId,roleUserId,event); live.onEvent(event); },
+            onSkills: (skills) => live.setSkills(skills),
           });
     }
   } catch (error) {

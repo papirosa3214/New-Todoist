@@ -138,6 +138,8 @@ export interface SavedSteps {
   usage?: TurnUsage;
   /** Файлы, которые роль поменяла за ход (владелец 27.10.2026). */
   code_changes?: TurnCodeChanges;
+  /** Навыки, подключённые к ходу: имя папки и русский заголовок для владельца. */
+  skills?: Array<{ name: string; title: string }>;
 }
 
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
@@ -852,6 +854,14 @@ export class LiveTurn {
    *  announceEnd(id). Так клиент меняет живой пузырь на готовый одним
    *  кадром, без мгновения пустоты между ними (то самое «дёрганье» в конце
    *  ответа). */
+  /** Навыки хода, приходят от загрузчика ресурсов (instructionResources). */
+  private skillsOfTurn: Array<{ name: string; title: string }> = [];
+
+  /** Запомнить навыки, подключённые к этому ходу. Звать один раз, до finish. */
+  setSkills(list: Array<{ name: string; title: string }> | null | undefined): void {
+    this.skillsOfTurn = Array.isArray(list) ? list : [];
+  }
+
   finish(opts: { deferAnnounce?: boolean } = {}): SavedSteps | null {
     if (this.closed) return null;
     this.endThinking();
@@ -876,9 +886,11 @@ export class LiveTurn {
     if (!usage && !items.some((it) => it.kind !== "text")) return null;
     let codeChanges: TurnCodeChanges | null = null;
     try { codeChanges = this.files.result(); } catch { codeChanges = null; }
+    const savedSkills = this.skillsOfTurn.length ? this.skillsOfTurn : undefined;
     return {
       duration_ms: Date.now() - this.startedAt.getTime(),
       items,
+      ...(savedSkills ? { skills: savedSkills } : {}),
       ...(usage ? { usage } : {}),
       ...(codeChanges ? { code_changes: codeChanges } : {}),
     };

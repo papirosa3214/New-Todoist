@@ -66,6 +66,13 @@ export function normalizeSavedSteps(raw: unknown): SavedSteps | null {
       items: obj.items as SavedSteps["items"],
       ...(obj.usage !== undefined ? { usage: obj.usage as SavedSteps["usage"] } : {}),
       ...(obj.code_changes !== undefined ? { code_changes: obj.code_changes as SavedSteps["code_changes"] } : {}),
+      ...(Array.isArray(obj.skills)
+        ? {
+            skills: (obj.skills as Array<Record<string, unknown>>)
+              .filter((s) => typeof s?.name === "string")
+              .map((s) => ({ name: String(s.name), title: s.title == null ? String(s.name) : String(s.title) })),
+          }
+        : {}),
     };
   }
   return null;

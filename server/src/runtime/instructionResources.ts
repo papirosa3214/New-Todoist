@@ -3,6 +3,7 @@ import {behaviorInstruction,genderInstruction} from './roleBehavior.js';
 import {chatExecutionMode} from './chatExecutionMode.js';
 import {registryEnabled,buildRegistryRules} from './roleRegistryPrompt.js';
 import { stageSkillNames } from "../lib/collaborationTemplates.js";
+import { skillLabels, type SkillLabel } from "../lib/skillCatalog.js";
 import { PLANNING_TOOLS, chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
 import fs from 'node:fs';
 import path from 'node:path';
@@ -183,7 +184,7 @@ export async function listRoleSkills(role: string) {
 }
 
 /** Тот же набор файлов роли; cwd задачи не меняется, executable extensions отключены. */
-export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}, sharedChatSkills=false):Promise<ResourceLoader & {disposeResources:()=>void}> {
+export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}, sharedChatSkills=false):Promise<ResourceLoader & {disposeResources:()=>void; usedSkills:()=>SkillLabel[]}> {
  const home=ensureRoleHome(role);
  // Навыки и папка роли подключаются и в чате (владелец 07.11.2026): сверка перед работой одинакова везде.
  const discovered=await discoverChatResources(role,sharedChatSkills);
@@ -209,6 +210,8 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  const missing=names?.filter(name=>!skills.some(s=>s.name===name)) ?? [];
  const keep=work ? await withObservationContext({role},()=>selectSkillsByJev({...work,step:[work.step,work.stageInstructions].filter(Boolean).join("\n")},candidates.map(s=>({name:s.name,description:s.description})),names ?? [])).catch(()=>null) : null;
  const usedSkills=keep ? candidates.filter(s=>keep.has(s.name)) : candidates;
+ // Владельцу показываем русские заголовки навыков, а не имена папок (lib/skillCatalog).
+ const usedSkillLabels=skillLabels(usedSkills.map(s=>({name:s.name,filePath:(s as {filePath?:string}).filePath ?? null})));
  const stagePrompt=work?.stageInstructions ? "\n\nЗадание текущего этапа:\n"+work.stageInstructions : "";
  const missingPrompt=missing.length ? "\n\nНедоступные навыки этапа: "+missing.join(", ")+". Не утверждай, что они подключены; укажи ограничение в результате." : "";
  const loader=new DefaultResourceLoader({
@@ -220,7 +223,9 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
   agentsFilesOverride:()=>({agentsFiles:registryEnabled()?[]:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))?.effective ?? fs.readFileSync(f.path,'utf8')})).filter(f=>!systemPrompt.includes(f.content))}),
  });
  await loader.reload();
- return Object.assign(loader,{disposeResources:()=>{if(snapshotDir)fs.rmSync(snapshotDir,{recursive:true,force:true});}});
+ return Object.assign(loader,{disposeResources:()=>{if(snapshotDir)fs.rmSync(snapshotDir,{recursive:true,force:true});},
+  /** Навыки, реально подключённые к этому ходу: имя папки + русский заголовок. */
+  usedSkills:()=>usedSkillLabels});
 }
 
 /**

@@ -1254,6 +1254,9 @@ export async function modelExists(ref: string): Promise<boolean> {
 export interface StartChatRunInput {
   /** Чат задачи: только чтение своей задачи (владелец 05.11.2026). */
   taskChatTaskId?: string;
+  /** Навыки, реально подключённые к ходу: имя папки и русский заголовок.
+   *  Нужны, чтобы владелец видел, чем роль пользуется (см. SavedSteps.skills). */
+  onSkills?: (skills: Array<{ name: string; title: string }>) => void;
   /** Settles after the visible reply is persisted, never merely on SDK completion. */
   deliveryOutcome?: Promise<boolean>;
   mode?: ChatWorkMode;
@@ -1552,6 +1555,7 @@ async function startChatRunOnce(
       undefined,
       true,
     ), resource => resource.disposeResources());
+    try { input.onSkills?.(resourceLoader.usedSkills()); } catch { /* показ навыков не должен ломать ход */ }
     const composio = await preparation.wait(connectRoleComposio(role, mode, input.chatId).catch(
       (error) => {
         console.warn(`[chats] Composio для ${role} не подключился:`, error);
