@@ -31,6 +31,7 @@ import {
   branchClosedEverywhere,
   closeRoleBranchOnHosts,
 } from "../lib/worktree/branchCleanup.js";
+import { projectRepo } from "./roleWorkspace.js";
 import {
   GitError,
   dirtyFiles,
@@ -789,6 +790,15 @@ export async function sweepMergedWorkspaces(limit = 20): Promise<number> {
  * слитых до 10.11.2026, когда ветку никто не убирал. По сети — точечно и
  * по чуть-чуть за проход: у каждой карточки свой `ls-remote` на каждый хост.
  */
+/** Один и тот же каталог (realpath: симлинки и хвостовые слэши не в счёт). */
+function sameRepo(a: string, b: string): boolean {
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
 export async function sweepClosedRoleBranches(limit = 5): Promise<number> {
   if (String(process.env.TASKFLOW_ROLE_WORKTREES ?? "").trim() === "off") return 0;
   const live = liveRepo();
@@ -801,6 +811,11 @@ export async function sweepClosedRoleBranches(limit = 5): Promise<number> {
   let closed = 0;
   for (const row of rows) {
     try {
+      // Ветку закрываем только у своего репозитория: у карточек iOS-проекта
+      // рабочая папка живёт на маке, и `roles/<id>` в этом репозитории просто
+      // нет — пометить её «закрытой» значило бы соврать, а настоящая ветка на
+      // GitHub осталась бы жить.
+      if (!sameRepo(projectRepo(row.id), live)) continue;
       const results = closeRoleBranchOnHosts(live, roleBranch(row.id));
       if (!branchClosedEverywhere(results)) continue;
       db.prepare(
