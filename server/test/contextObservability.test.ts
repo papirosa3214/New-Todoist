@@ -23,11 +23,13 @@ describe("контекст и JEV: наблюдаемость",()=>{
  expect(readObservability("24h").events.find(e=>e.scenario==="teamMemory")).toMatchObject({status:"error",reason:"source_unavailable",role:"builder"});
  });
 
- it("отказ библиотеки проекта виден отдельно от отсутствия знаний",async()=>{
+ it("чат без проекта не зовёт поиск библиотеки",async()=>{
  vi.spyOn(memoryLib,"memoryBlock").mockResolvedValue("");
- vi.spyOn(noteSearch,"searchNotes").mockImplementation(()=>{throw Error("private");});
- await roleProjectContext({role:"builder",taskId:"fixture-missing-task",query:"q"});
- expect(readObservability("24h").events.find(e=>e.scenario==="projectLibrary")).toMatchObject({status:"error",reason:"source_unavailable",role:"builder",taskId:"fixture-missing-task"});
+ const spy=vi.spyOn(noteSearch,"searchNotes");
+ const text=await roleProjectContext({role:"builder",query:"q"});
+ expect(spy).not.toHaveBeenCalled();
+ expect(text).not.toContain("Библиотека TaskFlow");
+ expect(readObservability("24h").events.find(e=>e.scenario==="projectLibrary")).toBeUndefined();
  });
 
  it("доступен только владельцу и проверяет период",async()=>{
