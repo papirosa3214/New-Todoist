@@ -442,6 +442,24 @@ describe("блоки command, link, widget и таблица (20.10.2026)", () =
     expect(text).toContain("| a | b |\n| --- | --- |\n| 1 | x\\|y |");
     expect(text).toContain('"points":[{"x":"пн","y":3}]');
   });
+  it("отчёт в текстовой форме сохраняет пункты списков, проверки и ограничения (10.11.2026)", async () => {
+    const { structuredOutputText } = await import("../src/lib/roleContractV1.js");
+    const text = structuredOutputText([{ type: "report", report_kind: "final", sections: {
+      result: [{ type: "text", text: "Итог правки." }],
+      work: [{ type: "heading", level: 2, text: "Что изменилось" }, { type: "list", items: ["правка A", "правка B"] }],
+      checks: [{ label: "swiftc -parse", status: "passed" }, { label: "тесты", status: "not_run" }],
+      limitations: [{ type: "list", items: ["на телефоне не смотрено"] }],
+      materials: [],
+    } }]);
+    // До правки в тексте оставались только заголовки: `list` и `checks` брали
+    // несуществующее поле `text|label|title` верхнего уровня и выбрасывались.
+    expect(text).toContain("Итог правки.");
+    expect(text).toContain("• правка A");
+    expect(text).toContain("• правка B");
+    expect(text).toContain("• swiftc -parse — passed");
+    expect(text).toContain("• тесты — not_run");
+    expect(text).toContain("• на телефоне не смотрено");
+  });
   it("отвергает ссылку не http(s), пустую команду и кривой виджет", async () => {
     const { validateStructuredRoleContractV1 } = await import("../src/lib/roleContractV1.js");
     const errors = validateStructuredRoleContractV1(env([

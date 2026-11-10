@@ -432,12 +432,23 @@ export function structuredOutputText(blocks: Record<string, unknown>[]): string 
         points: (Array.isArray(block.points) ? block.points : []).map((p: any) => ({ x: String(p?.label ?? ""), y: Number(p?.value ?? 0) })) }) + "\n```";
       case "diagram": return String(block.title ?? "") + ": " + (Array.isArray(block.items) ? block.items.map((item: any) => String(item.label ?? "")).join(" → ") : "");
       case "report": {
+        // Разделы отчёта — те же блоки, что и обычный output: собираем их тем же
+        // рендером. Раньше здесь бралось только `text|label|title` верхнего
+        // уровня, и владелец видел заголовки без содержимого: пункты `list`,
+        // ограничения и статусы проверок пропадали (жалоба 10.11.2026).
         const sections = block.sections as Record<string, any> | undefined;
         if (!sections) return "";
-        return ["result", "work", "checks", "limitations", "materials"].flatMap((key) => {
-          const value = sections[key];
-          return Array.isArray(value) ? value.map((item) => typeof item === "string" ? item : item.text ?? item.label ?? item.title ?? "") : [];
-        }).filter(Boolean).join("\n");
+        const parts: string[] = [];
+        const pushSection = (title: string, rendered: string) => { if (rendered) parts.push("## " + title + "\n" + rendered); };
+        const renderBlocks = (value: unknown) => Array.isArray(value) ? structuredOutputText(value.filter(isObject)) : "";
+        pushSection("Результат", renderBlocks(sections.result));
+        pushSection("Что сделано", renderBlocks(sections.work));
+        const checks = Array.isArray(sections.checks) ? sections.checks.filter(isObject) : [];
+        pushSection("Проверки", checks.map((check: any) => "• " + String(check.label ?? "") + (check.status ? " — " + String(check.status) : "")).join("\n"));
+        pushSection("Ограничения", renderBlocks(sections.limitations));
+        const materials = Array.isArray(sections.materials) ? sections.materials.filter(isObject) : [];
+        pushSection("Материалы", materials.map((item: any) => "• " + String(item.title ?? item.ref ?? "")).join("\n"));
+        return parts.join("\n\n");
       }
       case "handoff": return String(block.summary ?? "");
       case "command": return (block.title ? String(block.title) + "\n" : "") + "```bash\n" + String(block.command ?? "").trim() + "\n```";
