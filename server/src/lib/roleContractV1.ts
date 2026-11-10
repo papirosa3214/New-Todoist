@@ -86,7 +86,7 @@ export const ROLE_BLOCK_GUIDE: Record<string, string> = {
   report: "`report_kind` (`intermediate`|`final`), `sections`",
   handoff: "`artifact_key`, `summary`",
   command: "`command`, необязательный `title`: команда для запуска на .110; у владельца рядом кнопка «Запустить». Одна команда — один блок",
-  link: "`title`, `url`: кликабельная ссылка. Внешний адрес — http(s); заметка в приложении на телефоне — `note://<id заметки>`",
+  link: "`title`, `url`: кликабельная ссылка. Внешний адрес — http(s); заметка в приложении на телефоне — `note://<id заметки>`. Клиент сам рисует иконку хоста и короткую подпись (`o/r#12`), длинный адрес прятать не надо. Пути к файлам оформляй полным путём со строкой через двоеточие — `Sources/…/File.swift:42`",
   html: "`title`, `html`: интерактив в окне чата — самодостаточная страница HTML/CSS/JS",
   widget: "`widget`: объект виджета (`metrics`, `progress`, `checklist`, `card`, `chart` и др.); сервер проверяет его по каталогу виджетов",
 };
