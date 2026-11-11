@@ -178,8 +178,12 @@ export function updateCoordination(questionId:string,recipientId:string,patch:Pa
  db.prepare("UPDATE chat_messages SET text=?,steps=? WHERE id=?").run(c.requester_name+" → "+c.recipient_name+": "+c.activity,JSON.stringify({duration_ms:0,items:[],coordination:c}),row.id);
  publish(row.id);
 }
+type AnswerListener=(input:{deliveryKey:string;questionId:string;recipientId:string;answer:string})=>void;
+const answerListeners:AnswerListener[]=[];
+/** Подписка на закрытие обращения ответом (межсессионное обращение будит спросившего). */
+export function onCoordinationAnswered(fn:AnswerListener){answerListeners.push(fn);}
 export function coordinationDeliveryChanged(deliveryId:string){
- const q=db.prepare("SELECT message_id,role_id,status FROM chat_message_queue WHERE id=?").get(deliveryId) as {message_id:string;role_id:string;status:string}|undefined;if(!q?.message_id)return;
+ const q=db.prepare("SELECT message_id,role_id,status,delivery_id FROM chat_message_queue WHERE id=?").get(deliveryId) as {message_id:string;role_id:string;status:string;delivery_id:string}|undefined;if(!q?.message_id)return;
  ensureCoordinationCard(q.message_id,q.role_id);
  const now=new Date().toISOString();
  if(q.status==="picked")updateCoordination(q.message_id,q.role_id,{status:"starting",activity:"Вопрос взят из очереди; готовится запуск",last_activity_at:now});
@@ -187,6 +191,7 @@ export function coordinationDeliveryChanged(deliveryId:string){
  if(q.status==="done"){
   const reply=db.prepare("SELECT text FROM chat_messages WHERE reply_to_message_id=? AND from_user_id=? ORDER BY rowid DESC LIMIT 1").get(q.message_id,q.role_id) as {text:string}|undefined;
   updateCoordination(q.message_id,q.role_id,reply?{status:"answered",activity:"Ответ получен",answer:reply.text,terminal:true,last_activity_at:now}:{status:"delivered",activity:"Вопрос доставлен в рабочую сессию; ответ ещё не получен",last_activity_at:now});
+  if(reply)for(const fn of answerListeners){try{fn({deliveryKey:q.delivery_id,questionId:q.message_id,recipientId:q.role_id,answer:reply.text});}catch(error){console.warn("[coordination] слушатель ответа:",error);}}
  }
 }
 const lastUpdate=new Map<string,number>();

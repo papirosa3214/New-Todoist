@@ -18,8 +18,10 @@
 import crypto from "node:crypto";
 import db from "../db.js";
 import { ensurePersonalRoom } from "../lib/chatRooms.js";
-import { registerCrossSessionOrigin } from "./chatCoordination.js";
+import { onCoordinationAnswered, registerCrossSessionOrigin } from "./chatCoordination.js";
 import { recordDurableDelivery } from "./chatSession.js";
+import { enqueueMessageDelivery } from "./chatQueue.js";
+import { activeVoiceCallId } from "../lib/voiceCallRegistry.js";
 
 export type CrossSessionPost = {
   /** Учётка отправителя (роль). */
@@ -86,3 +88,60 @@ export async function startRoleSessionDelivery(input: {
     queueRowId: input.queueRowId,
   });
 }
+
+/**
+ * Ответ адресата будит спросившую роль (владелец 11.11.2026).
+ *
+ * Раньше ответ только закрывал карточку в сессии отправителя, хода ему не
+ * поднимал: Помощник спросил Инженера .110, тот ответил, а Помощник так и
+ * остался на «ждём». Вызов роли (`roleSubagentCall`) будил всегда — теперь
+ * и обращение через сессию: ответ ложится в сессию отправителя сообщением,
+ * строка очереди поднимает ему ход. Повтор того же ответа отсекается по
+ * delivery_id.
+ */
+type WakeLauncher = (input: { chatId: string; roleId: string; queueRowId: string }) => void;
+let wakeLauncher: WakeLauncher = (input) => {
+  void import("../routes/chats.js")
+    .then(({ recoverAgentDelivery }) => recoverAgentDelivery(input))
+    .catch((error) => console.warn("[cross-session] ход отправителя не поднялся:", error));
+};
+/** Подмена запуска хода (тесты). */
+export function setCrossSessionWakeLauncher(fn: WakeLauncher): void {
+  wakeLauncher = fn;
+}
+
+onCoordinationAnswered(({ deliveryKey, questionId, recipientId, answer }) => {
+  if (!deliveryKey.startsWith("cross-session:")) return;
+  const question = db
+    .prepare(
+      "SELECT json_extract(steps,'$.coordination_origin.chat_id') AS chat, json_extract(steps,'$.coordination_origin.requester_id') AS requester, text FROM chat_messages WHERE id=? AND json_valid(steps)",
+    )
+    .get(questionId) as { chat: string | null; requester: string | null; text: string } | undefined;
+  if (!question?.chat || !question.requester) return;
+  const requester = db.prepare("SELECT type FROM users WHERE id=?").get(question.requester) as { type: string } | undefined;
+  if (requester?.type !== "ai") return;
+  const recipientName =
+    (db.prepare("SELECT name FROM users WHERE id=?").get(recipientId) as { name: string } | undefined)?.name ?? recipientId;
+  const deliveryId = `cross-session-answer:${questionId}`;
+  const known = db
+    .prepare("SELECT 1 FROM chat_message_queue WHERE chat_id=? AND role_id=? AND delivery_id=?")
+    .get(question.chat, question.requester, deliveryId);
+  if (known) return;
+  const messageId = crypto.randomUUID();
+  const text = [`Ответ «${recipientName}» на твоё обращение «${String(question.text).slice(0, 160)}»:`, "", answer].join("\n");
+  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)").run(
+    messageId,
+    question.requester,
+    text,
+    question.chat,
+  );
+  const queued = enqueueMessageDelivery({
+    chatId: question.chat,
+    roleId: question.requester,
+    deliveryId,
+    messageId,
+    payload: { mode: "work", hop: 0 },
+  });
+  if (activeVoiceCallId(question.chat)) return;
+  wakeLauncher({ chatId: question.chat, roleId: question.requester, queueRowId: queued.id });
+});
