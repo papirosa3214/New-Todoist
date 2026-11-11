@@ -196,6 +196,18 @@ Things 3 — 20 операций `things_*`, Todoist — 46 операций `to
 карточке субагента работает: `server/src/routes/chats.ts`, маршрут
 `/api/chats/:id/coordination/:messageId/stop`.
 
+## Отложенные сообщения владельца (12.11.2026)
+
+Пока роль в обычном чате отвечает, новое сообщение владельца ход **не прерывает**
+(прежнее правило 23.10.2026 заменено): оно ждёт в `chat_queued_messages`
+(`server/src/runtime/chatQueued.ts`), в ленте его нет, `POST /api/chats/{id}/messages`
+отвечает `queued: true`. Ход кончился — первое уходит само, остальные по одному.
+`GET /api/chats/{id}/composer-status` → `queued[]` и `running[]` (комнаты субагентов
+и назначения из этого чата); `POST …/queued/{messageId}/send-now` подмешивает в
+текущий ход, `DELETE …/queued/{messageId}` убирает; WS-событие
+`chat.composer_status`. Темы задач работают по-прежнему (подмешивание в слот).
+Остановка хода — кнопка «Стоп» (`POST /api/chats/{id}/stop`). Тест — `server/test/chatQueued.test.ts`.
+
 ## Остальные файлы-указатели в корне
 
 - `docs/2026-10-29-owner-role-request-ios.md` — **обращение владельца к роли,

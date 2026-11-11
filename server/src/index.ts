@@ -6,6 +6,7 @@ import { serverListenOptions } from "./runtime/systemdSocket.js";
 import {startToolRequestWatcher} from "./runtime/toolRequestStore.js";
 import {startChatCoordinationWatcher} from "./runtime/chatCoordination.js";
 import {startChatTopologyWatcher} from "./lib/chatTopologyWatcher.js";
+import {startQueuedSweeper} from "./runtime/chatQueued.js";
 import { startRoleLoadWatcher } from "./lib/roleLoadWatcher.js";
 import { startReviewHistoryWatcher } from "./lib/reviewHistory.js";
 import { startWorkPlanWatcher } from "./lib/workPlanWatcher.js";
@@ -704,6 +705,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     // передача, доставка в архив (docs/watchers.md).
     const stopChatTopologyWatcher = startChatTopologyWatcher();
     app.addHook("onClose", async () => stopChatTopologyWatcher());
+    const stopQueuedSweeper = startQueuedSweeper();
+    app.addHook("onClose", async () => stopQueuedSweeper());
     const stopBudgetCaptureWatcher=startBudgetCaptureWatcher();
     app.addHook("onClose",async()=>stopBudgetCaptureWatcher());
     const stopWorkPlanWatcher = startWorkPlanWatcher();

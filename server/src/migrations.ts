@@ -6466,6 +6466,22 @@ const migrations: Migration[] = [
       )`);
     },
   },
+  {
+    id: "218_chat_queued_messages",
+    description: "Отложенные сообщения владельца: пока роль отвечает, сообщение ждёт в очереди и уходит после хода",
+    up: () => {
+      db.exec(`CREATE TABLE IF NOT EXISTS chat_queued_messages (
+        message_id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        body_json TEXT NOT NULL,
+        idempotency_key TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_queued_chat ON chat_queued_messages(chat_id)`);
+    },
+  },
 
 ];
 /**

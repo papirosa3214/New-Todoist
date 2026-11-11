@@ -149,6 +149,13 @@ export interface SavedSteps {
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 const liveTurns = new Map<string, LiveTurn>();
+
+const turnEndListeners = new Set<(chatId: string) => void>();
+/** Подписка на конец хода (отложенные сообщения владельца ждут именно его). */
+export function onLiveTurnEnd(listener: (chatId: string) => void): () => void {
+  turnEndListeners.add(listener);
+  return () => { turnEndListeners.delete(listener); };
+}
 const keyOf = (chatId: string, userId: string) => `${chatId}\u0000${userId}`;
 
 /** Идущие сейчас ходы в чате — для GET /api/chats/:id/live. */
@@ -877,6 +884,7 @@ export class LiveTurn {
     this.closed = true;
     this.dispose();
     if (!this.publish) liveTurns.delete(keyOf(this.chatId, this.userId));
+    for (const listener of turnEndListeners) { try { listener(this.chatId); } catch { /* слушатель не должен ронять ход */ } }
     if (!opts.deferAnnounce) this.broadcastEnd(null);
     else this.endPending = true;
     const items = this.snapshot().items;
