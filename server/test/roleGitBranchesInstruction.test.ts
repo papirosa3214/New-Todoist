@@ -18,6 +18,12 @@ describe("доставка server+iOS: ветка и PR (11.11.2026)", () => {
     expect(c27?.enabled).toBe(false);
   });
 
+  it("R343/R347 и Mac-host для builder (R335–R342) выключены", () => {
+    for (const id of ["R343", "R347", "R335", "R336", "R338"]) {
+      expect(rules.find((r) => r.id === id)?.enabled).toBe(false);
+    }
+  });
+
   it("builder видит правила ветки/PR и iOS на .110 в карточке", () => {
     const text = renderRules(rulesFor("builder", "card"));
     expect(text).toMatch(/main не пушить/i);

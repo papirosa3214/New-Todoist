@@ -8644,7 +8644,7 @@
  {
   "id": "R300",
   "old_id": "R0321",
-  "text": "Сперва `graft ask` или `graft grep` — вернёт точные `файл:строка`. Открывай исходник через `taskflow_host_read`, когда знаешь файл и диапазон. Никогда не выдумывай содержимое графа — читай вывод команды.",
+  "text": "Сперва `graft ask` или `graft grep` — вернёт точные `файл:строка`. Открывай исходник через read/bash в рабочей папке; на Mac через host — `taskflow_host_read`. Никогда не выдумывай содержимое графа — читай вывод команды.",
   "kind": "rule",
   "category": "личные инструкции",
   "roles": [
@@ -9139,7 +9139,7 @@
  {
   "id": "R320",
   "old_id": "R0341",
-  "text": "«Приложение» — только нативный iOS-клиент в `/Users/max/Проекты/TaskFlowNativeBuild` (`Sources/`, `Tests/`, `UITests/`). Веб-клиент `New-Todoist` заморожен с 24.10.2026 и «приложением» не является. При упоминании «приложения» работай исключительно в iOS-репозитории, не трогай веб.",
+  "text": "«Приложение» — только нативный iOS-клиент (`papirosa3214/TaskFlowNativeBuild`, клон на .110: `/home/maksim/Проекты/TaskFlowNativeBuild`, перед правкой — `ensure-ios-repo.sh`; `Sources/`, `Tests/`, `UITests/`). Веб-клиент `New-Todoist` заморожен с 24.10.2026 и «приложением» не является. При упоминании «приложения» работай в iOS-репозитории, не трогай веб.",
   "kind": "rule",
   "category": "личные инструкции",
   "roles": [
@@ -9507,7 +9507,9 @@
    "chat",
    "card"
   ],
-  "text_before_shrink": "У тебя есть инструменты `taskflow_*` для работы на Mac. Назначение машины этапу и согласование плана для этого не нужны — рабочая копия проекта на Mac создаётся автоматически, в песочнице проекта."
+  "text_before_shrink": "У тебя есть инструменты `taskflow_*` для работы на Mac. Назначение машины этапу и согласование плана для этого не нужны — рабочая копия проекта на Mac создаётся автоматически, в песочнице проекта.",
+  "enabled": false,
+  "disabled_reason": "заменено C23 и R584 (владелец 11.11.2026): iOS на .110, builder без taskflow_host_*"
  },
  {
   "id": "R336",
@@ -9530,7 +9532,9 @@
   "channels": [
    "chat",
    "card"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "заменено C23 и R584 (владелец 11.11.2026): iOS на .110, builder без taskflow_host_*"
  },
  {
   "id": "R337",
@@ -9553,7 +9557,9 @@
   "channels": [
    "chat",
    "card"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "заменено C23 и R584 (владелец 11.11.2026): iOS на .110, builder без taskflow_host_*"
  },
  {
   "id": "R338",
@@ -9576,7 +9582,9 @@
   "channels": [
    "chat",
    "card"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "заменено C23 и R584 (владелец 11.11.2026): iOS на .110, builder без taskflow_host_*"
  },
  {
   "id": "R339",
@@ -9598,7 +9606,9 @@
   "merged_from": [],
   "channels": [
    "card"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "заменено C23 и R584 (владелец 11.11.2026): iOS на .110, builder без taskflow_host_*"
  },
  {
   "id": "R340",
@@ -9621,7 +9631,9 @@
   "channels": [
    "chat",
    "card"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "заменено C23 и R584 (владелец 11.11.2026): iOS на .110, builder без taskflow_host_*"
  },
  {
   "id": "R341",
@@ -9644,7 +9656,9 @@
   "channels": [
    "chat",
    "card"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "заменено C23 и R584 (владелец 11.11.2026): iOS на .110, builder без taskflow_host_*"
  },
  {
   "id": "R342",
@@ -9667,7 +9681,9 @@
   "channels": [
    "chat",
    "card"
-  ]
+  ],
+  "enabled": false,
+  "disabled_reason": "заменено C23 и R584 (владелец 11.11.2026): iOS на .110, builder без taskflow_host_*"
  },
  {
   "id": "R343",
