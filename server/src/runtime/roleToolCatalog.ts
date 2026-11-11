@@ -22,7 +22,7 @@ import {getSetting} from "../lib/serverSettings.js";
 
 /** Legacy universal taskflow в customTools (operation/arguments). По умолчанию выкл. */
 export function piLegacyTaskflowGateway(mode?: string): boolean {
-  return mode === "voice" || getSetting("pi_legacy_taskflow_gateway") === true;
+  return mode === "voice" || Boolean(getSetting("pi_legacy_taskflow_gateway"));
 }
 
 export function roleToolUiNames(role: string): string[] {
