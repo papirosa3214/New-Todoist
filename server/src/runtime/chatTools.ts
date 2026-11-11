@@ -31,6 +31,7 @@ import {
 } from "../lib/chatQuestions.js";
 import { broadcastToUsers } from "../ws.js";
 import { liveInterruptEvent, liveResumeEvent, waitForAnswer } from "../lib/questionWait.js";
+import { captureQuestionWidget } from "../integrations/telegram.js";
 import { saveUploadedFile, UploadRejected } from "../routes/attachments.js";
 import { roleUserId } from "../roleRouting.js";
 import { lazyTaskChatContext, type ChatContext } from "./taskChatContext.js";
@@ -429,6 +430,8 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         broadcastToUsers(участники, { type: "chat:new", message: loadChatMessage(messageId) });
         const ждём = waitForAnswer(вопрос.id, { signal });
         broadcastToUsers(участники, liveInterruptEvent({ chatId: chatCtx.chatId, userId: roleId, questionId: вопрос.id, messageId, payload }));
+        // Telegram получает ОДНО сообщение — виджет вопроса. Текстового дубля нет.
+        try { captureQuestionWidget(вопрос.id); } catch (error) { console.warn("[chatTools] вопрос не ушёл в Telegram:", error); }
         const ответ = await ждём;
         broadcastToUsers(участники, liveResumeEvent({ chatId: chatCtx.chatId, userId: roleId, questionId: вопрос.id, outcome: ответ ? "answered" : "expired" }));
         if (ответ) {

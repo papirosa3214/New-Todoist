@@ -174,7 +174,7 @@ import {
 } from "../lib/roleContextResolver.js";
 import {
 } from "../runtime/inProcessRun.js";
-import { cancelTelegramProgress, captureTelegramFinal, startTelegramStream } from "../integrations/telegram.js";
+import { cancelTelegramProgress, captureTelegramFinal, foldQuestionWidget, startTelegramStream } from "../integrations/telegram.js";
 import {
   attachmentRow,
   saveUploadedFile,
@@ -1413,6 +1413,9 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
         db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
       })();
       broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(id) });
+      // Виджет вопроса сворачивается в строку «Вопрос: … → Ответ: …»: живой
+      // виджет в ленте Telegram после ответа не остаётся.
+      try { foldQuestionWidget(вопрос.id); } catch (error) { console.warn("[chats] виджет вопроса не свёрнут:", error); }
       // Ход роли стоит на паузе на этом вопросе — ответ уходит в него, и роль
       // продолжает с того же вызова инструмента (27.10.2026).
       if (deliverAnswer(вопрос.id, answer)) return { message: loadChatMessage(id), resumed: true };
