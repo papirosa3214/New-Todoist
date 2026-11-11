@@ -189,6 +189,18 @@ export function telegramReactionsEnabled(): boolean {
   return value === "1" || value === "on" || value === "true" || value === "yes";
 }
 
+/**
+ * Авто-пересылка финального ответа роли в Telegram выключена по умолчанию
+ * (владелец 11.11.2026): Помощник показывает итог нативными сообщениями
+ * (sendWidget/sendRichMessage), дубль обычным текстом не нужен.
+ * Включить обратно — `TASKFLOW_TELEGRAM_FINAL=on`.
+ * Прогресс/typing и реакции 👍/👎 выключатель не затрагивает.
+ */
+export function telegramFinalEnabled(): boolean {
+  const value = String(process.env.TASKFLOW_TELEGRAM_FINAL ?? "").trim().toLowerCase();
+  return value === "1" || value === "on" || value === "true" || value === "yes";
+}
+
 /** Транспорт живого потока: `auto` — черновик с безусловным откатом на правку. */
 export function telegramStreamMode(): "auto" | "draft" | "edit" | "off" {
   const value = String(process.env.TASKFLOW_TELEGRAM_STREAM ?? "").trim().toLowerCase();
@@ -394,15 +406,21 @@ export function captureTelegramFinal(messageId: string): number {
   let count = 0;
   for (const link of links) {
     const exists = db.prepare("SELECT 1 FROM telegram_delivery_outbox WHERE source_message_id=? AND kind='final'").get(reply.id);
-    if (exists) continue;
     // Финал идёт со звуком: disable_notification не ставим (критерий владельца).
-    enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload: { text: reply.text }, replyToMessageId: link.message_id, sourceMessageId: reply.id });
+    // Выключатель TASKFLOW_TELEGRAM_FINAL (по умолчанию выключен, владелец
+    // 11.11.2026): текст в Telegram не пересылаем — Помощник показывает итог
+    // нативными сообщениями. Реакции и прогресс выключатель не трогает.
+    if (telegramFinalEnabled() && !exists) {
+      enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload: { text: reply.text }, replyToMessageId: link.message_id, sourceMessageId: reply.id });
+      count++;
+    }
     // Прерванный ход или ошибка — 👎 на сообщении-триггере, успех — 👍.
     // source_message_id не заполняем: уникальный индекс (source_message_id,kind='final')
     // принадлежит самой доставке финала, а реакция — отдельное намерение.
+    const reactionQueued = db.prepare("SELECT 1 FROM telegram_delivery_outbox WHERE kind IN ('final','error') AND payload_json LIKE '%setMessageReaction%' AND json_extract(payload_json,'$.message_id')=?").get(link.message_id);
+    if (reactionQueued) continue;
     const failed = Boolean(reply.stop_reason) || Boolean(reply.partial);
     enqueueTelegramReaction({ kind: failed ? "error" : "final", chatId: link.chat_id, messageId: link.message_id, emoji: failed ? "👎" : "👍", sourceMessageId: null });
-    count++;
   }
   return count;
 }
