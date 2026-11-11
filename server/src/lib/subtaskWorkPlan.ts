@@ -159,7 +159,7 @@ export function chatPlanViewOf(plan: ChatWorkPlan): ChatPlanView {
   const storedStatus: ChatPlanStatus =
     plan.status === "stopped" ? "stopped" : plan.status === "finished" ? "finished" : "active";
   const obviousFinished = plan.items.length > 0 && plan.items.every((item) => acceptedOutcome(plan, item.id)?.state === "done");
-  const status: ChatPlanStatus = storedStatus === "stopped" ? "stopped" : obviousFinished ? "finished" : "active";
+  const status: ChatPlanStatus = storedStatus !== "active" ? storedStatus : obviousFinished ? "finished" : "active";
   if (status === "active") currentItemId = pendingCandidate?.id ?? null;
   else if (status === "stopped") currentItemId = null;
 
@@ -402,11 +402,12 @@ export function submitChatWorkItem(input: ChatItemSubmitInput): ChatItemSubmitRe
     const byOther = !!input.markedBy && input.markedBy !== input.roleId;
     if (byOther && !input.markedBy!.startsWith("owner:") && plan.parent_role_id !== input.markedBy)
       throw new ChatItemSubmitError({ code: "not_caller", status: 403, message: "Пункт чужого плана сдаёт только роль, которая позвала эту роль" });
-    if (view.status === "stopped")
+    // Сданный и закрытый (в том числе закрытый стопом) план сдачи не принимает.
+    if (view.status !== "active")
       throw new ChatItemSubmitError({
         code: "plan_stopped",
         status: 409,
-        message: `План остановлен${plan.stop_reason ? ` (${plan.stop_reason})` : ""}: новые пункты не принимаются`,
+        message: `План закрыт${plan.stop_reason ? ` (${plan.stop_reason})` : ""}: новые пункты не принимаются`,
         extra: { stop_reason: plan.stop_reason },
       });
     if (!plan.items.some((item) => item.id === input.itemId))
@@ -516,8 +517,12 @@ export function submitChatWorkItem(input: ChatItemSubmitInput): ChatItemSubmitRe
   })();
 }
 
-/** Стоп плана: останавливает, а не ставит на паузу (контракт §7). Продолжить
- *  работу можно только новым планом. */
+/** Стоп плана: план сразу ЗАКРЫВАЕТСЯ, а не висит остановленным
+ *  (владелец 11.11.2026: «пусть сервер их не стопорит, а закрывает сразу, чтобы
+ *  они не маячили и мусор не создавали»). Причина и время закрытия
+ *  сохраняются в stop_reason/stopped_at для истории. Закрытый план сдачи не
+ *  принимает и полоску над лентой не занимает; продолжить можно только новым
+ *  планом — он заменит закрытый без сверки revision. */
 export function stopChatWorkPlan(
   chatId: string,
   roleId: string,
@@ -530,7 +535,7 @@ export function stopChatWorkPlan(
     const view = chatPlanViewOf(plan);
     if (view.status !== "active") return view;
     const now = new Date().toISOString();
-    db.prepare("UPDATE chat_work_plans SET status='stopped',stop_reason=?,stopped_at=?,revision=?,updated_at=? WHERE chat_id=? AND role_id=?")
+    db.prepare("UPDATE chat_work_plans SET status='finished',stop_reason=?,stopped_at=?,revision=?,updated_at=? WHERE chat_id=? AND role_id=?")
       .run(reason, now, plan.revision + 1, now, chatId, roleId);
     return chatPlanView(chatId, roleId);
   })();
