@@ -1575,7 +1575,9 @@ try {
   // разработчика падали на старте, хотя задаче он не нужен. Не поднялся — роль
   // работает без его инструментов.
   const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId).catch(error => { console.warn(`[composio] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
-  if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensureTaskRoom(taskId);
+  // Комната задачи заводится здесь — в момент, когда задача действительно
+  // пошла в работу (владелец 11.11.2026). До первого запуска роли комнаты нет.
+  ensureTaskRoom(taskId);
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
   const infra = await connectRoleMcp(role, cwd).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
   const toolCatalog = buildRoleToolCatalog({role,model:model.id??modelId,taskId,subtaskId:input.subtaskId,mode:"work",runId:manager.getSessionId()}, [...composio.tools,...infra.tools]);

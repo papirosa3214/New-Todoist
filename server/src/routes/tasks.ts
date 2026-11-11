@@ -50,7 +50,6 @@ import {
   resultFromSubtasks,
 } from "../resultVersions.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
-import { ensureTaskRoom } from "../lib/projectTopics.js";
 import { archiveTaskRoom } from "../lib/taskRoomArchive.js";
 import { closeTaskTree } from "../lib/taskCloseCascade.js";
 import { criticApproved } from "../lib/criticApproved.js";
@@ -1693,17 +1692,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
       });
       createTaskTxn();
 
-      // Тема задачи заводится сразу при создании (карточка ca816271, п. 4),
-      // а не только на подготовке плана: пропущенная подготовка (гонка
-      // автоприёма) оставляла задачу без темы вовсе. Приватные проекты не
-      // трогаем — там темы не нужны. Ошибка темы не должна ронять создание.
-      if (!isPrivateProject) {
-        try {
-          ensureTaskRoom(id);
-        } catch (error) {
-          req.log?.warn?.({ err: String(error), taskId: id }, "не удалось завести тему задачи");
-        }
-      }
+      // Комнату задачи при создании НЕ заводим (владелец 11.11.2026:
+      // «комната не должна создаваться, пока задачка ещё не в работе»).
+      // Пустая комната без единого сообщения только наполняла список чатов.
+      // Комната появляется при первом запуске роли по задаче
+      // (runtime/inProcessRun.ts) и по первому обращению в чат карточки.
 
       // Первая запись ленты — «создал задачу»: до этого лента начиналась с
       // первого же изменения, и по ней нельзя было понять, кто и когда

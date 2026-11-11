@@ -84,7 +84,8 @@ describe("триггер разбора накопившихся заметок"
     __raiseKbTriage();
     const t = triageCards()[0];
     expect(t, "задача на разбор должна появиться").toBeTruthy();
-    expect(t.title).toContain("20");
+    expect(t.title, "заголовок постоянный — счётчика в нём нет").toBe("Разобрать накопившиеся заметки");
+    expect(t.description, "счётчик живёт в описании").toContain("Ждут разбора: 20");
     const row = db
       .prepare("SELECT project_id, owner_selected_role AS role FROM tasks WHERE id = ?")
       .get(t.id) as { project_id: string; role: string };
@@ -126,13 +127,13 @@ describe("триггер разбора накопившихся заметок"
     const cards = triageCards();
     expect(cards.length, "пока карточка жива, вторая не заводится").toBe(1);
     expect(cards[0].id, "обновляется та же карточка").toBe(first.id);
-    expect(cards[0].title, "счётчик виден в заголовке").toContain("31");
+    expect(cards[0].title, "заголовок не меняется от счётчика").toBe("Разобрать накопившиеся заметки");
     expect(cards[0].description, "и в описании").toContain("Ждут разбора: 31");
     expect(cards[0].description, "инструкция разбора не потеряна").toContain("Workflows");
     expect(secretarySignals().length, "повторно по живой карточке не сигналим").toBe(1);
   });
 
-  it("карточка закрыта — следующий порог заводит новую", () => {
+  it("карточка закрыта — следующий порог возвращает ту же, а не заводит новую", () => {
     seedPending(20);
     __raiseKbTriage();
     const first = triageCards()[0];
@@ -141,12 +142,66 @@ describe("триггер разбора накопившихся заметок"
     seedPending(5);
     __raiseKbTriage();
 
+    // Владелец 11.11.2026: «должна быть создана только одна задача,
+    // изменять можно». Разбор не сделан — карточка та же, снова в работе.
     const cards = triageCards();
-    expect(cards.length, "разбор не сделан — карточка должна вернуться").toBe(2);
-    const second = cards.find((c) => c.id !== first.id)!;
-    expect(second.title).toContain("25");
-    expect(secretarySignals().length, "по новой карточке сигнал свой").toBe(2);
-    expect(secretarySignals()[1].text).toContain(second.id);
+    expect(cards.length, "карточка разбора одна на всё время").toBe(1);
+    expect(cards[0].id, "вернулась та же карточка").toBe(first.id);
+    const row = db
+      .prepare("SELECT status, completed_at FROM tasks WHERE id = ?")
+      .get(first.id) as { status: string; completed_at: string | null };
+    expect(row.status, "карточка снова в работе").toBe("active");
+    expect(row.completed_at, "отметка закрытия снята").toBeNull();
+    expect(cards[0].description, "счётчик переписан в ней же").toContain("Ждут разбора: 25");
+    expect(secretarySignals().length, "по той же карточке повторно не сигналим").toBe(1);
+  });
+
+  it("лишние живые карточки разбора убираются в архив, остаётся одна", () => {
+    seedPending(20);
+    __raiseKbTriage();
+    const first = triageCards()[0];
+    // Дубль от прежней версии сторожа: живая карточка рядом, работу по ней
+    // никто не начинал (жалоба владельца 11.11.2026 — их было больше десяти).
+    db.prepare(
+      `INSERT INTO tasks (id, title, description, priority, creator_id, status, project_id, owner_selected_role, created_at, updated_at)
+       VALUES ('kb-triage-duplicate', 'Разобрать накопившиеся заметки: 21 ждут разбора', NULL, 2, 'u1', 'active',
+               (SELECT project_id FROM tasks WHERE id = ?), 'secretary', datetime('now'), datetime('now'))`,
+    ).run(first.id);
+
+    __raiseKbTriage();
+
+    const alive = db
+      .prepare("SELECT id FROM tasks WHERE id LIKE 'kb-triage-%' AND status = 'active' AND archived_at IS NULL")
+      .all() as Array<{ id: string }>;
+    expect(alive.map((r) => r.id), "живая карточка только одна").toEqual([first.id]);
+    const dup = db.prepare("SELECT archived_at FROM tasks WHERE id = 'kb-triage-duplicate'").get() as { archived_at: string | null };
+    expect(dup.archived_at, "дубль не удалён, а убран в архив").toBeTruthy();
+    db.prepare("DELETE FROM tasks WHERE id = 'kb-triage-duplicate'").run();
+  });
+
+  it("ниже порога живые дубли всё равно убираются в архив", () => {
+    // На живом сервере заметок осталось меньше порога, а живые дубли прежней
+    // версии сторожа висят. Ждать следующего порога, чтобы это исправить,
+    // незачем: карточка разбора одна (владелец 11.11.2026).
+    const insert = db.prepare(
+      `INSERT INTO tasks (id, title, description, priority, creator_id, status, owner_selected_role, created_at, updated_at)
+       VALUES (?, 'Разобрать накопившиеся заметки: 21 ждут разбора', NULL, 2, 'u1', 'active', 'secretary', ?, datetime('now'))`,
+    );
+    insert.run("kb-triage-old-a", "2026-10-12 09:00:00");
+    insert.run("kb-triage-old-b", "2026-10-14 09:00:00");
+    __setKbTriageState({ raised_task_id: "kb-triage-old-b" });
+    seedPending(3);
+
+    __raiseKbTriage();
+
+    const alive = db
+      .prepare("SELECT id FROM tasks WHERE id LIKE 'kb-triage-%' AND status = 'active' AND archived_at IS NULL")
+      .all() as Array<{ id: string }>;
+    expect(alive.map((r) => r.id), "живая карточка осталась одна").toEqual(["kb-triage-old-b"]);
+    const old = db.prepare("SELECT archived_at FROM tasks WHERE id = 'kb-triage-old-a'").get() as
+      | { archived_at: string | null }
+      | undefined;
+    expect(old?.archived_at, "лишний дубль в архиве, а не удалён").toBeTruthy();
   });
 
   it("по одной карточке сигнал не повторяется чаще раза в сутки", () => {
@@ -200,7 +255,7 @@ describe("триггер разбора накопившихся заметок"
     seedPending(20, "Из задачи: Координация");
     seedPending(30, "мусор");
     __raiseKbTriage();
-    expect(triageCards()[0].title, "в счётчике ровно живые 20, а не 50").toContain("20");
+    expect(triageCards()[0].description, "в счётчике ровно живые 20, а не 50").toContain("Ждут разбора: 20");
     expect(triageCards()[0].description, "и в описании то же число").toContain("Ждут разбора: 20");
     expect(triageCards()[0].description, "инструкция про «мусор» осталась").toContain("мусор");
   });

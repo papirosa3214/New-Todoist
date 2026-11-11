@@ -28,7 +28,9 @@ describe("Автоматическая подготовка",()=>{
   await process();expect(job(id).status).toBe("ready");
   expect((db.prepare("SELECT status FROM task_collaboration_plans WHERE id=?").get(job(id).plan_id) as any).status).toBe("draft");
   expect(db.prepare("SELECT 1 FROM subtasks WHERE task_id=?").get(id)).toBeUndefined();expect(runs.start).not.toHaveBeenCalled();
-  expect(db.prepare("SELECT 1 FROM chats WHERE task_id=? AND room_kind='task'").get(id)).toBeTruthy();
+  // Комната задачи не заводится ни при создании, ни на подготовке плана:
+  // задача ещё не в работе (владелец 11.11.2026).
+  expect(db.prepare("SELECT 1 FROM chats WHERE task_id=? AND room_kind='task'").get(id)).toBeUndefined();
   expect((db.prepare("SELECT artifact_key FROM task_collaboration_plan_edges WHERE plan_id=?").get(job(id).plan_id) as any).artifact_key).toBeTruthy();
   expect((db.prepare("SELECT start_condition FROM task_collaboration_plan_edges WHERE plan_id=?").get(job(id).plan_id) as any).start_condition).toBe("submitted");
  });

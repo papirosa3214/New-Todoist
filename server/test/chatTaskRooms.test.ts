@@ -181,4 +181,26 @@ describe("групповая комната задачи", () => {
     const projectChats = db.prepare("SELECT COUNT(*) AS n FROM chats WHERE project_id IS NOT NULL").get() as { n: number };
     expect(projectChats.n).toBe(0);
   });
+  it("создание задачи комнату не заводит — она появляется, когда задача в работе", async () => {
+    // Владелец 11.11.2026: «комната не должна создаваться, пока задачка ещё
+    // не в работе». Пустая комната без сообщений только засоряла список чатов.
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title: "Комната не при создании", project_id: PROJECT, skip_auto_plan: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const id = res.json().task.id as string;
+    const rooms = db
+      .prepare("SELECT COUNT(*) AS n FROM chats WHERE task_id = ? AND room_kind = 'task'")
+      .get(id) as { n: number };
+    expect(rooms.n, "задача не в работе — комнаты нет").toBe(0);
+    db.prepare("DELETE FROM task_preparation_jobs WHERE task_id = ?").run(id);
+    // Уборка тестовой карточки: детей (события, уведомления, inbox) уносим
+    // вместе с ней, чтобы не ловить FOREIGN KEY на временной базе.
+    db.pragma("foreign_keys = OFF");
+    db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+    db.pragma("foreign_keys = ON");
+  });
 });
