@@ -29,15 +29,16 @@ const both = <T>(fn: () => T): { on: T; off: T } => {
 };
 
 describe("правила из кода в реестре", () => {
-  it("в реестре 160 строк из кода: 150 правил, 2 смешанных (данные отдельно), 8 данных; составы 16 шаблонов", () => {
+  it("в реестре 161 строка из кода: 151 правило, 2 смешанных (данные отдельно), 8 данных; составы 16 шаблонов", () => {
     const all = loadRoleRules();
     const rows = all.filter((r) => r.category === "из кода" && r.kind !== "compose" && /^R\d+$/.test(r.id) && !["R123", "R214"].includes(r.id));
     // R124 и R217 вынесены в «новое 06.11.2026» (11f7fc7b), чтобы формат доходил до роли.
-    expect(rows).toHaveLength(160);
+    // R581: тексты ритма развели по каналам (11.11.2026), строк из кода стало на одну больше.
+    expect(rows).toHaveLength(161);
     expect(rows.every((r) => r.condition && r.site)).toBe(true);
     expect(rows.filter((r) => r.kind === "data")).toHaveLength(8);
     expect(rows.filter((r) => r.kind === "rule" && r.data_part)).toHaveLength(2);
-    expect(rows.filter((r) => r.kind === "rule" && !r.data_part)).toHaveLength(150);
+    expect(rows.filter((r) => r.kind === "rule" && !r.data_part)).toHaveLength(151);
     expect(all.filter((r) => r.kind === "compose")).toHaveLength(16);
   });
   it("AGENT_RULES и контракт постановки берутся из реестра, массив и текст те же", () => {

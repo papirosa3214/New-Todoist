@@ -3631,49 +3631,29 @@
  {
   "id": "R132",
   "old_id": "R0132",
-  "text": "В начале хода напиши одно короткое сообщение в чат, что делаешь. После каждого пункта чек-листа — короткий итог в одну строку. Используй инструмент taskflow_chat_reply (владельцу, до 4 сообщений за ход). Сообщения не пиши в рабочий канал агентов. Молчание и рассуждения вслух вместо работы владелец читает как зависание.",
+  "text": "Один ответ за ход. Всё выполнимое делаешь и отдаёшь одним финальным ответом. Промежуточное сообщение через taskflow_chat_reply — только если работа идёт дольше нескольких минут, и тогда финальный ответ его не дублирует.",
   "kind": "rule",
   "category": "из кода",
   "roles": "all",
-  "where": "карточка: start",
+  "where": "чат: каждое сообщение и продолжение",
   "sources": [
    {
-    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
-    "line": 122,
-    "section": "defaults:task.start > (без раздела) (строка 74 текста)"
+    "file": "решение владельца 11.11.2026",
+    "line": null,
+    "section": "чат: каждое сообщение > ритм работы (строка 88 текста)"
    },
    {
-    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
-    "line": 132,
-    "section": "defaults:task.plan > (без раздела) (строка 137 текста)"
-   },
-   {
-    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
-    "line": 283,
-    "section": "defaults:task.resume > (без раздела) (строка 70 текста)"
-   },
-   {
-    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
-    "line": 310,
-    "section": "defaults:task.reply > (без раздела) (строка 70 текста)"
-   },
-   {
-    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
-    "line": 316,
-    "section": "defaults:chat.wrapper > (без раздела) (строка 88 текста)"
-   },
-   {
-    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
-    "line": 434,
-    "section": "defaults:chat.followup > (без раздела) (строка 31 текста)"
+    "file": "решение владельца 11.11.2026",
+    "line": null,
+    "section": "чат: продолжение > ритм работы (строка 31 текста)"
    }
   ],
   "merged_from": [],
   "channels": [
-   "card"
+   "chat"
   ],
-  "condition": "карточка: start",
-  "site": "defaults:task.start",
+  "condition": "чат: каждое сообщение",
+  "site": "defaults:chat.wrapper",
   "text_before_shrink": "4. ПОКАЖИ ХОД РАБОТЫ В ЧАТЕ. В начале длинного хода напиши в чат\n   одно короткое сообщение, что ты сейчас делаешь («лезу в память, потом\n   код», «нашёл, делаю то-то»), а по завершении каждого пункта чек-листа —\n   короткий итог в одну строку. Инструмент для такого сообщения —\n   taskflow_chat_reply (владельцу, до 4 сообщений за ход); в рабочий канал\n   агентов сообщения не пишутся — это не «прогресс перед владельцем».\n   Молчание и рассуждения вслух вместо работы владелец читает как\n   зависание: он не видит ни хода, ни результата."
  },
  {
@@ -14940,7 +14920,7 @@
    "R129",
    "R130",
    "R131",
-   "R132"
+   "R581"
   ]
  },
  {
@@ -15011,7 +14991,7 @@
    "R129",
    "R130",
    "R131",
-   "R132"
+   "R581"
   ]
  },
  {
@@ -15105,7 +15085,7 @@
    "R129",
    "R130",
    "R131",
-   "R132"
+   "R581"
   ]
  },
  {
@@ -15147,7 +15127,7 @@
    "R129",
    "R130",
    "R131",
-   "R132"
+   "R581"
   ]
  },
  {
@@ -15718,5 +15698,53 @@
    "card"
   ],
   "enabled": true
+ },
+ {
+  "id": "R581",
+  "old_id": null,
+  "text": "В начале хода напиши одно короткое сообщение в чат, что делаешь. После каждого пункта чек-листа — короткий итог в одну строку. Используй инструмент taskflow_chat_reply (владельцу, до 4 сообщений за ход). Сообщения не пиши в рабочий канал агентов. Молчание и рассуждения вслух вместо работы владелец читает как зависание.",
+  "kind": "rule",
+  "category": "из кода",
+  "roles": "all",
+  "where": "карточка: start",
+  "sources": [
+   {
+    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
+    "line": 122,
+    "section": "defaults:task.start > (без раздела) (строка 74 текста)"
+   },
+   {
+    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
+    "line": 132,
+    "section": "defaults:task.plan > (без раздела) (строка 137 текста)"
+   },
+   {
+    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
+    "line": 283,
+    "section": "defaults:task.resume > (без раздела) (строка 70 текста)"
+   },
+   {
+    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
+    "line": 310,
+    "section": "defaults:task.reply > (без раздела) (строка 70 текста)"
+   },
+   {
+    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
+    "line": 316,
+    "section": "defaults:chat.wrapper > (без раздела) (строка 88 текста)"
+   },
+   {
+    "file": "/home/maksim/Проекты/New-Todoist/server/src/runtime/instructionDefaults.ts",
+    "line": 434,
+    "section": "defaults:chat.followup > (без раздела) (строка 31 текста)"
+   }
+  ],
+  "merged_from": [],
+  "channels": [
+   "card"
+  ],
+  "condition": "карточка: start",
+  "site": "defaults:task.start",
+  "text_before_shrink": "4. ПОКАЖИ ХОД РАБОТЫ В ЧАТЕ. В начале длинного хода напиши в чат\n   одно короткое сообщение, что ты сейчас делаешь («лезу в память, потом\n   код», «нашёл, делаю то-то»), а по завершении каждого пункта чек-листа —\n   короткий итог в одну строку. Инструмент для такого сообщения —\n   taskflow_chat_reply (владельцу, до 4 сообщений за ход); в рабочий канал\n   агентов сообщения не пишутся — это не «прогресс перед владельцем».\n   Молчание и рассуждения вслух вместо работы владелец читает как\n   зависание: он не видит ни хода, ни результата."
  }
 ]
