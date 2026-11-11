@@ -49,6 +49,13 @@ export function historySince(chatId: string, triggerId: string, selfId: string, 
     .all(chatId, triggerId, chatId, selfId, triggerId, limit);
 }
 
+/** После «Новая сессия» в ленте есть маркер — память/БЗ/проекты в ход не кладём. Свод правил роли остаётся в системном промпте. */
+export function skipChatProjectKnowledge(chatId: string): boolean {
+  return Boolean(
+    db.prepare("SELECT 1 FROM chat_messages WHERE chat_id = ? AND COALESCE(is_session_marker, 0) = 1 LIMIT 1").get(chatId),
+  );
+}
+
 /** Первый ход сессии — история до сообщения-триггера. */
 export function historyBefore(chatId: string, triggerId: string, limit: number): unknown[] {
   return db

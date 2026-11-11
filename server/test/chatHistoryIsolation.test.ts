@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
-import { historyBefore, historySince, modelHistorySql } from "../src/lib/chatHistoryModel.js";
+import { historyBefore, historySince, modelHistorySql, skipChatProjectKnowledge } from "../src/lib/chatHistoryModel.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
 vi.mock("../src/lib/embeddingClient.js", () => ({
@@ -110,5 +110,10 @@ describe("История для модели не содержит отобра�
       .prepare(`SELECT m.id FROM chat_messages m WHERE m.chat_id = ? AND ${modelHistorySql("m")}`)
       .all(CHAT) as Array<{ id: string }>;
     expect(rows.map((row) => row.id).sort()).toEqual(["iso-1", "iso-answer", "iso-trigger"]);
+  });
+
+  it("после маркера новой сессии память и библиотеку в ход не кладём", () => {
+    expect(skipChatProjectKnowledge(CHAT)).toBe(true);
+    expect(skipChatProjectKnowledge("no-such-chat")).toBe(false);
   });
 });

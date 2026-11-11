@@ -46,7 +46,7 @@ import { deliverTopicToWork, deliverChatToWork, slotWorkspace } from "../runtime
 import { topicContext, taskRoomClosedAt, ensureTaskRoom, roomsOfPersonalChat } from "../lib/projectTopics.js";
 import { assignmentsOf } from "../lib/chatChildren.js";
 import { roomArchivedAt } from "../lib/taskRoomArchive.js";
-import { HISTORY_SELECT, historyBefore, historySince } from "../lib/chatHistoryModel.js";
+import { HISTORY_SELECT, historyBefore, historySince, skipChatProjectKnowledge } from "../lib/chatHistoryModel.js";
 import {
   archiveChat,
   archiveRight,
@@ -3623,14 +3623,17 @@ async function deliverAgentReply(args: {
   if (topic) { const brief = taskChatBrief(topic.task_id, role, slot?.id ?? null, chatId, fromOwner ? unwrapRoleEnvelope(trigger.text) : null); if (brief) prompt = `${brief}\n\n${prompt}`; }
   // Заблокированный слот: не запрет, а маячок предложить план решения.
   if (slot?.agent_state === "blocked" && fromOwner) prompt = `${prompt}\n\n${RESOLUTION_PLAN_BEACON}`;
-  const memory = taskChatScoped ? null : await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text, dataOnly:role==="secretary" }));
+  // Владелец 11.11.2026: после «Новая сессия» — нуль: без памяти, БЗ и проектов.
+  // Свод правил (системный промпт) остаётся. История первого хода уже ≤20.
+  const skipKnowledge = skipChatProjectKnowledge(chatId);
+  const memory = taskChatScoped || skipKnowledge ? null : await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text, dataOnly:role==="secretary" }));
   if (memory) prompt = `${prompt}\n\n${memory}`;
   // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
   // последний снимок в общий контекст роли — и для чата, и для работы»).
   // Для конкретного этапа — его снимок, без этапа — короткий перечень моих
   // слотов. Это ДАННЫЕ о работе, а не инструкция: в чат ничего не отправляется
   // автоматически, роль сама решает, упоминать ли это в ответе.
-  const snapshots = taskChatScoped ? null : slot
+  const snapshots = taskChatScoped || skipKnowledge ? null : slot
     ? roleSlotSnapshotsBlock({ role, taskId: slot.task_id, subtaskId: slot.id })
     : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null, projectId: topic ? null : chatProject });
   if (snapshots) prompt = `${prompt}\n\n${snapshots}`;
