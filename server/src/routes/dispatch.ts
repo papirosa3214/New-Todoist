@@ -225,6 +225,8 @@ export function roleChoiceNoteRu(choice: RoleChoice): string {
  *    «задача уже в работе»;
  *  - у задачи уже есть draft/approved план → `skipped-plan`: смена схемы
  *    через отдельные эндпоинты, не ломаем чужой draft;
+ *  - у задачи есть хотя бы один шаг в `subtasks` → `skipped-has-steps`:
+ *    такая карточка исполняется своим планом из шагов (см. ниже).
  *  - иначе подбираем роль (тот же `pickRole`, что и в `dispatchTaskToPi`)
  *    и зовём `startSingleExecutorPlan(taskId, actorId, { roleKey, system })`.
  *
@@ -235,7 +237,15 @@ export function roleChoiceNoteRu(choice: RoleChoice): string {
  */
 export type TryStartOutcome =
   | { ok: true; reason: "started"; role: string; planId: string; subtaskId: string; runId: string }
-  | { ok: true; reason: "skipped-assignee" | "skipped-plan" | "skipped-inactive" | "skipped-parent-plan" }
+  | {
+      ok: true;
+      reason:
+        | "skipped-assignee"
+        | "skipped-plan"
+        | "skipped-inactive"
+        | "skipped-parent-plan"
+        | "skipped-has-steps";
+    }
   | { ok: false; reason: "failed"; code: number; error: string };
 
 /** Есть ли у кого-то из предков карточки план совместной работы (черновик
@@ -265,6 +275,14 @@ export async function tryStartSingleExecutorPlan(
   if (task.status !== "active") return { ok: true, reason: "skipped-inactive" };
   if (task.assignee_id) return { ok: true, reason: "skipped-assignee" };
   if (task.agent_state) return { ok: true, reason: "skipped-assignee" };
+  // Карточка со шагами исполняется своим планом из шагов, а не
+  // single_executor (владелец 11.11.2026). Гейт стоит здесь, до `pickRole`:
+  // при создании шаги вставляются в той же транзакции, что и карточка
+  // (`subtasks_seeded`), поэтому автоприём иначе успевал подобрать роль и
+  // запустить узел раньше, чем собирался план из шагов (прецедент 342467fb:
+  // карточка с 6 шагами ушла одному исполнителю в 05:54).
+  const hasSteps = db.prepare("SELECT 1 FROM subtasks WHERE task_id = ? LIMIT 1").get(taskId);
+  if (hasSteps) return { ok: true, reason: "skipped-has-steps" };
   const activePlan = db
     .prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id = ? AND status IN ('draft','approved')")
     .get(taskId);
