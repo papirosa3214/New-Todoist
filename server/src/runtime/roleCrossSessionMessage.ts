@@ -110,7 +110,11 @@ export function setCrossSessionWakeLauncher(fn: WakeLauncher): void {
   wakeLauncher = fn;
 }
 
-onCoordinationAnswered(({ deliveryKey, questionId, recipientId, answer }) => {
+// Подписка откладывается на микрозадачу: модульный граф доходит сюда раньше,
+// чем chatCoordination завершит инициализацию (agentMessaging → этот файл →
+// chatCoordination), и прямой вызов падал на «answerListeners before
+// initialization» — весь сервер не грузился в тестах (11.11.2026).
+queueMicrotask(() => onCoordinationAnswered(({ deliveryKey, questionId, recipientId, answer }) => {
   if (!deliveryKey.startsWith("cross-session:")) return;
   const question = db
     .prepare(
@@ -144,4 +148,4 @@ onCoordinationAnswered(({ deliveryKey, questionId, recipientId, answer }) => {
   });
   if (activeVoiceCallId(question.chat)) return;
   wakeLauncher({ chatId: question.chat, roleId: question.requester, queueRowId: queued.id });
-});
+}));
