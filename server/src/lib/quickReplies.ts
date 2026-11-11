@@ -7,15 +7,24 @@ export function extractQuickReplies(text: string): { clean: string; replies: str
   let lastIdx = lines.length - 1;
   while (lastIdx >= 0 && lines[lastIdx].trim() === "") lastIdx--;
   if (lastIdx < 0) return { clean: text, replies: null };
-  const match = lines[lastIdx].trim().match(/^БЫСТРО:\s*(.+)$/i);
-  if (!match) return { clean: text, replies: null };
-  const replies = match[1]
+  // Маркер ищем в любом месте последней непустой строки (владелец 11.11.2026:
+  // роль приписывает его в конец абзаца, и кнопки терялись). Варианты — всё,
+  // что стоит после маркера до конца строки; сам маркер вырезаем вместе с
+  // пробелом или переводом строки перед ним.
+  const line = lines[lastIdx];
+  const marker = /(^|\s)БЫСТРО:\s*/i.exec(line);
+  if (!marker) return { clean: text, replies: null };
+  const prefix = line.slice(0, marker.index + marker[1].length).trimEnd();
+  const replies = line
+    .slice(marker.index + marker[0].length)
     .split("|")
     .map((s) => s.trim())
     .filter(Boolean)
     .slice(0, 4);
   if (!replies.length) return { clean: text, replies: null };
-  const clean = lines.slice(0, lastIdx).join("\n").trimEnd();
+  const head = [...lines.slice(0, lastIdx), prefix].filter((part) => part.trim() !== "").join("\n");
+  const tail = lines.slice(lastIdx + 1).join("\n").trim();
+  const clean = (tail ? `${head}\n${tail}` : head).trimEnd();
   return { clean, replies };
 }
 

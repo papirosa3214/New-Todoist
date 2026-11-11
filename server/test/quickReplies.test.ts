@@ -44,3 +44,23 @@ it("ответ без развилки не получает кнопок", () =
   expect(pullQuickReplies([{ type: "text", text: "Просто текст." }]).replies).toBeNull();
   expect(extractQuickReplies("Просто текст.").replies).toBeNull();
 });
+
+it("маркер приклеен к концу абзаца: кнопки есть, абзац остаётся без маркера", () => {
+  const { output, replies } = pullQuickReplies([
+    { type: "text", text: "Правку сделал, чужое сам не трогаю. БЫСТРО: A | B | Не туда, объясню" },
+  ]);
+  expect(replies).toEqual(["A", "B", "Не туда, объясню"]);
+  expect((output[0] as { text: string }).text).toBe("Правку сделал, чужое сам не трогаю.");
+});
+
+it("маркер отдельной строкой — работает как раньше", () => {
+  const { clean, replies } = extractQuickReplies("Итог.\n\nБЫСТРО: Да | Нет");
+  expect(replies).toEqual(["Да", "Нет"]);
+  expect(clean).toBe("Итог.");
+});
+
+it("БЫСТРО в середине абзаца тоже вынимается, хвост строки остаётся вариантами", () => {
+  const { clean, replies } = extractQuickReplies("Готово. БЫСТРО: Один | Два. Хвост после вариантов не нужен");
+  expect(replies?.[0]).toBe("Один");
+  expect(clean).toBe("Готово.");
+});
