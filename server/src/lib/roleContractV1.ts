@@ -411,12 +411,37 @@ function asV1Candidate(body: string): unknown | null {
   }
 }
 
+// Имена из кода, пути и файлы — в обратных кавычках, что бы ни написала роль
+// (владелец 11.11.2026: «чтобы от роли не зависело, сервер сам вставлял»).
+// Без кавычек `note_accesses` шло курсивом, путь — голым текстом без значка.
+// Уже размеченное (код, ссылки, адреса) не трогаем.
+const CODE_TOKEN = new RegExp([
+  String.raw`(?<![\w/~.\-])(?:~|\.{1,2})?\/[\w.\-]+(?:\/[\w.\-]+)*\/?(?![\w/])`,
+  String.raw`(?<![\w/.\-])[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+(?![\w/])`,
+  String.raw`(?<![\w/.\-])[\w\-]+(?:\.[\w\-]+)*\.(?:ts|tsx|js|mjs|cjs|jsx|swift|py|md|json|sh|yml|yaml|sql|db|txt|log|html|css|toml|plist|kt|go|rs)(?![\w/])`,
+].join("|"), "g");
+const PROTECTED = /(```[\s\S]*?```|`[^`\n]+`|\[[^\]\n]*\]\([^)\n]*\)|<[^>\n]+>|https?:\/\/\S+|[a-z]+:\/\/\S+)/g;
+
+export function codeIdentifiers(text: string): string {
+  return text.split(PROTECTED).map((part, index) => index % 2 === 1 ? part
+    : part.replace(CODE_TOKEN, (token) => "`" + token + "`")).join("");
+}
+
+function materialLine(item: any): string {
+  const title = String(item?.title ?? "").replace(/[\[\]]/g, "").trim();
+  const ref = String(item?.ref ?? "").trim();
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const href = uuid.test(ref) ? "note://" + ref : /^(note|task|taskflow|https?):\/\//i.test(ref) ? ref : "";
+  if (href) return "- [" + (title || href) + "](" + href + ")";
+  return "- " + codeIdentifiers(title || ref);
+}
+
 export function structuredOutputText(blocks: Record<string, unknown>[]): string {
   return blocks.map((block) => {
     switch (block.type) {
-      case "text": return String(block.text ?? "");
+      case "text": return codeIdentifiers(String(block.text ?? ""));
       case "heading": return "#".repeat(Number(block.level ?? 2)) + " " + String(block.text ?? "");
-      case "list": return (Array.isArray(block.items) ? block.items : []).map((item) => "• " + String(item)).join("\n");
+      case "list": return (Array.isArray(block.items) ? block.items : []).map((item) => "- " + codeIdentifiers(String(item))).join("\n");
       case "table": {
         // Таблица Markdown: клиенты рисуют её как таблицу (сервер сам делает из неё виджет).
         const cell = (v: unknown) => String(v ?? "").replace(/\|/g, "\\|").replace(/\n/g, " ");
@@ -444,10 +469,10 @@ export function structuredOutputText(blocks: Record<string, unknown>[]): string 
         pushSection("Результат", renderBlocks(sections.result));
         pushSection("Что сделано", renderBlocks(sections.work));
         const checks = Array.isArray(sections.checks) ? sections.checks.filter(isObject) : [];
-        pushSection("Проверки", checks.map((check: any) => "• " + String(check.label ?? "") + (check.status ? " — " + String(check.status) : "")).join("\n"));
+        pushSection("Проверки", checks.map((check: any) => "- " + codeIdentifiers(String(check.label ?? "")) + (check.status ? " — " + String(check.status) : "")).join("\n"));
         pushSection("Ограничения", renderBlocks(sections.limitations));
         const materials = Array.isArray(sections.materials) ? sections.materials.filter(isObject) : [];
-        pushSection("Материалы", materials.map((item: any) => "• " + String(item.title ?? item.ref ?? "")).join("\n"));
+        pushSection("Материалы", materials.map(materialLine).join("\n"));
         return parts.join("\n\n");
       }
       case "handoff": return String(block.summary ?? "");
