@@ -21,6 +21,7 @@ function env() {
   process.env.TASKFLOW_TELEGRAM_OWNER_CHAT_ID = "100";
   process.env.TASKFLOW_TELEGRAM_STREAM = "edit";
   process.env.TASKFLOW_TELEGRAM_FINAL = "on";
+  process.env.TASKFLOW_TELEGRAM_QUESTION_WIDGET = "on";
   delete process.env.TASKFLOW_TELEGRAM_REACTIONS;
 }
 
@@ -98,6 +99,13 @@ describe("telegram question widget", () => {
     // Живого виджета со списком кнопок больше нет.
     expect(payload.html).not.toContain("<ul>");
     expect(foldQuestionWidget(questionId)).toBe(0);
+  });
+
+  it("stays silent while TASKFLOW_TELEGRAM_QUESTION_WIDGET is off", () => {
+    delete process.env.TASKFLOW_TELEGRAM_QUESTION_WIDGET;
+    const { questionId } = askedQuestion();
+    expect(captureQuestionWidget(questionId)).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM telegram_delivery_outbox").get()).toMatchObject({ n: 0 });
   });
 
   it("does not fold anything when the widget never reached Telegram", () => {

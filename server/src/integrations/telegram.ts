@@ -201,6 +201,17 @@ export function telegramStreamMode(): "auto" | "draft" | "edit" | "off" {
   return value === "draft" || value === "edit" || value === "off" ? value : "auto";
 }
 
+/**
+ * Вопрос роли уходит в Telegram виджетом. По умолчанию **выключено**
+ * (владелец 11.11.2026): виджет вопроса сейчас отправляет сам Помощник
+ * скриптом роли, и вторая автоматическая отправка дала бы два сообщения.
+ * Включить — `TASKFLOW_TELEGRAM_QUESTION_WIDGET=on`.
+ */
+export function telegramQuestionWidgetEnabled(): boolean {
+  const value = String(process.env.TASKFLOW_TELEGRAM_QUESTION_WIDGET ?? "").trim().toLowerCase();
+  return value === "1" || value === "on" || value === "true" || value === "yes";
+}
+
 /** `draft_id` стабилен на ход и не равен нулю — требование Bot API. */
 export function telegramDraftId(triggerMessageId: string): number {
   let hash = 0x811c9dc5;
@@ -436,6 +447,7 @@ export function telegramStatus() {
  * `kind='ack'`: вопрос не закрывает ход, поэтому «печатает…» не гасится.
  */
 export function captureQuestionWidget(questionId: string): number {
+  if (!telegramQuestionWidgetEnabled()) return 0;
   const question = db
     .prepare("SELECT id,chat_id,message_id,payload_json FROM chat_questions WHERE id=?")
     .get(questionId) as { id: string; chat_id: string; message_id: string | null; payload_json: string } | undefined;
