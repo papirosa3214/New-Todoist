@@ -461,7 +461,7 @@ export function captureQuestionWidget(questionId: string): number {
     enqueueTelegramDelivery({
       kind: "ack",
       chatId: link.chat_id,
-      payload: { method: "sendWidget", widget_html: questionWidgetHtml(payload), height: 260 },
+      payload: { method: "sendWidget", html: questionWidgetHtml(payload), height: 260, allow_queries: false },
       replyToMessageId: link.message_id,
       sourceMessageId: question.message_id,
     });
@@ -516,7 +516,7 @@ export function foldQuestionWidget(questionId: string): number {
     payload: {
       method: "editMessageWidgetData",
       message_id: delivered.telegram_message_id,
-      widget_html: foldedQuestionHtml(payload, answer),
+      html: foldedQuestionHtml(payload, answer),
       height: 120,
     },
     sourceMessageId: question.message_id,

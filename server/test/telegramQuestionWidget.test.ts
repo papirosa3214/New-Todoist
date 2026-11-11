@@ -68,7 +68,8 @@ describe("telegram question widget", () => {
     expect(rows[0].kind).toBe("ack");
     const payload = JSON.parse(rows[0].payload_json);
     expect(payload.method).toBe("sendWidget");
-    expect(payload.widget_html).toContain("Чинить things3?");
+    expect(payload.html).toContain("Чинить things3?");
+    expect(payload.allow_queries).toBe(false);
     // Текст вопроса не уходит отдельным сообщением.
     expect(rows.some((row) => JSON.parse(row.payload_json).method === "sendMessage")).toBe(false);
     // Авто-финал с тем же текстом вопроса тоже не ставится.
@@ -92,10 +93,10 @@ describe("telegram question widget", () => {
     const payload = JSON.parse(edit.payload_json);
     expect(payload.method).toBe("editMessageWidgetData");
     expect(payload.message_id).toBe(777);
-    expect(payload.widget_html).toContain("Вопрос: Чинить things3?");
-    expect(payload.widget_html).toContain("Ответ: Да");
+    expect(payload.html).toContain("Вопрос: Чинить things3?");
+    expect(payload.html).toContain("Ответ: Да");
     // Живого виджета со списком кнопок больше нет.
-    expect(payload.widget_html).not.toContain("<ul>");
+    expect(payload.html).not.toContain("<ul>");
     expect(foldQuestionWidget(questionId)).toBe(0);
   });
 
