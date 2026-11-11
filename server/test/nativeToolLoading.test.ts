@@ -29,7 +29,7 @@ it("в модель уходят группы по объектам и отде�
   // Прежние имена остаются в реестре сессии и подключаются автоматически.
   expect(catalog.registeredNames).toContain("taskflow_recall");
   expect(catalog.registeredNames).toContain(TOOL_LOADER_NAME);
-  expect(catalog.customTools.map(tool=>tool.name)).toContain("taskflow");
+  expect(catalog.customTools.map(tool=>tool.name)).not.toContain("taskflow");
 });
 
 it("загрузчик подключает операцию по имени и отдаёт индекс остальных",async()=>{

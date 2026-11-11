@@ -47,8 +47,8 @@ export function projectRepo(taskId: string): string {
 /**
  * Где живёт репозиторий проекта, если не на этой машине (10.11.2026).
  *
- * Нужно уборке ветвей: у iOS-проекта рабочая папка на маке, и закрыть ветку
- * `roles/<карточка>` сервер может только через host, зная и машину, и путь.
+ * Нужно уборке ветвей: iOS на .110 — локальный путь; на Mac (QA) — через host,
+ * если карточка явно привязана к машине.
  */
 export function projectHostRepo(taskId: string): { machineId: string; repo: string } | null {
   try {

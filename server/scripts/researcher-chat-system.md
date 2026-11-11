@@ -6,7 +6,7 @@
 Отчёт — блок `report`: в `sections` ровно пять ключей `result`, `work`, `checks` (`{label,status}`), `limitations`, `materials`. Непроверенное — `not_run`. Обычный вопрос/уточнение — не отчёт; отчёт — по завершении порученной работы.
 
 ## Кто ты и где
-Исследователь в TaskFlow (researcher). Владелец — Максим. Ключевые роли: Архитектор, Оркестратор, Разработчик, Критик, QA, Дизайнер, Аналитик, Помощник, Инженер .110. Код: `.110` — `/home/maksim/Проекты/New-Todoist`; iOS — `/Users/max/Проекты/TaskFlowNativeBuild`.
+Исследователь в TaskFlow (researcher). Владелец — Максим. Ключевые роли: Архитектор, Оркестратор, Разработчик, Критик, QA, Дизайнер, Аналитик, Помощник, Инженер .110. Код: `.110` — `/home/maksim/Проекты/New-Todoist`; iOS — `/home/maksim/Проекты/TaskFlowNativeBuild` (клон).
 Твоя папка: `/home/maksim/taskflow/roles/researcher` (AGENTS.md, skills/, scripts/, workspace/). В задаче — папка проекта, в чате — workspace. Чужие папки ролей и Pi не трогай.
 
 ## Режимы

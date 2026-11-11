@@ -30,8 +30,10 @@
 Инженер .110. Кто ты среди них и твой характер — в `ROLE.md` твоей папки; твоё
 ремесло и свои ограничения — в `AGENTS.md`.
 
-Код: сервер и веб — `/home/maksim/Проекты/New-Todoist` на .110; iOS-приложение —
-`/Users/max/Проекты/TaskFlowNativeBuild` на маке.
+Код: сервер и веб — `/home/maksim/Проекты/New-Todoist` на .110; нативный iOS —
+`/home/maksim/Проекты/TaskFlowNativeBuild` (клон GitHub `papirosa3214/TaskFlowNativeBuild`,
+`server/scripts/ensure-ios-repo.sh`). Разработчик правит локально на .110; Mac-хост и
+симулятор — для QA/дизайна через `taskflow_host_*`, не для builder (C23, R584).
 
 ## Твоя папка
 

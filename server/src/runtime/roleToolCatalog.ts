@@ -18,6 +18,17 @@ import {MISTAKE_LIMIT,stopRoleOnErrorLoop} from "./errorLoopStop.js";
 import {createToolLoader,onDemandScopeKey,onDemandTools,rememberOnDemandTool,TOOL_LOADER_NAME} from "./nativeToolLoader.js";
 import {createRoleSubagentCallTool,createRoleSubagentSteerTool,isSubagentRun,resetSubagentCallCounters,ROLE_SUBAGENT_CALL_TOOL,ROLE_SUBAGENT_STEER_TOOL} from "./roleSubagentCall.js";
 import {createSecretaryOpenBranchTool} from "./secretaryVoiceBranch.js";
+import {getSetting} from "../lib/serverSettings.js";
+
+/** Legacy universal taskflow в customTools (operation/arguments). По умолчанию выкл. */
+export function piLegacyTaskflowGateway(mode?: string): boolean {
+  return mode === "voice" || Boolean(getSetting("pi_legacy_taskflow_gateway"));
+}
+
+export function roleToolUiNames(role: string): string[] {
+  const catalog = buildRoleToolCatalog({ role, mode: "work", runId: "ui-tools" });
+  return catalog.activeNames.filter((name) => name !== "taskflow");
+}
 export {UNIVERSAL_INSTRUCTION};
 /** Текст инструкции инструментов. Единственный источник — реестр инструкций
  *  (владелец 08.11.2026): код-запасной литерал убран, чтобы у одного правила
@@ -136,7 +147,8 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  ? [createRoleSubagentSteerTool(context)] : [];
  // Новый ход роли — счётчик вызовов субагента сбрасывается: лимит «3 за ход».
  if(subagentCallTools.length)resetSubagentCallCounters(input.role,input.chatId??"");
- const allOperations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input),...hostTools,...archifyTools,...openBranchTools,...subagentCallTools,...subagentSteerTools,...adapters];
+ const allowed=(tool:Tool)=>roleToolAllowed(input.role,tool.name);
+ const allOperations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input).filter(allowed),...hostTools.filter(allowed),...archifyTools,...openBranchTools,...subagentCallTools,...subagentSteerTools,...adapters];
  // Чат задачи: чужую карточку, документ и коллегу пускает только слово владельца.
  // Один набор во всех режимах (владелец 07.11.2026): чат задачи больше не урезается.
  const operations=allOperations;
@@ -294,7 +306,10 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  // сервисы (Todoist, Composio, Things) остаются в реестре сессии и подключаются
  // через taskflow_tools — по имени или по смыслу задачи.
  const activeNames=[...standalone.filter(tool=>staysActive(tool.name)).map(tool=>tool.name),...grouped.tools.map(tool=>tool.name),batch.name,loader.tool.name];
- return {activeNames,registeredNames:[...aliases.map(tool=>tool.name),...grouped.tools.map(tool=>tool.name),batch.name,loader.tool.name],customTools:[universal,...aliases,...grouped.tools,batch,loader.tool],operations,context,scope,loader,onToolExecutionEnd,onAgentEvent,autoConnected,
+ const legacy=piLegacyTaskflowGateway(input.mode);
+ const sessionTools=[...aliases,...grouped.tools,batch,loader.tool];
+ const customTools=legacy?[universal,...sessionTools]:sessionTools;
+ return {activeNames,registeredNames:[...aliases.map(tool=>tool.name),...grouped.tools.map(tool=>tool.name),batch.name,loader.tool.name],customTools,operations,context,scope,loader,onToolExecutionEnd,onAgentEvent,autoConnected,
   attachSession:(session:any)=>loader.attach(session)};
 }
 
