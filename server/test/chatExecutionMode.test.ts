@@ -7,16 +7,16 @@ import {chatExecutionMode} from "../src/runtime/chatExecutionMode.js";
 import {buildRoleToolCatalog} from "../src/runtime/roleToolCatalog.js";
 import {runVoiceTool} from "../src/lib/secretaryVoiceTools.js";
 import {registerChatSteering,offerChatSteering} from "../src/runtime/chatSteering.js";
+import {getSetting,setSetting} from "../src/lib/serverSettings.js";
 
 function withLegacyGateway<T>(run: () => T): T {
-  const key = "TASKFLOW_SETTING_PI_LEGACY_TASKFLOW_GATEWAY";
-  const prev = process.env[key];
-  process.env[key] = "true";
+  const key = "pi_legacy_taskflow_gateway" as const;
+  const prev = getSetting(key);
+  setSetting(key, true);
   try {
     return run();
   } finally {
-    if (prev === undefined) delete process.env[key];
-    else process.env[key] = prev;
+    setSetting(key, prev);
   }
 }
 
@@ -90,8 +90,12 @@ describe("chat/card execution boundary",()=>{
   await mode("chat");const online=await send("Работай в чате");
   await mode("card");const card=await send("Оформи работу по карточке");
   const make=(m:any)=>legacyCatalog({role:"secretary",mode:"work",runId:m.id,chatId:chat.id,messageId:m.id});
-  expect(make(online).customTools.map(t=>t.name)).not.toContain("taskflow_create_task");
-  expect(make(card).customTools.map(t=>t.name)).toContain("taskflow_create_task");
+  const discover=async(catalog:any,query:string)=>{
+   const text=(await gatewayTool(catalog).execute("find-"+query,{action:"discover",query,limit:20})).content[0].text;
+   return JSON.parse(text).data.operations.map((x:any)=>x.operation);
+  };
+  expect(await discover(make(online),"taskflow_create_task")).not.toContain("taskflow_create_task");
+  expect(await discover(make(card),"taskflow_create_task")).toContain("taskflow_create_task");
   expect(make(card).context.executionMode).toBe("card");
   await mode("chat");
   expect(make(card).context.executionMode).toBe("card");
@@ -109,8 +113,7 @@ describe("chat/card execution boundary",()=>{
  });
  it("uses the same restriction through the real voice gateway",async()=>{
   const msg=await send("Сделай это здесь голосом");
-  const result=await runVoiceTool(owner.user.id,"taskflow",{operation:"taskflow_create_task",arguments:{}},{chatId:chat.id,messageId:msg.id});
-  expect(JSON.parse(result.result).error.code).toBe("EXECUTION_MODE_RESTRICTED");
+  await expect(runVoiceTool(owner.user.id,"taskflow_create_task",{},{chatId:chat.id,messageId:msg.id})).rejects.toThrow(/EXECUTION_MODE_RESTRICTED|Выбран режим/);
  });
  it("allows an explicit owner handoff for one message and preserves the room selection",async()=>{
   await mode("chat");const msg=await send("Оформить как карточку");
