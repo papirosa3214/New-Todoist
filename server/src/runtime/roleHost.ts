@@ -44,10 +44,10 @@ export function resolveRoleHost(taskId: string, subtaskId?: string | null, role?
 }
 
 /**
- * Машина роли по умолчанию (roleDefaults в task-context-hosts.json): разработчик
- * iOS-клиента собирает на маке через хоста, а не в отдельной копии через
- * ssh-шлюз (владелец 15.10.2026). Только если у проекта задачи на этой машине
- * есть путь — иначе роль, как и раньше, работает на .110.
+ * Машина роли по умолчанию (roleDefaults в task-context-hosts.json): QA/дизайнер
+ * на Mac при необходимости. Разработчик с 11.11.2026 — на .110, клон iOS
+ * (ensure-ios-repo.sh), без Mac-хоста. Только если у проекта задачи на этой
+ * машине есть путь — иначе роль работает на .110.
  */
 function roleDefaultHost(taskId: string, role: string): string | null {
   try {
