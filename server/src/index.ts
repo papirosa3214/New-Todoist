@@ -83,6 +83,7 @@ import { registerManualRunRoutes } from "./routes/manual-run.js";
 import { registerControlRoutes } from "./routes/control.js";
 import { registerRetryRoutes } from "./routes/retry.js";
 import { registerConsultationRoutes } from "./routes/consultation.js";
+import { registerRoleRulesRoutes } from "./routes/roleRules.js";
 import { registerEmbeddingsRoutes } from "./routes/embeddings.js";
 import { registerEnrichSemanticRoutes } from "./routes/enrichSemantic.js";
 import { registerProjectLabelRoutes } from "./routes/projects.js";
@@ -595,6 +596,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerManualRunRoutes(app);
   registerRetryRoutes(app);
   registerConsultationRoutes(app);
+  registerRoleRulesRoutes(app);
   registerEmbeddingsRoutes(app);
   registerEnrichSemanticRoutes(app);
   registerEnrichmentRoutes(app);

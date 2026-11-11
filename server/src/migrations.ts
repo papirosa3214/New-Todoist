@@ -6453,6 +6453,19 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "217_role_rule_overrides",
+    description: "Реестр правил: переопределения владельца (включить/выключить, адресаты, рекомендация) и пояснения простым языком",
+    up: () => {
+      db.exec(`CREATE TABLE IF NOT EXISTS role_rule_overrides (
+        id TEXT PRIMARY KEY, active INTEGER NULL, roles_json TEXT NULL,
+        recommended INTEGER NOT NULL DEFAULT 0, updated_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS role_rule_explanations (
+        id TEXT PRIMARY KEY, text_hash TEXT, explanation TEXT, created_at TEXT
+      )`);
+    },
+  },
 
 ];
 /**

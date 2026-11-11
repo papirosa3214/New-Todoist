@@ -2,6 +2,7 @@
 // Читается с кешем по mtime: правка файла подхватывается без рестарта.
 import fs from "node:fs";
 import path from "node:path";
+import db from "../db.js";
 import { getSetting } from "./serverSettings.js";
 
 export type RuleChannel = "chat" | "card" | "voice";
@@ -61,14 +62,47 @@ export function loadRoleRules(): RoleRule[] {
 const isPlaceholder = (r: RoleRule) => r.kind === "data" && /^\{\{[A-Z]+\}\}$/.test(r.text.trim());
 const rank = (r: RoleRule) => Math.max(0, INCLUDED_CATEGORIES.indexOf(r.category.startsWith("данные") ? "общий шаблон" : r.category));
 
-/** Правила роли в канале: только включённые категории; data — лишь строки-плейсхолдеры подстановки. */
+export type RuleOverride = { active: boolean | null; roles: "all" | string[] | null; recommended: boolean };
+/** Переопределения владельца из role_rule_overrides (экран «Реестр правил»). Файл правил приложение не переписывает. */
+export function loadRuleOverrides(): Map<string, RuleOverride> {
+  const out = new Map<string, RuleOverride>();
+  let rows: Array<{ id: string; active: number | null; roles_json: string | null; recommended: number }> = [];
+  try { rows = db.prepare("SELECT id, active, roles_json, recommended FROM role_rule_overrides").all() as typeof rows; } catch { return out; }
+  for (const r of rows) {
+    let roles: RuleOverride["roles"] = null;
+    if (r.roles_json) {
+      try { const v = JSON.parse(r.roles_json); if (v === "all" || (Array.isArray(v) && v.every((x) => typeof x === "string"))) roles = v; } catch { /* битое — без замены */ }
+    }
+    out.set(r.id, { active: r.active === null ? null : r.active === 1, roles, recommended: r.recommended === 1 });
+  }
+  return out;
+}
+
+/** Правило с наложенной заменой адресатов. */
+export function withOverride(r: RoleRule, ov: RuleOverride | undefined): RoleRule {
+  return ov?.roles ? { ...r, roles: ov.roles } : r;
+}
+
+/** Доходит ли правило до ролей (без учёта конкретной роли и канала). */
+export function ruleActive(r: RoleRule, ov?: RuleOverride): boolean {
+  if (ov?.active === true) return true;
+  if (ov?.active === false) return false;
+  return r.enabled !== false &&
+    (INCLUDED_CATEGORIES.includes(r.category) || isPlaceholder(r)) &&
+    (r.kind !== "data" || isPlaceholder(r));
+}
+
+/** Правила роли в канале: только включённые категории; data — лишь строки-плейсхолдеры подстановки.
+ *  Поверх — переопределения владельца: active=1 включает, active=0 выключает, roles заменяет адресатов. */
 export function rulesFor(role: string, channel: RuleChannel): RoleRule[] {
-  const picked = loadRoleRules().filter((r) =>
-    r.enabled !== false &&
-    (INCLUDED_CATEGORIES.includes(r.category) || (isPlaceholder(r))) &&
-    (r.kind !== "data" || isPlaceholder(r)) &&
-    (r.roles === "all" || r.roles.includes(role)) &&
-    (r.channels ?? ALL_CHANNELS).includes(channel));
+  const overrides = loadRuleOverrides();
+  const picked = loadRoleRules()
+    .map((r) => ({ r: withOverride(r, overrides.get(r.id)), ov: overrides.get(r.id) }))
+    .filter(({ r, ov }) =>
+      ruleActive(r, ov) &&
+      (r.roles === "all" || r.roles.includes(role)) &&
+      (r.channels ?? ALL_CHANNELS).includes(channel))
+    .map(({ r }) => r);
   // Порядок источников сохраняется; категории идут блоками: шаблон, личные, характер, новое.
   return picked.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i).map((x) => x.r);
 }
