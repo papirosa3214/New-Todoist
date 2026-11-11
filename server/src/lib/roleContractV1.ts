@@ -867,8 +867,12 @@ export function salvageMarkdownFromJsonParseFailure(error: unknown, partialText 
   const partial = partialText.trim();
   if (partial && !/^\s*[{[]/.test(partial)) return partial;
   const message = error instanceof Error ? error.message : String(error ?? "");
-  const snippet = /Unexpected token [^,]*, "([\s\S]*?)" is not valid JSON/.exec(message);
-  if (snippet?.[1]?.trim() && !snippet[1].trim().startsWith("{")) return snippet[1];
+  // Node: Unexpected token '#', "## Результ"... is not valid JSON
+  const snippet = /Unexpected token [^,]*, "([\s\S]*?)"(?:\.\.\.)?\s*is not valid JSON/.exec(message);
+  const recovered = snippet?.[1]?.trim() ?? "";
+  if (recovered && !recovered.startsWith("{") && !recovered.startsWith("[")) {
+    return partial || recovered;
+  }
   return partial || null;
 }
 

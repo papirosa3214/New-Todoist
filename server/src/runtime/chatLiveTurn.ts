@@ -24,7 +24,11 @@ import crypto from "node:crypto";
 import { sourcedChatBlocks, type ChatBlock } from "../lib/chatBlocks.js";
 import { liveDeltaOps, type LiveView } from "./chatLiveDelta.js";
 import { broadcastToUsers } from "../ws.js";
-import { unwrapRoleEnvelopeText } from "../lib/roleContractV1.js";
+import {
+  isJsonParseFailure,
+  salvageMarkdownFromJsonParseFailure,
+  unwrapRoleEnvelopeText,
+} from "../lib/roleContractV1.js";
 import { TurnFileTracker, type TurnCodeChanges } from "../lib/turnFileChanges.js";
 import { emptyAssistantAnswer } from "./providerFailover.js";
 import { LIVE_DRAFT_MS, beginLiveDraft, finishLiveDraft, saveLiveDraft } from "./chatLiveDraft.js";
@@ -1028,6 +1032,11 @@ export function chatRunFailureText(error: unknown): string {
     return `Остановил ход: работа шла дольше ${min} мин. Напишите, если продолжить.`;
   }
   const message = error instanceof Error ? error.message : String(error ?? "");
+  if (isJsonParseFailure(error)) {
+    const salvaged = salvageMarkdownFromJsonParseFailure(error);
+    if (salvaged) return salvaged;
+    return "Ответ пришёл текстом, не JSON. Сервер должен был обернуть его в text-блок.";
+  }
   const firstLine = message.split("\n")[0].replace(/\s*Stderr:.*$/, "").trim();
   return `Не смог ответить: ${clip(redactSecrets(firstLine || "неизвестная ошибка"))}`;
 }
