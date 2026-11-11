@@ -87,10 +87,14 @@ describe("реестр: подключение", () => {
     expect(loader.getAgentsFiles().agentsFiles).toHaveLength(0);
     expect(loader.getSystemPrompt() ?? "").not.toContain(MARKER);
   });
-  it("исключение: текстовый чат secretary и researcher остаётся на коротких файлах", async () => {
-    for (const role of ["secretary", "researcher"]) {
-      expect(await chatSystemPrompt(role, "work", roleHome(role).workspace)).toBe(singleChatSystemPrompt(role));
-    }
+  it("исключение: текстовый чат researcher остаётся на коротком файле", async () => {
+    expect(await chatSystemPrompt("researcher", "work", roleHome("researcher").workspace)).toBe(singleChatSystemPrompt("researcher"));
+  });
+  // Владелец 11.11.2026: «давай присоединяй её уже к реестру».
+  it("текстовый чат secretary собирается из реестра правил, а не из secretary-chat-system.md", async () => {
+    const prompt = await chatSystemPrompt("secretary", "work", roleHome("secretary").workspace);
+    expect(prompt.startsWith(buildRegistryRules("secretary", "chat").text)).toBe(true);
+    expect(prompt).not.toContain("# Системная инструкция: Помощник владельца (secretary)");
   });
   it("выключатель false → прежний путь (SYSTEM.md + AGENTS.md + behavior)", async () => {
     setSetting("role_registry_enabled", false, null);

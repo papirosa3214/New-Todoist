@@ -3,10 +3,10 @@ import fs from "node:fs";
 /**
  * Роли, у которых в текстовом чате одна выбранная владельцем инструкция, без
  * общего канона, AGENTS.md и серверных дополнений. Исследователь — с 05.11.2026
- * (сжатие Qwen по слову владельца), Помощник — с 04.11.2026.
+ * (сжатие Qwen по слову владельца). Помощник был здесь с 04.11.2026, 11.11.2026
+ * переведён на реестр правил («давай присоединяй её уже к реестру»).
  */
 const SINGLE_CHAT_SYSTEM:Record<string,string>={
- secretary:"secretary-chat-system.md",
  researcher:"researcher-chat-system.md",
 };
 export function hasSingleChatSystem(role:string):boolean { return Object.hasOwn(SINGLE_CHAT_SYSTEM,role); }
@@ -17,8 +17,6 @@ export function singleChatSystemPrompt(role:string):string {
  if(!text.trim())throw new Error("Chat system instruction is empty: "+role);
  return text;
 }
-/** Sole owner-controlled system instruction for secretary text chat. No fallback to the common canon. */
-export function secretaryChatPrompt():string { return singleChatSystemPrompt("secretary"); }
 export function chatTurnSystemText(role:string,base:string,extras:string[]):string {
  return hasSingleChatSystem(role) ? base : [base,...extras.filter(Boolean)].join("\n\n");
 }

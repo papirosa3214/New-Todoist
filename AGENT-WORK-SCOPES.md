@@ -24,6 +24,9 @@
 
 # Реестр активных работ по серверу
 
+| LOCK-SECRETARY-CHAT-REGISTRY-20261111 | REVIEW | ROLE-REGISTRY | Помощник в текстовом чате получает системную инструкцию из реестра правил, как остальные роли; `secretary` убран из списка ролей с отдельным файлом. Исследователь и обёртка хода Помощника не меняются | `AGENT-WORK-SCOPES.md`, `server/src/runtime/secretaryChatPrompt.ts`, `server/test/secretarySinglePrompt.test.ts`, `server/test/roleRegistryPrompt.test.ts` | Владелец 11.11.2026: «давай присоединяй её уже к реестру» | Claude Code | СДЕЛАНО 11.11.2026: RED→GREEN `secretarySinglePrompt` + `roleRegistryPrompt` 15/15; неиспользуемая `secretaryChatPrompt()` удалена (вызывала бы файл). Файл secretary-chat-system.md в репозитории оставлен, сервер его больше не читает. Сверх задачи: ничего |
+
+
 | LOCK-PROMPT-CONTEXT-ALL-ROLES-20261111 | REVIEW | PROMPT-AUDIT | Журнал того, что реально уходит модели, — для всех ролей: на каждый запрос к провайдеру системный текст, список инструментов и приложенный к сообщению ход; latest.md на роль; срок хранения 14 дней; сторож пробной записью. Полный архив Помощника не меняется | `AGENT-WORK-SCOPES.md`, `server/src/runtime/promptAudit.ts`, `server/src/index.ts`, `server/test/promptAudit.test.ts`, `docs/watchers.md` | Владелец 11.11.2026: «журналы всем поставь, чтобы я видел, какой контекст им идёт» | Claude Code | СДЕЛАНО 11.11.2026: RED→GREEN `promptAudit.test.ts` 4/4; сводка на каждый запрос любой роли, latest.md на роль, 14 дней, сторож пробной записью. Сверх задачи: ничего |
 
 
