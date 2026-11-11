@@ -58,8 +58,9 @@ export const SUBAGENT_CALL_LIMIT = 3;
 export const SUBAGENT_STEER_LIMIT = 3;
 /** Ответ длиннее этого обрезается — иначе он съест контекст вызывающей роли. */
 export const SUBAGENT_ANSWER_LIMIT = 16000;
-/** Потолок хода субагента. */
-export const SUBAGENT_TIMEOUT_MS = 10 * 60_000;
+/** Потолок хода субагента. 0 — без потолка: дочерняя сессия живёт, пока
+ *  модель не закончит (владелец 11.11.2026: ход в ветке не обрывать). */
+export const SUBAGENT_TIMEOUT_MS = 0;
 
 export type SubagentRunInput = {
   role: string;

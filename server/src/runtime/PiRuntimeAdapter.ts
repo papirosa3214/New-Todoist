@@ -1343,6 +1343,9 @@ export const CHAT_RUN_IDLE_MS = 0;
 export const CHAT_RUN_CEILING_MS = 30 * 60_000;
 
 function resolveChatRunTimeout(override?: number): number {
+  // Явный 0 — «без потолка»: ход идёт, пока модель не закончит или пока
+  // владелец не остановит (дочерняя сессия, карточки 11.11.2026).
+  if (override === 0) return 0;
   const raw =
     override && override > 0
       ? override
@@ -1803,6 +1806,8 @@ async function startChatRunOnce(
     // 30-минутный потолок оборвал бы долгую цель посередине.
     const armCeiling = () => {
       clearTimeout(ceilingTimer);
+      // timeoutMs === 0 — потолка нет: обещание, которое не срабатывает.
+      if (timeoutMs <= 0) return new Promise<never>(() => {});
       const ceiling = new Promise<never>((_, reject) => {
         ceilingTimer = setTimeout(() => {
           stopChatWorkPlan(input.chatId, input.roleId, "budget_exhausted");
@@ -2020,6 +2025,8 @@ async function runExternalChat(
           : input.prompt,
       ),
       new Promise<never>((_, reject) => {
+        // timeoutMs === 0 — потолка нет (дочерняя сессия, 11.11.2026).
+        if (timeoutMs <= 0) return;
         ceilingTimer = setTimeout(() => {
           void session.abort();
           reject(new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs));
