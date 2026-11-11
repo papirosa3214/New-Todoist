@@ -205,9 +205,34 @@ describe("Шлюз хостов: подключение, операции, от�
 
     expect(результат.ok).toBe(true);
     expect(куски).toEqual(["строка\n"]);
+    // Кадр и поле результата совпали — текст один, не дважды.
+    expect((результат as { stdout?: string }).stdout).toBe("строка\n");
     // Сервер должен отдать хосту ровно тот вызов, который запросили.
     expect(хост.of("op")[0].op).toBe("bash");
     expect(хост.of("op")[0].args.command).toBe("echo строка");
+  });
+
+  it("пустой stdout в op_result не стирает текст, пришедший кадрами", async () => {
+    const { machine, token } = issueMachineKey({ name: "mac-кадры", allowedRoots: ["/Users/max"] });
+    const хост = await FakeHost.подключиться(url, { key: token });
+    хосты.push(хост);
+    await хост.ждать("welcome");
+    хост.ответить = (op) => {
+      хост.socket.send(JSON.stringify({ type: "op_chunk", opId: op.opId, stream: "stdout", data: "commit 649f627\n" }));
+      хост.socket.send(JSON.stringify({ type: "op_chunk", opId: op.opId, stream: "stdout", data: "main\n" }));
+      хост.socket.send(JSON.stringify({ type: "op_chunk", opId: op.opId, stream: "stderr", data: "warn\n" }));
+      // Живой хост кладёт текст в кадры, а в op_result оставляет пустые строки.
+      хост.socket.send(JSON.stringify({
+        type: "op_result", opId: op.opId, ok: true, exitCode: 0, stdout: "", stderr: "",
+      }));
+    };
+
+    const результат = await runOperation(machine.id, "bash", { command: "git log -1" });
+
+    expect(результат.ok).toBe(true);
+    expect((результат as { stdout?: string; stderr?: string; exitCode?: number }).exitCode).toBe(0);
+    expect((результат as { stdout?: string }).stdout).toBe("commit 649f627\nmain\n");
+    expect((результат as { stderr?: string }).stderr).toBe("warn\n");
   });
 
   it("отмена доходит до хоста, а вызов падает ошибкой отмены, а не висит", async () => {
