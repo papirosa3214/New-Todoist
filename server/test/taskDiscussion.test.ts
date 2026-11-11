@@ -77,6 +77,7 @@ import db, { migrate } from "../src/db.js";
 import { runMigrations } from "../src/migrations.js";
 import { seedRoleAccounts } from "./helpers/seedOwner.js";
 import { buildRoleToolCatalog } from "../src/runtime/roleToolCatalog.js";
+import { getSetting, resetSetting, setSetting } from "../src/lib/serverSettings.js";
 import { operationRestriction } from "../src/runtime/universalTaskflow.js";
 import {
   acceptsReplies,
@@ -227,7 +228,7 @@ describe("обсуждение карточки: read-only и изоляция",
     expect(result.ok).toBe(true);
     expect(harness.registered).toContain("taskflow_projects");
     expect(harness.active).toContain("taskflow_batch");
-    expect(harness.active).not.toContain("taskflow_tools");
+    expect(harness.active).toContain("taskflow_tools");
   });
 
   for (const native of [false,true]) it(`integration: discussion error guard never blocks work (${native ? "native" : "gateway"})`, async () => {
@@ -237,12 +238,16 @@ describe("обсуждение карточки: read-only и изоляция",
     db.prepare("UPDATE subtasks SET current_attempt_id=?,agent_state='in_progress' WHERE id=?").run(attemptId,SLOT);
     const before=db.prepare("SELECT agent_state,current_attempt_id FROM subtasks WHERE id=?").get(SLOT);
     const stopped=vi.fn();
+    const legacyKey = "pi_legacy_taskflow_gateway" as const;
+    const legacyPrev = getSetting(legacyKey);
+    if (!native) setSetting(legacyKey, true, "test");
     const catalog=buildRoleToolCatalog({role:"builder",mode:"task_discussion",runId:attemptId,taskId:TASK,subtaskId:SLOT,onErrorLoop:stopped} as any);
     try {
       for(let i=0;i<3;i++) {
         if(native)catalog.onToolExecutionEnd({type:"tool_execution_end",toolCallId:"isolated-"+i,toolName:"taskflow_task",isError:true,result:{content:[{type:"text",text:"  - /id: Expected string, received number"}]}});
         else {
-          const universal=catalog.customTools.find(tool=>tool.name==="taskflow")!;
+          const universal=catalog.customTools.find(tool=>tool.name==="taskflow");
+          if (!universal) throw new Error("legacy taskflow gateway missing in catalog");
           const result=await universal.execute("isolated-"+i,{action:"invoke",operation:"taskflow_task",version:1,arguments:{id:42},request_id:attemptId+":"+i});
           expect(JSON.parse(result.content[0].text).error.code).toBe("INVALID_ARGUMENTS");
         }
@@ -252,6 +257,8 @@ describe("обсуждение карточки: read-only и изоляция",
       expect(db.prepare("SELECT ended_at FROM attempts WHERE id=?").get(attemptId)).toEqual({ended_at:null});
       expect(stopped).toHaveBeenCalled();
     } finally {
+      if (!native) resetSetting(legacyKey, "test");
+      else if (legacyPrev !== getSetting(legacyKey)) setSetting(legacyKey, legacyPrev, "test");
       db.prepare("UPDATE subtasks SET current_attempt_id=NULL,agent_state='in_progress' WHERE id=?").run(SLOT);
     }
   });
