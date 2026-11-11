@@ -8,6 +8,28 @@ import {buildRoleToolCatalog} from "../src/runtime/roleToolCatalog.js";
 import {runVoiceTool} from "../src/lib/secretaryVoiceTools.js";
 import {registerChatSteering,offerChatSteering} from "../src/runtime/chatSteering.js";
 
+function withLegacyGateway<T>(run: () => T): T {
+  const key = "TASKFLOW_SETTING_PI_LEGACY_TASKFLOW_GATEWAY";
+  const prev = process.env[key];
+  process.env[key] = "true";
+  try {
+    return run();
+  } finally {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  }
+}
+
+function legacyCatalog(...args: Parameters<typeof buildRoleToolCatalog>) {
+  return withLegacyGateway(() => buildRoleToolCatalog(...args));
+}
+
+function gatewayTool(catalog: ReturnType<typeof buildRoleToolCatalog>) {
+  const tool = catalog.customTools.find((t) => t.name === "taskflow");
+  if (!tool) throw new Error("legacy taskflow gateway missing in catalog");
+  return tool;
+}
+
 describe("chat/card execution boundary",()=>{
  let app:any,owner:any,other:any,chat:any;
  const auth=(u:any)=>({authorization:`Bearer ${u.token}`});
@@ -51,8 +73,8 @@ describe("chat/card execution boundary",()=>{
  });
  it("blocks hidden and direct card operations without losing coding/docs/plan tools",async()=>{
   const msg=await send("Исправь код прямо здесь");
-  const catalog=buildRoleToolCatalog({role:"secretary",mode:"work",runId:"mode-chat",chatId:chat.id,messageId:msg.id});
-  const tool=catalog.customTools[0];
+  const catalog=legacyCatalog({role:"secretary",mode:"work",runId:"mode-chat",chatId:chat.id,messageId:msg.id});
+  const tool=gatewayTool(catalog);
   const found=JSON.parse((await tool.execute("find",{action:"discover",query:""})).content[0].text);
   const names=found.data.operations.map((x:any)=>x.operation);
   for(const name of ["taskflow_create_task","taskflow_work_start","taskflow_subtask_add","taskflow_claim","taskflow_plan_request"]){
@@ -67,7 +89,7 @@ describe("chat/card execution boundary",()=>{
  it("snapshots accepted messages so later switching does not change their permissions",async()=>{
   await mode("chat");const online=await send("Работай в чате");
   await mode("card");const card=await send("Оформи работу по карточке");
-  const make=(m:any)=>buildRoleToolCatalog({role:"secretary",mode:"work",runId:m.id,chatId:chat.id,messageId:m.id});
+  const make=(m:any)=>legacyCatalog({role:"secretary",mode:"work",runId:m.id,chatId:chat.id,messageId:m.id});
   expect(make(online).customTools.map(t=>t.name)).not.toContain("taskflow_create_task");
   expect(make(card).customTools.map(t=>t.name)).toContain("taskflow_create_task");
   expect(make(card).context.executionMode).toBe("card");
@@ -103,8 +125,8 @@ describe("chat/card execution boundary",()=>{
  });
  it("planning remains read-only even with card execution selected",async()=>{
   await mode("card");const msg=await send("Сначала только план");
-  const catalog=buildRoleToolCatalog({role:"secretary",mode:"plan",runId:"mode-plan-card",chatId:chat.id,messageId:msg.id});
-  expect((await invoke(catalog.customTools[0],"taskflow_create_task","plan-card-deny")).error.code).toBe("MODE_RESTRICTED");
+  const catalog=legacyCatalog({role:"secretary",mode:"plan",runId:"mode-plan-card",chatId:chat.id,messageId:msg.id});
+  expect((await invoke(gatewayTool(catalog),"taskflow_create_task","plan-card-deny")).error.code).toBe("MODE_RESTRICTED");
   await mode("chat");
  });
  it("does not steer a card request into an online run",async()=>{
