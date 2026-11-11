@@ -160,3 +160,7 @@ kb-state/
 
 # Граф graft сервера — генерируется, в репозиторий не идёт
 server/graft/
+
+# Кэши: байткод Python и индекс graphify
+__pycache__/
+graphify-out/cache/

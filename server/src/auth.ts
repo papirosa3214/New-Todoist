@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import db, { hashApiToken } from "./db.js";
+import { devicesCheckSkipped } from "./lib/devicesCheck.js";
 import { isOrchestrator, isSecretary } from "./access.js";
 import { isServiceUser } from "./serviceUser.js";
 import { touchActive } from "./activeAgent.js";
@@ -100,7 +101,9 @@ export function resolveUserId(
   // миграции 036, а 141 — позже. Без try/catch такая база роняла бы
   // авторизацию целиком (500 на каждом запросе с ключом). Отсутствующая
   // таблица означает ровно одно: устройства в этой базе ещё не заводились.
-  if (devicesTableMissing) return null;
+  if (devicesCheckSkipped(devicesTableMissing, devicesTableMissingSince, Date.now())) {
+    return null;
+  }
   try {
     const device = db
       .prepare(
@@ -109,6 +112,9 @@ export function resolveUserId(
       .get(hashApiToken(token)) as
       | { id: string; user_id: string; last_seen_at: string | null }
       | undefined;
+    // Запрос прошёл — значит таблица на месте; память об ошибке снимаем.
+    devicesTableMissing = false;
+    devicesTableMissingSince = 0;
     if (!device) return null;
     touchDevice(device.id, device.last_seen_at);
     return { userId: device.user_id, via: "device", deviceId: device.id };
@@ -117,11 +123,13 @@ export function resolveUserId(
     // на процесс, а не на каждый запрос: «нет таблицы» и «нет такой строки»
     // для авторизации одно и то же (входа нет).
     devicesTableMissing = true;
+    devicesTableMissingSince = Date.now();
     return null;
   }
 }
 
 let devicesTableMissing = false;
+let devicesTableMissingSince = 0;
 
 /**
  * Отметка «когда устройство видели» пишется не на каждый запрос.
@@ -168,15 +176,10 @@ function isLanRequest(req: FastifyRequest): boolean {
 /**
  * Запрос сделан из браузера, а не скриптом?
  *
- * Браузер обязан присылать метаданные запроса: `Sec-Fetch-*` (все движки
- * с 2020 года), `Origin`/`Referer` у fetch с фронта и `User-Agent: Mozilla/...`.
- * `curl`, `urllib`, `requests` не шлют ничего из этого, пока им об этом
- * специально не попросят.
+ * Браузер шлёт `Sec-Fetch-*`. `curl`/`requests` — нет, пока специально не попросить.
  *
- * По адресу браузер от скрипта не отличить: фронт ходит через прокси Vite
- * (`vite.config.ts`, `/api → localhost:3001`), поэтому запрос Максима с
- * телефона приходит на сервер с того же 127.0.0.1, что и запрос локального
- * скрипта. Заголовки — единственный разделитель, который тут есть.
+ * По адресу клиент от скрипта не отличить: iPhone в LAN и агент на .110
+ * могут прийти с одной частной сети. Заголовки — разделитель.
  *
  * ⚠️ Что именно считаем признаком браузера (24.10.2026, аудит безопасности).
  * Раньше признаком считался ЛЮБОЙ из: `Sec-Fetch-*`, `Origin`/`Referer`,
@@ -256,9 +259,16 @@ export function lanOwnerId(req: FastifyRequest): string | null {
   // важно лишь наличие.
   if (req.headers["x-taskflow-relay"]) return null;
 
-  if (process.env.TASKFLOW_LAN_NO_AUTH !== "1") return null;
   if (!isLanRequest(req)) return null;
-  if (!looksLikeBrowser(req)) return null;
+  // Прототип нового чата (NewChatTF): своя метка и свой флаг, чтобы не
+  // включать домашний вход остальным клиентам. Домашний вход
+  // (TASKFLOW_LAN_NO_AUTH) при этом остаётся в прежнем состоянии.
+  if (String(req.headers["x-taskflow-client"] || "") === "newchat") {
+    if (process.env.TASKFLOW_NEWCHAT_NO_AUTH !== "1") return null;
+  } else {
+    if (process.env.TASKFLOW_LAN_NO_AUTH !== "1") return null;
+    if (!looksLikeBrowser(req)) return null;
+  }
   const row = db
     .prepare(
       "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
@@ -338,14 +348,19 @@ export async function authOrApiToken(req: FastifyRequest, reply: FastifyReply) {
  * «сломался токен», и будет переподключаться до бесконечности (документ
  * решения §8, §10 п. 7, §11.2). */
 export function isRevokedDeviceToken(token: string): boolean {
-  if (devicesTableMissing) return false;
+  if (devicesCheckSkipped(devicesTableMissing, devicesTableMissingSince, Date.now())) {
+    return false;
+  }
   try {
     const row = db
       .prepare("SELECT 1 AS hit FROM devices WHERE token_hash = ? AND revoked_at IS NOT NULL")
       .get(hashApiToken(token));
+    devicesTableMissing = false;
+    devicesTableMissingSince = 0;
     return !!row;
   } catch {
     devicesTableMissing = true;
+    devicesTableMissingSince = Date.now();
     return false;
   }
 }

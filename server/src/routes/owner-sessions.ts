@@ -5,6 +5,7 @@ import { authOrApiToken } from "../auth.js";
 import { isOwner as userIsOwner } from "../access.js";
 import { broadcast as socketBroadcast } from "../ws.js";
 import {
+  OwnerSessionModelError,
   OwnerSessionBranchError,
   OwnerSessionNotFoundError,
   OwnerSessionRuntime,
@@ -14,7 +15,7 @@ import {
 import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
 
 type RuntimeContract = Pick<OwnerSessionRuntime,
-  "openRoot" | "open" | "list" | "snapshot" | "prompt" | "abort" | "branch" | "fork" | "subscribe"
+  "openRoot" | "open" | "list" | "snapshot" | "prompt" | "abort" | "branch" | "fork" | "subscribe" | "setModel"
 > & {
   subscribeAll?: OwnerSessionRuntime["subscribeAll"];
 };
@@ -63,6 +64,9 @@ function sendRuntimeError(reply: FastifyReply, error: unknown) {
   }
   if (error instanceof OwnerSessionBranchError) {
     return reply.code(409).send({ error: "session_branch_conflict", message: error.message });
+  }
+  if (error instanceof OwnerSessionModelError) {
+    return reply.code(400).send({ error: "model_unavailable", message: error.message });
   }
   throw error;
 }
@@ -200,6 +204,27 @@ export function registerOwnerSessionRoutes(
       if (error instanceof TypeError) return reply.code(400).send({ error: error.message });
       throw error;
     }),
+  );
+
+  app.put<{ Params: { id: string }; Body: { requestId?: string; provider?: string; model?: string } }>(
+    "/api/sessions/:id/model",
+    { preHandler: ownerOnly },
+    async (request: any, reply) =>
+      mutate(request, reply, `model:${request.params.id}`, 200, async requestId => {
+        const provider = request.body?.provider;
+        const model = request.body?.model;
+        if (typeof provider !== "string" || !provider.trim()) throw new TypeError("provider_required");
+        if (typeof model !== "string" || !model.trim()) throw new TypeError("model_required");
+        const session = await runtime.setModel(request.params.id, {
+          provider: provider.trim(),
+          id: model.trim(),
+        });
+        await ensureForwarding(request.params.id, request.userId);
+        return { requestId, session };
+      }).catch((error: unknown) => {
+        if (error instanceof TypeError) return reply.code(400).send({ error: error.message });
+        throw error;
+      }),
   );
 
   app.post<{ Params: { id: string }; Body: { requestId?: string } }>(

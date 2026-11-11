@@ -128,7 +128,7 @@ import {
   checklistStateOfMessage,
   setChecklistItem,
 } from "../lib/chatChecklist.js";
-import { exhaustedRoleReplyFallback, normalizeRoleReplyV1, roleReplyCorrectionPrompt, shouldRetryRoleReply, structuredOutputText } from "../lib/roleContractV1.js";
+import { exhaustedRoleReplyFallback, normalizeRoleReplyV1, roleReplyCorrectionPrompt, salvageMarkdownFromJsonParseFailure, shouldRetryRoleReply, structuredOutputText } from "../lib/roleContractV1.js";
 import { applyRoleFormat, roleFormatRefusal } from "../lib/roleFormat.js";
 import { roleProjectContext } from "../runtime/roleProjectContext.js";
 import { roleSlotSnapshotsBlock } from "../runtime/slotWorkSnapshot.js";
@@ -1862,10 +1862,11 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
   // отдаёт представление плана с текущим пунктом и состоянием каждого пункта.
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plans", { preHandler: authPre }, async (req: any, reply) => {
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
-    // Выполненный целиком план закрыт — полоска его не показывает; остановленный
-    // остаётся видимым: владелец должен видеть, что работа остановлена и почему.
+    // Полоска показывает только живые планы: сданный целиком и закрытый
+    // (в том числе закрытый стопом владельца) сюда не попадает — владелец
+    // 11.11.2026: закрытые чек-листы не должны маячить мусором.
     const { flat, tree } = chatPlanTree(req.params.id);
-    const visible = (plan: { items: unknown[]; status: string }) => plan.items.length >= OWNER_VISIBLE_PLAN_MIN_ITEMS && plan.status !== "finished";
+    const visible = (plan: { items: unknown[]; status: string }) => plan.items.length >= OWNER_VISIBLE_PLAN_MIN_ITEMS && plan.status === "active";
     return {
       // Прежнее поле: плоский список (к каждому плану добавлены parent_role_id, question_id, progress).
       // План из одного-двух пунктов владельцу не показываем (26.10.2026): роль ведёт его у себя.
@@ -3740,6 +3741,12 @@ async function deliverAgentReply(args: {
     }
   } catch (error) {
     if(error instanceof MessageForwardedToWork)throw error;
+    const salvaged = salvageMarkdownFromJsonParseFailure(error, live.partialText());
+    if (salvaged) {
+      // JSON.parse упал на markdown: контракт не ослабляем — текст пойдёт в normalizeRoleReplyV1.
+      console.warn("[chats] JSON.parse финального ответа: нормализую markdown в конверт", { role, chatId });
+      reply = { sessionId: reply?.sessionId ?? null, text: salvaged };
+    } else {
     // Онлайн-сессия не роняет HTTP-запрос, но и молчать нельзя (владелец
     // 27.09.2026): о сорванном ходе в чат ложится сообщение с причиной.
     console.warn(
@@ -3748,6 +3755,7 @@ async function deliverAgentReply(args: {
       JSON.stringify(live.diagnostics()),
     );
     failure = error;
+    }
   }
   const partial = live.partialText();
   const cancelled = (failure as { code?: string } | null)?.code === "CHAT_RUN_CANCELLED";

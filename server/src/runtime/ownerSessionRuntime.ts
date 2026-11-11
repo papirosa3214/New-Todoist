@@ -30,6 +30,10 @@ export const OWNER_ROOT_DEFAULT_MODEL = {
 export interface OwnerAgentSession {
   readonly sessionManager: SessionManager;
   readonly isStreaming: boolean;
+  /// Текущая модель сессии (объект каталога Pi).
+  readonly model?: any;
+  /// Смена модели: Pi проверяет авторизацию и пишет model_change.
+  setModel?(model: any): Promise<void>;
   readonly isIdle: boolean;
   prompt(text: string): Promise<void>;
   steer(text: string): Promise<unknown>;
@@ -46,6 +50,7 @@ export interface OwnerSessionSnapshot {
   cwd: string;
   sessionFile?: string;
   parentSession?: string;
+  model: { provider: string; id: string } | null;
   relation: OwnerSessionRelation;
   name?: string;
   leafId: string | null;
@@ -85,6 +90,13 @@ export class OwnerSessionBranchError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "OwnerSessionBranchError";
+  }
+}
+
+export class OwnerSessionModelError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerSessionModelError";
   }
 }
 
@@ -252,6 +264,7 @@ export class OwnerSessionRuntime {
       cwd: handle.manager.getCwd(),
       sessionFile: handle.manager.getSessionFile(),
       parentSession: header?.parentSession,
+      model: this.modelRef(handle.session),
       relation: this.relation(handle.manager),
       name: handle.manager.getSessionName(),
       leafId: handle.manager.getLeafId(),
@@ -271,6 +284,34 @@ export class OwnerSessionRuntime {
         if (handle.listeners.size === 0) this.detachSdkSubscription(handle);
       }
     };
+  }
+
+  /**
+   * Переключение модели живой сессии.
+   *
+   * Модель принадлежит сессии, а не клиенту: Pi сам проверяет авторизацию
+   * провайдера и пишет model_change в транскрипт, поэтому выбор переживает
+   * перезапуск сервера и виден в истории.
+   */
+  async setModel(id: string, modelRef: { provider: string; id: string }): Promise<OwnerSessionSnapshot> {
+    const handle = await this.ensureHandle(id);
+    if (handle.session.isStreaming) throw new OwnerSessionStreamingConflictError(id);
+    if (!handle.session.setModel) throw new OwnerSessionModelError(`Session ${id} does not support model switching`);
+    const modelRuntime = await getModelRuntime();
+    const model = modelRuntime?.getModel(modelRef.provider, modelRef.id);
+    if (!model) throw new OwnerSessionModelError(`Model ${modelRef.provider}/${modelRef.id} is unavailable`);
+    try {
+      await handle.session.setModel(model);
+    } catch (error) {
+      throw new OwnerSessionModelError(error instanceof Error ? error.message : String(error));
+    }
+    return this.snapshot(id);
+  }
+
+  private modelRef(session: OwnerAgentSession): { provider: string; id: string } | null {
+    const model = session.model as { provider?: unknown; id?: unknown } | undefined;
+    if (typeof model?.provider !== "string" || typeof model?.id !== "string") return null;
+    return { provider: model.provider, id: model.id };
   }
 
   private async ensureHandle(id: string): Promise<SessionHandle> {

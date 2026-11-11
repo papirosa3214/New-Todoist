@@ -852,6 +852,26 @@ export interface NormalizedRoleReplyV1 {
   validationErrors: string[];
 }
 
+/** Стеклянное замечание роли: сервер обернул брак формы, контракт не ослаблен. */
+export const ROLE_REPLY_GLASS_REMARK =
+  "Стекло: финальный ответ не был JSON-конвертом v1. Сервер обернул текст в output[]; в следующий ход верни один JSON-объект.";
+
+export function isJsonParseFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /is not valid JSON|Unexpected token|JSON\.parse/i.test(message);
+}
+
+/** Если ход упал на JSON.parse markdown — вернуть текст для normalizeRoleReplyV1, иначе null. */
+export function salvageMarkdownFromJsonParseFailure(error: unknown, partialText = ""): string | null {
+  if (!isJsonParseFailure(error)) return null;
+  const partial = partialText.trim();
+  if (partial && !/^\s*[{[]/.test(partial)) return partial;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const snippet = /Unexpected token [^,]*, "([\s\S]*?)" is not valid JSON/.exec(message);
+  if (snippet?.[1]?.trim() && !snippet[1].trim().startsWith("{")) return snippet[1];
+  return partial || null;
+}
+
 /**
  * Исправимая ошибка финального ответа: роль получает один адресный повтор,
  * прежде чем сервер покажет владельцу безопасно нормализованный fallback.
@@ -960,5 +980,6 @@ export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
       next_hint: null,
       needs_human: false,
     });
+  if (!validationErrors.includes(ROLE_REPLY_GLASS_REMARK)) validationErrors.push(ROLE_REPLY_GLASS_REMARK);
   return { envelope, displayText: preservedText, normalizedByServer: true, validationErrors };
 }
