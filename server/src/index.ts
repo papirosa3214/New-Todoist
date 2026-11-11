@@ -143,6 +143,7 @@ import {
 } from "./routes/activity.js";
 import { startInboxTriageWatcher } from "./lib/inboxTriageWatcher.js";
 import { startNoteAccessWatcher } from "./lib/noteAccessWatcher.js";
+import { startPromptContextWatcher } from "./runtime/promptAudit.js";
 import { startKbTriageWatcher } from "./lib/kbTriageWatcher.js";
 import { startOllamaHealthWatcher } from "./lib/ollamaHealthWatcher.js";
 import { startWorktreeMergeWatcher } from "./lib/worktreeMergeWatcher.js";
@@ -686,6 +687,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Сторож прибора «учёт обращений к заметкам»: без счётчиков схема базы
     // знаний слепнет (заметка cfa5cdcd, шаг 1 из 4).
     startNoteAccessWatcher();
+    // Журнал контекста ролей (владелец 11.11.2026): пробная запись сводки раз в 15 минут.
+    const stopPromptContextWatcher = startPromptContextWatcher();
+    app.addHook("onClose", async () => stopPromptContextWatcher());
     const stopRoleLoadWatcher = startRoleLoadWatcher();
     app.addHook("onClose", async()=>stopRoleLoadWatcher());
     const stopReviewHistoryWatcher = startReviewHistoryWatcher();
