@@ -6,6 +6,9 @@ import { DB_PATH } from "../db.js";
 import { SECRETARY_CHAT_ID } from "../lib/secretaryReply.js";
 import { enqueueMessageDelivery } from "../runtime/chatQueue.js";
 import { resolveTelegramCommandText } from "../lib/telegramCommands.js";
+import { bindTopic, knownThreadOfRoom, normalizeThreadId, parseTopicCommand, telegramTopicsEnabled, topicReplyText, topicTargetChat } from "../lib/telegramTopics.js";
+import { normalizeTelegramTables, splitTelegramText, telegramRichHtml, envelopePlainText, TELEGRAM_PART_LIMIT, TELEGRAM_PART_PAUSE_MS, TELEGRAM_MAX_PARTS } from "../lib/telegramRich.js";
+import type { StructuredRoleEnvelopeV1 } from "../lib/roleContractV1.js";
 
 export const TELEGRAM_MAX_BYTES = 15 * 1024 * 1024;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(path.dirname(DB_PATH), "uploads");
@@ -26,6 +29,13 @@ export type TelegramInbound = {
   user_id: number;
   chat_type: string;
   message_id: number;
+  /**
+   * Топик (этап 7): `message_thread_id` входящего — часть адреса беседы
+   * `{channel, account, chat, thread, principal}`. Адресация в личном чате
+   * именно `message_thread_id` (живой факт 06.11.2026), `direct_messages_topic_id`
+   * там не доставляет. Не пришёл — NULL: общий топик, прежнее поведение.
+   */
+  thread_id?: number | null;
   text?: string;
   caption?: string;
   /** Текст для роли: явный вызов команды уже разрешён на сервере (этап 2). */
@@ -140,9 +150,18 @@ export type TelegramDeliveryKind = "ack" | "progress" | "final" | "error";
 
 export const TELEGRAM_METHOD_POLICY = {
   sendMessage: { kinds: ["ack", "progress", "final", "error"] },
+  // Rich-сообщение (Bot API 10.1, проверено живьём 06.11.2026): текст, разметка
+  // и таблицы одним блоком. Сбой метода — откат на sendMessage в gateway.
+  sendRichMessage: { kinds: ["final"] },
   editMessageText: { kinds: ["progress", "final"] },
+  editMessageReplyMarkup: { kinds: ["progress"] },
   setMessageReaction: { kinds: ["progress", "final", "error"] },
   sendMessageDraft: { kinds: ["progress"] },
+  // Топики (этап 7): Bot API дёргает только gateway, сервер ставит намерение.
+  // `createForumTopic` возвращает id треда — тема привязки к комнате появляется
+  // при ответе сервера на `/topic` (см. lib/telegramTopics.ts).
+  createForumTopic: { kinds: ["ack"] },
+  editForumTopic: { kinds: ["ack"] },
 } as const;
 
 export type TelegramMethod = keyof typeof TELEGRAM_METHOD_POLICY;
@@ -166,6 +185,9 @@ export function enqueueTelegramDelivery(args: {
   payload: Record<string, unknown>;
   replyToMessageId?: number | null;
   sourceMessageId?: string | null;
+  /** Топик беседы (этап 7): в него адресуется доставка и по нему же
+   *  отличается строка статуса — у общих и разных топиков она своя. */
+  threadId?: number | null;
 }): string {
   const id = crypto.randomUUID();
   // Метод сохраняем как есть: неизвестный транспорт — забота gateway (он
@@ -173,13 +195,15 @@ export function enqueueTelegramDelivery(args: {
   // метода нет вовсе — так прежние вызовы (progress/final) не меняют поведение.
   const rawMethod = args.payload.method;
   const method = typeof rawMethod === "string" && rawMethod.trim() ? rawMethod.trim() : "sendMessage";
+  const threadId = Number(args.threadId ?? 0);
   const payload = {
     ...args.payload,
     method,
     reply_to_message_id: args.replyToMessageId ?? (args.payload.reply_to_message_id as number | null | undefined) ?? null,
+    ...(Number.isSafeInteger(threadId) && threadId > 0 ? { message_thread_id: threadId } : {}),
   };
-  db.prepare(`INSERT INTO telegram_delivery_outbox(delivery_id,bot_id,chat_id,kind,payload_json,state,next_attempt_at,source_message_id)
-    VALUES(?,?,?,?,?,'pending',datetime('now'),?)`).run(id, telegramConfig().botId, args.chatId, args.kind, JSON.stringify(payload), args.sourceMessageId ?? null);
+  db.prepare(`INSERT INTO telegram_delivery_outbox(delivery_id,bot_id,chat_id,kind,payload_json,state,next_attempt_at,source_message_id,thread_id)
+    VALUES(?,?,?,?,?,'pending',datetime('now'),?,?)`).run(id, telegramConfig().botId, args.chatId, args.kind, JSON.stringify(payload), args.sourceMessageId ?? null, Number.isSafeInteger(threadId) && threadId > 0 ? threadId : null);
   return id;
 }
 
@@ -240,8 +264,8 @@ export function enqueueTelegramReaction(args: {
 // затянулся. Пузырь один на ход: повторно не шлём, финальный ответ уходит
 // обычной доставкой `final`.
 export function captureTelegramProgress(triggerMessageId: string, tool?: string): number {
-  const links = db.prepare(`SELECT chat_id,message_id FROM telegram_inbound_ledger
-    WHERE taskflow_message_id=? AND state='posted'`).all(triggerMessageId) as Array<{ chat_id: string; message_id: number }>;
+  const links = db.prepare(`SELECT chat_id,message_id,thread_id FROM telegram_inbound_ledger
+    WHERE taskflow_message_id=? AND state='posted'`).all(triggerMessageId) as Array<{ chat_id: string; message_id: number; thread_id: number | null }>;
   if (!links.length) return 0;
   const already = db.prepare("SELECT 1 FROM telegram_delivery_outbox WHERE kind='progress' AND source_message_id=?").get(triggerMessageId);
   if (already) return 0;
@@ -253,7 +277,7 @@ export function captureTelegramProgress(triggerMessageId: string, tool?: string)
   if (telegramStreamMode() === "auto" || telegramStreamMode() === "draft") return 0;
   for (const link of links) {
     // Прогресс идёт без звука (владелец 06.11.2026): звенит только финал.
-    enqueueTelegramDelivery({ kind: "progress", chatId: link.chat_id, payload: { text: label, disable_notification: true }, replyToMessageId: link.message_id, sourceMessageId: triggerMessageId });
+    enqueueTelegramDelivery({ kind: "progress", chatId: link.chat_id, payload: { text: label, disable_notification: true }, replyToMessageId: link.message_id, sourceMessageId: triggerMessageId, threadId: link.thread_id });
   }
   return links.length;
 }
@@ -295,8 +319,8 @@ export function startTelegramStream(triggerMessageId: string, readText: () => st
       if (text.length > STREAM_MAX) text = "…" + text.slice(-STREAM_MAX);
       if (text === last) return;
       last = text;
-      const links = db.prepare(`SELECT chat_id,message_id FROM telegram_inbound_ledger
-        WHERE taskflow_message_id=? AND state='posted'`).all(triggerMessageId) as Array<{ chat_id: string; message_id: number }>;
+      const links = db.prepare(`SELECT chat_id,message_id,thread_id FROM telegram_inbound_ledger
+        WHERE taskflow_message_id=? AND state='posted'`).all(triggerMessageId) as Array<{ chat_id: string; message_id: number; thread_id: number | null }>;
       const draft = telegramStreamMode() === "auto" || telegramStreamMode() === "draft"
         ? { draft_id: telegramDraftId(triggerMessageId) }
         : null;
@@ -309,6 +333,7 @@ export function startTelegramStream(triggerMessageId: string, readText: () => st
             : { text, disable_notification: true },
           replyToMessageId: link.message_id,
           sourceMessageId: null,
+          threadId: link.thread_id,
         });
       }
     } catch { /* поток — не повод ломать ход */ }
@@ -319,13 +344,16 @@ export function startTelegramStream(triggerMessageId: string, readText: () => st
   streamTimers.set(triggerMessageId, timer);
 }
 
-export async function acceptTelegramInbound(input: TelegramInbound): Promise<{ duplicate: boolean; ledger_id: string; message_id: string | null; ack_delivery_id: string | null; queue_row_id: string | null; chat_id: string; role_id: string }> {
+export async function acceptTelegramInbound(input: TelegramInbound): Promise<{ duplicate: boolean; ledger_id: string; message_id: string | null; ack_delivery_id: string | null; queue_row_id: string | null; chat_id: string; role_id: string; thread_id: number | null; topic_action: "created" | "renamed" | "pending" | null; topic_title: string | null }> {
   const existing = db.prepare("SELECT id,taskflow_message_id,ack_delivery_id FROM telegram_inbound_ledger WHERE bot_id=? AND update_id=?").get(String(input.bot_id), input.update_id) as { id: string; taskflow_message_id: string | null; ack_delivery_id: string | null } | undefined;
-  if (existing) return { duplicate: true, ledger_id: existing.id, message_id: existing.taskflow_message_id, ack_delivery_id: existing.ack_delivery_id, queue_row_id: null, chat_id: SECRETARY_CHAT_ID, role_id: SECRETARY_USER_ID };
+  if (existing) return { duplicate: true, ledger_id: existing.id, message_id: existing.taskflow_message_id, ack_delivery_id: existing.ack_delivery_id, queue_row_id: null, chat_id: SECRETARY_CHAT_ID, role_id: SECRETARY_USER_ID, thread_id: null, topic_action: null, topic_title: null };
+  // Тред — часть адреса беседы (этап 7). Выключенные топики его не читают:
+  // прежнее поведение один в один (все сообщения — в комнату Секретаря).
+  const threadId = telegramTopicsEnabled() ? normalizeThreadId(input.thread_id) : null;
   const ledgerId = crypto.randomUUID();
   const hash = normalizedHash(input);
-  db.prepare(`INSERT INTO telegram_inbound_ledger(id,bot_id,update_id,chat_id,user_id,message_id,payload_hash,state)
-    VALUES(?,?,?,?,?,?,?,'received')`).run(ledgerId, String(input.bot_id), input.update_id, String(input.chat_id), String(input.user_id), input.message_id, hash);
+  db.prepare(`INSERT INTO telegram_inbound_ledger(id,bot_id,update_id,chat_id,user_id,message_id,payload_hash,state,thread_id)
+    VALUES(?,?,?,?,?,?,?,'received',?)`).run(ledgerId, String(input.bot_id), input.update_id, String(input.chat_id), String(input.user_id), input.message_id, hash, threadId);
   try {
     validateInbound(input);
     db.prepare("UPDATE telegram_inbound_ledger SET state='authorized',authorized_at=datetime('now') WHERE id=?").run(ledgerId);
@@ -345,22 +373,74 @@ export async function acceptTelegramInbound(input: TelegramInbound): Promise<{ d
     const command = await resolveTelegramCommandText(text).catch(() => null);
     if (command && !command.ok) throw new Error("unknown_command");
     if (command?.ok) roleText = command.role_text;
+    // `/topic <имя>` — своя команда рабочего пространства (этап 7): она не ход
+    // роли, а привязка топика к комнате. Распознаётся до маршрутизации хода.
+    const topicCommand = telegramTopicsEnabled() ? parseTopicCommand(text) : null;
+    if (topicCommand && !topicCommand.ok) {
+      // Топик без имени — не ошибка сервера, а подсказка владельцу: команда
+      // не должна превращаться в ход роли.
+      enqueueTelegramDelivery({ kind: "ack", chatId: String(input.chat_id), payload: { text: "Назовите топик: /topic Работа", disable_notification: true }, replyToMessageId: input.message_id, threadId });
+      db.prepare("UPDATE telegram_inbound_ledger SET state='posted',posted_at=datetime('now') WHERE id=?").run(ledgerId);
+      return { duplicate: false, ledger_id: ledgerId, message_id: null, ack_delivery_id: null, queue_row_id: null, chat_id: SECRETARY_CHAT_ID, role_id: SECRETARY_USER_ID, thread_id: threadId, topic_action: null, topic_title: null };
+    }
+    let topicTarget = SECRETARY_CHAT_ID;
+    let topicRole = SECRETARY_USER_ID;
+    let topicThread: number | null = threadId;
+    let topicAction: "created" | "renamed" | "pending" | null = null;
+    let topicTitle: string | null = null;
+    if (topicCommand?.ok) {
+      let requested;
+      try {
+        requested = requestTopic(topicCommand.action, topicCommand.title, {
+          botId: String(input.bot_id), chatId: String(input.chat_id), threadId,
+        });
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "topic_failed";
+        enqueueTelegramDelivery({ kind: "ack", chatId: String(input.chat_id), payload: { text: `Топик не переименован: ${code === "topic_required" ? "сначала создайте топик командой /topic Название" : "попробуйте ещё раз"}`, disable_notification: true }, replyToMessageId: input.message_id, threadId });
+        db.prepare("UPDATE telegram_inbound_ledger SET state='posted',posted_at=datetime('now') WHERE id=?").run(ledgerId);
+        return { duplicate: false, ledger_id: ledgerId, message_id: null, ack_delivery_id: null, queue_row_id: null, chat_id: SECRETARY_CHAT_ID, role_id: SECRETARY_USER_ID, thread_id: threadId, topic_action: null, topic_title: null };
+      }
+      topicAction = requested.action;
+      topicTitle = requested.title;
+      topicTarget = requested.chatId;
+      topicRole = requested.roleId;
+      topicThread = requested.threadId ?? threadId;
+    } else if (threadId) {
+      const target = topicTargetChat(input.bot_id, input.chat_id, threadId);
+      topicTarget = target.chatId;
+      topicRole = target.roleId;
+    }
     db.transaction(() => {
       db.prepare(`INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,work_mode,execution_mode)
-        VALUES(?,?,?,'chat',?,'work','chat')`).run(messageId, owner, text, SECRETARY_CHAT_ID);
+        VALUES(?,?,?,'chat',?,'work','chat')`).run(messageId, owner, text, topicTarget);
       const attach = db.prepare("UPDATE attachments SET chat_message_id=? WHERE id=? AND user_id=? AND chat_message_id IS NULL");
       for (const id of attachmentIds) attach.run(messageId, id, owner);
-      db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(SECRETARY_CHAT_ID);
+      db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(topicTarget);
       db.prepare("UPDATE telegram_inbound_ledger SET state='posted',posted_at=datetime('now'),taskflow_message_id=? WHERE id=?").run(messageId, ledgerId);
     })();
-    const durable = enqueueMessageDelivery({ chatId: SECRETARY_CHAT_ID, roleId: SECRETARY_USER_ID, deliveryId: `tg:${input.bot_id}:${input.update_id}`, messageId, payload: { hop: 0, mode: "work", text: roleText } });
+    // `/topic` — служебная команда: ход роли не поднимаем. На создание ответ
+    // придёт после ответа Bot API (id треда известен только тогда), на
+    // переименование — сразу, топик уже известен.
+    if (topicCommand?.ok) {
+      if (topicAction !== "pending") {
+        enqueueTelegramDelivery({
+          kind: "ack",
+          chatId: String(input.chat_id),
+          payload: { text: topicReplyText(topicAction, topicTitle, topicThread), disable_notification: true },
+          replyToMessageId: input.message_id,
+          threadId: topicThread,
+        });
+      }
+      return { duplicate: false, ledger_id: ledgerId, message_id: messageId, ack_delivery_id: null, queue_row_id: null, chat_id: topicTarget, role_id: topicRole, thread_id: topicThread, topic_action: topicAction, topic_title: topicTitle };
+    }
+    const durable = enqueueMessageDelivery({ chatId: topicTarget, roleId: topicRole, deliveryId: `tg:${input.bot_id}:${input.update_id}`, messageId, payload: { hop: 0, mode: "work", text: roleText } });
     // Немедленного «Принял.» нет: Telegram получает статус только если ход
     // тянется дольше 10 секунд (scheduleTelegramProgress в чат-рантайме).
     // Реакция 👀 — сразу после успешного inbound: владелец видит, что запрос
     // принят, не дожидаясь статуса (выключатель TASKFLOW_TELEGRAM_REACTIONS).
     enqueueTelegramReaction({ kind: "progress", chatId: String(input.chat_id), messageId: input.message_id, emoji: "👀", sourceMessageId: null });
     scheduleTelegramProgress(messageId);
-    return { duplicate: false, ledger_id: ledgerId, message_id: messageId, ack_delivery_id: null, queue_row_id: durable.id, chat_id: SECRETARY_CHAT_ID, role_id: SECRETARY_USER_ID };
+    return { duplicate: false, ledger_id: ledgerId, message_id: messageId, ack_delivery_id: null, queue_row_id: durable.id, chat_id: topicTarget, role_id: topicRole, thread_id: topicThread, topic_action: null, topic_title: null };
   } catch (error) {
     const code = error instanceof Error ? error.message : "inbound_failed";
     db.prepare("UPDATE telegram_inbound_ledger SET state='rejected',error_code=?,finished_at=datetime('now') WHERE id=?").run(code, ledgerId);
@@ -370,7 +450,7 @@ export async function acceptTelegramInbound(input: TelegramInbound): Promise<{ d
 
 export function telegramOutbox(limit = 20) {
   db.prepare("UPDATE telegram_delivery_outbox SET state='ambiguous',last_error='sending lease expired',updated_at=datetime('now') WHERE state='sending' AND updated_at < datetime('now','-2 minutes')").run();
-  return db.prepare(`SELECT delivery_id,chat_id,kind,payload_json,attempts,state,next_attempt_at FROM telegram_delivery_outbox
+  return db.prepare(`SELECT delivery_id,chat_id,thread_id,kind,payload_json,attempts,state,next_attempt_at FROM telegram_delivery_outbox
     WHERE state IN ('pending','retry_wait','ambiguous') AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now')) ORDER BY created_at LIMIT ?`).all(limit);
 }
 
@@ -378,9 +458,29 @@ export function markTelegramSending(id: string): boolean {
   return db.prepare("UPDATE telegram_delivery_outbox SET state='sending',attempts=attempts+1,updated_at=datetime('now') WHERE delivery_id=? AND state IN ('pending','retry_wait','ambiguous')").run(id).changes === 1;
 }
 
-export function settleTelegramDelivery(id: string, result: { ok: boolean; permanent?: boolean; ambiguous?: boolean; retryAfterSeconds?: number; telegramMessageId?: number; error?: string }) {
+export function settleTelegramDelivery(id: string, result: { ok?: boolean; permanent?: boolean; ambiguous?: boolean; retryAfterSeconds?: number; telegramMessageId?: number; error?: string; parts?: Array<{ index: number; sent: boolean }>; threadId?: number }) {
+  // Части одной доставки: gateway отмечает отправленные, чтобы после сбоя
+  // середины повторялась только она, без дубля первой (DoD этапа 5).
+  // Запись «только прогресс частей» приходит без ok и состояние не меняет.
+  if (Array.isArray(result.parts) && result.parts.length) {
+    try {
+      const row = db.prepare("SELECT payload_json FROM telegram_delivery_outbox WHERE delivery_id=?").get(id) as { payload_json: string } | undefined;
+      if (row) {
+        const payload = JSON.parse(row.payload_json) as { parts?: Array<{ index?: number; sent?: boolean }> };
+        if (Array.isArray(payload.parts)) {
+          for (const part of result.parts) {
+            const target = payload.parts.find((item) => Number(item.index) === Number(part.index));
+            if (target) target.sent = part.sent === true;
+          }
+          db.prepare("UPDATE telegram_delivery_outbox SET payload_json=?,updated_at=datetime('now') WHERE delivery_id=?").run(JSON.stringify(payload), id);
+        }
+      }
+    } catch { /* прогресс частей не должен ломать расчёт исхода доставки */ }
+    if (result.ok === undefined) return;
+  }
   if (result.ok) {
     db.prepare("UPDATE telegram_delivery_outbox SET state='delivered',telegram_message_id=?,delivered_at=datetime('now'),updated_at=datetime('now'),last_error=NULL WHERE delivery_id=?").run(result.telegramMessageId ?? null, id);
+    settleTelegramTopicDelivery(id, result);
     return;
   }
   const row = db.prepare("SELECT attempts FROM telegram_delivery_outbox WHERE delivery_id=?").get(id) as { attempts: number } | undefined;
@@ -398,11 +498,127 @@ export function settleTelegramDelivery(id: string, result: { ok: boolean; perman
   db.prepare("UPDATE telegram_delivery_outbox SET state='retry_wait',last_error=?,next_attempt_at=datetime('now',?),updated_at=datetime('now') WHERE delivery_id=?").run(result.error ?? "delivery failed", `+${seconds} seconds`, id);
 }
 
+/**
+ * Вопрос роли → Telegram с inline-кнопками (этап 3 плана note://a2475482).
+ *
+ * Отдельная доставка от финала: у финала свой уникальный индекс
+ * `(source_message_id, kind='final')`, а вопрос — своё сообщение с клавиатурой.
+ * Подпись — `renderQuestionText`, уже готовая для Telegram, плюс строка про
+ * номер/текст: кнопки не единственный путь ответа.
+ */
+export function captureQuestionToTelegram(questionId: string): number {
+  const question = db
+    .prepare("SELECT id,chat_id,message_id,payload_json,created_at FROM chat_questions WHERE id=?")
+    .get(questionId) as { id: string; chat_id: string; message_id: string | null; payload_json: string; created_at: string } | undefined;
+  if (!question || !question.message_id) return 0;
+  // Ledger связывает входящее из Telegram с сообщением чата; вопрос — ответ на
+  // это входящее, поэтому ищем ответ на сообщение-вопрос (как captureTelegramFinal).
+  const questionMessage = db
+    .prepare("SELECT reply_to_message_id FROM chat_messages WHERE id=?")
+    .get(question.message_id) as { reply_to_message_id: string | null } | undefined;
+  if (!questionMessage?.reply_to_message_id) return 0;
+  let payload: { questions?: Array<{ question?: string; header?: string; options?: Array<{ label?: string; description?: string }> }> } = {};
+  try { payload = JSON.parse(question.payload_json); } catch { return 0; }
+  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  const keyboard = telegramQuestionKeyboard(question.id, { questions: questions.map((q) => ({ options: (q.options ?? []).map((o) => ({ label: String(o.label ?? "") })) })) });
+  if (!keyboard) return 0;
+  const links = db.prepare(`SELECT chat_id,message_id,thread_id FROM telegram_inbound_ledger
+    WHERE taskflow_message_id=? AND state='posted'`).all(questionMessage.reply_to_message_id) as Array<{ chat_id: string; message_id: number; thread_id: number | null }>;
+  let count = 0;
+  for (const link of links) {
+    // kind='ack': вопрос — не финал хода. Иначе gateway погасил бы «печатает…»
+    // (для kind='final' он это делает), а ход ещё ждёт ответа.
+    enqueueTelegramDelivery({
+      kind: "ack",
+      chatId: link.chat_id,
+      payload: { text: renderTelegramQuestionText(questions), reply_markup: keyboard },
+      replyToMessageId: link.message_id,
+      sourceMessageId: question.message_id,
+      threadId: link.thread_id,
+    });
+    count++;
+  }
+  return count;
+}
+
+/** Текст вопроса для Telegram: нумерованный список вариантов — ответ номером
+ *  работает и тогда, когда кнопки уже погашены по TTL. */
+function renderTelegramQuestionText(questions: Array<{ question?: string; header?: string; options?: Array<{ label?: string; description?: string }> }>): string {
+  const lines: string[] = [];
+  questions.slice(0, TELEGRAM_QUESTION_MAX_ROWS).forEach((question, questionIndex) => {
+    if (questionIndex === 0) lines.push("Нужен ответ на вопрос.");
+    const header = question.header ? `${question.header}: ` : "";
+    lines.push(`${questionIndex + 1}. ${header}${String(question.question ?? "")}`);
+    (question.options ?? []).forEach((option, optionIndex) => {
+      if (optionIndex >= 4) return;
+      lines.push(`   ${questionIndex + 1}.${optionIndex + 1} — ${String(option.label ?? "")}${option.description ? ` (${option.description})` : ""}`);
+    });
+  });
+  lines.push("Нажми кнопку или ответь номером/текстом.");
+  return lines.join("\n").slice(0, 4000);
+}
+
+/** Убрать клавиатуру у сообщения вопроса (отвечен или истёк срок кнопок).
+ *  `source_message_id` — сообщение вопроса: по нему видно, что клавиатура уже
+ *  снята, и повторная проверка срока не ставит вторую такую доставку. */
+export function releaseTelegramQuestionKeyboard(questionMessageId: string, chatId: string, messageId: number, threadId?: number | null): string | null {
+  return enqueueTelegramDelivery({
+    kind: "progress",
+    chatId,
+    payload: { method: "editMessageReplyMarkup", message_id: messageId, reply_markup: { inline_keyboard: [] } },
+    sourceMessageId: questionMessageId,
+    threadId: threadId ?? null,
+  });
+}
+
+/**
+ * Истёк срок кнопок: у вопросов старше TELEGRAM_QUESTION_TTL_SECONDS и без
+ * клавиатуры снимаем её. Статус вопроса не меняется: ход ждёт ответ 30 мин
+ * (questionWait.QUESTION_WAIT_MS), а текстовый ответ работает всегда.
+ * Вызывается из /api/integrations/telegram/outbox — систему таймеров не заводим.
+ */
+export function expireTelegramQuestionKeyboards(): number {
+  let links: Array<{ chat_id: string; message_id: number; question_id: string; question_message_id: string; thread_id: number | null }> = [];
+  try {
+    links = db.prepare(`SELECT q.id AS question_id, q.message_id AS question_message_id, l.chat_id AS chat_id, l.message_id AS message_id, l.thread_id AS thread_id
+        FROM chat_questions q
+        JOIN chat_messages m ON m.id = q.message_id
+        JOIN telegram_inbound_ledger l
+          ON l.taskflow_message_id = m.reply_to_message_id AND l.state = 'posted'
+       WHERE q.created_at <= datetime('now', ?)
+         AND EXISTS (
+           SELECT 1 FROM telegram_delivery_outbox d
+            WHERE d.source_message_id = q.message_id AND d.kind = 'ack'
+              AND d.payload_json LIKE '%inline_keyboard%'
+              AND d.state = 'delivered'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM telegram_delivery_outbox d
+            WHERE d.source_message_id = q.message_id AND d.kind = 'progress'
+              AND d.payload_json LIKE '%editMessageReplyMarkup%'
+         )`).all(`-${TELEGRAM_QUESTION_TTL_SECONDS} seconds`) as Array<{ chat_id: string; message_id: number; question_id: string; question_message_id: string; thread_id: number | null }>;
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const link of links) {
+    releaseTelegramQuestionKeyboard(link.question_message_id, link.chat_id, link.message_id, link.thread_id);
+    count++;
+  }
+  return count;
+}
+
 export function captureTelegramFinal(messageId: string): number {
-  const reply = db.prepare("SELECT id,text,reply_to_message_id,from_user_id,stop_reason,partial FROM chat_messages WHERE id=?").get(messageId) as { id: string; text: string; reply_to_message_id: string | null; from_user_id: string; stop_reason: string | null; partial: number | null } | undefined;
+  const reply = db.prepare("SELECT id,text,role_envelope_json,reply_to_message_id,from_user_id,stop_reason,partial FROM chat_messages WHERE id=?").get(messageId) as { id: string; text: string; role_envelope_json: string | null; reply_to_message_id: string | null; from_user_id: string; stop_reason: string | null; partial: number | null } | undefined;
   if (!reply || reply.from_user_id !== SECRETARY_USER_ID || !reply.reply_to_message_id) return 0;
-  const links = db.prepare(`SELECT l.chat_id,l.message_id FROM telegram_inbound_ledger l
-    WHERE l.taskflow_message_id=? AND l.state='posted'`).all(reply.reply_to_message_id) as Array<{ chat_id: string; message_id: number }>;
+  const links = db.prepare(`SELECT l.chat_id,l.message_id,l.thread_id FROM telegram_inbound_ledger l
+    WHERE l.taskflow_message_id=? AND l.state='posted'`).all(reply.reply_to_message_id) as Array<{ chat_id: string; message_id: number; thread_id: number | null }>;
+  // Конверт ответа роли — источник rich-версии; его plain-текст — основа
+  // обычного текста (в `text` может лежать сам JSON-конверт).
+  const { text, envelope } = telegramFinalBody(reply);
+  const parts = splitTelegramText(text, TELEGRAM_PART_LIMIT).slice(0, TELEGRAM_MAX_PARTS);
+  const hasAttachment = Boolean(db.prepare("SELECT 1 FROM attachments WHERE chat_message_id=? LIMIT 1").get(reply.id));
+  const richHtml = parts.length === 1 && !hasAttachment ? telegramRichHtml(envelope, TELEGRAM_PART_LIMIT) : null;
   let count = 0;
   for (const link of links) {
     const exists = db.prepare("SELECT 1 FROM telegram_delivery_outbox WHERE source_message_id=? AND kind='final'").get(reply.id);
@@ -411,7 +627,15 @@ export function captureTelegramFinal(messageId: string): number {
     // 11.11.2026): текст в Telegram не пересылаем — Помощник показывает итог
     // нативными сообщениями. Реакции и прогресс выключатель не трогает.
     if (telegramFinalEnabled() && !exists) {
-      enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload: { text: reply.text }, replyToMessageId: link.message_id, sourceMessageId: reply.id });
+      // Одно намерение — один delivery_id: либо rich-сообщение, либо части.
+      // Двух путей доставки одного ответа нет (DoD этапа 6).
+      const payload: Record<string, unknown> = richHtml
+        ? { method: "sendRichMessage", rich_message: { html: richHtml }, plain_text: text, link_preview_options: { is_disabled: true } }
+        : parts.length > 1
+          ? { parts: parts.map((part, index) => ({ index: index + 1, total: parts.length, text: part, sent: false })), part_pause_ms: TELEGRAM_PART_PAUSE_MS }
+          : { text: parts[0] ?? "" };
+      // Тред — часть адреса ответа: финал в топик уходит в тот же топик.
+      enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload, replyToMessageId: link.message_id, sourceMessageId: reply.id, threadId: link.thread_id });
       count++;
     }
     // Прерванный ход или ошибка — 👎 на сообщении-триггере, успех — 👍.
@@ -423,6 +647,143 @@ export function captureTelegramFinal(messageId: string): number {
     enqueueTelegramReaction({ kind: failed ? "error" : "final", chatId: link.chat_id, messageId: link.message_id, emoji: failed ? "👎" : "👍", sourceMessageId: null });
   }
   return count;
+}
+
+/** Тело финала: plain-текст для Telegram и конверт для rich-версии. */
+function telegramFinalBody(reply: { text: string; role_envelope_json: string | null }): { text: string; envelope: StructuredRoleEnvelopeV1 | null } {
+  let envelope: StructuredRoleEnvelopeV1 | null = null;
+  if (typeof reply.role_envelope_json === "string") {
+    try {
+      const raw = JSON.parse(reply.role_envelope_json) as { schema_version?: unknown; output?: unknown };
+      if (raw && raw.schema_version === 1 && Array.isArray(raw.output)) envelope = raw as StructuredRoleEnvelopeV1;
+    } catch { /* битый конверт — остаётся прежний текст */ }
+  }
+  const fromEnvelope = envelope ? envelopePlainText(envelope).trim() : "";
+  const source = fromEnvelope || String(reply.text ?? "");
+  // Таблицы-«палки» в моноширинный блок: без rich Telegram не рисует таблицу.
+  return { text: normalizeTelegramTables(source), envelope };
+}
+
+/**
+ * Кнопки ответа на вопрос роли (этап 3 плана note://a2475482).
+ *
+ * Числа — из Bot API, а не «на глаз»:
+ *  • `callback_data` — 1–64 байта (core.telegram.org/bots/api#inlinekeyboardbutton),
+ *    поэтому в кнопку идёт `q:<8 hex id>:<индекс варианта>` — 12 байт, а полный
+ *    id вопроса живёт на сервере;
+ *  • `reply_markup.inline_keyboard` — ряды по кнопкам, один ряд на вопрос
+ *    (те же ограничения, что у обычной inline-клавиатуры);
+ *  • TTL кнопок 3600 с — как у Hermes (hermes-agent.nousresearch.com/docs/
+ *    user-guide/messaging/telegram: «buttons expire after an hour»).
+ */
+export const TELEGRAM_QUESTION_TTL_SECONDS = 3600;
+
+/** Сколько вопросов в Telegram-клавиатуре имеет смысл показывать: у пакета
+ *  вопросов максимум 4 (chatQuestions.MAX_QUESTIONS), столько и рядов. */
+const TELEGRAM_QUESTION_MAX_ROWS = 4;
+
+export function telegramQuestionShortId(questionId: string): string {
+  return questionId.replace(/-/g, "").slice(0, 8).toLowerCase();
+}
+
+export function telegramQuestionCallbackData(questionId: string, optionIndex: number): string {
+  return `q:${telegramQuestionShortId(questionId)}:${optionIndex}`;
+}
+
+/** «q:<id8>:<код варианта>» → {short, questionIndex, optionIndex}.
+ *  Код варианта — `questionIndex*10 + optionIndex` (вопросов ≤4, вариантов ≤4):
+ *  так один ряд клавиатуры = один вопрос, а данные остаются в 12 байтах.
+ *  Всё остальное — мусор, не ошибка сервера. */
+export function parseTelegramQuestionCallback(
+  data: unknown,
+): { short: string; questionIndex: number; optionIndex: number } | null {
+  const match = /^q:([0-9a-f]{8}):(\d{1,2})$/.exec(String(data ?? "").trim().toLowerCase());
+  if (!match) return null;
+  const code = Number(match[2]);
+  return { short: match[1], questionIndex: Math.floor(code / 10), optionIndex: code % 10 };
+}
+
+/** Клавиатура вопроса: ряд на вопрос, кнопки — по вариантам ответа. */
+export function telegramQuestionKeyboard(
+  questionId: string,
+  payload: { questions: Array<{ options: Array<{ label: string }> }> },
+): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | null {
+  const rows = payload.questions.slice(0, TELEGRAM_QUESTION_MAX_ROWS).map((question, questionIndex) =>
+    question.options.map((option, optionIndex) => ({
+      text: String(option.label).slice(0, 60),
+      callback_data: telegramQuestionCallbackData(questionId, questionIndex * 10 + optionIndex),
+    })),
+  );
+  return rows.length ? { inline_keyboard: rows } : null;
+}
+
+/**
+ * `/topic <имя>`: Bot API дёргает только gateway (инвариант 1), поэтому сервер
+ * ставит ему намерение `createForumTopic`/`editForumTopic`.
+ *
+ * Привязка топик→комната появляется там, где известен id треда:
+ *  • для создания — после ответа Bot API (settleTelegramTopicDelivery);
+ *  • для переименования — по уже известному треду (его шлёт gateway вместе с
+ *    сообщением либо он последний созданный в этом чате).
+ */
+function requestTopic(action: "create" | "rename", title: string, context: { botId: string; chatId: string; threadId: number | null }): { action: "created" | "renamed" | "pending"; title: string; chatId: string; roleId: string; threadId: number | null } {
+  if (action === "create") {
+    enqueueTelegramDelivery({
+      kind: "ack",
+      chatId: context.chatId,
+      payload: { method: "createForumTopic", name: title },
+    });
+    return { action: "pending", title, chatId: SECRETARY_CHAT_ID, roleId: SECRETARY_USER_ID, threadId: null };
+  }
+  const threadId = normalizeThreadId(context.threadId) ?? knownThreadOfRoom(context.botId, context.chatId);
+  if (!threadId) throw new Error("topic_required");
+  const binding = bindTopic({ botId: context.botId, chatId: context.chatId, threadId, title });
+  enqueueTelegramDelivery({
+    kind: "ack",
+    chatId: context.chatId,
+    payload: { method: "editForumTopic", message_thread_id: threadId, name: title },
+    threadId,
+  });
+  return { action: "renamed", title, chatId: binding.chat_id_target, roleId: binding.role_id, threadId };
+}
+
+/**
+ * Gateway ответил на `createForumTopic` — только здесь известен id треда.
+ * Вызывается из `/api/integrations/telegram/outbox/:id/result`.
+ * Неудача создания топика — не ошибка доставки: владелец получит обычный
+ * ответ в общий топик, а не молчание.
+ */
+function settleTelegramTopicDelivery(deliveryId: string, result: { ok?: boolean; threadId?: number; permanent?: boolean; error?: string }): void {
+  let row: { payload_json: string; kind: string } | undefined;
+  try { row = db.prepare("SELECT payload_json,kind FROM telegram_delivery_outbox WHERE delivery_id=?").get(deliveryId) as { payload_json: string; kind: string } | undefined; } catch { return; }
+  if (!row) return;
+  let payload: { method?: string; name?: string; message_thread_id?: number } = {};
+  try { payload = JSON.parse(row.payload_json); } catch { return; }
+  if (payload.method !== "createForumTopic") return;
+  const title = String(payload.name ?? "").trim();
+  if (!title) return;
+  const threadId = normalizeThreadId(result.threadId);
+  const chatId = (db.prepare("SELECT chat_id FROM telegram_delivery_outbox WHERE delivery_id=?").get(deliveryId) as { chat_id: string } | undefined)?.chat_id;
+  if (!chatId) return;
+  if (result.ok && threadId) {
+    try {
+      const binding = bindTopic({ botId: telegramConfig().botId, chatId, threadId, title });
+      enqueueTelegramDelivery({
+        kind: "ack",
+        chatId,
+        payload: { text: topicReplyText("created", binding.title ?? title, threadId), disable_notification: true },
+        threadId,
+      });
+    } catch (error) {
+      console.warn("[telegram] топик создан, но не привязан к комнате:", error);
+    }
+    return;
+  }
+  enqueueTelegramDelivery({
+    kind: "ack",
+    chatId,
+    payload: { text: `Не удалось создать топик «${title}»: режим топиков включается в @BotFather. Сообщения остаются в общем топике.`, disable_notification: true },
+  });
 }
 
 export function telegramStatus() {

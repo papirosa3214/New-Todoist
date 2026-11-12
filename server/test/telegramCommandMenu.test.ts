@@ -44,7 +44,8 @@ describe("telegram delivery contract", () => {
     expect(isKnownTelegramMethod("setMessageReaction")).toBe(true);
     expect(isKnownTelegramMethod("sendMessageDraft")).toBe(true);
     expect(isKnownTelegramMethod("deleteWebhook")).toBe(false);
-    expect(TELEGRAM_KNOWN_METHODS).not.toContain("sendRichMessage");
+    // Rich-сообщения добавлены коммитом 4614c01a (финал одним rich-сообщением).
+    expect(TELEGRAM_KNOWN_METHODS).toContain("sendRichMessage");
   });
 
   it("keeps a stable non-zero draft id per turn and defaults stream to auto", () => {
