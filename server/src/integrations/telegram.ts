@@ -4,6 +4,8 @@ import path from "path";
 import db from "../db.js";
 import { DB_PATH } from "../db.js";
 import { SECRETARY_CHAT_ID } from "../lib/secretaryReply.js";
+import type { AnswerPayload, QuestionPayload } from "../lib/chatQuestions.js";
+import { foldedQuestionHtml, questionWidgetHtml } from "../lib/telegramQuestionWidget.js";
 import { enqueueMessageDelivery } from "../runtime/chatQueue.js";
 import { resolveTelegramCommandText } from "../lib/telegramCommands.js";
 import { bindTopic, knownThreadOfRoom, normalizeThreadId, parseTopicCommand, telegramTopicsEnabled, topicReplyText, topicTargetChat } from "../lib/telegramTopics.js";
@@ -162,6 +164,10 @@ export const TELEGRAM_METHOD_POLICY = {
   // при ответе сервера на `/topic` (см. lib/telegramTopics.ts).
   createForumTopic: { kinds: ["ack"] },
   editForumTopic: { kinds: ["ack"] },
+  // Виджет вопроса (Bot API 10.4): одно сообщение вместо текста + карточки.
+  sendWidget: { kinds: ["ack"] },
+  // Свёрнутый виджет после ответа — вместо живого виджета в ленте.
+  editMessageWidgetData: { kinds: ["progress"] },
 } as const;
 
 export type TelegramMethod = keyof typeof TELEGRAM_METHOD_POLICY;
@@ -229,6 +235,17 @@ export function telegramFinalEnabled(): boolean {
 export function telegramStreamMode(): "auto" | "draft" | "edit" | "off" {
   const value = String(process.env.TASKFLOW_TELEGRAM_STREAM ?? "").trim().toLowerCase();
   return value === "draft" || value === "edit" || value === "off" ? value : "auto";
+}
+
+/**
+ * Вопрос роли уходит в Telegram виджетом. По умолчанию **выключено**
+ * (владелец 11.11.2026): виджет вопроса сейчас отправляет сам Помощник
+ * скриптом роли, и вторая автоматическая отправка дала бы два сообщения.
+ * Включить — `TASKFLOW_TELEGRAM_QUESTION_WIDGET=on`.
+ */
+export function telegramQuestionWidgetEnabled(): boolean {
+  const value = String(process.env.TASKFLOW_TELEGRAM_QUESTION_WIDGET ?? "").trim().toLowerCase();
+  return value === "1" || value === "on" || value === "true" || value === "yes";
 }
 
 /** `draft_id` стабилен на ход и не равен нулю — требование Bot API. */
@@ -611,6 +628,10 @@ export function expireTelegramQuestionKeyboards(): number {
 export function captureTelegramFinal(messageId: string): number {
   const reply = db.prepare("SELECT id,text,role_envelope_json,reply_to_message_id,from_user_id,stop_reason,partial FROM chat_messages WHERE id=?").get(messageId) as { id: string; text: string; role_envelope_json: string | null; reply_to_message_id: string | null; from_user_id: string; stop_reason: string | null; partial: number | null } | undefined;
   if (!reply || reply.from_user_id !== SECRETARY_USER_ID || !reply.reply_to_message_id) return 0;
+  // Вопрос ушёл виджетом — текстового дубля с тем же вопросом быть не должно
+  // (владелец 11.11.2026: сначала текст, потом карточка).
+  const asQuestion = db.prepare("SELECT 1 FROM chat_questions WHERE message_id=?").get(reply.id);
+  if (asQuestion) return 0;
   const links = db.prepare(`SELECT l.chat_id,l.message_id,l.thread_id FROM telegram_inbound_ledger l
     WHERE l.taskflow_message_id=? AND l.state='posted'`).all(reply.reply_to_message_id) as Array<{ chat_id: string; message_id: number; thread_id: number | null }>;
   // Конверт ответа роли — источник rich-версии; его plain-текст — основа
@@ -795,4 +816,93 @@ export function telegramStatus() {
     FROM telegram_delivery_outbox`).get();
   const inbound = db.prepare("SELECT MAX(update_id) last_update_id,SUM(CASE WHEN state='rejected' THEN 1 ELSE 0 END) rejected FROM telegram_inbound_ledger WHERE bot_id=?").get(telegramConfig().botId);
   return { ...counts as object, ...inbound as object };
+}
+export function captureQuestionWidget(questionId: string): number {
+  if (!telegramQuestionWidgetEnabled()) return 0;
+  const question = db
+    .prepare("SELECT id,chat_id,message_id,payload_json FROM chat_questions WHERE id=?")
+    .get(questionId) as { id: string; chat_id: string; message_id: string | null; payload_json: string } | undefined;
+  if (!question?.message_id) return 0;
+  const message = db
+    .prepare("SELECT reply_to_message_id FROM chat_messages WHERE id=?")
+    .get(question.message_id) as { reply_to_message_id: string | null } | undefined;
+  if (!message?.reply_to_message_id) return 0;
+  let payload: QuestionPayload;
+  try {
+    payload = JSON.parse(question.payload_json) as QuestionPayload;
+  } catch {
+    return 0;
+  }
+  const links = db.prepare(`SELECT chat_id,message_id FROM telegram_inbound_ledger
+    WHERE taskflow_message_id=? AND state='posted'`).all(message.reply_to_message_id) as Array<{ chat_id: string; message_id: number }>;
+  let count = 0;
+  for (const link of links) {
+    const already = db
+      .prepare("SELECT 1 FROM telegram_delivery_outbox WHERE source_message_id=? AND kind='ack' AND payload_json LIKE '%sendWidget%'")
+      .get(question.message_id);
+    if (already) continue;
+    enqueueTelegramDelivery({
+      kind: "ack",
+      chatId: link.chat_id,
+      payload: { method: "sendWidget", html: questionWidgetHtml(payload), height: 260, allow_queries: false },
+      replyToMessageId: link.message_id,
+      sourceMessageId: question.message_id,
+    });
+    count++;
+  }
+  return count;
+}
+
+/**
+ * Виджет вопроса после ответа: сворачиваем в строку «Вопрос: … → Ответ: …».
+ *
+ * Сворачивание, а не `deleteMessage`: у удаления в outbox нет транспорта (см.
+ * TELEGRAM_METHOD_POLICY — там нет deleteMessage), а несверный live-виджет
+ * продолжает перерисовываться в ленте — ровно то, на что жалуется владелец.
+ * Правка тем же сообщением оставляет в ленте историю ответа и не требует
+ * нового метода. Если сообщения уже нет — Telegram ответит ошибкой, доставка
+ * помечается abandoned, лента не ломается.
+ */
+export function foldQuestionWidget(questionId: string): number {
+  const question = db
+    .prepare("SELECT id,message_id,payload_json,answer_json FROM chat_questions WHERE id=?")
+    .get(questionId) as { id: string; message_id: string | null; payload_json: string; answer_json: string | null } | undefined;
+  if (!question?.message_id) return 0;
+  let payload: QuestionPayload;
+  let answer: AnswerPayload | null = null;
+  try {
+    payload = JSON.parse(question.payload_json) as QuestionPayload;
+  } catch {
+    return 0;
+  }
+  if (question.answer_json) {
+    try {
+      answer = JSON.parse(question.answer_json) as AnswerPayload;
+    } catch {
+      answer = null;
+    }
+  }
+  const delivered = db
+    .prepare("SELECT telegram_message_id,chat_id FROM telegram_delivery_outbox WHERE source_message_id=? AND kind='ack' AND state='delivered' AND telegram_message_id IS NOT NULL LIMIT 1")
+    .get(question.message_id) as { telegram_message_id: number; chat_id: string } | undefined;
+  const already = db
+    .prepare("SELECT 1 FROM telegram_delivery_outbox WHERE source_message_id=? AND payload_json LIKE '%editMessageWidgetData%'")
+    .get(question.message_id);
+  if (already) return 0;
+  if (!delivered) {
+    // Виджет не дошёл до Telegram (владелец отвечал в чате TaskFlow) — сворачивать нечего.
+    return 0;
+  }
+  enqueueTelegramDelivery({
+    kind: "progress",
+    chatId: delivered.chat_id,
+    payload: {
+      method: "editMessageWidgetData",
+      message_id: delivered.telegram_message_id,
+      html: foldedQuestionHtml(payload, answer),
+      height: 120,
+    },
+    sourceMessageId: question.message_id,
+  });
+  return 1;
 }

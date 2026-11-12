@@ -344,6 +344,45 @@ async function sendDelivery(delivery, payload) {
     return;
   }
 
+  // Виджет вопроса (Bot API 10.4): html уже проверен сервером по лимитам.
+  if (method === "sendWidget") {
+    try {
+      const sent = await telegram("sendWidget", {
+        chat_id: Number(delivery.chat_id),
+        html: String(payload.html || ""),
+        allow_queries: payload.allow_queries === true,
+        ...(Number.isSafeInteger(Number(payload.height)) && Number(payload.height) > 0 ? { height: Number(payload.height) } : {}),
+        ...(Number.isSafeInteger(Number(payload.width)) && Number(payload.width) > 0 ? { width: Number(payload.width) } : {}),
+      });
+      await settle(delivery, { ok: true, telegramMessageId: sent.message_id });
+    } catch (error) {
+      // Виджет — украшение вопроса: при отказе Telegram не теряем ход и не
+      // ретраим вслепую, но владелец видит, что вопрос не дошёл.
+      log("widget_failed", { delivery_id: delivery.delivery_id, status: Number(error.status || 0), error: String(error.message || error).slice(0, 300) });
+      await settle(delivery, { ok: false, permanent: true, error: `sendWidget:${String(error.message || error).slice(0, 200)}` });
+    }
+    return;
+  }
+
+  if (method === "editMessageWidgetData") {
+    const messageId = Number(payload.message_id ?? payload.reply_to_message_id ?? 0);
+    try {
+      await telegram("editMessageWidgetData", {
+        chat_id: Number(delivery.chat_id),
+        message_id: messageId,
+        html: String(payload.html || ""),
+        ...(Number.isSafeInteger(Number(payload.height)) && Number(payload.height) > 0 ? { height: Number(payload.height) } : {}),
+      });
+      await settle(delivery, { ok: true, telegramMessageId: messageId });
+    } catch (error) {
+      // Сообщения уже нет или оно старше лимита правки — лента важнее: не
+      // ретраим, но и не считаем доставку успешной.
+      log("widget_edit_failed", { delivery_id: delivery.delivery_id, status: Number(error.status || 0), error: String(error.message || error).slice(0, 300) });
+      await settle(delivery, { ok: false, permanent: true, error: `editMessageWidgetData:${String(error.message || error).slice(0, 200)}` });
+    }
+    return;
+  }
+
   if (method === "sendRichMessage") {
     await sendRich(delivery, payload, text);
     return;

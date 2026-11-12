@@ -32,6 +32,7 @@ import {
 } from "../lib/chatQuestions.js";
 import { broadcastToUsers } from "../ws.js";
 import { liveInterruptEvent, liveResumeEvent, waitForAnswer } from "../lib/questionWait.js";
+import { captureQuestionWidget } from "../integrations/telegram.js";
 import { saveUploadedFile, UploadRejected } from "../routes/attachments.js";
 import { roleUserId } from "../roleRouting.js";
 import { lazyTaskChatContext, type ChatContext } from "./taskChatContext.js";
@@ -428,9 +429,15 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         const участники = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(chatCtx.chatId) as Array<{ member_id: string }>)
           .map((row) => row.member_id);
         broadcastToUsers(участники, { type: "chat:new", message: loadChatMessage(messageId) });
-        // Вопрос в Telegram уходит кнопками вместе с нумерованным текстом
-        // (этап 3 плана): текстовый ответ и ответ номером работают всегда.
-        try { captureQuestionToTelegram(вопрос.id); } catch (error) { console.warn("[chatTools] вопрос не ушёл в Telegram:", error); }
+        // Вопрос в Telegram: либо виджет (одно сообщение, выключатель
+        // TASKFLOW_TELEGRAM_QUESTION_WIDGET), либо текст с кнопками. Два
+        // сообщения об одном вопросе владелец видеть не должен (11.11.2026).
+        let виджетУшёл = 0;
+        try { виджетУшёл = captureQuestionWidget(вопрос.id); } catch (error) { console.warn("[chatTools] виджет вопроса не ушёл в Telegram:", error); }
+        if (!виджетУшёл) {
+          // Текст с кнопками: текстовый ответ и ответ номером работают всегда.
+          try { captureQuestionToTelegram(вопрос.id); } catch (error) { console.warn("[chatTools] вопрос не ушёл в Telegram:", error); }
+        }
         const ждём = waitForAnswer(вопрос.id, { signal });
         broadcastToUsers(участники, liveInterruptEvent({ chatId: chatCtx.chatId, userId: roleId, questionId: вопрос.id, messageId, payload }));
         const ответ = await ждём;
