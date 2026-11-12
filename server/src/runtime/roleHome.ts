@@ -157,6 +157,12 @@ export function chatReportInstruction():string {
   return readCanon(path.resolve(process.cwd(), "scripts", "role-chat-report.md")) ?? "";
 }
 
+/** Контракт ответа роли (scripts/role-answer-contract.md) отдельно — для
+ *  сессии владельца, где правил чат-комнаты нет, а блоки ответа нужны. */
+export function roleAnswerContract(): string {
+  return readCanon(path.resolve(process.cwd(), "scripts", "role-answer-contract.md")) ?? "";
+}
+
 export function renderPromptAddendum(
   kind: RunKind,
   role: string,

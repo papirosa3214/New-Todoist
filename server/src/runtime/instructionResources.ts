@@ -16,7 +16,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import {registerInstructionBlock, composeLayer, LAYER_CATALOG, type RunMode} from '../lib/roleContextResolver.js';
 import {INSTRUCTION_DEFAULTS} from './instructionDefaults.js';
-import {ensureRoleHome, roleHome, roleHomeInstruction, systemPromptSourceFile, renderSystemPrompt, renderPromptAddendum, roleAgentsSection} from './roleHome.js';
+import {ensureRoleHome, roleHome, roleHomeInstruction, systemPromptSourceFile, renderSystemPrompt, renderPromptAddendum, roleAgentsSection, roleAnswerContract} from './roleHome.js';
 import type { RuleChannel } from '../lib/roleRules.js';
 import { withObservationContext } from "../lib/contextObservability.js";
 import { selectSkillsByJev } from "../lib/memorySkillsJev.js";
@@ -261,6 +261,15 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  if(useRegistry){const agents=roleAgentsSection(role);if(agents)append.push(agents);}
  for(const file of useRegistry?[]:discovered.agentsFiles)append.push('# '+file.path+'\n'+(composeLayer(role,keyFor(file.path))?.effective ?? fs.readFileSync(file.path,'utf8')));
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))?.effective ?? fs.readFileSync(source.path,'utf8'));
+ // Сессия владельца (владелец 12.11.2026: «из реестра почисти всё ненужное
+ // для сессии»): после реестра и AGENTS.md — только род и контракт ответа.
+ // Правил чат-комнаты (коллеги, кнопки, чек-лист чата), «ключа роли» и
+ // повтора папки (она уже в реестре, R010) в сессии нет.
+ if(channel==="session"){
+  append.push(genderInstruction(role));
+  append.push(roleAnswerContract());
+  return [base,...append.filter(Boolean)].join('\n\n');
+ }
  // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).
  append.push(roleHomeInstruction(role));
  append.push(useRegistry?genderInstruction(role):behaviorInstruction(role));

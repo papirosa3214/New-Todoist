@@ -104,6 +104,13 @@ describe("реестр: подключение", () => {
     const prompt = await chatSystemPrompt("secretary", "work", roleHome("secretary").workspace, undefined, "session");
     expect(prompt.startsWith(buildRegistryRules("secretary", "session").text)).toBe(true);
     expect(prompt).not.toContain("Роль analyst");
+    // Кроме реестра в сессии — только контракт ответа (по нему приложение
+    // рисует блоки); правила чат-комнаты, «ключ роли» и повтор папки не идут.
+    expect(prompt).toContain("# Форма ответа роли");
+    expect(prompt).not.toContain("# Инструкция роли: работа в чате");
+    expect(prompt).not.toContain("ключ роли:");
+    expect(prompt).not.toContain("Постоянная папка роли secretary");
+    expect(prompt).not.toContain("ПРОМЕЖУТОЧНЫЕ ПОЯСНЕНИЯ");
   });
   it("исключение: текстовый чат researcher остаётся на коротком файле", async () => {
     expect(await chatSystemPrompt("researcher", "work", roleHome("researcher").workspace)).toBe(singleChatSystemPrompt("researcher"));
