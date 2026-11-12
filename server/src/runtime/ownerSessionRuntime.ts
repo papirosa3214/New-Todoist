@@ -16,6 +16,7 @@ import {
   type SpawnedChildSession,
 } from "./spawnChildSessionTool.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
+import type { OwnerSessionProfile } from "./ownerAssistantProfile.js";
 
 export type OwnerSessionPromptMode = "prompt" | "steer" | "follow_up";
 export type OwnerSessionRelation = "root" | "fork" | "subagent";
@@ -64,12 +65,17 @@ export interface OwnerSessionRuntimeOptions {
   cwd: string;
   sessionDir: string;
   createSession?: (manager: SessionManager, options?: OwnerSessionCreateOptions) => Promise<OwnerAgentSession>;
+  /** Профиль Помощника для сессий разговора (корень, новая, ответвление). */
+  assistantProfile?: (sessionId: string) => Promise<OwnerSessionProfile>;
 }
 
 export interface OwnerSessionCreateOptions {
   tools?: readonly string[];
   customTools?: ToolDefinition[];
   modelRef?: { provider: string; id: string };
+  /** Сессия разговора владельца — с профилем Помощника; субагент — без. */
+  assistant?: boolean;
+  profile?: OwnerSessionProfile;
 }
 
 export class OwnerSessionNotFoundError extends Error {
@@ -119,15 +125,30 @@ async function createDefaultSession(
   if (options.modelRef && !model) {
     throw new Error(`Owner session model ${options.modelRef.provider}/${options.modelRef.id} is unavailable`);
   }
+  const profile = options.profile;
+  const customTools = [...(profile?.customTools ?? []), ...(options.customTools ?? [])];
   const { session } = await createAgentSession({
     cwd,
     sessionManager: manager,
     settingsManager: SettingsManager.create(cwd),
     modelRuntime,
     model,
-    tools: options.tools ? [...options.tools] : undefined,
-    customTools: options.customTools,
+    ...(profile ? { resourceLoader: profile.resourceLoader as any } : {}),
+    tools: options.tools
+      ? [...options.tools]
+      : profile
+        ? [...profile.toolNames, ...(options.customTools ?? []).map(tool => tool.name)]
+        : undefined,
+    customTools: customTools.length ? customTools : undefined,
   });
+  if (profile) {
+    profile.install(session);
+    const dispose = session.dispose.bind(session);
+    session.dispose = () => {
+      dispose();
+      void profile.dispose();
+    };
+  }
   return session;
 }
 
@@ -152,9 +173,12 @@ export class OwnerSessionRuntime {
   constructor(options: OwnerSessionRuntimeOptions) {
     this.cwd = options.cwd;
     this.sessionDir = options.sessionDir;
-    this.createSession = options.createSession ?? ((manager, createOptions = {}) => createDefaultSession(manager, {
+    this.createSession = options.createSession ?? (async (manager, createOptions = {}) => createDefaultSession(manager, {
       ...createOptions,
       customTools: createOptions.customTools ?? [this.childToolFor(manager)],
+      profile: createOptions.assistant && options.assistantProfile
+        ? await options.assistantProfile(manager.getSessionId())
+        : undefined,
     }));
     fs.mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });
   }
@@ -169,6 +193,12 @@ export class OwnerSessionRuntime {
     const handle = await this.install(manager);
     this.rootSessionId = handle.manager.getSessionId();
     return this.snapshot(this.rootSessionId);
+  }
+
+  /** Новая сессия разговора рядом с прежними (владелец 12.11.2026: сессий сколько угодно). */
+  async createRoot(): Promise<OwnerSessionSnapshot> {
+    const handle = await this.install(SessionManager.create(this.cwd, this.sessionDir));
+    return this.snapshot(handle.manager.getSessionId());
   }
 
   async list(): Promise<OwnerSessionListItem[]> {
@@ -391,9 +421,11 @@ export class OwnerSessionRuntime {
   }
 
   private defaultCreateOptions(manager: SessionManager): OwnerSessionCreateOptions {
-    if (this.relation(manager) !== "root") return {};
+    const relation = this.relation(manager);
+    if (relation === "subagent") return {};
+    if (relation !== "root") return { assistant: true };
     const hasPersistedModel = manager.getBranch().some(entry => entry.type === "model_change");
-    return hasPersistedModel ? {} : { modelRef: OWNER_ROOT_DEFAULT_MODEL };
+    return hasPersistedModel ? { assistant: true } : { assistant: true, modelRef: OWNER_ROOT_DEFAULT_MODEL };
   }
 
   private isRelationEntry(entry: SessionEntry): boolean {

@@ -13,9 +13,10 @@ import {
   type OwnerSessionPromptMode,
 } from "../runtime/ownerSessionRuntime.js";
 import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
+import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
 
 type RuntimeContract = Pick<OwnerSessionRuntime,
-  "openRoot" | "open" | "list" | "snapshot" | "prompt" | "abort" | "branch" | "fork" | "subscribe" | "setModel"
+  "openRoot" | "createRoot" | "open" | "list" | "snapshot" | "prompt" | "abort" | "branch" | "fork" | "subscribe" | "setModel"
 > & {
   subscribeAll?: OwnerSessionRuntime["subscribeAll"];
 };
@@ -41,7 +42,12 @@ function productionDependencies(): OwnerSessionRouteDependencies {
     const sessionDir = process.env.VITEST
       ? path.join(os.tmpdir(), `taskflow-owner-sessions-${process.pid}`)
       : path.join(runsRoot, "owner-sessions");
-    defaultRuntime = new OwnerSessionRuntime({ cwd, sessionDir });
+    defaultRuntime = new OwnerSessionRuntime({
+      cwd,
+      sessionDir,
+      // В тестах профиль не собираем: он подключает MCP и Composio.
+      ...(process.env.VITEST ? {} : { assistantProfile: ownerAssistantProfile }),
+    });
   }
   defaultEvents ??= new OwnerSessionEventBuffer();
   return {
@@ -146,6 +152,14 @@ export function registerOwnerSessionRoutes(
       return sendRuntimeError(reply, error);
     }
   });
+
+  // Новая сессия разговора (владелец 12.11.2026: «просто обычные сессии»).
+  app.post("/api/sessions", { preHandler: ownerOnly }, async (request: any, reply) =>
+    mutate(request, reply, "create-root", 201, async () => {
+      const session = await runtime.createRoot();
+      await ensureForwarding(session.id, request.userId);
+      return { session };
+    }));
 
   app.get("/api/sessions", { preHandler: ownerOnly }, async () => {
     const sessions = (await runtime.list()).map(session => ({

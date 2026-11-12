@@ -28,6 +28,11 @@ class FakeRuntime {
   listeners = new Map<string, Set<(event: any) => void>>();
 
   async openRoot() { return rootSnapshot; }
+  createdRoots = 0;
+  async createRoot() {
+    this.createdRoots += 1;
+    return { ...rootSnapshot, id: `new-root-${this.createdRoots}`, entries: [] };
+  }
   async open(id: string) { return this.snapshot(id); }
   async list() {
     return [{ id: rootSnapshot.id, cwd: rootSnapshot.cwd, name: "Owner assistant", parentSessionPath: undefined, relation: "root" }];
@@ -110,6 +115,18 @@ describe("owner session API", () => {
     });
     expect(snapshot.json()).toEqual({ session: rootSnapshot });
     expect(runtime.listeners.get("root-session")?.size).toBe(1);
+  });
+
+  it("creates a new root session once per request ID and forwards its events", async () => {
+    const request = { method: "POST" as const, url: "/api/sessions", headers: ownerHeaders, payload: { requestId: "new-1" } };
+    const created = await app.inject(request);
+    const repeated = await app.inject(request);
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json().session).toMatchObject({ id: "new-root-1", relation: "root" });
+    expect(repeated.json().session.id).toBe("new-root-1");
+    expect(runtime.createdRoots).toBe(1);
+    expect(runtime.listeners.get("new-root-1")?.size).toBe(1);
   });
 
   it.each(["prompt", "steer", "follow_up"])("dispatches explicit %s mode", async mode => {

@@ -108,6 +108,39 @@ describe("OwnerSessionRuntime", () => {
     expect(h.createOptions[1]).not.toMatchObject({ modelRef: expect.anything() });
   });
 
+  // Владелец 12.11.2026: «из помощника делать не роль, а просто обычные
+  // сессии». Каждая сессия разговора — это Помощник: его инструкция и
+  // инструменты. Субагенты получают свой профиль отдельно.
+  it("gives root, new and forked sessions the assistant profile", async () => {
+    const h = harness();
+    const runtime = new OwnerSessionRuntime(h);
+
+    const root = await runtime.openRoot();
+    await runtime.createRoot();
+    await runtime.prompt(root.id, "fork source", "prompt");
+    await runtime.fork(root.id, (await runtime.snapshot(root.id)).leafId!);
+
+    expect(h.createOptions).toHaveLength(3);
+    for (const options of h.createOptions) expect(options).toMatchObject({ assistant: true });
+  });
+
+  it("creates more root sessions next to the reusable one", async () => {
+    const h = harness();
+    const runtime = new OwnerSessionRuntime(h);
+    const first = await runtime.openRoot();
+    const second = await runtime.createRoot();
+    await runtime.prompt(first.id, "first", "prompt");
+    await runtime.prompt(second.id, "second", "prompt");
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.relation).toBe("root");
+    expect(h.createOptions[1]).toMatchObject({
+      modelRef: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+    });
+    const roots = (await runtime.list()).filter(session => session.relation === "root");
+    expect(roots.map(session => session.id).sort()).toEqual([first.id, second.id].sort());
+  });
+
   it("reuses the persisted root session", async () => {
     const h = harness();
     const firstRuntime = new OwnerSessionRuntime(h);
