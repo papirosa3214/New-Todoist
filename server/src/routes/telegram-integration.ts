@@ -12,6 +12,7 @@ import {
   expireTelegramQuestionKeyboards,
   isKnownTelegramMethod,
   isLoopback,
+  foldQuestionWidget,
   markTelegramSending,
   parseTelegramQuestionCallback,
   releaseTelegramQuestionKeyboard,
@@ -193,6 +194,9 @@ function settleTelegramQuestionAnswer(question: QuestionRow, answer: AnswerPaylo
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(question.chat_id);
   })();
   if (!closed) return null;
+  // Живой виджет вопроса в ленте сворачивается в строку «Вопрос: … → Ответ: …»
+  // тем же message_id: иначе он перерисовывается и остаётся висеть (11.11.2026).
+  try { foldQuestionWidget(question.id); } catch (error) { console.warn("[telegram] виджет вопроса не свёрнут:", error); }
   broadcastToUsers(
     (db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(question.chat_id) as Array<{ member_id: string }>).map((row) => row.member_id),
     { type: "chat:new", message: loadChatMessage(id) },
