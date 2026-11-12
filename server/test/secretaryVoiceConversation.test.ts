@@ -9,7 +9,7 @@ import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 vi.mock("../src/runtime/composioRuntime.js",()=>({connectRoleComposio:async()=>({tools:[],close:async()=>{}})}));
 vi.mock("../src/runtime/graftMcp.js",()=>({connectRoleMcp:async()=>({tools:[],close:async()=>{}})}));
-import { voiceChatContext, saveVoiceMessage, assertVoiceChat, voiceSummaryText } from "../src/lib/secretaryVoiceConversation.js";
+import { voiceChatContext, saveVoiceMessage, assertVoiceChat, voiceSummaryText, setOwnerSessionVoiceTarget } from "../src/lib/secretaryVoiceConversation.js";
 
 describe("голос сохраняет исходный чат без второй генерации", () => {
   let owner: string;
@@ -33,6 +33,25 @@ describe("голос сохраняет исходный чат без втор�
   });
 
   afterAll(async()=>{ await stopBridge(); await app.close(); });
+
+  // Владелец 12.11.2026: голосовой вызов в сессии владельца — тот же мост,
+  // вместо чата номер сессии; реплики и контекст — в сессии, не в чате.
+  it("голос в сессии владельца: доступ, контекст и реплики — через сессию", () => {
+    const saved: any[] = [];
+    setOwnerSessionVoiceTarget({
+      hasSession: (id) => id === "owner-session-1",
+      appendVoice: (id, eventId, role, text) => { saved.push({ id, eventId, role, text }); return "entry-" + saved.length; },
+      voiceContext: () => [{ id: "e1", role: "user", text: "Из сессии" }],
+    });
+    try {
+      expect(() => assertVoiceChat(owner, "owner-session-1")).not.toThrow();
+      expect(() => assertVoiceChat("role_builder", "owner-session-1")).toThrow();
+      expect(voiceChatContext(owner, "owner-session-1")).toEqual([{ id: "e1", role: "user", text: "Из сессии" }]);
+      expect(saveVoiceMessage(owner, "owner-session-1", "room:item", "assistant", "Голосом")).toBe("entry-1");
+      expect(saved).toEqual([{ id: "owner-session-1", eventId: "room:item", role: "assistant", text: "Голосом" }]);
+      expect(db.prepare("SELECT COUNT(*) AS n FROM chat_messages WHERE chat_id='owner-session-1'").get()).toEqual({ n: 0 });
+    } finally { setOwnerSessionVoiceTarget(undefined); }
+  });
 
   it("записывает обе стороны и идемпотентно переживает повтор события", () => {
     const first = saveVoiceMessage(owner,"voice-a","room1:item1","user","Вспомни наш разговор");

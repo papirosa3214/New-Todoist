@@ -8,7 +8,21 @@ import { broadcastToUsers } from "../ws.js";
 const SECRETARY = "u-secretary";
 
 /** Голос предназначен для личного диалога владельца с Секретарём. */
+/** Сессия владельца как цель голоса (владелец 12.11.2026): если номер — не
+ *  чат, а сессия, контекст и реплики идут в сессию. Ставит маршрут сессий. */
+export interface OwnerSessionVoiceTarget {
+  hasSession(id: string): boolean;
+  appendVoice(id: string, eventId: string, role: "user" | "assistant", text: string): string;
+  voiceContext(id: string): Array<{ id: string; role: "user" | "assistant"; text: string }>;
+}
+let sessionTarget: OwnerSessionVoiceTarget | undefined;
+export function setOwnerSessionVoiceTarget(target: OwnerSessionVoiceTarget | undefined): void { sessionTarget = target; }
+const isVoiceSession = (owner: string, id: unknown): id is string =>
+  isOwner(owner) && typeof id === "string" && Boolean(id) && Boolean(sessionTarget?.hasSession(id))
+  && !db.prepare("SELECT 1 FROM chats WHERE id=?").get(id);
+
 export function assertVoiceChat(owner: string, chatId: unknown): asserts chatId is string {
+  if (isVoiceSession(owner, chatId)) return;
   if (!isOwner(owner) || typeof chatId !== "string" || !chatId) throw new Error("нет доступа к голосовому чату");
   const chat = db.prepare("SELECT kind,closed_at FROM chats WHERE id=?").get(chatId) as any;
   const members = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(chatId) as {member_id:string}[]).map(m=>m.member_id);
@@ -19,6 +33,7 @@ export function assertVoiceChat(owner: string, chatId: unknown): asserts chatId 
 
 export function voiceChatContext(owner: string, chatId: string) {
   assertVoiceChat(owner,chatId);
+  if (isVoiceSession(owner, chatId)) return sessionTarget!.voiceContext(chatId);
   const rows = db.prepare("SELECT id,from_user_id FROM chat_messages WHERE chat_id=? AND from_user_id IN (?,?) AND COALESCE(is_session_marker,0)=0 ORDER BY rowid DESC LIMIT 40").all(chatId,owner,SECRETARY) as {id:string;from_user_id:string}[];
   return rows.reverse().map(row=>{
     const message = loadChatMessage(row.id) as any;
@@ -33,6 +48,7 @@ export function saveVoiceMessage(owner: string, chatId: string, eventId: string,
   if (!["user","assistant"].includes(role) || typeof eventId!=="string" || !eventId || eventId.length>512 || typeof text!=="string" || !text.trim() || text.length>100000) {
     throw new Error("неверное голосовое сообщение");
   }
+  if (isVoiceSession(owner, chatId)) return sessionTarget!.appendVoice(chatId, eventId, role, text);
   const id = "voice-"+createHash("sha256").update(JSON.stringify([owner,chatId,eventId])).digest("hex");
   const inserted = db.transaction(()=>{
     const result = db.prepare("INSERT OR IGNORE INTO chat_messages(id,from_user_id,text,channel,chat_id,execution_mode) VALUES (?,?,?,'chat',?,?)").run(id,role==="user" ? owner : SECRETARY,text,chatId,role==="user" && isCardHandoffCommand(text) ? "card" : chatExecutionMode(chatId));

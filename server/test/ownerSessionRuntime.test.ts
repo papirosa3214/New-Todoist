@@ -163,6 +163,28 @@ describe("OwnerSessionRuntime", () => {
     expect(accepted).toBe("accepted");
   });
 
+  // Владелец 12.11.2026: голосовой вызов в сессии — реплики голоса
+  // ложатся в саму сессию и видны модели на следующем ходу.
+  it("stores voice turns in the session once per event and returns them as context", async () => {
+    const h = harness();
+    const runtime = new OwnerSessionRuntime(h);
+    const root = await runtime.openRoot();
+    await runtime.prompt(root.id, "Текстом", "prompt");
+
+    expect(runtime.hasSession(root.id)).toBe(true);
+    expect(runtime.hasSession("missing")).toBe(false);
+    const first = runtime.appendVoice(root.id, "room1:item1", "user", "Скажи голосом");
+    const again = runtime.appendVoice(root.id, "room1:item1", "user", "Скажи голосом");
+    runtime.appendVoice(root.id, "room1:item2", "assistant", "Говорю");
+
+    expect(again).toBe(first);
+    expect(runtime.voiceContext(root.id)).toEqual([
+      { id: expect.any(String), role: "user", text: "Текстом" },
+      { id: expect.any(String), role: "user", text: "Скажи голосом" },
+      { id: expect.any(String), role: "assistant", text: "Говорю" },
+    ]);
+  });
+
   it("reuses the persisted root session", async () => {
     const h = harness();
     const firstRuntime = new OwnerSessionRuntime(h);

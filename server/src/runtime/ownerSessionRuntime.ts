@@ -23,6 +23,7 @@ export type OwnerSessionRelation = "root" | "fork" | "subagent";
 export type OwnerSessionListItem = SessionInfo & { relation: OwnerSessionRelation };
 
 const SESSION_RELATION_ENTRY = "taskflow.session-relation";
+const VOICE_ENTRY = "taskflow.voice";
 export const OWNER_ROOT_DEFAULT_MODEL = {
   provider: "opencode-go",
   id: "deepseek-v4.1-flash",
@@ -193,6 +194,52 @@ export class OwnerSessionRuntime {
     const handle = await this.install(manager);
     this.rootSessionId = handle.manager.getSessionId();
     return this.snapshot(this.rootSessionId);
+  }
+
+  /** Есть ли сессия владельца с таким id (голосовой мост различает чат и сессию). */
+  hasSession(id: string): boolean {
+    if (this.handles.has(id)) return true;
+    try { return Boolean(SessionManager.findById(this.cwd, id, this.sessionDir)); } catch { return false; }
+  }
+
+  /** Реплика голосового разговора в сессии (владелец 12.11.2026): запись
+   *  `taskflow.voice` в файле сессии — модель видит её на следующем ходу.
+   *  Повтор того же события голоса не дублирует запись. */
+  appendVoice(id: string, eventId: string, role: "user" | "assistant", text: string): string {
+    const manager = this.voiceManager(id);
+    const existing = manager.getEntries().find(entry =>
+      entry.type === "custom_message" && (entry as any).customType === VOICE_ENTRY
+      && (entry as any).details?.eventId === eventId);
+    if (existing) return existing.id;
+    const label = role === "user" ? "Владелец голосом" : "Помощник голосом";
+    return manager.appendCustomMessageEntry(VOICE_ENTRY, `${label}: ${text}`, true, { role, eventId, text });
+  }
+
+  /** Последние реплики сессии для голоса: текст и голос вперемешку, по порядку. */
+  voiceContext(id: string, limit = 40): Array<{ id: string; role: "user" | "assistant"; text: string }> {
+    const out: Array<{ id: string; role: "user" | "assistant"; text: string }> = [];
+    for (const entry of this.voiceManager(id).getBranch() as any[]) {
+      if (entry.type === "custom_message" && entry.customType === VOICE_ENTRY && entry.details?.text) {
+        out.push({ id: entry.id, role: entry.details.role === "assistant" ? "assistant" : "user", text: String(entry.details.text) });
+        continue;
+      }
+      if (entry.type !== "message") continue;
+      const role = entry.message?.role;
+      if (role !== "user" && role !== "assistant") continue;
+      const content = entry.message.content;
+      const text = typeof content === "string" ? content
+        : Array.isArray(content) ? content.filter((part: any) => part?.type === "text").map((part: any) => part.text).join("") : "";
+      if (text.trim()) out.push({ id: entry.id, role, text: text.slice(0, 12000) });
+    }
+    return out.slice(-limit);
+  }
+
+  private voiceManager(id: string): SessionManager {
+    const handle = this.handles.get(id);
+    if (handle) return handle.manager;
+    const file = SessionManager.findById(this.cwd, id, this.sessionDir);
+    if (!file) throw new OwnerSessionNotFoundError(id);
+    return SessionManager.open(file, this.sessionDir, this.cwd);
   }
 
   /** Новая сессия разговора рядом с прежними (владелец 12.11.2026: сессий сколько угодно). */

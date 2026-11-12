@@ -14,6 +14,7 @@ import {
 } from "../runtime/ownerSessionRuntime.js";
 import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
 import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
+import { setOwnerSessionVoiceTarget } from "../lib/secretaryVoiceConversation.js";
 import { ownerSessionMeta, type OwnerSessionMetaPatch, type OwnerSessionMetaStore } from "../lib/ownerSessionMeta.js";
 
 type RuntimeContract = Pick<OwnerSessionRuntime,
@@ -50,6 +51,8 @@ function productionDependencies(): OwnerSessionRouteDependencies {
       // В тестах профиль не собираем: он подключает MCP и Composio.
       ...(process.env.VITEST ? {} : { assistantProfile: ownerAssistantProfile }),
     });
+    // Голосовой вызов в сессии: мост Помощника пишет реплики в сессию.
+    setOwnerSessionVoiceTarget(defaultRuntime);
   }
   defaultEvents ??= new OwnerSessionEventBuffer();
   return {
