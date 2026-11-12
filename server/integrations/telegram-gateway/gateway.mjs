@@ -7,6 +7,7 @@
 // `sendMessageDraft` с безусловным откатом на правку `editMessageText` (этап 4).
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatTelegramText, stripHtml } from "./format.mjs";
 
 const token = required("TELEGRAM_BOT_TOKEN");
 const secret = required("TASKFLOW_TELEGRAM_INTEGRATION_SECRET");
@@ -65,6 +66,40 @@ async function telegram(method, body) {
   const data = await response.json();
   if (!data.ok) throw Object.assign(new Error(data.description || `Telegram ${method} failed`), { status: response.status, parameters: data.parameters });
   return data.result;
+}
+/**
+ * Ответ роли уходит в Telegram разметкой, а не плоским текстом: `**жирный**`,
+ * `код`, блок кода и таблица «палочками» без `parse_mode` приезжают символами.
+ * Markdown переводится в HTML Telegram (`parse_mode=HTML`); если Bot API
+ * отверг разметку (400 «can't parse entities») — тот же текст уходит без
+ * разметки, чтобы ответ не потерялся.
+ */
+async function sendTelegramMessage(args) {
+  const formatted = formatTelegramText(args.text);
+  if (!formatted.changed) return telegram("sendMessage", args);
+  try {
+    return await telegram("sendMessage", { ...args, text: formatted.html, parse_mode: "HTML" });
+  } catch (error) {
+    if (Number(error.status) === 400) {
+      log("format_fallback", { method: "sendMessage", error: String(error.message || error) });
+      return telegram("sendMessage", { ...args, text: stripHtml(formatted.html) });
+    }
+    throw error;
+  }
+}
+/** Правка сообщения — тем же правилом, что и отправка. */
+async function editTelegramMessage(args) {
+  const formatted = formatTelegramText(args.text);
+  if (!formatted.changed) return telegram("editMessageText", args);
+  try {
+    return await telegram("editMessageText", { ...args, text: formatted.html, parse_mode: "HTML" });
+  } catch (error) {
+    if (Number(error.status) === 400) {
+      log("format_fallback", { method: "editMessageText", error: String(error.message || error) });
+      return telegram("editMessageText", { ...args, text: stripHtml(formatted.html) });
+    }
+    throw error;
+  }
 }
 function authorized(message) { return message?.chat?.type === "private" && !message?.from?.is_bot && message.from.id === allowedUser && message.chat.id === allowedChat && message.from.id === message.chat.id; }
 function attachmentMeta(message) {
@@ -249,7 +284,7 @@ async function saveStatusBubbles() {
   try { await fs.mkdir(path.dirname(statusPath), { recursive: true }); const tmp = `${statusPath}.tmp`; await fs.writeFile(tmp, JSON.stringify({ bubbles: statusBubbles, updated_at: new Date().toISOString() })); await fs.rename(tmp, statusPath); } catch {}
 }
 async function editStatus(chatId, telegramMessageId, text, disableNotification, replyMarkup) {
-  try { await telegram("editMessageText", { chat_id: chatId, message_id: telegramMessageId, text: String(text || "").slice(0, STATUS_TEXT_MAX), ...(replyMarkup ? { reply_markup: replyMarkup } : {}), ...(disableNotification === undefined ? {} : { disable_notification: disableNotification }) }); return true; }
+  try { await editTelegramMessage({ chat_id: chatId, message_id: telegramMessageId, text: String(text || "").slice(0, STATUS_TEXT_MAX), ...(replyMarkup ? { reply_markup: replyMarkup } : {}), ...(disableNotification === undefined ? {} : { disable_notification: disableNotification }) }); return true; }
   catch { return false; }
 }
 /** `message_thread_id` — единственная адресация топика в личном чате (живой
@@ -313,7 +348,7 @@ async function sendDelivery(delivery, payload) {
     const messageId = Number(payload.message_id ?? payload.reply_to_message_id ?? 0);
     const ok = messageId ? await editStatus(Number(delivery.chat_id), messageId, text, payload.disable_notification === true ? true : undefined) : false;
     if (ok) { await settle(delivery, { ok: true, telegramMessageId: messageId }); return; }
-    const sent = await telegram("sendMessage", sendArgs(delivery, payload, text));
+    const sent = await sendTelegramMessage(sendArgs(delivery, payload, text));
     await settle(delivery, { ok: true, telegramMessageId: sent.message_id });
     return;
   }
@@ -323,7 +358,7 @@ async function sendDelivery(delivery, payload) {
     // Откат: тот же текст уходит правкой статус-пузыря или новым сообщением.
     const existing = key ? statusBubbles[key] : null;
     if (existing && await editStatus(Number(delivery.chat_id), existing, text, true)) { await settle(delivery, { ok: true, telegramMessageId: existing }); return; }
-    const sent = await telegram("sendMessage", sendArgs(delivery, payload, text));
+    const sent = await sendTelegramMessage(sendArgs(delivery, payload, text));
     if (key) { statusBubbles[key] = sent.message_id; await saveStatusBubbles(); }
     await settle(delivery, { ok: true, telegramMessageId: sent.message_id });
     return;
@@ -434,7 +469,7 @@ async function sendDelivery(delivery, payload) {
         const args = { chat_id: Number(delivery.chat_id), text: String(part.text || "").slice(0, STATUS_TEXT_MAX), ...(thread ? { message_thread_id: thread } : {}) };
         // Ответ на сообщение-триггер — у первой части, чтобы цитата не повторялась.
         if (sentAny === 0 && payload.reply_to_message_id) args.reply_to_message_id = payload.reply_to_message_id;
-        const sent = await telegram("sendMessage", args);
+        const sent = await sendTelegramMessage(args);
         part.sent = true;
         messageIds.push(sent.message_id);
         sentAny++;
@@ -454,7 +489,7 @@ async function sendDelivery(delivery, payload) {
     const existing = key ? statusBubbles[key] : null;
     const result = existing
       ? { message_id: (await editStatus(Number(delivery.chat_id), existing, text, true)) ? existing : null }
-      : await telegram("sendMessage", sendArgs(delivery, payload, text));
+      : await sendTelegramMessage(sendArgs(delivery, payload, text));
     if (result.message_id && key) { statusBubbles[key] = result.message_id; await saveStatusBubbles(); }
     await settle(delivery, { ok: true, telegramMessageId: result.message_id || undefined });
     return;
@@ -466,7 +501,7 @@ async function sendDelivery(delivery, payload) {
     // Финал — со звуком: disable_notification в правке не передаём.
     if (await editStatus(Number(delivery.chat_id), bubble, text)) { await settle(delivery, { ok: true, telegramMessageId: bubble }); return; }
   }
-  const sent = await telegram("sendMessage", sendArgs(delivery, payload, text));
+  const sent = await sendTelegramMessage(sendArgs(delivery, payload, text));
   await settle(delivery, { ok: true, telegramMessageId: sent.message_id });
 }
 
