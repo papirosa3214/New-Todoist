@@ -16,7 +16,8 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import {registerInstructionBlock, composeLayer, LAYER_CATALOG, type RunMode} from '../lib/roleContextResolver.js';
 import {INSTRUCTION_DEFAULTS} from './instructionDefaults.js';
-import {ensureRoleHome, roleHome, roleHomeInstruction, systemPromptSourceFile, renderSystemPrompt, renderPromptAddendum} from './roleHome.js';
+import {ensureRoleHome, roleHome, roleHomeInstruction, systemPromptSourceFile, renderSystemPrompt, renderPromptAddendum, roleAgentsSection} from './roleHome.js';
+import type { RuleChannel } from '../lib/roleRules.js';
 import { withObservationContext } from "../lib/contextObservability.js";
 import { selectSkillsByJev } from "../lib/memorySkillsJev.js";
 const ROLE_RESOURCE_MODES: RunMode[] = ['work','resume','reply','review','subtask','chat'];
@@ -61,7 +62,7 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  const dir=path.dirname(configPath);const prefix=path.basename(configPath);
  const discovered=await discoverChatResources(role,true);
  const useRegistry=registryEnabled()&&!hasSingleChatSystem(role);
- const append=useRegistry?[]:discovered.agentsFiles.map(x=>'# '+x.path+'\n'+(composeLayer(role,keyFor(x.path))?.effective ?? fs.readFileSync(x.path,'utf8')));
+ const append=useRegistry?[roleAgentsSection(role)].filter(Boolean):discovered.agentsFiles.map(x=>'# '+x.path+'\n'+(composeLayer(role,keyFor(x.path))?.effective ?? fs.readFileSync(x.path,'utf8')));
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))?.effective ?? fs.readFileSync(source.path,'utf8'));
  // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).
  append.push(useRegistry?genderInstruction(role):behaviorInstruction(role));
@@ -235,8 +236,9 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  * SYSTEM.md или штатная Pi), дополнения роли, правила и режим чата.
  * AGENTS.md и навыки подмешивает загрузчик ресурсов (createTaskResourceLoader).
  */
-export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:string, chatId?:string):Promise<string> {
- const channel=chatExecutionMode(chatId)==="card"?"card":"chat";
+export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:string, chatId?:string, channelOverride?:RuleChannel):Promise<string> {
+ // channelOverride — сессия Помощника собирается по своему каналу реестра «session».
+ const channel:RuleChannel=channelOverride ?? (chatExecutionMode(chatId)==="card"?"card":"chat");
  if(hasSingleChatSystem(role))return singleChatSystemPrompt(role);
  instructionResources(cwd);
  const discovered=await discoverChatResources(role,true);
@@ -256,6 +258,7 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  // AGENTS.md роли и её папка: при переезде чата внутрь процесса (8986da3) эти
  // два слоя выпали из базовой инструкции — роль не знала ни про свою папку, ни
  // про свои навыки. Возвращены оба, файлом и текстом соответственно.
+ if(useRegistry){const agents=roleAgentsSection(role);if(agents)append.push(agents);}
  for(const file of useRegistry?[]:discovered.agentsFiles)append.push('# '+file.path+'\n'+(composeLayer(role,keyFor(file.path))?.effective ?? fs.readFileSync(file.path,'utf8')));
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))?.effective ?? fs.readFileSync(source.path,'utf8'));
  // Правила карточки в чат не идут (владелец 28.10.2026: чат и карточка — разные режимы).

@@ -47,7 +47,7 @@ export async function ownerAssistantProfile(sessionId: string): Promise<OwnerSes
   const cwd = home.workspace;
   const systemPrompt = chatTurnSystemText(
     ASSISTANT_ROLE,
-    await chatSystemPrompt(ASSISTANT_ROLE, ASSISTANT_MODE, cwd),
+    await chatSystemPrompt(ASSISTANT_ROLE, ASSISTANT_MODE, cwd, undefined, "session"),
     [roleToolInstruction()],
   );
   const resourceLoader = await createTaskResourceLoader(ASSISTANT_ROLE, cwd, systemPrompt, undefined, true);

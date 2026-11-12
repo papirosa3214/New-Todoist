@@ -297,12 +297,25 @@ export async function prepareChatSessionDirectory(role: string, chatId: string, 
   return directory;
 }
 
+/** AGENTS.md роли для сборки поверх реестра: один раз, с заголовком-путём;
+ *  пустой файл не добавляется (владелец 12.11.2026: «пусть они пустые для всех
+ *  будут… потом что-нибудь туда»). */
+export function roleAgentsSection(role: string): string {
+  const home = ensureRoleHome(role);
+  const text = fs.existsSync(home.agents) ? fs.readFileSync(home.agents, "utf8").trim() : "";
+  return text ? "# " + home.agents + "\n" + text : "";
+}
+
 /** Инструкция роли — один источник (владелец 20.10.2026): общий шаблон
  *  scripts/role-system-prompt.md (SYSTEM.md, со списком блоков из схемы) и
  *  AGENTS.md в папке роли. roles.prompt в БД и scripts/role-prompts больше не
  *  читаются. withAgents=false — когда AGENTS.md подключает загрузчик ресурсов. */
 export function roleInstructionText(role: string, options: { withAgents?: boolean; channel?: RuleChannel } = {}): string {
-  if (registryEnabled()) return registryInstructionText(role, options.channel ?? "card");
+  if (registryEnabled()) {
+    // Реестр + один «бумажный» AGENTS.md роли (владелец 12.11.2026).
+    const agents = options.withAgents === false ? "" : roleAgentsSection(role);
+    return [registryInstructionText(role, options.channel ?? "card"), agents].filter(Boolean).join("\n\n");
+  }
   const home = ensureRoleHome(role, { refreshSystem: true });
   const system = fs.readFileSync(home.system, "utf8").trim();
   if (options.withAgents === false) return [system,behaviorInstruction(role)].join("\n\n");

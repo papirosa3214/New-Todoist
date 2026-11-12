@@ -5,7 +5,8 @@ import path from "node:path";
 import db from "../db.js";
 import { getSetting } from "./serverSettings.js";
 
-export type RuleChannel = "chat" | "card" | "voice";
+/** session — сессия владельца (Помощник как обычный разговор, владелец 12.11.2026). */
+export type RuleChannel = "chat" | "card" | "voice" | "session";
 export type RoleRule = {
   id: string;
   old_id?: string;

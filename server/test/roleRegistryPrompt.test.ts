@@ -1,4 +1,6 @@
-// Единый реестр правил в сборке инструкций ролей: канал, исключения, выключатель, нет второго AGENTS.md.
+// Единый реестр правил в сборке инструкций ролей: канал, исключения, выключатель.
+// Владелец 12.11.2026: реестр + один «бумажный» AGENTS.md у каждой роли (сейчас пустой,
+// пустой не добавляется); AGENTS.md приходит ровно один раз — после правил реестра.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +19,7 @@ import { singleChatSystemPrompt } from "../src/runtime/secretaryChatPrompt.js";
 migrate(); runMigrations();
 const FRAME = /ЛИЧНОСТЬ РОЛИ — кто ты/g;
 const once = (t: string) => (t.match(FRAME) ?? []).length;
+const count = (t: string, s: string) => t.split(s).length - 1;
 const MARKER = "МАРКЕР-AGENTS-ЭТОГО-ТЕСТА-8841";
 let dir: string; const prevRoles = process.env.TASKFLOW_ROLES_DIR;
 beforeEach(() => {
@@ -60,32 +63,47 @@ describe("реестр: выбор и рендер", () => {
 });
 
 describe("реестр: подключение", () => {
-  it("карточка и голос: из реестра, без AGENTS.md/SYSTEM.md, рамка характера один раз, со строкой о роде", () => {
+  it("карточка и голос: реестр, затем AGENTS.md один раз, рамка характера один раз, со строкой о роде", () => {
     const card = roleInstructionText("builder");
-    expect(card).toBe(buildRegistryRules("builder", "card").text + "\n\n" + genderInstruction("builder"));
-    expect(card).not.toContain(MARKER);
+    expect(card.startsWith(buildRegistryRules("builder", "card").text + "\n\n" + genderInstruction("builder"))).toBe(true);
+    expect(count(card, MARKER)).toBe(1);
     expect(once(card)).toBe(1); // рамка характера — строка реестра R491, не подмешивается кодом второй раз
     expect(card).toContain("Пол и грамматический род");
     const voice = roleInstructionText("secretary", { channel: "voice" });
-    expect(voice).toBe(buildRegistryRules("secretary", "voice").text + "\n\n" + genderInstruction("secretary"));
-    expect(voice).not.toContain(MARKER);
+    expect(voice.startsWith(buildRegistryRules("secretary", "voice").text)).toBe(true);
+    expect(count(voice, MARKER)).toBe(1);
   });
-  it("текстовый чат builder: системный текст = реестр, AGENTS.md второй раз не приходит", async () => {
+  it("текстовый чат builder: системный текст = реестр, AGENTS.md ровно один раз", async () => {
     const cwd = roleHome("builder").workspace;
     const prompt = await chatSystemPrompt("builder", "work", cwd);
     const rules = buildRegistryRules("builder", "chat").text;
     expect(prompt.startsWith(rules)).toBe(true);
-    expect(prompt).not.toContain(MARKER);
+    expect(count(prompt, MARKER)).toBe(1);
     expect(once(prompt)).toBe(1);
     expect(prompt).toContain("Пол и грамматический род");
     const args = await chatInstructionArgs("builder", path.join(dir, "run.json"), "work", cwd);
     expect(fs.readFileSync(args[args.indexOf("--system-prompt") + 1], "utf8")).toBe(rules);
-    expect(fs.readFileSync(args[args.indexOf("--append-system-prompt") + 1], "utf8")).not.toContain(MARKER);
+    expect(count(fs.readFileSync(args[args.indexOf("--append-system-prompt") + 1], "utf8"), MARKER)).toBe(1);
   });
   it("карточный загрузчик ресурсов не добавляет AGENTS.md вторым слоем", async () => {
     const loader = await createTaskResourceLoader("builder", roleHome("builder").workspace, roleInstructionText("builder"));
     expect(loader.getAgentsFiles().agentsFiles).toHaveLength(0);
-    expect(loader.getSystemPrompt() ?? "").not.toContain(MARKER);
+    expect(count(loader.getSystemPrompt() ?? "", MARKER)).toBe(1);
+  });
+  it("пустой AGENTS.md в инструкцию не попадает", async () => {
+    fs.writeFileSync(roleHome("builder").agents, "  \n");
+    const prompt = await chatSystemPrompt("builder", "work", roleHome("builder").workspace);
+    expect(prompt).not.toContain("# " + roleHome("builder").agents);
+    expect(roleInstructionText("builder")).not.toContain("# " + roleHome("builder").agents);
+  });
+  // Владелец 12.11.2026: сессия Помощника — свой канал реестра, лишнее вычищено.
+  it("канал session: правила Помощника без чужих ролей, нативного цикла и «ты — роль»", async () => {
+    const ids = rulesFor("secretary", "session").map((r) => r.id);
+    for (const gone of ["C01", "C23", "C24", "C25", "C26", "R290", "R291", "R003"]) expect(ids).not.toContain(gone);
+    for (const kept of ["R467", "R476", "R217", "R523"]) expect(ids).toContain(kept);
+    const prompt = await chatSystemPrompt("secretary", "work", roleHome("secretary").workspace, undefined, "session");
+    expect(prompt.startsWith(buildRegistryRules("secretary", "session").text)).toBe(true);
+    expect(prompt).not.toContain("Роль analyst");
   });
   it("исключение: текстовый чат researcher остаётся на коротком файле", async () => {
     expect(await chatSystemPrompt("researcher", "work", roleHome("researcher").workspace)).toBe(singleChatSystemPrompt("researcher"));
