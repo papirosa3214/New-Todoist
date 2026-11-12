@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerOwnerSessionRoutes } from "../src/routes/owner-sessions.js";
 import { OwnerSessionEventBuffer } from "../src/runtime/ownerSessionEvents.js";
+import { chatBlocksCached } from "../src/lib/chatBlocks.js";
 import {
   OwnerSessionNotFoundError,
   OwnerSessionStreamingConflictError,
@@ -170,6 +171,23 @@ describe("owner session API", () => {
   it("rejects an unknown label field", async () => {
     const response = await app.inject({ method: "PATCH", url: "/api/sessions/a", headers: ownerHeaders, payload: { colour: "red" } });
     expect(response.statusCode).toBe(400);
+  });
+
+  // Владелец 12.11.2026: ответы в сессии — той же разметкой, что в чате.
+  it("adds chat text blocks to assistant answers in the snapshot", async () => {
+    runtime.snapshot = async (id: string) => ({ ...rootSnapshot, id, entries: [
+      { type: "message", id: "u1", message: { role: "user", content: "Вопрос" } },
+      { type: "message", id: "a1", message: { role: "assistant", content: [{ type: "text", text: "## Итог\n\n- пункт" }] } },
+      { type: "custom_message", id: "v1", customType: "taskflow.voice", details: { role: "assistant", text: "- голосом" } },
+    ] as any });
+    runtime.open = async (id: string) => runtime.snapshot(id);
+
+    const entries = (await app.inject({ method: "GET", url: "/api/sessions/s1", headers: ownerHeaders })).json().session.entries;
+
+    expect(entries[0].text_blocks).toBeUndefined();
+    expect(entries[1].text_blocks).toEqual(chatBlocksCached("## Итог\n\n- пункт"));
+    expect(entries[2].text_blocks).toEqual(chatBlocksCached("- голосом"));
+    expect(entries[1].text_blocks.length).toBeGreaterThan(0);
   });
 
   it.each(["prompt", "steer", "follow_up"])("dispatches explicit %s mode", async mode => {
