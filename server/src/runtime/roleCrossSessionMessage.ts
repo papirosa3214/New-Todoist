@@ -18,7 +18,8 @@
 import crypto from "node:crypto";
 import db from "../db.js";
 import { ensurePersonalRoom } from "../lib/chatRooms.js";
-import { onCoordinationAnswered, registerCrossSessionOrigin } from "./chatCoordination.js";
+import { registerCrossSessionOrigin } from "./chatCoordination.js";
+import { onCoordinationAnswered } from "./coordinationAnswerBus.js";
 import { recordDurableDelivery } from "./chatSession.js";
 import { enqueueMessageDelivery } from "./chatQueue.js";
 import { activeVoiceCallId } from "../lib/voiceCallRegistry.js";
@@ -110,11 +111,11 @@ export function setCrossSessionWakeLauncher(fn: WakeLauncher): void {
   wakeLauncher = fn;
 }
 
-// Подписка откладывается на микрозадачу: модульный граф доходит сюда раньше,
-// чем chatCoordination завершит инициализацию (agentMessaging → этот файл →
-// chatCoordination), и прямой вызов падал на «answerListeners before
-// initialization» — весь сервер не грузился в тестах (11.11.2026).
-queueMicrotask(() => onCoordinationAnswered(({ deliveryKey, questionId, recipientId, answer }) => {
+// Подписка идёт через листовой реестр (coordinationAnswerBus.ts), а не через
+// chatCoordination: раньше цикл chatCoordination ↔ этот файл заставлял читать
+// answerListeners до инициализации и серверный граф падал с
+// «Cannot access 'answerListeners' before initialization» (11–12.11.2026).
+onCoordinationAnswered(({ deliveryKey, questionId, recipientId, answer }) => {
   if (!deliveryKey.startsWith("cross-session:")) return;
   const question = db
     .prepare(
@@ -148,4 +149,4 @@ queueMicrotask(() => onCoordinationAnswered(({ deliveryKey, questionId, recipien
   });
   if (activeVoiceCallId(question.chat)) return;
   wakeLauncher({ chatId: question.chat, roleId: question.requester, queueRowId: queued.id });
-}));
+});
