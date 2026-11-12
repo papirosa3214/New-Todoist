@@ -14,8 +14,12 @@
 import crypto from "node:crypto";
 
 import db from "../db.js";
+import { STUCK_MS } from "./knowledgeIndexQueue.js";
 
 export const KB_SEARCH_WATCH_TYPE = "kb_search_watch";
+/** Отдельный тип: поломка очереди и поломка поиска — разные беды и лечатся
+ *  по-разному, а суточное «не чаще раза» у каждого своё. */
+export const KB_INDEX_WATCH_TYPE = "kb_index_watch";
 
 const INTERVAL_MS = 6 * 60 * 60 * 1000;
 const PROBE_TIMEOUT_MS = 90_000; // эмбеддинг вопроса может ждать холодную Ollama
@@ -89,28 +93,64 @@ export async function probeKbSearch(
   };
 }
 
+/** Застрявшая очередь индексации (09.11.2026). Проверка без сети: только
+ *  собственные записи очереди. Задание, которое висит дольше десяти минут
+ *  (STUCK_MS), значит воркер умер или RAGFlow не отвечает; задание в статусе
+ *  error — заметка не попала в поиск и сама уже не попадёт. */
+export function probeIndexQueue(now: number = Date.now()): KbSearchProbeResult {
+  const stuck = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM knowledge_index_jobs
+        WHERE status IN ('queued','running') AND queued_at <= ?`,
+    )
+    .get(new Date(now - STUCK_MS).toISOString()) as { n: number };
+  if (stuck.n > 0) {
+    return {
+      ok: false,
+      reason: `Очередь индексации застряла: заданий висит дольше десяти минут — ${stuck.n}.`,
+    };
+  }
+  const failed = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM knowledge_index_jobs
+        WHERE status = 'error' AND finished_at >= ?`,
+    )
+    .get(new Date(now - 24 * 60 * 60 * 1000).toISOString()) as { n: number };
+  if (failed.n > 0) {
+    return {
+      ok: false,
+      reason: `Индексация сорвалась: за сутки не попали в поиск заметок — ${failed.n}.`,
+    };
+  }
+  return { ok: true, reason: "" };
+}
+
 /** Уведомление в «Состояние системы» — не чаще одного раза в сутки. */
-function alert(reason: string): void {
+function alert(reason: string, type: string = KB_SEARCH_WATCH_TYPE): void {
   const already = db
     .prepare(
       "SELECT 1 FROM notifications WHERE type = ? AND created_at >= datetime('now','-1 day') LIMIT 1",
     )
-    .get(KB_SEARCH_WATCH_TYPE);
+    .get(type);
   if (already) return;
   const owners = db
     .prepare("SELECT id FROM users WHERE role = 'owner'")
     .all() as { id: string }[];
   const text =
-    "Поиск по базе знаний не находит известное: роли считают, что знаний нет, и работают на догадках. " +
-    reason +
-    " Разбор — docs/watchers.md, «Поиск по базе знаний».";
+    type === KB_INDEX_WATCH_TYPE
+      ? "Заметки сохраняются, но в поиске базы знаний их нет: очередь индексации не доводит дело до конца. " +
+        reason +
+        " Разбор — docs/watchers.md, «Очередь индексации базы знаний»."
+      : "Поиск по базе знаний не находит известное: роли считают, что знаний нет, и работают на догадках. " +
+        reason +
+        " Разбор — docs/watchers.md, «Поиск по базе знаний».";
   for (const owner of owners) {
     db.prepare(
       "INSERT INTO notifications (id, user_id, type, text) VALUES (?,?,?,?)",
     ).run(
       crypto.randomUUID(),
       owner.id,
-      KB_SEARCH_WATCH_TYPE,
+      type,
       text.slice(0, 400),
     );
   }
@@ -121,6 +161,9 @@ export async function checkKbSearch(
 ): Promise<KbSearchProbeResult> {
   const result = await probeKbSearch(fetchImpl);
   if (!result.ok) alert(result.reason);
+  // Очередь проверяется на том же тике: обе беды про «в базе знаний этого нет».
+  const queue = probeIndexQueue();
+  if (!queue.ok) alert(queue.reason, KB_INDEX_WATCH_TYPE);
   return result;
 }
 

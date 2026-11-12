@@ -1,4 +1,5 @@
 import { recordModelUsage } from "../lib/modelUsage.js";
+import { translateThinkingRu } from "../lib/thinkingTranslation.js";
 import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 // Живой ход роли в чате (владелец 27.09.2026): пока роль отвечает, окно
 // чата показывает то же, что окно сессии Claude Code, — текст ответа
@@ -23,7 +24,11 @@ import crypto from "node:crypto";
 import { sourcedChatBlocks, type ChatBlock } from "../lib/chatBlocks.js";
 import { liveDeltaOps, type LiveView } from "./chatLiveDelta.js";
 import { broadcastToUsers } from "../ws.js";
-import { unwrapRoleEnvelopeText } from "../lib/roleContractV1.js";
+import {
+  isJsonParseFailure,
+  salvageMarkdownFromJsonParseFailure,
+  unwrapRoleEnvelopeText,
+} from "../lib/roleContractV1.js";
 import { TurnFileTracker, type TurnCodeChanges } from "../lib/turnFileChanges.js";
 import { emptyAssistantAnswer } from "./providerFailover.js";
 import { LIVE_DRAFT_MS, beginLiveDraft, finishLiveDraft, saveLiveDraft } from "./chatLiveDraft.js";
@@ -83,6 +88,11 @@ export type LiveItem =
       id: string;
       tool: "thinking";
       text: string;
+      /// Исходный текст модели, если показан перевод (владелец 08.11.2026:
+      /// «хочу видеть раздумья по-русски»). Оригинал не теряем: перевод
+      /// бывает грубым, а по исходнику видно, что модель поняла.
+      original?: string;
+      translated?: string;
       status: "running" | "done";
       started_at: string;
       ended_at?: string;
@@ -132,11 +142,20 @@ export interface SavedSteps {
   usage?: TurnUsage;
   /** Файлы, которые роль поменяла за ход (владелец 27.10.2026). */
   code_changes?: TurnCodeChanges;
+  /** Навыки, подключённые к ходу: имя папки и русский заголовок для владельца. */
+  skills?: Array<{ name: string; title: string }>;
 }
 
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 const liveTurns = new Map<string, LiveTurn>();
+
+const turnEndListeners = new Set<(chatId: string) => void>();
+/** Подписка на конец хода (отложенные сообщения владельца ждут именно его). */
+export function onLiveTurnEnd(listener: (chatId: string) => void): () => void {
+  turnEndListeners.add(listener);
+  return () => { turnEndListeners.delete(listener); };
+}
 const keyOf = (chatId: string, userId: string) => `${chatId}\u0000${userId}`;
 
 /** Идущие сейчас ходы в чате — для GET /api/chats/:id/live. */
@@ -200,6 +219,10 @@ export function presentedToolCall(tool:string,args:unknown):{tool:string;args:un
   if(a.action==="describe")return {tool:"taskflow_describe",args:{name:a.operation}};
  }
  if(tool==="mcp" && typeof a.tool==="string")return {tool:a.tool,args:a.args};
+ // Grouped memory calls carry their actual operation in action, not the tool name.
+ if(tool==="taskflow_memory" && (a.action==="recall" || a.action==="remember")){
+  return {tool:`taskflow_${a.action}`,args:a.args && typeof a.args==="object"?a.args:{}};
+ }
  return {tool,args};
 }
 function gatewayResult(result:unknown):{ok?:boolean;data?:{state?:string}}|null{
@@ -650,6 +673,31 @@ export class LiveTurn {
     item.status = "done";
     item.ended_at = new Date().toISOString();
     this.thinkingItem = null;
+    this.translateThinking(item);
+  }
+
+  /**
+   * Перевести блок размышлений на русский (владелец 08.11.2026). Модель
+   * думает по-английски, а читать это владельцу приходится каждый ход.
+   *
+   * Перевод идёт фоном и не держит ход: пока он считается, в ленте лежит
+   * исходник. Сбой перевода ничего не меняет — остаётся оригинал. Кэш живёт
+   * в `thinkingTranslation.ts`, повторные куски не переводятся заново.
+   */
+  private translateThinking(item: Extract<LiveItem, { kind: "thinking" }>): void {
+    if (this.closed || item.text.length < 30) return;
+    const text = item.text;
+    void translateThinkingRu(text)
+      .then((ru) => {
+        if (!ru || this.closed || item.text !== text) return;
+        item.original = text;
+        item.translated = ru;
+        item.text = ru;
+        this.schedule(true);
+      })
+      .catch(() => {
+        // Перевод — удобство, а не условие. Молчим и оставляем исходник.
+      });
   }
 
   private appendText(delta: string): void {
@@ -817,12 +865,26 @@ export class LiveTurn {
    *  announceEnd(id). Так клиент меняет живой пузырь на готовый одним
    *  кадром, без мгновения пустоты между ними (то самое «дёрганье» в конце
    *  ответа). */
+  /** Навыки хода, приходят от загрузчика ресурсов (instructionResources). */
+  private skillsOfTurn: Array<{ name: string; title: string }> = [];
+
+  /** Навыки этого хода — для строки в ответе (см. lib/skillCatalog). */
+  usedSkills(): Array<{ name: string; title: string }> {
+    return this.skillsOfTurn;
+  }
+
+  /** Запомнить навыки, подключённые к этому ходу. Звать один раз, до finish. */
+  setSkills(list: Array<{ name: string; title: string }> | null | undefined): void {
+    this.skillsOfTurn = Array.isArray(list) ? list : [];
+  }
+
   finish(opts: { deferAnnounce?: boolean } = {}): SavedSteps | null {
     if (this.closed) return null;
     this.endThinking();
     this.closed = true;
     this.dispose();
     if (!this.publish) liveTurns.delete(keyOf(this.chatId, this.userId));
+    for (const listener of turnEndListeners) { try { listener(this.chatId); } catch { /* слушатель не должен ронять ход */ } }
     if (!opts.deferAnnounce) this.broadcastEnd(null);
     else this.endPending = true;
     const items = this.snapshot().items;
@@ -841,9 +903,11 @@ export class LiveTurn {
     if (!usage && !items.some((it) => it.kind !== "text")) return null;
     let codeChanges: TurnCodeChanges | null = null;
     try { codeChanges = this.files.result(); } catch { codeChanges = null; }
+    const savedSkills = this.skillsOfTurn.length ? this.skillsOfTurn : undefined;
     return {
       duration_ms: Date.now() - this.startedAt.getTime(),
       items,
+      ...(savedSkills ? { skills: savedSkills } : {}),
       ...(usage ? { usage } : {}),
       ...(codeChanges ? { code_changes: codeChanges } : {}),
     };
@@ -976,6 +1040,11 @@ export function chatRunFailureText(error: unknown): string {
     return `Остановил ход: работа шла дольше ${min} мин. Напишите, если продолжить.`;
   }
   const message = error instanceof Error ? error.message : String(error ?? "");
+  if (isJsonParseFailure(error)) {
+    const salvaged = salvageMarkdownFromJsonParseFailure(error);
+    if (salvaged) return salvaged;
+    return "Ответ пришёл текстом, не JSON. Сервер должен был обернуть его в text-блок.";
+  }
   const firstLine = message.split("\n")[0].replace(/\s*Stderr:.*$/, "").trim();
   return `Не смог ответить: ${clip(redactSecrets(firstLine || "неизвестная ошибка"))}`;
 }

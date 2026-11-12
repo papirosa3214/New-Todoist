@@ -26,13 +26,14 @@ import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { isOwner } from "../access.js";
 import { findMachineByName, issueMachineKey } from "../host/machines.js";
+import {
+  issuePairingCode,
+  issuedCodesLastHour,
+  pairingQrUri,
+  PAIRING_CODE_LIMIT_PER_HOUR,
+  PAIRING_CODE_TTL_MS,
+} from "../lib/pairingCodes.js";
 
-/** Срок жизни кода — 5 минут (документ решения §5). */
-const CODE_TTL_MS = 5 * 60 * 1000;
-/** 128 бит энтропии = 32 hex-символа. */
-const CODE_BYTES = 16;
-/** Сколько кодов один человек может выписать в час. */
-const CODE_LIMIT_PER_HOUR = 10;
 /** Сколько ПОПЫТОК обмена с одного адреса в час. */
 const EXCHANGE_LIMIT_PER_IP_PER_HOUR = 20;
 /** Сколько попыток обмена на один код. */
@@ -130,12 +131,7 @@ export function registerPairingRoutes(app: FastifyInstance) {
 
       // Лимит на пользователя, а не на IP: у Максима телефон, браузер и все
       // агенты сидят с одного адреса, лимит по IP запер бы их вместе.
-      const issued = db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM pairing_codes WHERE created_by = ? AND created_at > ?",
-        )
-        .get(userId, oneHourAgoIso()) as { n: number };
-      if (issued.n >= CODE_LIMIT_PER_HOUR) {
+      if (issuedCodesLastHour(userId) >= PAIRING_CODE_LIMIT_PER_HOUR) {
         return reply
           .code(429)
           .send({ error: "pairing_rate_limited", retry_after: 3600 });
@@ -145,15 +141,7 @@ export function registerPairingRoutes(app: FastifyInstance) {
       // гасим, иначе у Максима накапливалась бы пачка кодов, half из которых
       // уже никто не показывает (гасится он только обменом, а обмена может
       // не быть неделями).
-      db.prepare(
-        "UPDATE pairing_codes SET used_at = ? WHERE created_by = ? AND used_at IS NULL",
-      ).run(nowIso(), userId);
-
-      const code = crypto.randomBytes(CODE_BYTES).toString("hex");
-      const expiresAt = new Date(Date.now() + CODE_TTL_MS).toISOString();
-      db.prepare(
-        "INSERT INTO pairing_codes(id, code_hash, created_by, created_at, expires_at, used_at, source_ip) VALUES (?,?,?,?,?,NULL,?)",
-      ).run(uid(), hashApiToken(code), userId, nowIso(), expiresAt, req.ip || null);
+      const { code, expiresAt } = issuePairingCode(userId, req.ip || null);
 
       logDeviceEvent({ userId, kind: "pairing_code_issued" });
 
@@ -163,9 +151,9 @@ export function registerPairingRoutes(app: FastifyInstance) {
         code,
         // Тот же формат, что ждёт приложение (§10 п.2): только адрес https и
         // никаких логина/пароля в URL — пароля в этой схеме нет вовсе.
-        qr: `taskflow://pair?v=1&code=${code}&host=${encodeURIComponent(host)}`,
+        qr: pairingQrUri(code, host),
         expires_at: expiresAt,
-        expires_in: CODE_TTL_MS / 1000,
+        expires_in: PAIRING_CODE_TTL_MS / 1000,
       };
     },
   );

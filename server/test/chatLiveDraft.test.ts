@@ -12,6 +12,7 @@ vi.mock("../src/ws.js", () => ({
 }));
 
 import db, { migrate } from "../src/db.js";
+import { restartDelivery } from "../src/runtime/chatDeliveryRetryBudget.js";
 import { runMigrations } from "../src/migrations.js";
 import { seedRoleAccounts } from "./helpers/seedOwner.js";
 import {
@@ -68,6 +69,25 @@ function draftRow(turnId: string) {
 }
 
 describe("живой черновик хода", () => {
+  it.each(['missing', 'other-role', 'system'])("восстановление не теряет обязательство: %s", (kind) => {
+    const id = `unanswered-${kind}`;
+    db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,'u1','вопрос','chat',?)").run(id, CHAT_ID);
+    db.prepare("INSERT INTO chat_message_queue(id,chat_id,role_id,delivery_id,message_id,session_generation,payload_json,status) VALUES(?,?,?,?,?,1,'{}','picked')").run(id,CHAT_ID,ROLE_ID,id,id);
+    if (kind !== 'missing') db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id,message_type) VALUES(?,?,'уведомление','chat',?,?,?)")
+      .run(`${id}-reply`,kind === 'other-role' ? 'u1' : ROLE_ID, CHAT_ID,id,kind === 'system' ? 'system' : null);
+    expect(restartDelivery(id, 'server_restarted', 'picked')).toBe('restarted');
+  });
+  it("сохранённый при рестарте ответ не запускает тот же запрос заново", () => {
+    db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES('recovery-trigger','u1','вопрос','chat',?)").run(CHAT_ID);
+    db.prepare("INSERT INTO chat_message_queue(id,chat_id,role_id,delivery_id,message_id,session_generation,payload_json,status) VALUES('recovery-delivery',?,?,'recovery-delivery','recovery-trigger',1,'{}','picked')").run(CHAT_ID, ROLE_ID);
+    beginLiveDraft({turnId:'recovery-turn',chatId:CHAT_ID,roleId:ROLE_ID,triggerMessageId:'recovery-trigger',startedAt:new Date().toISOString()});
+    finishLiveDraft({turnId:'recovery-turn',chatId:CHAT_ID,roleId:ROLE_ID,text:'сохранённый текст',answerText:'сохранённый текст',items:[]});
+    recoverLiveDrafts();
+    expect(restartDelivery('recovery-delivery', 'server_restarted', 'picked')).toBe('skipped');
+    expect(db.prepare("SELECT status FROM chat_message_queue WHERE id='recovery-delivery'").get()).toEqual({status:'done'});
+    expect(restartDelivery('recovery-delivery', 'lease_expired', 'picked')).toBe('skipped');
+    expect(db.prepare("SELECT count(*) AS n FROM chat_messages WHERE reply_to_message_id='recovery-trigger'").get()).toEqual({n:1});
+  });
   it("текст и размышления попадают в базу до конца хода", () => {
     vi.useFakeTimers();
     const turn = startLiveTurn({

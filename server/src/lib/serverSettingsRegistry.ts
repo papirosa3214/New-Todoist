@@ -136,6 +136,9 @@ export const DEFAULTS = {
   // Интеграция (LOCK-WORKTREE-MANAGER-20261019)
   auto_merge_mode: "off",
   auto_merge_test_timeout_min: 20,
+
+  // In-process Pi: legacy-шлюз taskflow (operation/arguments) в customTools
+  pi_legacy_taskflow_gateway: false,
 } as const satisfies Record<string, number | boolean | string>;
 
 export type Defaults = typeof DEFAULTS;
@@ -169,6 +172,9 @@ export const SERVER_SETTINGS: readonly ServerSetting[] = [
   // Расписания
   { key: "auto_merge_mode", label: "Автослияние веток в main", group: "интеграция", kind: "enum", default: DEFAULTS.auto_merge_mode, options: ["off", "dry", "on"], applies_to: ["runtime/worktreeMergeQueue.ts"] },
   { key: "auto_merge_test_timeout_min", label: "Таймаут тестов при слиянии", group: "интеграция", kind: "duration_min", default: DEFAULTS.auto_merge_test_timeout_min, min: 1, max: 120, applies_to: ["runtime/worktreeMergeQueue.ts"] },
+  { key: "pi_legacy_taskflow_gateway", label: "Legacy-шлюз taskflow в Pi", group: "интеграция", kind: "bool", default: DEFAULTS.pi_legacy_taskflow_gateway,
+    description: "Вкл. — в сессию Pi снова попадает один инструмент taskflow (operation/arguments). Выкл. — только нативные taskflow_* и загрузчик (владелец 11.11.2026). Режим voice включает шлюз отдельно.",
+    applies_to: ["runtime/roleToolCatalog.ts"] },
   { key: "scheduler_interval_ms", label: "Интервал планировщика", group: "расписания", kind: "interval_ms", default: DEFAULTS.scheduler_interval_ms, min: 30_000, max: 24 * 60 * 60_000, applies_to: ["runtime/scheduler.ts"] },
   { key: "retry_delay_min", label: "Задержка перед повтором", group: "расписания", kind: "duration_min", default: DEFAULTS.retry_delay_min, min: 0, max: 1440, applies_to: ["runtime/scheduler.ts"] },
   { key: "retry_limit", label: "Лимит повторов", group: "расписания", kind: "int", default: DEFAULTS.retry_limit, min: 0, max: 50, applies_to: ["runtime/scheduler.ts"] },
@@ -299,6 +305,7 @@ export const DEV_OVERRIDES: Defaults = {
   memory_observer_chat_idle_min: envOverride("memory_observer_chat_idle_min", DEFAULTS.memory_observer_chat_idle_min),
   auto_merge_mode: envOverride("auto_merge_mode", DEFAULTS.auto_merge_mode),
   auto_merge_test_timeout_min: envOverride("auto_merge_test_timeout_min", DEFAULTS.auto_merge_test_timeout_min),
+  pi_legacy_taskflow_gateway: envOverride("pi_legacy_taskflow_gateway", DEFAULTS.pi_legacy_taskflow_gateway),
   task_intake_mode: envOverride("task_intake_mode", DEFAULTS.task_intake_mode),
   reviewer_first_default: envOverride("reviewer_first_default", DEFAULTS.reviewer_first_default),
 } as const;

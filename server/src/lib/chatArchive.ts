@@ -1,4 +1,6 @@
-import db from "../db.js";
+import fs from "node:fs";
+import path from "node:path";
+import db, { DB_PATH } from "../db.js";
 import { cancelQuestionsForChat } from "./chatQuestions.js";
 
 /**
@@ -6,7 +8,7 @@ import { cancelQuestionsForChat } from "./chatQuestions.js";
  *
  * Три правила живут здесь, чтобы маршрут и тесты говорили об одном и том же:
  *
- *  1. ПРАВО УБИРАТЬ. Темы задач и комнаты проектов заводятся сервером при
+ *  1. ПРАВО УБИРАТЬ. Комнаты задач заводятся сервером при
  *     создании задачи (lib/projectTopics.ts: created_by = project.owner_id).
  *     Проверка «убирает только создатель» к ним неприменима: создатель у
  *     всех тем проекта один, участников — много, и по факту никто из них
@@ -42,14 +44,14 @@ export type ArchiveRight =
   | { allowed: false; reason: string };
 
 /**
- * Системная комната — тема задачи: её заводит сервер, она живёт внутри
- * комнаты проекта. Именно её убирает любой участник проекта.
+ * Системная комната — комната задачи: её заводит сервер при работе по
+ * карточке. Именно её убирает любой участник задачи, а не только автор.
  */
-export function isTaskTopic(chat: {
+export function isTaskRoom(chat: {
   task_id?: string | null;
-  parent_chat_id?: string | null;
+  room_kind?: string | null;
 }): boolean {
-  return Boolean(chat.task_id) && Boolean(chat.parent_chat_id);
+  return Boolean(chat.task_id) && chat.room_kind === "task";
 }
 
 /**
@@ -63,7 +65,7 @@ export function archiveRight(chat: ChatRoomRow, userId: string): ArchiveRight {
   if (chat.room_kind === "common")
     return { allowed: false, reason: "общую комнату убрать нельзя" };
   // Тема задачи — системная комната: убирает любой участник проекта.
-  if (isTaskTopic(chat)) return { allowed: true };
+  if (isTaskRoom(chat)) return { allowed: true };
   // Личные и групповые переписки — только создатель.
   if (chat.created_by !== userId)
     return { allowed: false, reason: "убрать чат может только его создатель" };
@@ -84,6 +86,17 @@ export function archiveChat(chatId: string): void {
   // Убранный чат ответить уже не даст: его открытые вопросы снимаем, иначе
   // они навсегда висят в «Нужен ответ» (31.10.2026).
   cancelQuestionsForChat(chatId);
+}
+
+/**
+ * Вернуть чат из архива: снимаем и уборку, и отметку закрытия — комната снова
+ * обычная и принимает сообщения. Владелец 08.11.2026: «заархивировать, чтобы
+ * если что, потом когда-нибудь вернуть».
+ */
+export function unarchiveChat(chatId: string): void {
+  db.prepare(
+    `UPDATE chats SET archived_at = NULL, closed_at = NULL WHERE id = ?`,
+  ).run(chatId);
 }
 
 /** Убран ли чат человеком (в отличие от темы, закрытой вместе с задачей). */
@@ -150,7 +163,7 @@ export const CLEANUP_MIN_IDLE_HOURS = 2;
  * Кандидаты на массовую уборку — пустые темы задач.
  *
  * Условия (все должны выполняться):
- *   • это тема задачи (родитель — комната проекта), не личная переписка;
+ *   • это комната задачи (room_kind='task'), не личная переписка;
  *   • ни одного сообщения и ни одной строки в очереди доставки;
  *   • тема не тронута последние CLEANUP_MIN_IDLE_HOURS часов;
  *   • у задачи нет живой попытки (ended_at IS NULL) — ход не идёт;
@@ -168,9 +181,8 @@ export function cleanupCandidates(limit = 500): CleanupCandidate[] {
               (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS messages,
               (SELECT COUNT(*) FROM chat_message_queue q WHERE q.chat_id = c.id) AS queue
          FROM chats c
-        WHERE c.parent_chat_id IS NOT NULL
+        WHERE c.room_kind = 'task'
           AND c.task_id IS NOT NULL
-          AND c.room_kind IS NULL
           AND c.closed_at IS NULL
           AND COALESCE(c.archived_at, '') = ''
           AND c.updated_at <= datetime('now', ?)
@@ -219,4 +231,93 @@ export function runCleanup(limit = 500): string[] {
  */
 export function canArchiveTaskTopic(taskId: string | null): boolean {
   return taskId ? !taskIsInWork(taskId) : true;
+}
+
+/**
+ * Удалить чат насовсем (владелец 08.11.2026: «есть архив, есть просто удалить…
+ * если удалил, уже возвращать нечего»).
+ *
+ * Правила:
+ *  • сначала архив: удалять можно только убранный чат (archived_at) или
+ *    закрытый (closed_at) — «сначала в архив, захочу удалить, тогда удалю»;
+ *  • общая комната и личные комнаты ролей не удаляются: на них держится
+ *    структура комнат;
+ *  • комнату задачи удаляет только владелец трекера, остальные чаты — владелец
+ *    или тот, кто их завёл.
+ */
+/**
+ * Право на удаление. Владелец 08.11.2026: «заархивировать чат либо удалить
+ * насовсем — понятно, максимально», поэтому требование «сначала в архив»
+ * снято: удалять можно сразу, но вернуть будет нечего.
+ */
+export function purgeRight(
+  chat: ChatRoomRow,
+  userId: string,
+  trackerOwner: boolean,
+): ArchiveRight {
+  if (chat.room_kind === "common")
+    return { allowed: false, reason: "общую комнату удалить нельзя" };
+  if (chat.room_kind === "personal")
+    return { allowed: false, reason: "личная комната роли не удаляется" };
+  if (isTaskRoom(chat))
+    return trackerOwner
+      ? { allowed: true }
+      : { allowed: false, reason: "комнату задачи удаляет владелец" };
+  if (trackerOwner || chat.created_by === userId) return { allowed: true };
+  return { allowed: false, reason: "удалить чат может только его создатель" };
+}
+
+/** Каталог вложений — тот же, что у routes/attachments.ts, без лишней связи. */
+function uploadsDir(): string {
+  return process.env.UPLOAD_DIR || path.join(path.dirname(DB_PATH), "uploads");
+}
+
+export interface PurgeCounts {
+  messages: number;
+  attachments: number;
+  queue: number;
+  questions: number;
+}
+
+/**
+ * Окончательное удаление: сообщения, вложения (и их файлы), участники, сессии,
+ * очередь доставки, открытые вопросы и сам чат. Откат невозможен — в этом и
+ * смысл действия; перед вызовом ходы чата должны быть остановлены.
+ */
+export function purgeChat(chatId: string): PurgeCounts {
+  const count = (sql: string) => (db.prepare(sql).get(chatId) as { n: number }).n;
+  const counts: PurgeCounts = {
+    messages: count("SELECT COUNT(*) AS n FROM chat_messages WHERE chat_id = ?"),
+    attachments: count(
+      `SELECT COUNT(*) AS n FROM attachments a JOIN chat_messages m ON m.id = a.chat_message_id
+        WHERE m.chat_id = ?`,
+    ),
+    queue: count("SELECT COUNT(*) AS n FROM chat_message_queue WHERE chat_id = ?"),
+    questions: count("SELECT COUNT(*) AS n FROM chat_questions WHERE chat_id = ?"),
+  };
+  const files = db
+    .prepare(
+      `SELECT a.stored_name FROM attachments a JOIN chat_messages m ON m.id = a.chat_message_id
+        WHERE m.chat_id = ?`,
+    )
+    .all(chatId) as Array<{ stored_name: string }>;
+  const dir = uploadsDir();
+  const txn = db.transaction(() => {
+    // Вопросы роли держат chat_id без FK — снимаем сами.
+    db.prepare("DELETE FROM chat_questions WHERE chat_id = ?").run(chatId);
+    // Закреплённое сообщение — ссылка на сообщение, мешает каскаду.
+    db.prepare("UPDATE chats SET pinned_message_id = NULL WHERE id = ?").run(chatId);
+    // Остальное (сообщения, вложения, участники, сессии, очередь, топики,
+    // обсуждения, выжимки, настройки) уходит каскадом по FK.
+    db.prepare("DELETE FROM chats WHERE id = ?").run(chatId);
+  });
+  txn();
+  for (const file of files) {
+    try {
+      fs.rmSync(path.join(dir, file.stored_name), { force: true });
+    } catch {
+      /* файл уже удалён или недоступен — строка из базы уже ушла */
+    }
+  }
+  return counts;
 }

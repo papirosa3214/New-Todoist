@@ -4,15 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import {chatSystemPrompt,createTaskResourceLoader} from "../src/runtime/instructionResources.js";
 import {ensureRoleHome} from "../src/runtime/roleHome.js";
-const expected=fs.readFileSync(new URL("../scripts/secretary-chat-system.md",import.meta.url),"utf8");
-it("secretary text chat uses only the owner selected file, with no role or SDK resources appended",async()=>{
+const secretaryFile=fs.readFileSync(new URL("../scripts/secretary-chat-system.md",import.meta.url),"utf8");
+// Механизм «одна инструкция без добавок» остаётся у researcher.
+const expected=fs.readFileSync(new URL("../scripts/researcher-chat-system.md",import.meta.url),"utf8");
+// Владелец 11.11.2026: Помощник в чате переведён на реестр правил; отдельный файл — только у researcher.
+it("secretary text chat no longer uses its own file: the registry builds it like other roles",async()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),"secretary-single-"));const old=process.env.TASKFLOW_ROLES_DIR;process.env.TASKFLOW_ROLES_DIR=root;
  try{
-  const home=ensureRoleHome("secretary");fs.writeFileSync(home.agents,"OLD_AGENTS_SENTINEL");fs.writeFileSync(home.role,"OLD_PERSONA_SENTINEL");
+  const home=ensureRoleHome("secretary");
   const prompt=await chatSystemPrompt("secretary","work",home.workspace);
-  expect(prompt).toBe(expected);
-  const loader=await createTaskResourceLoader("secretary",home.workspace,prompt,undefined,true);
-  try{expect(loader.getSystemPrompt()).toBe(expected);expect(loader.getSkills().skills).toHaveLength(0);expect(loader.getAgentsFiles().agentsFiles).toHaveLength(0);expect(loader.getAppendSystemPrompt()).toHaveLength(0);}finally{loader.disposeResources();}
+  expect(prompt).not.toBe(secretaryFile);
+  expect(prompt).not.toContain("# Системная инструкция: Помощник владельца (secretary)");
+  const {hasSingleChatSystem}=await import("../src/runtime/secretaryChatPrompt.js");
+  expect(hasSingleChatSystem("secretary")).toBe(false);
+  expect(hasSingleChatSystem("researcher")).toBe(true);
  }finally{if(old===undefined)delete process.env.TASKFLOW_ROLES_DIR;else process.env.TASKFLOW_ROLES_DIR=old;fs.rmSync(root,{recursive:true,force:true});}
 });
 
@@ -28,7 +33,8 @@ it("removes resumed and incremental system instructions while preserving tool ch
  expect(projected[0].content).toBe(expected);
  expect(projected[0].toolsAdded.map((t:any)=>t.name)).toEqual(["read","new"]);
  expect(projected.slice(1)).toEqual([history[1],history[3]]);
- expect(chatTurnSystemText("secretary",expected,["SERVER_RULES"])).toBe(expected);
+ expect(chatTurnSystemText("researcher",expected,["SERVER_RULES"])).toBe(expected);
+ expect(chatTurnSystemText("secretary","BASE",["RULES"])).toBe("BASE\n\nRULES");
  expect(chatTurnSystemText("builder","BASE",["RULES"])).toBe("BASE\n\nRULES");
  expect(JSON.parse(secretaryChatInput({history:"old messages",userText:"new message",roleInstruction:"OLD_SERVER_RULES"}))).toEqual({participants:"",history:"old messages",message:"new message"});
 });
@@ -40,10 +46,10 @@ it("actual SDK sends exactly the selected prompt on first and next request, incl
  rt.hasConfiguredAuth=()=>true;
  rt.getAuth=async()=>({auth:{apiKey:"offline-test"},env:{}}) as any;
  const cwd=os.tmpdir();
- const loader=await createTaskResourceLoader("secretary",cwd,expected,undefined,true);
+ const loader=await createTaskResourceLoader("researcher",cwd,expected,undefined,true);
  const {session}=await createAgentSession({cwd,model,modelRuntime:rt,resourceLoader:loader,sessionManager:SessionManager.inMemory(cwd),tools:["read"],customTools:[createReadToolDefinition(cwd)],settingsManager:SettingsManager.inMemory({retry:{enabled:false},compaction:{enabled:false}})});
  const captures:any[]=[];
- installSecretarySystem(session,"secretary",expected);
+ installSecretarySystem(session,"researcher",expected);
  session.agent.streamFunction=(_model,context)=>{captures.push(context);throw new Error("offline boundary");};
  try{
   session.agent.state.messages=[{role:"system",content:"OLD_RESUMED_CANON",timestamp:0,toolsAdded:[]} as any];

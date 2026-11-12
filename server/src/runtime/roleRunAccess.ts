@@ -31,7 +31,7 @@ export function setRoleTokenSigner(fn: Signer): void {
 
 const PROFILES_DIR = path.join(os.homedir(), ".pi", "agent", "taskflow-profiles");
 const RUNS_DIR = process.env.TASKFLOW_RUNS_DIR || path.join(os.tmpdir(), "taskflow-runs");
-const DEFAULT_TOOLS = "taskflow_my_tasks,taskflow_task,taskflow_claim,taskflow_heartbeat,taskflow_state,taskflow_comment,taskflow_subtask_done,taskflow_subtask_add,taskflow_slot_snapshot,taskflow_rules,taskflow_status,taskflow_agents,taskflow_chat_send,taskflow_chat_typing,taskflow_chat_read,taskflow_subtask_work,taskflow_projects,taskflow_project_tasks,taskflow_create_project,taskflow_create_task,taskflow_suggest_subtasks,taskflow_structure_dictation,taskflow_my_stats,taskflow_docs,taskflow_doc_read,taskflow_doc_write,taskflow_kb_search,taskflow_kb_categorize,taskflow_runtime";
+const DEFAULT_TOOLS = "taskflow_my_tasks,taskflow_task,taskflow_claim,taskflow_heartbeat,taskflow_state,taskflow_comment,taskflow_subtask_done,taskflow_subtask_add,taskflow_slot_snapshot,taskflow_rules,taskflow_status,taskflow_agents,taskflow_subtask_work,taskflow_projects,taskflow_project_tasks,taskflow_create_project,taskflow_create_task,taskflow_suggest_subtasks,taskflow_structure_dictation,taskflow_my_stats,taskflow_docs,taskflow_doc_read,taskflow_doc_write,taskflow_kb_search,taskflow_kb_categorize,taskflow_runtime";
 
 /** Набор инструментов роли — из её прежнего профиля, если он есть; у новой
  *  роли профиля нет — стандартный набор исполнителя. */
@@ -90,7 +90,8 @@ export function prepareRoleRunAccess(runId: string, role: string, mode: ChatWork
           TASKFLOW_TOKEN: token,
           TASKFLOW_MCP_ROLE: role,
           TASKFLOW_INSTRUCTION_SNAPSHOT: snapshot,
-          TASKFLOW_MCP_TOOLS: mode === "plan" ? roleTools(role).split(",").filter(t => PLANNING_TOOLS.includes(t)).join(",") : roleTools(role),
+          // Пустой список — полный набор (владелец 07.11.2026: без урезания по роли и режиму).
+          TASKFLOW_MCP_TOOLS: "",
         },
         directTools: true,
       },

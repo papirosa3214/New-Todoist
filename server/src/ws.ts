@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import db from "./db.js";
 import { installRealtimeInvalidation } from "./lib/realtimeInvalidation.js";
 import { queueLiveActivityPush } from "./apns.js";
+import { eventRefs, logWsConnection, logWsDelivery } from "./lib/wsDeliveryLog.js";
 import {
   DEVICE_OP_TIMEOUT_MS,
   DEVICE_PROTOCOL_VERSION,
@@ -104,11 +105,17 @@ export function addClient(userId: string, socket: Socket, deviceId?: string | nu
     if (!deviceSockets.has(deviceId)) deviceSockets.set(deviceId, new Set());
     deviceSockets.get(deviceId)!.add(socket);
   }
+  logWsConnection("open", userId, deviceId ?? null, clients.get(userId)!.size);
   setStatus(userId, "online");
 }
 
 export function removeClient(userId: string, socket: Socket) {
   const set = clients.get(userId);
+  let closedDevice: string | null = null;
+  for (const [deviceId, socketsOfOne] of deviceSockets) {
+    if (socketsOfOne.has(socket)) closedDevice = deviceId;
+  }
+  logWsConnection("close", userId, closedDevice, Math.max(0, (set?.size ?? 1) - (set?.has(socket) ? 1 : 0)));
   // Убираем из среза устройств ТОЖЕ: иначе отозванное устройство держало бы
   // в памяти сокеты, которых уже нет, и closeDeviceSockets() закрывала бы
   // их по второму разу при каждом отзыве.
@@ -155,20 +162,56 @@ function alsoPushToIsland(event: unknown) {
 /** Push an event to every open socket for a single user. */
 export function broadcast(userId: string | null | undefined, event: unknown) {
   if (!userId) return;
+  const refs = eventRefs(event);
+  const base = { userId, type: refs.type, chatId: refs.chatId, taskId: refs.taskId,
+    sockets: 0, sent: 0, deviceSkipped: 0, notOpen: 0 };
   const chatEvent = event as {type?:string; message?:unknown};
-  if (chatEvent?.type === "chat:new" && isQuietSystemMessage(chatEvent.message)) return;
+  if (chatEvent?.type === "chat:new" && isQuietSystemMessage(chatEvent.message)) {
+    logWsDelivery({ ...base, dropped: "quiet_system" });
+    return;
+  }
   const notification = event as {type?:string;notificationId?:string};
   // Миграция подавляет дубли ещё при INSERT; не посылаем пустой сигнал.
   if (notification?.type === "notification:new" && notification.notificationId &&
       db.prepare("SELECT 1 FROM users WHERE id=? AND role='owner'").get(userId) &&
-      !db.prepare("SELECT 1 FROM notifications WHERE id=? AND user_id=?").get(notification.notificationId,userId)) return;
-  const set = clients.get(userId);
-  if (!set || set.size === 0) return;
-  const payload = JSON.stringify(event);
-  for (const socket of set) {
-    if (deviceOnlySockets.has(socket)) continue;
-    if (socket.readyState === 1) socket.send(payload);
+      !db.prepare("SELECT 1 FROM notifications WHERE id=? AND user_id=?").get(notification.notificationId,userId)) {
+    logWsDelivery({ ...base, dropped: "notification_duplicate" });
+    return;
   }
+  const set = clients.get(userId);
+  if (!set || set.size === 0) {
+    // Получателю некуда слать — тоже в журнал: именно так и выглядит
+    // «телефон ничего не получил».
+    logWsDelivery(base);
+    return;
+  }
+  const payload = JSON.stringify(event);
+  const outcome = { ...base, sockets: set.size };
+  // Сокет устройства нужен, только когда рядом есть сокет сессии: иначе
+  // телефон, у которого открыт один сокет устройства, не получает ничего
+  // (журнал 06.11.2026: sockets=1 sent=0 device_skipped=1, затем
+  // user_sockets=0 — приложение выглядит как «нет связи»).
+  // Сокет устройства получает события наравне с сокетом сессии (10.11.2026).
+  // Телефон входит привязкой по QR и держит ТОЛЬКО токен устройства, поэтому
+  // каждый его сокет считается «устройским» (ws.ts:104). Пока рядом открыт
+  // сокет сессии (браузер на маке), правило «пропустить устройский сокет, если
+  // есть сессия» (c194149a) глушило живой ход роли на телефоне: в журнале
+  // sent=1 device_skipped=1, а в клиенте ни одного live:start. Повтор на
+  // телефоне безвреден: дельты клиент отбрасывает по (turn_id, seq), снимок
+  // chats:live идемпотентен.
+  for (const socket of set) {
+    if (socket.readyState === 1) {
+      try {
+        socket.send(payload);
+        outcome.sent += 1;
+      } catch {
+        outcome.notOpen += 1;
+      }
+    } else {
+      outcome.notOpen += 1;
+    }
+  }
+  logWsDelivery(outcome);
 }
 
 // Владельцы кэшируются на минуту: событие по задаче прилетает часто (каждый

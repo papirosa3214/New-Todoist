@@ -9,7 +9,8 @@ import { skillCard, toolCard } from "./chatCommandCard.js";
 import { listRoleSkills } from "./instructionResources.js";
 import { taskflowTools } from "./inProcessRun.js";
 import { roleToolAllowed } from "../lib/roleToolScope.js";
-import { CARD_WORK_OPERATIONS, type ChatExecutionMode } from "./chatExecutionMode.js";
+import type { ChatExecutionMode } from "./chatExecutionMode.js";
+import { activeToolNamesFor, TOOL_GROUPS } from "./roleToolCatalog.js";
 import { PLANNING_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
 
 export type ChatCommand = {
@@ -51,12 +52,9 @@ function nativeAllowed(name: string, mode: ChatWorkMode): boolean {
 function roleToolAllowedInChat(
   role: string,
   name: string,
-  executionMode: ChatExecutionMode,
   mode: ChatWorkMode,
 ): boolean {
   if (!roleToolAllowed(role, name)) return false;
-  // В режиме «в чате» карточные операции скрыты — как и в самом ходе роли.
-  if (executionMode === "chat" && CARD_WORK_OPERATIONS.has(name)) return false;
   if (mode === "plan" && !PLANNING_TOOLS.includes(name)) return false;
   return true;
 }
@@ -113,8 +111,14 @@ export async function listChatCommands(params: {
     true,
     { chatId: params.chatId ?? "", messageId: params.messageId ?? "" },
   );
+  // Показываем то, чем роль реально работает: группы по объектам и одиночные
+  // операции. Имя, спрятанное в группе, в списке не дублируется (владелец
+  // 10.11.2026: «они одно к одному»).
+  const activeNames = activeToolNamesFor(registry.map((tool) => tool.name));
+  const active = new Set(activeNames);
   for (const tool of registry) {
-    if (!roleToolAllowedInChat(params.role, tool.name, params.executionMode, params.mode)) continue;
+    if (!active.has(tool.name)) continue;
+    if (!roleToolAllowedInChat(params.role, tool.name, params.mode)) continue;
     const description = (tool.description ?? "").split("\n")[0].slice(0, 300);
     const card = toolCard(tool.name, tool.name, description);
     commands.push({
@@ -123,6 +127,25 @@ export async function listChatCommands(params: {
       kind: "mcp",
       description,
       invocation: `/mcp:${tool.name} `,
+      summary: card.summary,
+      icon: card.icon,
+    });
+  }
+  // Группы по объектам: вызов идёт с параметром action, поэтому карточка нужна
+  // тоже — по ней видно, что действие выбирается внутри.
+  for (const name of activeNames) {
+    if (registry.some((tool) => tool.name === name)) continue;
+    const spec = TOOL_GROUPS[name];
+    if (!spec) continue;
+    if (!roleToolAllowedInChat(params.role, name, params.mode)) continue;
+    const description = `${spec.title}. Группа действий: ${spec.ops.join(", ")} — выбери одно в action.`.slice(0, 300);
+    const card = toolCard(name, name, description);
+    commands.push({
+      id: name,
+      title: card.title,
+      kind: "mcp",
+      description,
+      invocation: `/mcp:${name} `,
       summary: card.summary,
       icon: card.icon,
     });

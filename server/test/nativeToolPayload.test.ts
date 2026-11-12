@@ -72,7 +72,7 @@ it("в запрос уходит ядро, подключённая операц
   // Первый запрос: ядро, без общего шлюза.
   expect(requests.length).toBeGreaterThanOrEqual(2);
   expect(requests[0].names).toContain("taskflow_tools");
-  expect(requests[0].names).toContain("taskflow_task");
+  expect(requests[0].names).toContain("taskflow_tasks");
   expect(requests[0].names).not.toContain("taskflow");
   expect(requests[0].names).not.toContain("taskflow_doc_write");
   expect(requests[0].names.length).toBeLessThan(catalog.registeredNames.length);

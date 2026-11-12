@@ -1,4 +1,4 @@
-// Правила из кода берутся из реестра по условию; содержание и порядок — те же, что в литералах кода.
+// Правила из кода берутся из реестра. Второй копии в TypeScript нет.
 import { afterEach, describe, expect, it } from "vitest";
 import { migrate } from "../src/db.js";
 import { runMigrations } from "../src/migrations.js";
@@ -8,8 +8,8 @@ import { chatExecutionInstruction } from "../src/runtime/chatExecutionMode.js";
 import { roleToolInstruction } from "../src/runtime/roleToolCatalog.js";
 import { universalInstruction } from "../src/runtime/universalTaskflow.js";
 import { AGENT_RULES } from "../src/agentState.js";
-import { TASK_BRIEF_INSTRUCTIONS, taskBriefText } from "../src/lib/taskBrief.js";
-import { hasRegistrySite, loadRoleRules, registryText } from "../src/lib/roleRules.js";
+import { taskBriefText } from "../src/lib/taskBrief.js";
+import { hasRegistrySite, loadRoleRules, registryConditionOf, registryText } from "../src/lib/roleRules.js";
 
 migrate(); runMigrations();
 // Сверка с литералами кода идёт по тексту ДО сжатия формулировок (06.11.2026):
@@ -29,71 +29,86 @@ const both = <T>(fn: () => T): { on: T; off: T } => {
 };
 
 describe("правила из кода в реестре", () => {
-  it("в реестре 162 строки из кода: 151 правило, 3 смешанных (данные отдельно), 8 данных; составы 16 шаблонов", () => {
+  it("в реестре 161 строка из кода: 151 правило, 2 смешанных (данные отдельно), 8 данных; составы 16 шаблонов", () => {
     const all = loadRoleRules();
     const rows = all.filter((r) => r.category === "из кода" && r.kind !== "compose" && /^R\d+$/.test(r.id) && !["R123", "R214"].includes(r.id));
-    expect(rows).toHaveLength(162);
+    // R124 и R217 вынесены в «новое 06.11.2026» (11f7fc7b), чтобы формат доходил до роли.
+    // R581: тексты ритма развели по каналам (11.11.2026), строк из кода стало на одну больше.
+    expect(rows).toHaveLength(161);
     expect(rows.every((r) => r.condition && r.site)).toBe(true);
     expect(rows.filter((r) => r.kind === "data")).toHaveLength(8);
-    expect(rows.filter((r) => r.kind === "rule" && r.data_part)).toHaveLength(3);
+    expect(rows.filter((r) => r.kind === "rule" && r.data_part)).toHaveLength(2);
     expect(rows.filter((r) => r.kind === "rule" && !r.data_part)).toHaveLength(151);
     expect(all.filter((r) => r.kind === "compose")).toHaveLength(16);
   });
   it("AGENT_RULES и контракт постановки берутся из реестра, массив и текст те же", () => {
     const arr = both(() => [...AGENT_RULES]);
     expect(arr.on).toEqual(arr.off);
-    expect(arr.on).toHaveLength(10);
+    expect(arr.on).toHaveLength(9);
     expect(Array.isArray(AGENT_RULES)).toBe(true);
     expect(JSON.parse(JSON.stringify(AGENT_RULES))).toEqual(arr.off);
     const tb = both(taskBriefText);
     expect(tb.on).toBe(tb.off);
-    expect(tb.on).toBe(TASK_BRIEF_INSTRUCTIONS);
+    expect(tb.on).toBe(registryText("карточка: все шаги", undefined, "brief:TASK_BRIEF_INSTRUCTIONS"));
     expect(registryText("карточка: все шаги", undefined, "agentState:AGENT_RULES")).toBe(AGENT_RULES.join("\n"));
   });
-  it("шаблоны INSTRUCTION_DEFAULTS: выборка из реестра = литерал кода", () => {
+  it("шаблоны INSTRUCTION_DEFAULTS берутся из реестра", () => {
     const keys = Object.keys(INSTRUCTION_DEFAULTS).filter((k) => hasRegistrySite("defaults:" + k));
     expect(keys).toHaveLength(16);
     for (const key of keys) {
-      const { on, off } = both(() => INSTRUCTION_DEFAULTS[key]);
-      expect(norm(on), key).toBe(norm(off));
+      const site = "defaults:" + key;
+      const fromRegistry = registryText(registryConditionOf(site)!, key.startsWith("secretary.") ? "secretary" : undefined, site);
+      expect(fromRegistry.length, key).toBeGreaterThan(0);
+      expect(norm(INSTRUCTION_DEFAULTS[key]), key).toBe(norm(fromRegistry));
+      process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED = "false";
+      expect(norm(INSTRUCTION_DEFAULTS[key]), key).toBe(norm(fromRegistry));
+      delete process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED;
     }
   });
-  it("режимы чата, инструменты и политика помощи в плане: те же тексты", () => {
+  it("режимы чата, инструменты и политика помощи в плане берутся из реестра", () => {
     for (const mode of ["work", "plan", "deep_research", "discussion", "goal"] as const) {
-      const { on, off } = both(() => chatModeInstruction(mode));
-      expect(norm(on), mode).toBe(norm(off));
+      const fromRegistry = registryText("режим: " + mode, undefined, "mode:" + mode);
+      expect(fromRegistry.length, mode).toBeGreaterThan(0);
+      expect(norm(chatModeInstruction(mode)), mode).toBe(norm(fromRegistry));
     }
-    for (const [name, fn] of [["tools", roleToolInstruction], ["universal", universalInstruction], ["planHelp", planRoleHelpPolicy]] as const) {
-      const { on, off } = both(fn);
-      expect(norm(on), name).toBe(norm(off));
-    }
+    expect(norm(universalInstruction())).toBe(norm(registryText("инструменты: всегда", undefined, "tools:UNIVERSAL_INSTRUCTION")));
+    expect(norm(planRoleHelpPolicy())).toBe(norm(registryText("карточка: все шаги", undefined, "defaults:PLAN_ROLE_HELP_POLICY")));
   });
-  it("способ выполнения: одна правка смысла — его определяет задача чата, остальное дословно", () => {
-    const chat = both(() => chatExecutionInstruction("chat"));
-    expect(chat.off).toContain("Только владелец выбирает способ выполнения");
-    expect(chat.on).not.toContain("Только владелец выбирает");
-    expect(chat.on).toContain("Способ выполнения определяет задача чата");
-    const OLD = "Только владелец выбирает способ выполнения. Для явного поручения оформить карточку владелец выбирает «По карточке» или пишет «Оформить как карточку».";
-    const NEW = "Способ выполнения определяет задача чата: у чата нет задачи — работа идёт в чате. Для явного поручения оформить карточку владелец пишет «Оформить как карточку».";
-    const strip = (t: string) => t.replace(OLD, "<X>").replace(NEW, "<X>");
-    expect(norm(strip(chat.on))).toBe(norm(strip(chat.off)));
-    const card = both(() => chatExecutionInstruction("card"));
-    expect(card.off).toContain("Владелец выбрал работу через карточку");
-    expect(card.on).toContain("У чата есть задача");
-    expect(norm(card.on.replace("У чата есть задача — работа идёт через карточку задачи.", ""))).toBe(norm(card.off.replace("Владелец выбрал работу через карточку задачи.", "")));
+  // Владелец 08.11.2026: у инструкции инструментов один источник — реестр.
+  // Код-запасной литерал убран, чтобы у одного правила не было второй копии;
+  // выключатель реестра эту инструкцию кодом не подменяет.
+  it("у инструкции инструментов один источник — реестр", async () => {
+    // Место в реестре — своё: строка универсального инструмента (R271) в этот
+    // блок не попадает, иначе роль получила бы её дважды за один промпт.
+    expect(roleToolInstruction()).not.toContain("Каждый отказ содержит поле hint");
+    const registry = registryText("инструменты: всегда", undefined, "tools:ROLE_TOOL_INSTRUCTION");
+    expect(registry.length).toBeGreaterThan(100);
+    expect(roleToolInstruction()).toBe(registry);
+    process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED = "false";
+    expect(roleToolInstruction()).toBe(registry);
+    const mod: any = await import("../src/runtime/roleToolCatalog.js");
+    expect(mod.ROLE_TOOL_INSTRUCTION).toBeUndefined();
   });
-  it("нет задвоений: общие блоки встречаются в шаблонах столько же раз, сколько в коде", () => {
+  it("способ выполнения берётся из реестра и выключатель его не подменяет", () => {
+    const chat = chatExecutionInstruction("chat");
+    expect(chat).toBe(registryText("способ: в чате", undefined, "exec:chat"));
+    expect(chat).toContain("Способ выполнения определяет задача чата");
+    expect(chat).not.toContain("Только владелец выбирает");
+    const card = chatExecutionInstruction("card");
+    expect(card).toBe(registryText("способ: по карточке", undefined, "exec:card"));
+    expect(card).toContain("У чата есть задача");
+    process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED = "false";
+    expect(chatExecutionInstruction("card")).toBe(card);
+    expect(registryText("режим: plan")).not.toBe("");
+  });
+  it("общие блоки в шаблонах не задвоены", () => {
     const count = (t: string, m: string) => t.split(m).length - 1;
     for (const key of ["task.start", "task.plan", "task.resume", "task.reply", "chat.wrapper"]) {
-      const { on, off } = both(() => INSTRUCTION_DEFAULTS[key]);
-      expect(count(on, "ФОРМАТ ОТВЕТА (один во всём приложении)"), key).toBe(count(off, "ФОРМАТ ОТВЕТА (один во всём приложении)"));
-      expect(count(on, "{rules}") + count(on, "{roleInstruction}"), key).toBe(count(off, "{rules}") + count(off, "{roleInstruction}"));
+      const text = INSTRUCTION_DEFAULTS[key];
+      expect(count(text, "ФОРМАТ ОТВЕТА (один во всём приложении)"), key).toBeLessThanOrEqual(1);
+      const slots = count(text, "{rules}") + count(text, "{roleInstruction}");
+      expect(slots, key).toBeLessThanOrEqual(2);
     }
-  });
-  it("выключатель: при false — прежние тексты из кода", () => {
-    process.env.TASKFLOW_SETTING_ROLE_REGISTRY_ENABLED = "false";
-    expect(chatExecutionInstruction("card")).toContain("Владелец выбрал");
-    expect(registryText("режим: plan")).not.toBe("");
   });
   it("сжатые формулировки короче исходных и подменяют их в живом реестре", () => {
     const shrunk = live.filter((r) => r.text_before_shrink);

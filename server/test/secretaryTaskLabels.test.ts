@@ -130,13 +130,10 @@ describe("Метки задач для Помощника владельца", (
     expect(task.json().labels.map((l: any) => l.id)).toContain(labelId);
   });
 
-  it("операции меток достаются только Помощнику владельца", () => {
-    // Права проверяются при вызове (roleToolAllowed), а не составом каталога.
-    expect(roleToolAllowed("secretary", "taskflow_labels")).toBe(true);
-    expect(roleToolAllowed("secretary", "taskflow_set_task_labels")).toBe(true);
-    for (const роль of ["builder", "analyst", "researcher", "critic_verifier"]) {
-      expect(roleToolAllowed(роль, "taskflow_labels")).toBe(false);
-      expect(roleToolAllowed(роль, "taskflow_set_task_labels")).toBe(false);
+  it("операции меток доступны всем ролям — набор один (владелец 07.11.2026)", () => {
+    for (const роль of ["secretary", "builder", "analyst", "researcher", "critic_verifier"]) {
+      expect(roleToolAllowed(роль, "taskflow_labels")).toBe(true);
+      expect(roleToolAllowed(роль, "taskflow_set_task_labels")).toBe(true);
     }
   });
 });

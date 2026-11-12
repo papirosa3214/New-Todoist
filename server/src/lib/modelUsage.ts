@@ -49,6 +49,14 @@ export function readModelUsage(window:string) {
  const models=(db.prepare(`SELECT provider,model,${aggregate} FROM model_usage WHERE occurred_at>=? GROUP BY provider,model ORDER BY sum(input_tokens+output_tokens+cache_read+cache_write) DESC`).all(since) as any[]).map(decorate);
  const daily=(db.prepare(`SELECT date(occurred_at,'+3 hours') day,${aggregate} FROM model_usage WHERE occurred_at>=? GROUP BY day ORDER BY day`).all(since) as any[]).map(decorate);
  const dailyByModel=(db.prepare(`SELECT date(occurred_at,'+3 hours') day,provider,model,${aggregate} FROM model_usage WHERE occurred_at>=? GROUP BY day,provider,model ORDER BY day`).all(since) as any[]).map(decorate);
+ // Разрез по провайдерам: владелец 09.11.2026 — «нужна и обобщённая
+ // информация по провайдерам, и переключение между ними».
+ const providers=(db.prepare(`SELECT provider,${aggregate} FROM model_usage WHERE occurred_at>=? GROUP BY provider ORDER BY sum(input_tokens+output_tokens+cache_read+cache_write) DESC`).all(since) as any[]).map(decorate);
+ const dailyByProvider=(db.prepare(`SELECT date(occurred_at,'+3 hours') day,provider,${aggregate} FROM model_usage WHERE occurred_at>=? GROUP BY day,provider ORDER BY day`).all(since) as any[]).map(decorate);
+ // Прогноз по среднему темпу: только факт из базы, никаких выдуманных лимитов.
+ const daysWithUsage=daily.filter((d:any)=>d.totalTokens>0).length;
+ const tokensPerDay=daysWithUsage>0?Math.round(daily.reduce((s:number,d:any)=>s+d.totalTokens,0)/daysWithUsage):0;
+ const forecast={tokensPerDay,tokensNext30Days:tokensPerDay*30,enoughData:daysWithUsage>=2};
  const trackingSince=(db.prepare("SELECT min(occurred_at) first FROM model_usage").get() as any).first;
- return {window,since,trackingSince,scope:"taskflow_roles",currency:"USD",costBasis:"sdk_estimate",totals,models,daily,dailyByModel};
+ return {window,since,trackingSince,scope:"taskflow_roles",currency:"USD",costBasis:"sdk_estimate",totals,models,daily,dailyByModel,providers,dailyByProvider,forecast};
 }

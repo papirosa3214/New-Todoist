@@ -5,6 +5,8 @@ import {startBudgetCaptureWatcher} from "./runtime/chatBudgetCases.js";
 import { serverListenOptions } from "./runtime/systemdSocket.js";
 import {startToolRequestWatcher} from "./runtime/toolRequestStore.js";
 import {startChatCoordinationWatcher} from "./runtime/chatCoordination.js";
+import {startChatTopologyWatcher} from "./lib/chatTopologyWatcher.js";
+import {startQueuedSweeper} from "./runtime/chatQueued.js";
 import { startRoleLoadWatcher } from "./lib/roleLoadWatcher.js";
 import { startReviewHistoryWatcher } from "./lib/reviewHistory.js";
 import { startWorkPlanWatcher } from "./lib/workPlanWatcher.js";
@@ -27,13 +29,14 @@ import { startChatQueueRecovery, scheduleChatQueueRecovery } from "./runtime/cha
 import { recoverLiveDrafts } from "./runtime/chatLiveDraft.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
+import { startKnowledgeIndexWorker } from "./lib/knowledgeIndexQueue.js";
 import { startModelUsageRetention } from "./lib/modelUsageRetention.js";
 import { startScheduler } from "./runtime/scheduler.js";
 import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
 import { closeOrphanedAttempts, startOrphanedAttemptSweep } from "./runtime/orphanedAttempts.js";
 import { startProviderProbe } from "./runtime/providerProbe.js";
 import { startLinearAutoImport } from "./lib/linearAutoImport.js";
-import { startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
+import { orchestratorWebhookEnabled, startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
 import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
@@ -81,6 +84,7 @@ import { registerManualRunRoutes } from "./routes/manual-run.js";
 import { registerControlRoutes } from "./routes/control.js";
 import { registerRetryRoutes } from "./routes/retry.js";
 import { registerConsultationRoutes } from "./routes/consultation.js";
+import { registerRoleRulesRoutes } from "./routes/roleRules.js";
 import { registerEmbeddingsRoutes } from "./routes/embeddings.js";
 import { registerEnrichSemanticRoutes } from "./routes/enrichSemantic.js";
 import { registerProjectLabelRoutes } from "./routes/projects.js";
@@ -95,6 +99,7 @@ import { registerOwnerCommandRoutes } from "./routes/owner-commands.js";
 import { registerAdminServerSettingsRoutes } from "./routes/admin-server-settings.js";
 import { registerSecretsRoutes } from "./routes/secrets.js";
 import { registerJevRoutes } from "./routes/jev.js";
+import { registerOpenCodeUsageRoutes } from "./routes/opencodeUsage.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerEscalationRoutes } from "./routes/escalation.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
@@ -113,6 +118,7 @@ import { resumePendingHandoffs } from "./runtime/taskDiscussion.js";
 import { ensureCommonChat } from "./lib/chatCommon.js";
 import { registerWidgetsRoutes } from "./routes/widgets.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
+import { registerMemoryWatchRoutes } from "./routes/memoryWatch.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerCompassRoutes } from "./routes/compass.js";
 import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
@@ -125,7 +131,6 @@ import { registerTaskOutcomeRoutes } from "./routes/taskOutcome.js";
 import { registerNoteRoutes } from "./routes/notes.js";
 import { registerRoleToolRequestRoutes } from "./routes/role-tool-requests.js";
 import { registerLibraryRoutes } from "./routes/library.js";
-import { registerChatRoutes } from "./routes/chat.js";
 import { registerAgentInboxRoutes } from "./routes/agent-inbox.js";
 import { registerAgentRulesRoutes } from "./routes/agent-rules.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
@@ -140,6 +145,7 @@ import {
 } from "./routes/activity.js";
 import { startInboxTriageWatcher } from "./lib/inboxTriageWatcher.js";
 import { startNoteAccessWatcher } from "./lib/noteAccessWatcher.js";
+import { startPromptContextWatcher } from "./runtime/promptAudit.js";
 import { startKbTriageWatcher } from "./lib/kbTriageWatcher.js";
 import { startOllamaHealthWatcher } from "./lib/ollamaHealthWatcher.js";
 import { startWorktreeMergeWatcher } from "./lib/worktreeMergeWatcher.js";
@@ -591,6 +597,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerManualRunRoutes(app);
   registerRetryRoutes(app);
   registerConsultationRoutes(app);
+  registerRoleRulesRoutes(app);
   registerEmbeddingsRoutes(app);
   registerEnrichSemanticRoutes(app);
   registerEnrichmentRoutes(app);
@@ -615,6 +622,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAdminServerSettingsRoutes(app);
   registerSecretsRoutes(app);
   registerJevRoutes(app);
+  registerOpenCodeUsageRoutes(app);
   registerServerEventsRoutes(app);
   registerOwnerCommandRoutes(app);
   registerSubtaskArtifactRoutes(app);
@@ -651,6 +659,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerRunToolsRoutes(app);
   registerWidgetsRoutes(app);
   registerMemoryRoutes(app);
+  registerMemoryWatchRoutes(app);
   registerTranscribeRoutes(app);
   // Архив диктовок (18.08.2026): аудио выгружается с телефона и хранится
   // бессрочно — прямое решение владельца.
@@ -664,7 +673,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerNoteRoutes(app);
   registerLibraryRoutes(app);
   registerRoleToolRequestRoutes(app);
-  registerChatRoutes(app);
   await registerAgentInboxRoutes(app);
   await registerAgentRulesRoutes(app);
   registerWebhookRoutes(app);
@@ -682,6 +690,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Сторож прибора «учёт обращений к заметкам»: без счётчиков схема базы
     // знаний слепнет (заметка cfa5cdcd, шаг 1 из 4).
     startNoteAccessWatcher();
+    // Журнал контекста ролей (владелец 11.11.2026): пробная запись сводки раз в 15 минут.
+    const stopPromptContextWatcher = startPromptContextWatcher();
+    app.addHook("onClose", async () => stopPromptContextWatcher());
     const stopRoleLoadWatcher = startRoleLoadWatcher();
     app.addHook("onClose", async()=>stopRoleLoadWatcher());
     const stopReviewHistoryWatcher = startReviewHistoryWatcher();
@@ -690,6 +701,12 @@ export async function buildApp(): Promise<FastifyInstance> {
     app.addHook("onClose",async()=>stopToolRequestWatcher());
     const stopCoordinationWatcher=startChatCoordinationWatcher();
     app.addHook("onClose",async()=>stopCoordinationWatcher());
+    // Топология чатов: ребёнок без комнаты задачи, чужой адресат, зависшая
+    // передача, доставка в архив (docs/watchers.md).
+    const stopChatTopologyWatcher = startChatTopologyWatcher();
+    app.addHook("onClose", async () => stopChatTopologyWatcher());
+    const stopQueuedSweeper = startQueuedSweeper();
+    app.addHook("onClose", async () => stopQueuedSweeper());
     const stopBudgetCaptureWatcher=startBudgetCaptureWatcher();
     app.addHook("onClose",async()=>stopBudgetCaptureWatcher());
     const stopWorkPlanWatcher = startWorkPlanWatcher();
@@ -736,6 +753,17 @@ export async function buildApp(): Promise<FastifyInstance> {
   //
   // Отдаём то, по чему видно живость и свежесть, а не диагностический дамп:
   // сколько работает, на каком коде, велика ли база, включена ли «Система».
+  // Журнал телефона (владелец 06.11.2026): приложение присылает строки о
+  // том, что получило по сокету и как показало, — они ложатся рядом с
+  // [ws-out] сервера, и обрыв видно по одному журналу.
+  app.post("/api/client-log", { preHandler: authOrApiToken }, async (req: any) => {
+    const lines = Array.isArray(req.body?.lines) ? req.body.lines.slice(0, 200) : [];
+    for (const line of lines) {
+      if (typeof line === "string") console.log(`[ios] user=${req.userId} ${line.slice(0, 500).replace(/\n/g, " ")}`);
+    }
+    return { ok: true };
+  });
+
   app.get("/api/server-status", { preHandler: authOrApiToken }, async () => {
     const uptime = Math.round(process.uptime());
     let commit: string | null = null;
@@ -1018,6 +1046,7 @@ if (isMain) {
     let stopRoleRuns: (() => Promise<void>) | null = null;
     let stopVoiceBridge: (() => Promise<void>) | null = null;
     let stopKnowledgeSync: (() => void) | null = null;
+    let stopKnowledgeIndex: (() => void) | null = null;
     let stopModelUsageRetention: (() => void) | null = null;
     let stopDataRetention: (() => void) | null = null;
     let stopScheduler: (() => void) | null = null;
@@ -1033,6 +1062,7 @@ if (isMain) {
     let stopChatQueueSweep: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
+      stopKnowledgeIndex?.();
       stopModelUsageRetention?.();
       stopDataRetention?.();
       stopScheduler?.();
@@ -1134,6 +1164,8 @@ if (isMain) {
     }
     if(process.env.TASKFLOW_AUTO_PREPARATION!=="0") stopPreparation=startPreparationWorker();
     // Документация проектов → база знаний раз в сутки (lib/knowledgeSync.ts).
+    // В тестах очередь не крутится сама: тик раз в 5 с мешал бы прогонам.
+    if (!process.env.VITEST) stopKnowledgeIndex = startKnowledgeIndexWorker();
     if (!sandbox) stopKnowledgeSync = startKnowledgeSyncSchedule();
     // Планировщик доски раз в 5 минут — внутри сервера (runtime/scheduler.ts).
     if (!sandbox) stopScheduler = startScheduler(app);
@@ -1148,7 +1180,7 @@ if (isMain) {
     // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
     // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
     if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();
-    if (process.env.ORCHESTRATOR_WEBHOOK_DISABLED !== "1") startOrchestratorWebhook();
+    if (orchestratorWebhookEnabled()) startOrchestratorWebhook();
     // Подписочный мост: durable delivery iOS-подпискам + wake-очередь
     // для пробуждения Codex-чата. Карточка c3c0c199… (hook_server).
     // Карточка 905db3e3-… (webhook V2): секреты HMAC обязаны переживать

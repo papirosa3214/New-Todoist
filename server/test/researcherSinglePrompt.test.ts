@@ -8,7 +8,7 @@ import {chatSystemPrompt,createTaskResourceLoader} from "../src/runtime/instruct
 import {ensureRoleHome} from "../src/runtime/roleHome.js";
 import {chatTurnSystemText,projectSecretarySystem,installSecretarySystem} from "../src/runtime/secretaryChatPrompt.js";
 const expected=fs.readFileSync(new URL("../scripts/researcher-chat-system.md",import.meta.url),"utf8");
-it("researcher text chat uses only its compressed file, without AGENTS.md, canon or skills",async()=>{
+it("researcher text chat starts with its compressed file, without AGENTS.md; skills are appended for the pre-work check (owner 07.11.2026)",async()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),"researcher-single-"));const old=process.env.TASKFLOW_ROLES_DIR;process.env.TASKFLOW_ROLES_DIR=root;
  try{
   const home=ensureRoleHome("researcher");fs.writeFileSync(home.agents,"OLD_AGENTS_SENTINEL");
@@ -16,7 +16,7 @@ it("researcher text chat uses only its compressed file, without AGENTS.md, canon
   expect(prompt).toBe(expected);
   expect(chatTurnSystemText("researcher",prompt,["SERVER_RULES"])).toBe(expected);
   const loader=await createTaskResourceLoader("researcher",home.workspace,prompt,undefined,true);
-  try{expect(loader.getSystemPrompt()).toBe(expected);expect(loader.getAgentsFiles().agentsFiles).toHaveLength(0);expect(loader.getSkills().skills).toHaveLength(0);}
+  try{expect(loader.getSystemPrompt().startsWith(expected)).toBe(true);expect(loader.getAgentsFiles().agentsFiles).toHaveLength(0);expect(loader.getSkills().skills.map(s=>s.name)).toContain("role-work-cycle");}
   finally{loader.disposeResources?.();}
  }finally{if(old===undefined)delete process.env.TASKFLOW_ROLES_DIR;else process.env.TASKFLOW_ROLES_DIR=old;fs.rmSync(root,{recursive:true,force:true});}
 });

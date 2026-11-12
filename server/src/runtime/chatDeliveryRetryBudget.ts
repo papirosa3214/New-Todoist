@@ -27,6 +27,19 @@ export function restartDelivery(
     const row = db.prepare("SELECT q.*, c.task_id FROM chat_message_queue q LEFT JOIN chats c ON c.id=q.chat_id WHERE q.id=?")
       .get(id) as {status:string;payload_json:string;chat_id:string;role_id:string;message_id:string|null;task_id:string|null}|undefined;
     if (!row || row.status !== from) return "skipped";
+    // Recovery may already have materialized the interrupted draft. A saved
+    // reply is a visible terminal outcome, including an explicitly partial
+    // one. Re-running the delivery would publish a second answer with a new ID.
+    // Scope by chat + author + trigger: other roles' replies do not settle us.
+    const answered = row.message_id && db.prepare(`SELECT 1 FROM chat_messages
+      WHERE chat_id=? AND from_user_id=? AND reply_to_message_id=?
+        AND COALESCE(message_type, 'text') != 'system' LIMIT 1`)
+      .get(row.chat_id, row.role_id, row.message_id);
+    if (answered) {
+      db.prepare("UPDATE chat_message_queue SET status='done',finished_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status=?")
+        .run(id, from);
+      return "skipped";
+    }
     let payload: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(row.payload_json || "{}");

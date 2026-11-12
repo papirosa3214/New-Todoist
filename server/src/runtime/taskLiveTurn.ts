@@ -1,4 +1,4 @@
-import { LiveTurn, type LiveTurnSnapshot } from "./chatLiveTurn.js";
+import { LiveTurn, liveTurnForClient, type LiveTurnSnapshot } from "./chatLiveTurn.js";
 import { liveDeltaOps, type LiveView } from "./chatLiveDelta.js";
 import db from "../db.js";
 
@@ -90,7 +90,8 @@ export function taskLiveTurns(taskId: string): TaskLiveSnapshot[] {
     const id = key(snapshot.task_id, snapshot.subtask_id);
     if (!byKey.has(id)) byKey.set(id, snapshot);
   }
-  return [...byKey.values()];
+  // Снимки из журнала клиент тоже получает уже с готовыми блоками.
+  return [...byKey.values()].map((snapshot) => ({ ...snapshot, turn: liveTurnForClient(snapshot.turn) }));
 }
 
 /** Shares the chat event parser, never registers or broadcasts a chat turn. */
@@ -113,7 +114,9 @@ export function beginTaskLiveTurn(args: {
       started = true;
       args.publishDelta({ type: "tasks:live:start", ...ids, name: args.name, started_at: turn.started_at, message_id: null, seq: 0 });
     }
-    const view: LiveView = { items: turn.items.map((it) => ({ ...it, id: (it as { id?: string }).id ?? "" })), thinking: turn.thinking };
+    // Блоки готовит сервер тем же хелпером, что и чат (lib/chatBlocks.ts):
+    // карточка рисует ход из готовых блоков, клиент текст сам не раскладывает.
+    const view: LiveView = { items: liveTurnForClient(turn).items.map((it) => ({ ...it, id: (it as { id?: string }).id ?? "" })), thinking: turn.thinking };
     const ops = liveDeltaOps(sentView, view);
     if (ops.length) {
       sentView = view;
@@ -132,14 +135,17 @@ export function beginTaskLiveTurn(args: {
       }
     }
     sendDelta(finalTurn, turn === null);
+    const storedTurn = args.publishDelta ? { ...finalTurn, turn_id: args.runId, message_id: null, seq } : finalTurn;
+    // Клиенту и в сокет — с готовыми блоками, как в чате; в журнал кладём
+    // чистый снимок: по конвенции чата блоки в сохраняемый снимок не входят.
     const snapshot: TaskLiveSnapshot = {
       task_id: args.taskId, subtask_id: args.subtaskId ?? null, run_id: args.runId,
       complete: turn === null,
-      turn: args.publishDelta ? { ...finalTurn, turn_id: args.runId, message_id: null, seq } : finalTurn,
+      turn: liveTurnForClient(storedTurn),
     };
     turns.set(id, { snapshot, updated: Date.now() });
     // Ход закончился — кладём в журнал, чтобы он пережил конец роли.
-    if (snapshot.complete) persistSnapshot(snapshot);
+    if (snapshot.complete) persistSnapshot({ ...snapshot, turn: storedTurn });
     args.publish(snapshot);
   };
   live = new LiveTurn({

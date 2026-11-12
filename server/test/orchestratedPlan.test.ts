@@ -1,6 +1,6 @@
 // Режим «Оркестратор» (владелец 13.10.2026): план из двух шагов Оркестратора —
 // разложить работу по ролям и принять/собрать итог. Проверяем шаблон,
-// инструкции шагов, отключение ответственного за интеграцию и побудку при блоке шага команды.
+// инструкции шагов, отключение ответственного за интеграцию.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 
@@ -14,7 +14,6 @@ import db from "../src/db.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 import { planSubtaskPrompt } from "../src/runtime/inProcessRun.js";
 import { integrationResponsibility } from "../src/lib/integrationResponsibility.js";
-import { wakeOrchestrator } from "../src/runtime/orchestratorWake.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { applyPlanOps } from "../src/runtime/planMutations.js";
 
@@ -64,7 +63,7 @@ describe("режим «Оркестратор»", () => {
     expect(first).toContain(planId);
     expect(first).not.toContain("Сделай работу.");
     const second = planSubtaskPrompt(taskId, "code_orchestrator", steps.find(s => s.plan_node_key === "assemble")!.id);
-    expect(second).toContain("сам в main не вливай");
+    expect(second).toContain("В main вливает система");
   });
 
   it("Оркестратор раскладывает работу: шаги ролей встают между его шагами и применяются сразу", () => {
@@ -78,52 +77,6 @@ describe("режим «Оркестратор»", () => {
     expect(edges).toEqual(expect.arrayContaining(["orchestrate>builder_main", "builder_main>critic_main", "builder_main>assemble", "critic_main>assemble"]));
   });
 
-  it("блок шага команды будит Оркестратора сообщением в очередь; свой шаг — нет", () => {
-    const own = db.prepare("SELECT id FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key='orchestrate'").get(planId) as { id: string };
-    expect(wakeOrchestrator(own.id, roleUserId("builder")!, "blocked", "x")).toBeNull();
-
-    db.prepare(`INSERT INTO task_collaboration_plan_nodes (plan_id, slot_key, role_key, required, expected_result)
-                SELECT plan_id, 'builder_1', 'builder', 1, 'Реализация' FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key='orchestrate'`).run(planId);
-    const sid = "orch-test-" + Date.now();
-    db.prepare("INSERT INTO subtasks (id, task_id, title, collaboration_plan_id, plan_node_key) VALUES (?,?,?,?,?)").run(sid, taskId, "Реализация", planId, "builder_1");
-    const wake = wakeOrchestrator(sid, roleUserId("builder")!, "blocked", "нет доступа к API");
-    expect(wake).not.toBeNull();
-    // Сессия «Заминки» своей задачи (21.10.2026): создатель — владелец.
-    const room = db.prepare("SELECT id,title,task_id,room_kind,created_by FROM chats WHERE id=?").get(wake!.chatId) as any;
-    expect(room).toMatchObject({ id: "wake:" + taskId, title: "Заминки", task_id: taskId, room_kind: "wake" });
-    expect(db.prepare("SELECT role FROM users WHERE id=?").get(room.created_by)).toMatchObject({ role: "owner" });
-    expect(wake!.roleId).toBe(roleUserId("code_orchestrator"));
-    const q = db.prepare("SELECT status FROM chat_message_queue WHERE message_id=?").get(wake!.messageId) as { status: string };
-    expect(q.status).toBe("pending");
-    const msg = db.prepare("SELECT text FROM chat_messages WHERE id=?").get(wake!.messageId) as { text: string };
-    expect(msg.text).toContain("нет доступа к API");
-    const ret = wakeOrchestrator(sid, roleUserId("qa")!, "returned", "нет обработки пустого ввода");
-    expect((db.prepare("SELECT text FROM chat_messages WHERE id=?").get(ret!.messageId) as { text: string }).text).toContain("возвращён проверяющим");
-    const ask = wakeOrchestrator(sid, roleUserId("builder")!, "approval", "op_id=x");
-    expect((db.prepare("SELECT text FROM chat_messages WHERE id=?").get(ask!.messageId) as { text: string }).text).toContain("taskflow_plan_proposal_decide");
-  });
-
-  it("в плане другого профиля блок будит Оркестратора, а возврат — нет (20.10.2026)", () => {
-    // Шаг builder_1 заведён предыдущим тестом.
-    const sid = (db.prepare("SELECT id FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key='builder_1'").get(planId) as { id: string }).id;
-    db.prepare("UPDATE task_collaboration_plans SET profile='single_executor' WHERE id=?").run(planId);
-    try {
-      db.prepare("UPDATE subtasks SET block_type='capability' WHERE id=?").run(sid);
-      const wake = wakeOrchestrator(sid, roleUserId("builder")!, "blocked", "жду ответа владельца");
-      expect(wake).not.toBeNull();
-      const text = (db.prepare("SELECT text FROM chat_messages WHERE id=?").get(wake!.messageId) as { text: string }).text;
-      expect(text).toContain("Тебя разбудили, потому что шаг встал в блок");
-      expect(text).toContain("Вид блока: capability");
-      for (const tool of ["taskflow_plan_read", "taskflow_plan_ops", "taskflow_team_read", "taskflow_slot_restart", "taskflow_topic_send", "taskflow_ask_user_question", "taskflow_notify_owner_urgent"]) expect(text).toContain(tool);
-      expect(wakeOrchestrator(sid, roleUserId("qa")!, "returned", "дефект")).toBeNull();
-      expect(wakeOrchestrator(sid, roleUserId("builder")!, "retry", null)).toBeNull();
-    } finally {
-      db.prepare("UPDATE task_collaboration_plans SET profile='orchestrated' WHERE id=?").run(planId);
-    }
-  });
-});
-
-describe("перенос карточки в другой проект", () => {
   it("пустая тема переезжает в группу нового проекта, план утверждается", async () => {
     const app = await buildApp();
     const reg = await app.inject({ method: "POST", url: "/api/auth/register", payload: { name: "Move owner", email: `move-${Date.now()}@test`, password: "password123" } });
@@ -137,8 +90,11 @@ describe("перенос карточки в другой проект", () => {
     const plan = (await app.inject({ method: "POST", url: `/api/tasks/${t.id}/collaboration-plans/propose`, headers: auth, payload: { profile: "research" } })).json().plan;
     const ap = await app.inject({ method: "POST", url: `/api/tasks/${t.id}/collaboration-plans/${plan.id}/approve`, headers: auth, payload: {} });
     expect(ap.statusCode).toBe(200);
-    const topic = db.prepare("SELECT project_id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(t.id) as { project_id: string };
-    expect(topic.project_id).toBe(p2.id);
+    const room = db.prepare("SELECT id, project_id, room_kind FROM chats WHERE task_id=?").get(t.id) as { id: string; project_id: string | null; room_kind: string };
+    // Комната задачи от проекта больше не зависит (08.11.2026): перенос
+    // карточки в другой проект её не переселяет и не заводит вторую.
+    expect(room.room_kind).toBe("task");
+    expect(room.project_id ?? null).toBeNull();
     await app.close();
   });
 });

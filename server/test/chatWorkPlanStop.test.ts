@@ -42,19 +42,20 @@ function chatWithRun(generation = 1) {
   return { chatId, messageId, deliveryId };
 }
 
-it("стоп останавливает план, а не ставит на паузу: сдачи не принимаются", () => {
+it("стоп сразу закрывает план: сдачи не принимаются, причина сохранена", () => {
   const { chatId, messageId } = chatWithRun();
   submitChatWorkItem({ chatId, roleId: role, itemId: "one", result: "Первый готов.", outcome: "done", messageId });
   const view = stopChatWorkPlan(chatId, role, "owner_stop")!;
-  expect(view.status).toBe("stopped");
+  // Владелец 11.11.2026: закрытый чек-лист не должен висеть остановленным мусором.
+  expect(view.status).toBe("finished");
   expect(view.stop_reason).toBe("owner_stop");
+  expect(view.stopped_at).toBeTruthy();
   expect(view.current_item_id).toBeNull();
-  expect(view.items.map((i) => i.state)).toEqual(["done", "stopped", "pending"]);
-  // Третий пункт не допускается: остановленный план сдачу не принимает.
+  expect(view.items.map((i) => i.state)).toEqual(["done", "pending", "pending"]);
+  // Третий пункт не допускается: закрытый план сдачу не принимает.
   expect(() =>
     submitChatWorkItem({ chatId, roleId: role, itemId: "two", result: "Второй готов.", outcome: "done", messageId }),
-  ).toThrow(/остановлен/);
-  expect(chatPlanView(chatId, role)!.items[1].state).toBe("stopped");
+  ).toThrow(/закрыт/);
 });
 
 it("остановленный план заменяется новым без сверки версии, старые сдачи не возвращаются", () => {
@@ -79,8 +80,12 @@ it("маршрут стопа гасит план и отвечает остан
   });
   expect(response.statusCode, response.body).toBe(200);
   const body = JSON.parse(response.body);
-  expect(body.plan.status).toBe("stopped");
-  expect(body.plan.items[0].state).toBe("stopped");
+  // Закрытый план в полоске владельца не показывается — мусором не висит.
+  expect(body.plan.status).toBe("finished");
+  const list = await app.inject({
+    method: "GET", url: `/api/chats/${chatId}/work-plans`, headers: { authorization: "Bearer " + token },
+  });
+  expect(JSON.parse(list.body).plans).toHaveLength(0);
 });
 
 it("исчерпание бюджета повторов останавливает план с явной причиной", () => {
@@ -95,9 +100,8 @@ it("исчерпание бюджета повторов останавлива�
     else process.env.TASKFLOW_CHAT_DELIVERY_MAX_RESTARTS = previous;
   }
   const view = chatPlanView(chatId, role)!;
-  expect(view.status).toBe("stopped");
+  expect(view.status).toBe("finished");
   expect(view.stop_reason).toBe("budget_exhausted");
-  expect(view.items[0].state).toBe("stopped");
 });
 
 it("заблокированный пункт держит очередь: следующий не становится текущим", () => {
@@ -119,9 +123,9 @@ it("кнопка стопа iOS останавливает план и запр�
   submitChatWorkItem({chatId,roleId:role,itemId:"one",result:"Первый готов",outcome:"done",messageId});
   const response=await app.inject({method:"POST",url:`/api/chats/${chatId}/stop`,headers:{authorization:"Bearer "+app.jwt.sign({id:"u1"})},payload:{}});
   expect(response.statusCode,response.body).toBe(200);
-  expect(chatPlanView(chatId,role)!.status).toBe("stopped");
-  expect(chatPlanView(chatId,role)!.items.map(item=>item.state)).toEqual(["done","stopped","pending"]);
-  expect(()=>submitChatWorkItem({chatId,roleId:role,itemId:"two",result:"Поздний ответ",outcome:"done",messageId})).toThrow(/остановлен/);
+  expect(chatPlanView(chatId,role)!.status).toBe("finished");
+  expect(chatPlanView(chatId,role)!.stop_reason).toBe("owner_stop");
+  expect(()=>submitChatWorkItem({chatId,roleId:role,itemId:"two",result:"Поздний ответ",outcome:"done",messageId})).toThrow(/закрыт/);
   expect(db.prepare("SELECT status FROM chat_message_queue WHERE id=?").get(deliveryId)).toEqual({status:"superseded"});
 });
 
@@ -132,6 +136,6 @@ it("стоп из корня отсекает доставку роли в ве�
  db.prepare("INSERT INTO chat_message_queue(id,chat_id,role_id,delivery_id,session_generation,payload_json,status) VALUES(?,?,?,?,?,?,?)").run(deliveryId,branch,role,deliveryId,1,"{}","picked");
  const response=await app.inject({method:"POST",url:`/api/chats/${chatId}/stop`,headers:{authorization:"Bearer "+app.jwt.sign({id:"u1"})},payload:{role_id:role}});
  expect(response.statusCode).toBe(200);
- expect(chatPlanView(branch,role)?.status).toBe("stopped");
+ expect(chatPlanView(branch,role)?.status).toBe("finished");
  expect(db.prepare("SELECT status FROM chat_message_queue WHERE id=?").get(deliveryId)).toEqual({status:"superseded"});
 });

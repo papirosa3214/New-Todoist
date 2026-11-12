@@ -61,6 +61,9 @@ type PendingOp = {
   resolve: (result: OperationResult) => void;
   reject: (err: Error) => void;
   onChunk?: (chunk: { stream: "stdout" | "stderr"; data: string }) => void;
+  /** Текст кадров op_chunk. Хост в op_result присылает пустые stdout/stderr. */
+  stdoutChunks: string[];
+  stderrChunks: string[];
   /** Сколько байт вывода уже отдали вызывающему — потолок держим на стороне
    *  сервера, потому что хост может быть старой версии и потолок не знать. */
   bytes: number;
@@ -214,6 +217,8 @@ export function runOperation(
       resolve,
       reject,
       onChunk: options.onChunk,
+      stdoutChunks: [],
+      stderrChunks: [],
       bytes: 0,
       truncated: false,
       timer,
@@ -375,6 +380,8 @@ function deliverChunk(machineId: string, chunk: OpChunkMessage) {
   }
   if (!данные) return;
   pending.bytes += Buffer.byteLength(данные, "utf8");
+  if (chunk.stream === "stderr") pending.stderrChunks.push(данные);
+  else pending.stdoutChunks.push(данные);
   pending.onChunk?.({ stream: chunk.stream, data: данные });
 }
 
@@ -391,8 +398,14 @@ function deliverResult(machineId: string, result: { opId: string } & Record<stri
     pending.resolve({
       ok: true,
       exitCode: typeof result.exitCode === "number" ? result.exitCode : 0,
-      stdout: typeof result.stdout === "string" ? result.stdout : "",
-      stderr: typeof result.stderr === "string" ? result.stderr : "",
+      // Кадры — сам вывод. Поле в op_result берём только если кадров не было:
+      // живой хост шлёт пустую строку, старый тест кладёт тот же текст в оба места.
+      stdout: pending.stdoutChunks.length > 0
+        ? pending.stdoutChunks.join("")
+        : typeof result.stdout === "string" ? result.stdout : "",
+      stderr: pending.stderrChunks.length > 0
+        ? pending.stderrChunks.join("")
+        : typeof result.stderr === "string" ? result.stderr : "",
       truncated: pending.truncated || result.truncated === true ? true : undefined,
       data: result.data,
     });

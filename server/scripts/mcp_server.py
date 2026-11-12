@@ -44,6 +44,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -341,18 +342,12 @@ def t_claim(args):
     rules = rules_of(resp)
     if rules:
         out["правила"] = rules
-    tail = _unread_tail()
-    if tail:
-        out["чат"] = tail
     return out
 
 
 def t_heartbeat(args):
     api("POST", f"/api/tasks/{args['id']}/heartbeat", {})
     out = {"аренда продлена": args["id"]}
-    tail = _unread_tail()
-    if tail:
-        out["чат"] = tail
     return out
 
 
@@ -644,166 +639,6 @@ def t_agents(_args):
 TO_ALL_WORDS = {"all", "всем", "*"}
 
 
-def _resolve_addressee(who: str | None) -> str:
-    """Кому адресовано сообщение — ОБЯЗАТЕЛЬНО (28.08.2026, владелец: «как я
-    должен догадаться, что ты мне написал, не упомянув ни слова обо мне»).
-
-    Принимает id участника или его имя (Hermes, Claude_Bot, Максим…) — тот же
-    приём, что у _project_id для проектов. Через /api/chat/participants, НЕ
-    /api/agents: тот намеренно узкий (видит только тех, с кем есть общая
-    задача) — для адресации в общем канале координации нужны все участники.
-
-    «Всем» — это слово, а не пустое поле: раньше и пропуск, и ОПЕЧАТКА в имени
-    молча превращались в рассылку всем, то есть промах адресации выглядел как
-    норма. Теперь непонятное имя — ошибка со списком, кого можно назвать."""
-    raw = (who or "").strip()
-    if not raw:
-        raise TaskFlowError(
-            'кому? укажи to: имя участника или "всем". '
-            "Пустое поле больше не значит «всем» — это должен быть явный выбор"
-        )
-    if raw.lower() in TO_ALL_WORDS:
-        return "all"
-    # Use full agents list instead of chat participants to allow addressing any agent
-    people = api("GET", "/api/agents")
-    for a in people:
-        if a.get("id") == raw.lower() or (a.get("name") or "").strip().lower() == raw.lower():
-            return a.get("id")
-    known = ", ".join(a.get("name") or a.get("id") for a in people)
-    raise TaskFlowError(
-        f'адресат «{raw}» не найден. Можно назвать: {known} — или "всем"'
-    )
-
-
-def _unread_tail() -> str | None:
-    """«У тебя N непрочитанных» — не отдельный опрос: heartbeat/claim/
-    subtask_work агент и так дёргает на каждом шаге, переиспользуем эти
-    заходы вместо второго троттлинга поверх чата."""
-    try:
-        n = api("GET", "/api/chat/unread").get("непрочитано", 0)
-    except TaskFlowError:
-        return None
-    if not n:
-        return None
-    return f"в чате {n} непрочитанных — taskflow_chat_read()"
-
-
-def t_chat_send(args):
-    """Написать в канал координации агентов.
-
-    ДВА КАНАЛА (28.08.2026, решение владельца). Твой — рабочая переписка
-    исполнителей и оркестратора; второй, окно постановки задач Максима,
-    тебе недоступен. Заговорить с Максимом первым нельзя: своё несёшь
-    оркестратору, он решает сам или выносит владельцу. Канал выбирать не
-    надо и нечем — сервер сам кладёт сообщение куда следует.
-
-    ОКНО ПОСТАНОВКИ ЗАДАЧ (10.09.2026, карточка 4396f8c9) — не разговор, а
-    диктофон: Максим наговаривает туда работу, локальная модель собирает из
-    неё карточку-черновик, отвечает скрипт под учёткой «Помощник владельца». Тебя эти
-    сообщения не касаются и не будят — адресата у них нет вовсе. Карточка
-    оттуда лежит без флага готовности: пока владелец его не поднял, взять её
-    нельзя, и это не сбой, а её нормальное состояние.
-
-    НО ЕСЛИ МАКСИМ НАПИСАЛ ТЕБЕ САМ — отвечай ему, и отвечай прямо
-    (28.08.2026, карточка 4caa266f): to = «Максим», ответ ляжет в ту же
-    рабочую ленту, где он спросил, и оркестратор его увидит. Право
-    ответить живёт сутки от последнего его сообщения тебе — пока разговор
-    идёт. Не относящееся к этому разговору по-прежнему адресуется
-    оркестратору.
-
-    КОМУ — ОБЯЗАТЕЛЬНО, и для переписки агентов между собой тоже: «to»
-    заполняется всегда, «всем» пишется словом. Сообщение без адресата
-    сервер не примет.
-
-    ПОВОД, А НЕ СЧЁТЧИК (правило владельца 27.08.2026): без task_id
-    сообщение ложится в общую ленту и никого не будит — адресуй задачу,
-    если ждёшь ответа. У сообщения есть тип: совещание (ждёшь ответа),
-    делегирование, находка. Разговор закрывает МОЛЧАНИЕ: на «принято/
-    сделал» новым ответом не отвечать, этим и гасится «спасибо-пожалуйста».
-    Делегирование работы — через доску (assignee задачи/шага), это
-    сообщение — контекст к уже назначенному, не замена назначению. Находка —
-    указатель на урок/память (taskflow_remember), не
-    пересказ текстом: пересказ умрёт вместе с сессией.
-    """
-    to_user_id = _resolve_addressee(args.get("to"))
-    body: dict = {"text": args["text"], "to_user_id": to_user_id}
-    if args.get("task_id"):
-        body["task_id"] = args["task_id"]
-    if args.get("kind"):
-        body["kind"] = args["kind"]
-    msg = api("POST", "/api/chat", body)
-    if args.get("task_id"):
-        send_activity(args["task_id"], "edit", "чат: написал по задаче")
-    return {
-        "отправлено": msg.get("text"),
-        "кому": "всем" if to_user_id == "all" else args.get("to"),
-        "id": msg.get("id"),
-    }
-
-
-def t_chat_typing(args):
-    """Отметка «печатает…» в чате — для тех, у кого нет клавиатуры.
-
-    У человека отметку зажигает сама строка ввода, у агента её зажигать
-    нечем: сигнал подаётся явно, ОДИН раз, перед тем как браться за ответ.
-    Продлевать по ходу нельзя и не нужно — пока модель сочиняет, вызвать
-    инструмент она не может, поэтому сервер даёт агенту срок с запасом
-    (минута) и гасит отметку сам, как только сообщение отправлено.
-
-    Ставить её, только если действительно собираешься ответить: отметка —
-    обещание Максиму, что ответ идёт, а не признак того, что сообщение
-    прочитано.
-    """
-    body = {"state": "stop"} if args.get("state") == "stop" else {}
-    resp = api("POST", "/api/chat/typing", body)
-    return {
-        "печатает": resp.get("печатает"),
-        "гаснет через": f"{int(resp.get('гаснет_через_мс', 0) / 1000)} с"
-        if resp.get("печатает")
-        else "—",
-    }
-
-
-def t_chat_read(args):
-    """История канала. limit по умолчанию 20 — это сводка для агента, не
-    постраничная лента фронтенда. Заодно отмечает прочтение (chat_reads),
-    поэтому хвост «N непрочитанных» после вызова обнулится.
-
-    Без channel отдаётся всё, что тебе видно. Для исполнителя это рабочая
-    переписка, для оркестратора — обе ленты сразу, и в каждой строке
-    написано, из какой она: у него разговор с владельцем и служебный канал
-    идут вперемешку по времени, и различать их надо по полю, а не по
-    догадке."""
-    limit = int(args.get("limit") or 20)
-    qs = {"limit": str(limit)}
-    if args.get("task_id"):
-        qs["task_id"] = args["task_id"]
-    if args.get("channel"):
-        qs["channel"] = args["channel"]
-    resp = api("GET", "/api/chat?" + urllib.parse.urlencode(qs))
-    names = {a["id"]: a["name"] for a in api("GET", "/api/chat/participants")}
-    try:
-        api("POST", "/api/chat/read")
-    except TaskFlowError:
-        pass  # отметка прочтения необязательна — история важнее
-    return {
-        "сообщения": [
-            {
-                "когда": m.get("created_at"),
-                "канал": "с владельцем" if m.get("channel") == "owner" else "рабочий",
-                "от": m.get("from_user_name"),
-                "кому": names.get(m.get("to_user_id"), "всем") if m.get("to_user_id") else "всем",
-                "тип": m.get("kind") or "—",
-                "задача": m.get("task_title"),
-                "task_id": m.get("task_id"),
-                "текст": m.get("text"),
-            }
-            for m in resp.get("messages", [])
-        ],
-        "ещё есть": resp.get("has_more", False),
-    }
-
-
 def t_subtask_work(args):
     """Взяться за подзадачу, продлить работу, упереться или отпустить.
 
@@ -834,9 +669,6 @@ def t_subtask_work(args):
         ),
         "итог": row.get("result") or "—",
     }
-    tail = _unread_tail()
-    if tail:
-        out["чат"] = tail
     return out
 
 
@@ -1500,66 +1332,273 @@ def _vtt_to_text(vtt: str) -> str:
     return text.strip()
 
 
+def _youtube_transcript_api(url: str, languages: list[str], cap: int) -> dict:
+    """Получает готовые субтитры без плеера, форматов и JS-задач yt-dlp."""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    video_id = ""
+    if host in {"youtu.be", "www.youtu.be"}:
+        video_id = parsed.path.strip("/").split("/", 1)[0]
+    elif host == "youtube.com" or host.endswith(".youtube.com"):
+        if parsed.path == "/watch":
+            video_id = (urllib.parse.parse_qs(parsed.query).get("v") or [""])[0]
+        else:
+            parts = [part for part in parsed.path.split("/") if part]
+            if len(parts) >= 2 and parts[0] in {"embed", "shorts", "live"}:
+                video_id = parts[1]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise TaskFlowError("не удалось определить идентификатор ролика YouTube")
+
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    cues = YouTubeTranscriptApi().fetch(video_id, languages=languages)
+    text = re.sub(r"\s+", " ", " ".join((cue.text or "").strip() for cue in cues)).strip()
+    if not text:
+        raise TaskFlowError("API субтитров YouTube вернул пустой текст")
+    return {
+        "title": "",
+        "url": url,
+        "transcript": text[:cap],
+        "chars": len(text),
+        "truncated": len(text) > cap,
+        "source": "youtube-transcript-api",
+        "sub_file": None,
+    }
+
+
+def _youtube_cookie_file(work: str) -> str | None:
+    """Copies the broker-held Netscape cookie jar into this one invocation only."""
+    token_path = os.environ.get("TASKFLOW_SECRET_BROKER_TOKEN_PATH", os.path.expanduser("~/.config/taskflow/secret-broker-owner.token"))
+    try:
+        with open(token_path, encoding="utf-8") as f:
+            token = f.read().strip()
+        req = urllib.request.Request(
+            os.environ.get("TASKFLOW_SECRET_BROKER_URL", "http://127.0.0.1:28443").rstrip("/") + "/owner-api/secrets/youtube-session/reveal",
+            method="POST",
+            headers={"Authorization": "Bearer " + token},
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            cookie_jar = json.loads(response.read().decode("utf-8")).get("value", "")
+        if not isinstance(cookie_jar, str) or not cookie_jar.startswith("# Netscape HTTP Cookie File"):
+            return None
+        cookie_path = os.path.join(work, "youtube-cookies.txt")
+        fd = os.open(cookie_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(cookie_jar)
+        return cookie_path
+    except Exception:
+        return None
+
+
+# Владелец 09.11.2026: субтитры есть не у всех роликов, а на части видео
+# yt-dlp вообще не отдаёт форматы. Поэтому путь двухшаговый: сначала
+# субтитры (секунды), а если их нет или извлечение сломалось — качаем звук и
+# отдаём его локальному ASR (faster-whisper на .110:1235). Текст возвращается
+# тем же контрактом плюс `source`, чтобы роль видела, откуда он взялся.
+#
+# yt-dlp 2026.x без JS-рантайма не решает n-challenge и печатает
+# «No video formats found» — это НЕ отсутствие субтитров и НЕ сеть.
+YTDLP_JS_ARGS = ["--js-runtimes", "deno", "--remote-components", "ejs:github"]
+YTDLP_PLAYER = ["--extractor-args", "youtube:player_client=web,mweb"]
+ASR_URL = os.environ.get("TASKFLOW_ASR_URL", "http://127.0.0.1:1235").rstrip("/")
+ASR_CHUNK_SECONDS = int(os.environ.get("TASKFLOW_ASR_CHUNK_SECONDS", "600"))
+ASR_TIMEOUT = int(os.environ.get("TASKFLOW_ASR_TIMEOUT", "900"))
+
+
+def _ytdlp_binary():
+    """Debian package can lag YouTube extractor fixes by years. Prefer the
+    user-managed current binary, while retaining PATH fallback for clean hosts."""
+    import shutil
+
+    path = os.path.expanduser("~/.local/bin/yt-dlp")
+    if os.path.isfile(path):
+        return path
+    return shutil.which("yt-dlp") or "yt-dlp"
+
+
+def _ytdlp_env():
+    """deno ставится в ~/.deno/bin, а юнита PATH его не знает."""
+    env = dict(os.environ)
+    deno_bin = os.path.expanduser("~/.deno/bin")
+    if os.path.isdir(deno_bin):
+        env["PATH"] = deno_bin + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def _ffmpeg_binary():
+    import shutil
+
+    local = os.path.expanduser("~/asr-service/bin/ffmpeg")
+    if os.path.isfile(local):
+        return local
+    return shutil.which("ffmpeg") or "ffmpeg"
+
+
+def _youtube_subs_text(url, langs, work, cookie_args):
+    """Субтитры YouTube → (текст, причина отказа, имя файла)."""
+    import glob
+    import subprocess
+
+    subs = subprocess.run(
+        [_ytdlp_binary(), *cookie_args, *YTDLP_JS_ARGS, *YTDLP_PLAYER,
+         "--skip-download", "--write-subs", "--write-auto-subs",
+         "--sub-langs", langs, "--sub-format", "vtt", "--convert-subs", "vtt",
+         "-o", os.path.join(work, "s.%(ext)s"), url],
+        capture_output=True, text=True, timeout=240, env=_ytdlp_env(),
+    )
+    files = sorted(glob.glob(os.path.join(work, "*.vtt")))
+    if not files:
+        # Владелец 30.09.2026: раньше здесь молча врали «нет субтитров»
+        # на ЛЮБОЙ сбой yt-dlp — бан за бота, сеть, что угодно — потому
+        # что код result скачивания вообще не смотрел. Найдено живьём:
+        # видео Стива Джобса (Stanford, точно с субтитрами) тоже давало
+        # эту же фразу — настоящая причина была в stderr, которую никто
+        # не читал. Теперь при пустом files разбираем stderr сами: если
+        # похоже на антибот-блок YouTube — говорим прямо, не выдаём его
+        # за «у видео нет субтитров» (это разные, несмежные причины и
+        # разные действия в ответ — ждать не поможет прокси починить).
+        stderr = (subs.stderr or "").strip()
+        last = stderr.splitlines()[-1][:300] if stderr else ""
+        if "Sign in to confirm" in stderr or "not a bot" in stderr:
+            return None, "YouTube требует подтверждения «я не бот» (антибот-блок): " + last, None
+        if subs.returncode != 0 and stderr:
+            return None, f"yt-dlp не смог получить субтитры (код {subs.returncode}): {last}", None
+        return None, "у видео нет субтитров (ни ручных, ни авто)", None
+    with open(files[0], encoding="utf-8", errors="ignore") as f:
+        return _vtt_to_text(f.read()), "", os.path.basename(files[0])
+
+
+def _youtube_audio_wav(url, work, cookie_args):
+    """Звук ролика → mono 16 kHz wav (формат, который ждёт ASR)."""
+    import glob
+    import subprocess
+
+    audio_dir = os.path.join(work, "audio")
+    os.makedirs(audio_dir, exist_ok=True)
+    res = subprocess.run(
+        [_ytdlp_binary(), *cookie_args, *YTDLP_JS_ARGS, *YTDLP_PLAYER,
+         "-f", "bestaudio/best", "-o", os.path.join(audio_dir, "%(id)s.%(ext)s"), url],
+        capture_output=True, text=True, timeout=900, env=_ytdlp_env(),
+    )
+    sources = [p for p in sorted(glob.glob(os.path.join(audio_dir, "*")))
+               if not p.endswith((".part", ".ytdl"))]
+    if not sources:
+        stderr = (res.stderr or "").strip()
+        raise TaskFlowError("не удалось скачать звук: " + (
+            stderr.splitlines()[-1][:300] if stderr else f"yt-dlp код {res.returncode}"))
+    wav = os.path.join(work, "speech.wav")
+    conv = subprocess.run(
+        [_ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error", "-i", sources[0],
+         "-vn", "-ac", "1", "-ar", "16000", wav],
+        capture_output=True, text=True, timeout=600,
+    )
+    if conv.returncode != 0 or not os.path.isfile(wav):
+        raise TaskFlowError("ffmpeg не смог извлечь дорожку: " + (conv.stderr or "").strip()[:300])
+    return wav
+
+
+def _wav_chunks(wav_path, out_dir):
+    """ASR принимает один файл за запрос — режем на куски, чтобы длинные
+    ролики не упирались в таймаут."""
+    import glob
+    import subprocess
+
+    os.makedirs(out_dir, exist_ok=True)
+    pattern = os.path.join(out_dir, "chunk-%03d.wav")
+    res = subprocess.run(
+        [_ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error", "-i", wav_path,
+         "-f", "segment", "-segment_time", str(ASR_CHUNK_SECONDS),
+         "-ac", "1", "-ar", "16000", pattern],
+        capture_output=True, text=True, timeout=900,
+    )
+    chunks = sorted(glob.glob(os.path.join(out_dir, "chunk-*.wav")))
+    if not chunks:
+        raise TaskFlowError("не удалось нарезать аудио: " + (res.stderr or "").strip()[:300])
+    return chunks
+
+
+def _asr_transcribe(wav_path):
+    """Один кусок → текст через локальный ASR (.110)."""
+    with open(wav_path, "rb") as f:
+        payload = f.read()
+    req = urllib.request.Request(
+        ASR_URL + "/asr", data=payload, method="POST",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=ASR_TIMEOUT) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        raise TaskFlowError(f"ASR недоступен ({ASR_URL}): {e}")
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise TaskFlowError("ASR вернул пустой текст")
+    return text
+
+
+def _youtube_whisper_text(url, work, cookie_args):
+    """Ролик → текст распознаванием звука локальным Whisper."""
+    wav = _youtube_audio_wav(url, work, cookie_args)
+    parts = [_asr_transcribe(chunk) for chunk in _wav_chunks(wav, os.path.join(work, "chunks"))]
+    text = " ".join(p for p in parts if p).strip()
+    if not text:
+        raise TaskFlowError("распознавание вернуло пустой текст")
+    return text
+
+
 def t_youtube(args):
-    """Транскрипт видео YouTube в текст (ручные субтитры, иначе авто)."""
+    """Транскрипт видео YouTube в текст: субтитры, иначе локальный Whisper."""
     url = str(args.get("url") or "").strip()
     if not url:
         raise TaskFlowError("нужен url")
     langs = str(args.get("langs") or "ru,en")
     cap = int(args.get("max_chars") or 24000)
 
-    import glob
+    # Основной путь: API отдаёт текстовые дорожки напрямую и не требует
+    # ни браузерной сессии, ни скачивания плеера/аудио. yt-dlp + Whisper
+    # остаются резервом для роликов без доступной дорожки.
+    try:
+        return _youtube_transcript_api(
+            url, [lang.strip() for lang in langs.split(",") if lang.strip()], cap
+        )
+    except Exception:
+        pass
+
     import shutil
     import subprocess
     import tempfile
 
+    yt_dlp = _ytdlp_binary()
     work = tempfile.mkdtemp(prefix="tf-yt-")
     try:
+        cookies = _youtube_cookie_file(work)
+        cookie_args = ["--cookies", cookies] if cookies else []
         meta = subprocess.run(
-            ["yt-dlp", "--skip-download", "--extractor-args",
-             "youtube:player_client=web,mweb", "--print", "%(title)s", url],
-            capture_output=True, text=True, timeout=60,
+            [yt_dlp, *cookie_args, *YTDLP_JS_ARGS, *YTDLP_PLAYER,
+             "--skip-download", "--print", "%(title)s", url],
+            capture_output=True, text=True, timeout=60, env=_ytdlp_env(),
         )
-        title = (meta.stdout or "").strip().splitlines()[0] if meta.stdout.strip() else ""
+        title = (meta.stdout or "").strip().splitlines()[0] if (meta.stdout or "").strip() else ""
 
-        subs = subprocess.run(
-            ["yt-dlp", "--skip-download", "--extractor-args",
-             "youtube:player_client=web,mweb",
-             "--write-subs", "--write-auto-subs",
-             "--sub-langs", langs, "--sub-format", "vtt", "--convert-subs", "vtt",
-             "-o", os.path.join(work, "s.%(ext)s"), url],
-            capture_output=True, text=True, timeout=240,
-        )
-        files = sorted(glob.glob(os.path.join(work, "*.vtt")))
-        if not files:
-            # Владелец 30.09.2026: раньше здесь молча врали «нет субтитров»
-            # на ЛЮБОЙ сбой yt-dlp — бан за бота, сеть, что угодно — потому
-            # что код result скачивания вообще не смотрел. Найдено живьём:
-            # видео Стива Джобса (Stanford, точно с субтитрами) тоже давало
-            # эту же фразу — настоящая причина была в stderr, которую никто
-            # не читал. Теперь при пустом files разбираем stderr сами: если
-            # похоже на антибот-блок YouTube — говорим прямо, не выдаём его
-            # за «у видео нет субтитров» (это разные, несмежные причины и
-            # разные действия в ответ — ждать не поможет прокси починить).
-            stderr = (subs.stderr or "").strip()
-            if "Sign in to confirm" in stderr or "not a bot" in stderr:
-                raise TaskFlowError(
-                    "YouTube требует подтверждения «я не бот» с этого IP/сети — "
-                    "не про субтитры конкретного видео, антибот-блок. "
-                    f"yt-dlp: {stderr.splitlines()[-1][:300] if stderr else ''}"
-                )
-            if subs.returncode != 0 and stderr:
-                raise TaskFlowError(f"yt-dlp не смог получить субтитры (код {subs.returncode}): {stderr.splitlines()[-1][:300]}")
-            raise TaskFlowError("у видео нет субтитров (ни ручных, ни авто)")
-        with open(files[0], encoding="utf-8", errors="ignore") as f:
-            text = _vtt_to_text(f.read())
+        text, subs_reason, sub_file = _youtube_subs_text(url, langs, work, cookie_args)
+        source = "subtitles"
+        if not text:
+            # Субтитров нет — это не повод отдавать роль пустоту: тот же
+            # ролик распознаём локально и возвращаем текст с пометкой источника.
+            try:
+                text = _youtube_whisper_text(url, work, cookie_args)
+                source = "whisper"
+            except TaskFlowError as e:
+                raise TaskFlowError(f"субтитры не получены ({subs_reason}); распознавание не удалось: {e}")
+            sub_file = None
         return {
             "title": title,
             "url": url,
             "transcript": text[:cap],
             "chars": len(text),
             "truncated": len(text) > cap,
-            "sub_file": os.path.basename(files[0]),
+            "source": source,
+            "sub_file": sub_file,
         }
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -1758,91 +1797,6 @@ TOOLS = [
         "fn": t_agents,
     },
     {
-        "name": "taskflow_chat_send",
-        "description": (
-            "Написать в рабочий канал координации агентов (Клод, Гермес и "
-            "остальные). МАКСИМУ НАПРЯМУЮ НЕ ПИШУТ: у него отдельный канал с "
-            "оркестратором, ответа от владельца ждать не нужно — вопрос неси "
-            "оркестратору, он решит сам или вынесет владельцу. "
-            "КОМУ — ОБЯЗАТЕЛЬНО, включая переписку агентов "
-            "между собой: `to` = имя участника или слово «всем». Без "
-            "адресата сервер сообщение не примет. ПОВОД, А НЕ СЧЁТЧИК: без task_id сообщение ложится "
-            "в общую ленту и никого не будит — указывай task_id, если ждёшь "
-            "ответа по делу. kind — тип сообщения: совещание (ждёшь ответа), "
-            "делегирование, находка. Разговор закрывает молчание: на "
-            "«принято/сделал» новым сообщением не отвечать. Делегирование "
-            "работы идёт через назначение на доске, не через этот чат — "
-            "здесь только контекст к уже назначенной задаче."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "text": {"type": "string"},
-                "to": {
-                    "type": "string",
-                    "description": (
-                        "Кому — ОБЯЗАТЕЛЬНО: имя участника (Hermes, "
-                        "Claude_Bot, Максим…), его id или слово «всем». "
-                        "Пропустить нельзя, «всем» пишется явно."
-                    ),
-                },
-                "task_id": {
-                    "type": "string",
-                    "description": "Задача, к которой относится сообщение — без неё никого не будит.",
-                },
-                "kind": {
-                    "type": "string",
-                    "description": "совещание | делегирование | находка",
-                },
-            },
-            "required": ["text", "to"],
-        },
-        "fn": t_chat_send,
-    },
-    {
-        "name": "taskflow_chat_typing",
-        "description": (
-            "Зажечь в чате отметку «печатает…» под своим именем — вызывать "
-            "ПЕРЕД тем, как сочинять ответ, чтобы Максим видел, что ответ "
-            "идёт, а не тишина. Одного вызова хватает на весь ответ: отметка "
-            "живёт минуту и гаснет сама, а отправленное сообщение снимает её "
-            "сразу. state='stop' — передумал отвечать. Ставить только когда "
-            "действительно отвечаешь: это обещание ответа, а не отметка "
-            "«прочитал»."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "state": {
-                    "type": "string",
-                    "description": "stop — снять отметку (передумал отвечать)",
-                },
-            },
-        },
-        "fn": t_chat_typing,
-    },
-    {
-        "name": "taskflow_chat_read",
-        "description": (
-            "История канала координации, свежие сообщения. Заодно отмечает "
-            "прочитанным. Без channel отдаётся всё, что тебе видно; у каждого "
-            "сообщения написано, из рабочего оно канала или из окна "
-            "постановки задач владельца."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "limit": {"type": "integer", "description": "по умолчанию 20"},
-                "task_id": {"type": "string", "description": "только переписка по этой задаче"},
-                "channel": {
-                    "type": "string",
-                    "description": "owner (окно постановки задач владельца) | agents (рабочая переписка). Пусто — всё видимое.",
-                },
-            },
-        },
-        "fn": t_chat_read,
-    },
-    {
         "name": "taskflow_subtask_work",
         "description": (
             "Отметить, что работаешь над подзадачей. state='in_progress' — берусь "
@@ -1945,7 +1899,6 @@ TOOLS = [
                 "subtasks": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["title"],
-            "anyOf": [{"required": ["brief"]}, {"required": ["description"]}],
         },
         "fn": t_create_task,
     },

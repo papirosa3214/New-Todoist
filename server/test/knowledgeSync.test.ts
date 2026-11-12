@@ -1,6 +1,7 @@
 // Выгрузка документации в базу знаний внутри сервера (владелец 01.10.2026).
 // Совместимость со старым ~/kb/taskflow_docs_ragflow_sync.py: хэш смысла,
 // перенятое состояние, удаление только своего.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { FastifyInstance } from "fastify";
 import db from "../src/db.js";
 import { buildApp } from "../src/index.js";
+import { enqueueNoteIndex } from "../src/lib/knowledgeIndexQueue.js";
 import { contentSha, isSyncDue, noteDocument, runKnowledgeSync } from "../src/lib/knowledgeSync.js";
+import { pushNoteToKnowledge } from "../src/routes/knowledge.js";
 import { demoteSeededOwner } from "./helpers/seedOwner.js";
 
 describe("хэш смысла — как у kb_content_hash.py", () => {
@@ -102,5 +105,25 @@ describe("прогон выгрузки", () => {
     expect(state["taskflow-gone.md"]).toBeUndefined();
     expect(state[`taskflow-${changed}.md`]).toMatch(/@ds$/);
     expect(state.__algo).toBe("content-v1");
+  });
+
+  it("отчёт сдачи в индекс не входит, исследование остаётся", async () => {
+    const reportId = (await app.inject({
+      method: "POST",
+      url: "/api/notes",
+      headers: auth,
+      payload: { markdown: "# Отчёт о проделанной работе\n\nсдал шаг" },
+    })).json().id as string;
+    db.prepare(
+      "INSERT INTO task_events (id, task_id, actor_id, kind, field, from_value, to_value) VALUES (?, NULL, NULL, 'role_result_report', NULL, NULL, ?)",
+    ).run(crypto.randomUUID(), reportId);
+
+    expect(noteDocument(reportId)).toBeNull();
+    expect(noteDocument(unchanged)?.name).toBe(`taskflow-${unchanged}.md`);
+
+    db.prepare("DELETE FROM knowledge_index_jobs WHERE note_id = ?").run(reportId);
+    enqueueNoteIndex(reportId);
+    expect(db.prepare("SELECT note_id FROM knowledge_index_jobs WHERE note_id = ?").get(reportId)).toBeUndefined();
+    await expect(pushNoteToKnowledge(reportId)).rejects.toThrow("Отчёт о сдаче работы в базу знаний не кладётся");
   });
 });

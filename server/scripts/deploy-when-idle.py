@@ -24,7 +24,7 @@
 Состояние: ~/.local/state/taskflow-deploy/ (deployed — выложенный коммит).
 Реестр: docs/watchers.md, раздел «Отложенная выкладка сервера».
 """
-import json, os, re, sqlite3, subprocess, time, urllib.request, uuid
+import json, os, re, sqlite3, subprocess, time, urllib.error, urllib.request, uuid
 from datetime import datetime
 
 REPO = os.path.expanduser("~/Проекты/New-Todoist")
@@ -238,7 +238,20 @@ def session_api_healthy(timeout=15):
             return json.loads(response.read())
 
     try:
-        auth = call("POST", "/api/auth/lan")
+        try:
+            auth = call("POST", "/api/auth/lan")
+        except urllib.error.HTTPError as error:
+            # LAN-вход выключен (TASKFLOW_LAN_NO_AUTH=0): маршрут по коду
+            # отвечает 404, «как будто его нет». Это не поломка выкладки:
+            # health проверяется отдельным вызовом, а owner-session сценарий
+            # без LAN-входа недоступен. До этой правки такая выкладка
+            # помечалась проваленной уже ПОСЛЕ перезапуска сервера
+            # (10.11.2026, 05:02): код выложен, отметка не сдвинута,
+            # повтор по тому же коммиту заблокирован.
+            if error.code == 404:
+                log("owner-session пропущена: LAN-вход выключен, проверено только health")
+                return True
+            raise
         token = auth.get("token")
         if not isinstance(token, str) or not token:
             return False

@@ -1,5 +1,4 @@
 import {isRoutineServiceComment} from "../lib/serviceNoise.js";
-import { wakeAndDeliver } from "./orchestratorWake.js";
 import { normalizePlanStartCondition } from "./planArtifactGate.js";
 import { withAssertionInstruction, parseFulfills } from "../lib/missionContract.js";
 // Живой план совместной работы (владелец 01.10.2026: «граф живой, может
@@ -716,13 +715,7 @@ export function applyPlanOps(
     if (over) {
       const opId = logOp(plan.id, actor, plan.version, null, ops, "proposed", reason);
       logEvent({ taskId: plan.task_id, actorId: actor.id, kind: "collaboration_plan_change_proposed", field: opId, toValue: clip(describe(ops, w), 500) });
-      // Режим «Оркестратор»: согласует Оркестратор, а не владелец.
-      const orchestrated = (db.prepare("SELECT profile FROM task_collaboration_plans WHERE id = ?").get(plan.id) as { profile: string }).profile === "orchestrated";
-      const askerStep = actor.kind === "role" ? steps.get(actor.slotKey) : undefined;
-      if (orchestrated && askerStep) {
-        const detail = `op_id=${opId}, plan_id=${plan.id}, task_id=${plan.task_id}. Предлагает: ${clip(describe(ops, w), 300)}. Причина: ${over}${reason ? `; ${reason}` : ""}`;
-        setImmediate(() => wakeAndDeliver(askerStep.id, actor.id, "approval", detail));
-      } else notifyPlanApprovalRequest(plan.task_id, plan.id, opId, actor.id, clip(describe(ops, w), 200), over);
+      notifyPlanApprovalRequest(plan.task_id, plan.id, opId, actor.id, clip(describe(ops, w), 200), over);
       return { status: "proposed", opId, reason: over };
     }
 
@@ -738,12 +731,6 @@ export function applyPlanOps(
     if (actor.kind === "role") {
       roleNote(plan.task_id, actor.roleKey, `Изменил план совместной работы: ${summary}${reason ? `. Причина: ${reason}` : ""}`);
       notifyOwner(plan.task_id, actor.id, `${roleTitle(actor.roleKey)} изменил план: ${clip(summary, 200)}`);
-    }
-    // Режим «Оркестратор»: возврат проверяющим будит Оркестратора после
-    // коммита — без блока роли могут по кругу сжечь попытки.
-    for (const op of ops) if (op.op === "rework") {
-      const from = steps.get(op.from_slot);
-      if (from) setImmediate(() => wakeAndDeliver(from.id, actor.id, "returned", clip(String(op.defects ?? ""), 600)));
     }
     return { status: "applied", version, opId, added: [...w.added] };
   })();

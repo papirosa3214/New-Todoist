@@ -40,11 +40,23 @@ describe("общая инструкция ролей: ритм работы", ()
     }
   });
 
-  it("во всех режимах требуется короткий прогресс в чате, а не молчание", () => {
-    for (const mode of modes) {
+  // Владелец 11.11.2026: «убери правила вот это реплей» — роль писала промежуточное
+  // сообщение и следом финальный ответ, владелец видел два ответа на один ход.
+  it("в чате один ответ за ход, промежуточное сообщение — только на долгой работе", () => {
+    for (const mode of ["chat.wrapper", "chat.followup"] as const) {
       const text = String(INSTRUCTION_DEFAULTS[mode]);
-      expect(text, mode).toContain("ПОКАЖИ ХОД РАБОТЫ В ЧАТЕ");
-      expect(text, mode).toMatch(/одно короткое сообщение/);
+      expect(text, mode).toContain("Один ответ за ход");
+      expect(text, mode).toMatch(/одним финальным ответом/);
+      expect(text, mode).toMatch(/дольше нескольких минут/);
+      expect(text, mode).toMatch(/финальный ответ его не дублирует/);
+      expect(text, mode).not.toContain("В начале хода напиши одно короткое сообщение в чат");
+    }
+  });
+
+  it("в карточке по-прежнему нужен короткий прогресс, а не молчание", () => {
+    for (const mode of ["task.start", "task.plan"] as const) {
+      const text = String(INSTRUCTION_DEFAULTS[mode]);
+      expect(text, mode).toContain("В начале хода напиши одно короткое сообщение в чат");
       expect(text, mode).toMatch(/Молчание и рассуждения вслух/);
       expect(text, mode).toContain("taskflow_chat_reply");
     }

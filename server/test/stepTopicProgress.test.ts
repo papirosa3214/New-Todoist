@@ -23,7 +23,7 @@ import crypto from "node:crypto";
 import db from "../src/db.js";
 import { buildApp } from "../src/index.js";
 import { announceStepState } from "../src/runtime/stepTopicProgress.js";
-import { ensurePlanTopic } from "../src/lib/projectTopics.js";
+import { ensureTaskRoom } from "../src/lib/projectTopics.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
@@ -111,7 +111,7 @@ describe.skip("Строка прогресса о шаге плана в тем�
         "INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition) VALUES (?, ?, 'gate', ?, 'submitted')",
       ).run(uid(), planId, slot);
     }
-    topicId = ensurePlanTopic(taskId)!;
+    topicId = ensureTaskRoom(taskId)!;
     expect(topicId).toBeTruthy();
   });
 
@@ -223,7 +223,7 @@ describe.skip("Строка прогресса о шаге плана в тем�
   });
 
   it("6. Карточка без темы не роняет работу, карточка с темой пишет в неё", async () => {
-    // Карточка без проекта: тема не создаётся (ensurePlanTopic вернёт null),
+    // Карточка без проекта: тема не создаётся (ensureTaskRoom вернёт null),
     // шаг молчит, но вызов не бросает — приёмка шага не зависит от сообщения.
     const t = await app.inject({ method: "POST", url: "/api/tasks", headers: auth, payload: { title: "Карточка без проекта" } });
     const fresh = t.json().task.id;
@@ -241,7 +241,7 @@ describe.skip("Строка прогресса о шаге плана в тем�
     ).run(uid(), plan);
     expect(announceStepState(step, "started")).toBeNull();
     expect(
-      db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(fresh),
+      db.prepare("SELECT id FROM chats WHERE task_id=? AND room_kind='task'").get(fresh),
     ).toBeUndefined();
     // Чужой шаг (не существует) — тишина, а не исключение.
     expect(announceStepState("нет-такого-шага", "started")).toBeNull();

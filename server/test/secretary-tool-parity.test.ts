@@ -16,7 +16,7 @@ describe("voice native tool parity",()=>{
   const manifest=await voiceToolManifest();
   expect(manifest.map(t=>t.name).sort()).toEqual([...chat.activeNames].sort());
   expect(manifest.some(t=>t.name==="taskflow")).toBe(false);
-  expect(manifest.find(t=>t.name==="taskflow_task")!.parameters.properties.id.type).toBe("string");
+  expect(manifest.find(t=>t.name==="taskflow_tasks")!.parameters.properties.action).toBeTruthy();
  });
  it("loads an operation and returns its callable schema for the next voice turn",async()=>{
   const result=await runVoiceTool("u1","taskflow_tools",{names:["taskflow_archive"]},{sessionId:"loader-test"} as any);
@@ -42,11 +42,10 @@ describe("voice native tool parity",()=>{
   await runVoiceTool("u1","taskflow_tools",{names:["taskflow_archive"]},context);
   expect((await voiceToolManifest("u1",context)).some(t=>t.name==="taskflow_archive")).toBe(true);
  });
- it("cannot load card-only operations in chat mode",async()=>{
-  const result=await runVoiceTool("u1","taskflow_tools",{names:["taskflow_create_task"]},{sessionId:"chat-mode"});
-  expect(JSON.parse(result.result).unknown).toContain("taskflow_create_task");
-  await expect(runVoiceTool("u1","taskflow_create_task",{}, {sessionId:"chat-mode"})).rejects.toThrow();
- });
+  it("loads card operations in chat mode too — one set everywhere (owner 07.11.2026)",async()=>{
+   const result=await runVoiceTool("u1","taskflow_tools",{names:["taskflow_create_task"]},{sessionId:"chat-mode"});
+   expect(JSON.parse(result.result).unknown).not.toContain("taskflow_create_task");
+  });
  it("keeps structured records and arrays through Gemini transport",()=>{
   const schema={type:"object",required:["items","headers"],properties:{
    items:{type:"array",items:{type:"object",properties:{id:{type:"integer"}},required:["id"]}},

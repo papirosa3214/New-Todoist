@@ -3,7 +3,6 @@ import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { logStepAbandoned } from "./abandonedStep.js";
-import { wakeAndDeliverStalled } from "./orchestratorWake.js";
 import { postOwnerNotification, postRoleNote, taskHeads } from "./stepNotes.js";
 import { serviceRefusalCodeList } from "./toolRefusalCodes.js";
 
@@ -126,7 +125,7 @@ export async function stopRoleOnErrorLoop(args: {
     console.warn("[error-loop] снимок брошенного шага не записался:", error);
   }
 
-  // 5. Владелец и оркестратор узнают сразу — молчаливый автоблок считается
+  // 5. Владелец узнаёт сразу — молчаливый автоблок считается
   //    тем же дефектом, что и молчаливый авторестарт (карточка 2beb2bf2).
   const heads = taskHeads(taskId);
   postRoleNote(
@@ -142,12 +141,6 @@ export async function stopRoleOnErrorLoop(args: {
       notificationType: "error_loop_blocked",
       eventKind: "subtask_error_loop_blocked",
     },
-  );
-  wakeAndDeliverStalled(
-    subtaskId,
-    "error_loop_blocked",
-    subtask.current_attempt_id ?? `error-loop:${subtask.plan_node_key ?? subtaskId}`,
-    `Роль: ${roleTitle(role)}. ${blockedReason} Шаг переведён в blocked, владельцу отправлено уведомление.`,
   );
 
   return { stopped, attemptClosed, blocked: true, reason: blockedReason };

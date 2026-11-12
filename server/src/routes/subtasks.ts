@@ -1,6 +1,5 @@
 import { commentWithBlocks } from "../lib/chatBlocks.js";
 import {visibleTaskComments, isRoutineServiceComment} from "../lib/serviceNoise.js";
-import { wakeAndDeliver } from "../runtime/orchestratorWake.js";
 import { scheduleDraftRebuildFromSubtasks } from "./task-collaboration-plans.js";
 import { assigneeToBlockedSlot } from "../runtime/planSubtaskAdmission.js";
 import { readWorkPlan, saveWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
@@ -1132,12 +1131,6 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           console.warn(`[subtasks] сигнал по блоку ${subtask.id} не ушёл:`, err);
         }
       }
-      // Режим «Оркестратор»: блок шага команды будит Оркестратора, а не
-      // только кладёт уведомление (orchestratorWake.ts).
-      if (state === "blocked" && state !== subtask.agent_state) {
-        wakeAndDeliver(subtask.id, req.userId, "blocked", (result ?? subtask.result ?? null) as string | null);
-      }
-
       const fullTask = getFullTask(subtask.task_id);
       broadcastTaskEvent([subtask.task_creator_id, subtask.task_assignee_id], {
         type: "task:updated",

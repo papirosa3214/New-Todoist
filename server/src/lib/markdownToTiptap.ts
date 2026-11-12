@@ -36,7 +36,7 @@ export function parseInline(src: string): Node[] {
   const out: Node[] = [];
   // Порядок важен: код первым — внутри него разметка не действует.
   const re =
-    /(`[^`]+`)|(\*\*[^*]+\*\*)|(==[^=]+==)|(\*[^*]+\*)|(_[^_]+_)|(~~[^~]+~~)|(\[[^\]]+\]\([^)]+\))/;
+    /(`[^`]+`)|(\*\*\*[^*]+\*\*\*)|(\*\*[^*]+\*\*)|(==[^=]+==)|(\*[^*]+\*)|((?<![A-Za-z0-9_])_[^_]+_(?![A-Za-z0-9_]))|(~~[^~]+~~)|(<u>[\s\S]+?<\/u>)|(\[[^\]]+\]\([^)]+\))/;
   let rest = src;
 
   while (rest.length > 0) {
@@ -57,30 +57,30 @@ export function parseInline(src: string): Node[] {
         text: tok.slice(1, -1),
         marks: [{ type: "code" }],
       });
+    } else if (tok.startsWith("***")) {
+      out.push(...parseInline(tok.slice(3, -3)).map((node) => ({
+        ...node, marks: [...(node.marks ?? []), { type: "bold" }, { type: "italic" }],
+      })));
+    } else if (tok.startsWith("<u>")) {
+      out.push(...parseInline(tok.slice(3, -4)).map((node) => ({
+        ...node, marks: [...(node.marks ?? []), { type: "underline" }],
+      })));
     } else if (tok.startsWith("**")) {
-      out.push({
-        type: "text",
-        text: unescapeMd(tok.slice(2, -2)),
-        marks: [{ type: "bold" }],
-      });
+      out.push(...parseInline(tok.slice(2, -2)).map((node) => ({
+        ...node, marks: [...(node.marks ?? []), { type: "bold" }],
+      })));
     } else if (tok.startsWith("==")) {
-      out.push({
-        type: "text",
-        text: unescapeMd(tok.slice(2, -2)),
-        marks: [{ type: "highlight" }],
-      });
+      out.push(...parseInline(tok.slice(2, -2)).map((node) => ({
+        ...node, marks: [...(node.marks ?? []), { type: "highlight" }],
+      })));
     } else if (tok.startsWith("~~")) {
-      out.push({
-        type: "text",
-        text: unescapeMd(tok.slice(2, -2)),
-        marks: [{ type: "strike" }],
-      });
+      out.push(...parseInline(tok.slice(2, -2)).map((node) => ({
+        ...node, marks: [...(node.marks ?? []), { type: "strike" }],
+      })));
     } else if (tok.startsWith("*") || tok.startsWith("_")) {
-      out.push({
-        type: "text",
-        text: unescapeMd(tok.slice(1, -1)),
-        marks: [{ type: "italic" }],
-      });
+      out.push(...parseInline(tok.slice(1, -1)).map((node) => ({
+        ...node, marks: [...(node.marks ?? []), { type: "italic" }],
+      })));
     } else {
       // [текст](ссылка)
       const cut = tok.indexOf("](");

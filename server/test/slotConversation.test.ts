@@ -65,10 +65,9 @@ it("ambiguous roles require a slot; explicit targeting cannot select another rol
  expect(shared).toContain('Исходный блок');expect(shared).toContain('Дополнительный этап');expect(shared).toContain('постоянный участник');
 });
 // Владелец 05.11.2026: разговор со слотом только читает и только свою задачу.
-it("slot conversation is read-only",()=>{
+it("slot conversation has the same full set as work (owner 07.11.2026)",()=>{
  const names=slotConversationTools('builder','test','shared_task','slot_a').map(tool=>tool.name);
- expect(names).toContain('taskflow_doc_read');expect(names).toContain('taskflow_task');
- expect(names).not.toContain('taskflow_state');expect(names).not.toContain('taskflow_subtask_done');expect(names).not.toContain('taskflow_doc_write');expect(names).not.toContain('taskflow_kb_search');expect(names).toContain('taskflow_topic_send');
+ for(const name of ['taskflow_doc_read','taskflow_task','taskflow_state','taskflow_subtask_done','taskflow_doc_write'])expect(names).toContain(name);
 });
 it("conversation has its own session: work file, slot state and attempts stay untouched",async()=>{
  const before=db.prepare("SELECT * FROM subtasks WHERE id='slot_a'").get();const attempts=(db.prepare("SELECT count(*) n FROM attempts").get() as any).n;
@@ -77,7 +76,7 @@ it("conversation has its own session: work file, slot state and attempts stay un
  expect(reply.text).toBe('Ответ по сохранённому этапу');expect(reply.sessionId).not.toBe(saved.session_id);
  expect(db.prepare("SELECT * FROM subtasks WHERE id='slot_a'").get()).toEqual(before);expect((db.prepare("SELECT count(*) n FROM attempts").get() as any).n).toBe(attempts);
  expect((db.prepare("SELECT session_file FROM slot_sessions WHERE subtask_id='slot_a'").get() as any).session_file).toBe(saved.session_file);
- expect(harness.options.at(-1).tools).not.toContain('taskflow');expect(harness.options.at(-1).tools).toContain('taskflow_task');expect(harness.options.at(-1).tools).not.toContain('bash');expect(harness.options.at(-1).tools).not.toContain('write');
+ expect(harness.options.at(-1).tools).not.toContain('taskflow');expect(harness.options.at(-1).tools).toContain('taskflow_task');expect(harness.options.at(-1).tools).toContain('bash');expect(harness.options.at(-1).tools).toContain('write');
  // Активно ядро и загрузчик: полный каталог в запрос не уходит.
- expect(harness.active).toContain('taskflow_tools');expect(harness.active).toContain('taskflow_task');expect(harness.active).not.toContain('taskflow');expect(harness.active).not.toContain('bash');expect(harness.active).not.toContain('write');
+ expect(harness.active).toContain('taskflow_batch');expect(harness.active).toContain('taskflow_tasks');expect(harness.active).not.toContain('taskflow');expect(harness.active).toContain('bash');expect(harness.active).toContain('write');
 });

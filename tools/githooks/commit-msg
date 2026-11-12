@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Страж решений владельца (владелец 11.11.2026).
+
+1. Закреплённое поведение (.githooks/pinned-behavior.txt) обязано остаться в коде.
+2. Коммит, удаляющий строку с пометкой «владелец», проходит только если в
+   сообщении есть строка «Отмена решения владельца: <что и почему>».
+Обходить --no-verify агентам запрещено.
+"""
+import re, subprocess, sys
+from pathlib import Path
+
+root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+msg = Path(sys.argv[1]).read_text(encoding="utf-8")
+override = re.search(r"^Отмена решения владельца:\s*\S", msg, re.M)
+errors = []
+# Слияние переносит уже проверенные коммиты — проверяем только свои.
+_gd = Path(subprocess.check_output(["git", "rev-parse", "--git-dir"], cwd=root, text=True).strip())
+if not _gd.is_absolute(): _gd = root / _gd
+if (_gd / "MERGE_HEAD").exists():
+    sys.exit(0)
+
+def staged(path):
+    r = subprocess.run(["git", "show", f":{path}"], cwd=root, capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
+
+for raw in (Path(__file__).resolve().parent / "pinned-behavior.txt").read_text(encoding="utf-8").splitlines():
+    if not raw.strip() or raw.lstrip().startswith("#"):
+        continue
+    path, pattern, why = (p.strip() for p in raw.split("|", 2))
+    # Блокируется только коммит, который сам убирает закреплённое: в HEAD было,
+    # в индексе нет. Ветка, отрезанная до решения, работать не мешает.
+    before = subprocess.run(["git", "show", f"HEAD:{path}"], cwd=root, capture_output=True, text=True)
+    if before.returncode != 0 or not re.search(pattern, before.stdout):
+        continue
+    text = staged(path)
+    if text is None:
+        errors.append(f"  удалён файл {path} — {why}")
+    elif not re.search(pattern, text):
+        errors.append(f"  {path}: пропало «{pattern}» — {why}")
+
+diff = subprocess.run(["git", "diff", "--cached", "-U0", "--", "server/src", "server/scripts", "server/test"],
+                      cwd=root, capture_output=True, text=True).stdout
+cur, removed = None, []
+for line in diff.splitlines():
+    if line.startswith("--- a/"):
+        cur = line[6:]
+    elif line.startswith("-") and not line.startswith("---") and re.search(r"[Вв]ладел", line):
+        removed.append(f"  {cur}: {line[1:].strip()[:120]}")
+added = "\n".join(l for l in diff.splitlines() if l.startswith("+"))
+# Перенос комментария без потери (та же строка добавлена обратно) — не удаление.
+removed = [r for r in removed if r.split(": ", 1)[1] not in added]
+
+if errors:
+    print("СТОП: коммит ломает закреплённое владельцем поведение:\n" + "\n".join(errors), file=sys.stderr)
+if removed and not override:
+    print("СТОП: коммит удаляет решения владельца:\n" + "\n".join(removed[:20]) +
+          "\nЕсли владелец САМ велел это отменить — добавь в сообщение строку\n"
+          "«Отмена решения владельца: <что и с чьих слов>». Иначе верни строки.", file=sys.stderr)
+if errors or (removed and not override):
+    print("Обход через --no-verify запрещён (CLAUDE.md, владелец 11.11.2026).", file=sys.stderr)
+    sys.exit(1)

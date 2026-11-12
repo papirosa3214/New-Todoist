@@ -19,7 +19,10 @@ describe("ход шага дельтами", () => {
     const patches = deltas.filter((d) => d.type === "tasks:live:patch");
     expect(patches.map((p) => p.seq)).toEqual([1, 2]);
     expect(patches[0].ops[0]).toMatchObject({ op: "item_add", item: { kind: "text", text: "При" } });
-    expect(patches[1].ops).toEqual([{ op: "text_append", item_id: patches[0].ops[0].item.id, text: "вет" }]);
+    expect(patches[1].ops).toEqual([
+      { op: "text_append", item_id: patches[0].ops[0].item.id, text: "вет" },
+      expect.objectContaining({ op: "blocks", item_id: patches[0].ops[0].item.id }),
+    ]);
     expect(patches[1]).toMatchObject({ chat_id: "t1", task_id: "t1", subtask_id: "s1", turn_id: "r1" });
     run.onEvent({ type: "tool_execution_start", toolCallId: "x", toolName: "read", args: { path: "a" } });
     run.finish();

@@ -289,20 +289,6 @@ describe("rules manifest (Этап B)", () => {
     ).toEqual({ n: 0 });
   });
 
-  it("AC-3 chat_send с kind='rule' без rule_ref → 400 rule_publication_requires_rule_ref", async () => {
-    // Чтобы добраться до валидатора, нужен кто-то, имеющий право писать.
-    // Владелец кладёт сообщения в свой канал, но post /api/chat всё равно
-    // проходит тот же валидатор — проверим на нём.
-    const send = await app.inject({
-      method: "POST",
-      url: "/api/chat",
-      headers: { authorization: `Bearer ${ownerToken}` },
-      payload: { text: "объявление правила", to: "всем", kind: "rule" },
-    });
-    expect(send.statusCode).toBe(400);
-    expect(send.json().error).toBe("rule_publication_requires_rule_ref");
-  });
-
   it("AC-4 точечный role_scope: правило адресовано только builder, другие роли его не видят", () => {
     publishRule({
       ruleId: "rules.builder_only", version: 1, content: "Только для builder",

@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { wealthfolioStatus } from "../runtime/wealthfolioMcp.js";
+import { changedetectionStatus } from "../runtime/changedetectionMcp.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -95,6 +97,19 @@ async function getFreshGoogleToken(userId: string): Promise<string | null> {
 
 export function registerIntegrationRoutes(app: FastifyInstance) {
   // ═══════════ Статус интеграций ═══════════
+  /** Финансовый трекер владельца: подключён или нет, сколько инструментов.
+   *  Адрес и токен наружу не отдаются — экрану они не нужны. */
+  app.get("/api/integrations/wealthfolio", { preHandler: authOrApiToken }, async () => {
+    return wealthfolioStatus();
+  });
+
+  /** Слежение за страницами (changedetection.io на .110): отвечает ли MCP и
+   *  сколько действий он даёт роли. Доступно всем ролям, поэтому карточка
+   *  стоит в «Интеграциях» рядом с остальными внешними приложениями. */
+  app.get("/api/integrations/changedetection", { preHandler: authOrApiToken }, async () => {
+    return changedetectionStatus();
+  });
+
   app.get("/api/integrations/status", { preHandler: authOrApiToken }, async (req) => {
     const userId = getUserId(req);
     const google = db

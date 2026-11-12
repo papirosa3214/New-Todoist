@@ -113,18 +113,13 @@ const toolOf = (context: any, runner: SubagentRunner) =>
   createRoleSubagentCallTool(context, runner);
 
 describe("вызов роли как субагента: права", () => {
-  it("инструмент есть в каталоге только у Помощника и Оркестратора", () => {
+  it("инструмент есть в каталоге у всех ролей — набор один (владелец 07.11.2026)", () => {
     const has = (role: string) =>
       buildRoleToolCatalog({ role, mode: "work", runId: `matrix-${role}`, chatId: CHAT_ID }).operations.some(
         (tool) => tool.name === ROLE_SUBAGENT_CALL_TOOL,
       );
-    expect(has("secretary")).toBe(true);
-    expect(has("code_orchestrator")).toBe(true);
-    // Остальным роль звать незачем: у них инструмента нет вовсе.
-    expect(has("researcher")).toBe(false);
-    expect(has("builder")).toBe(false);
-    expect(has("analyst")).toBe(false);
-    expect(has("critic_verifier")).toBe(false);
+    // Цепочку роль → роль → роль по-прежнему режет isSubagentRun, а не список ролей.
+    for (const role of ["secretary", "code_orchestrator", "researcher", "builder", "analyst", "critic_verifier"]) expect(has(role)).toBe(true);
   });
 
   it("инструмент подключён к сессии нативно (без загрузчика по требованию)", () => {
@@ -459,15 +454,12 @@ describe("вызов роли как субагента: корректиров�
     expect(prompts.length).toBeLessThanOrEqual(SUBAGENT_STEER_LIMIT + 1);
   });
 
-  it("инструмент уточнения доступен только Помощнику и Оркестратору", () => {
+  it("инструмент уточнения есть у всех ролей — набор один (владелец 07.11.2026)", () => {
     const has = (role: string) =>
       buildRoleToolCatalog({ role, mode: "work", runId: `steer-matrix-${role}`, chatId: CHAT_ID }).operations.some(
         (tool) => tool.name === ROLE_SUBAGENT_STEER_TOOL,
       );
-    expect(has("secretary")).toBe(true);
-    expect(has("code_orchestrator")).toBe(true);
-    expect(has("researcher")).toBe(false);
-    expect(has("builder")).toBe(false);
+    for (const role of ["secretary", "code_orchestrator", "researcher", "builder"]) expect(has(role)).toBe(true);
   });
 
   it("в каталоге субагента инструмента уточнения нет", () => {

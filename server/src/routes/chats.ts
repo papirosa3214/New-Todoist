@@ -1,4 +1,5 @@
 import { crossChatNotice } from "../lib/crossChatNotice.js";
+import { appendSkillsNote } from "../lib/skillCatalog.js";
 import { isTaskChatRestrictedRole } from "../runtime/taskChatTools.js";
 import { syncChecklistMarkWithPlan, resolveChecklistItem } from "../lib/chatChecklistPlanSync.js";
 import { observeChatMemory } from "../runtime/chatMemoryObserver.js";
@@ -42,14 +43,21 @@ import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topic
 import { isDiscussionChat, discussionByChatId } from "../runtime/taskDiscussion.js";
 import { runDiscussionTurn } from "../runtime/taskDiscussionSession.js";
 import { deliverTopicToWork, deliverChatToWork, slotWorkspace } from "../runtime/inProcessRun.js";
-import { topicContext, taskTopicClosedAt, rehomeEmptyTopic } from "../lib/projectTopics.js";
+import { configureQueuedRelease, composerStatus, emitComposerStatus, enqueueQueued, queuedByKey, queuedById, queuedOfChat, sendQueued, takeQueued, type QueuedRow } from "../runtime/chatQueued.js";
+import { topicContext, taskRoomClosedAt, ensureTaskRoom, roomsOfPersonalChat } from "../lib/projectTopics.js";
+import { assignmentsOf } from "../lib/chatChildren.js";
+import { roomArchivedAt } from "../lib/taskRoomArchive.js";
+import { HISTORY_SELECT, historyBefore, historySince, skipChatProjectKnowledge } from "../lib/chatHistoryModel.js";
 import {
   archiveChat,
   archiveRight,
   chatRoomRow,
   canArchiveTaskTopic,
+  purgeChat,
+  purgeRight,
+  unarchiveChat,
   cleanupCandidates,
-  isTaskTopic,
+  isTaskRoom,
   runCleanup,
 } from "../lib/chatArchive.js";
 import { nudgeTaskPlan } from "../runtime/taskNudge.js";
@@ -123,7 +131,7 @@ import {
   checklistStateOfMessage,
   setChecklistItem,
 } from "../lib/chatChecklist.js";
-import { exhaustedRoleReplyFallback, normalizeRoleReplyV1, roleReplyCorrectionPrompt, shouldRetryRoleReply, structuredOutputText } from "../lib/roleContractV1.js";
+import { exhaustedRoleReplyFallback, normalizeRoleReplyV1, roleReplyCorrectionPrompt, salvageMarkdownFromJsonParseFailure, shouldRetryRoleReply, structuredOutputText } from "../lib/roleContractV1.js";
 import { applyRoleFormat, roleFormatRefusal } from "../lib/roleFormat.js";
 import { roleProjectContext } from "../runtime/roleProjectContext.js";
 import { roleSlotSnapshotsBlock } from "../runtime/slotWorkSnapshot.js";
@@ -226,7 +234,8 @@ function memberIds(chatId: string): string[] {
   ).map((r) => r.member_id).filter((id) => isMember(chatId,id));
 }
 
-function isMember(chatId: string, userId: string): boolean {  const chat = db.prepare("SELECT project_id, parent_chat_id, task_id FROM chats WHERE id = ?").get(chatId) as any;
+function isMember(chatId: string, userId: string): boolean {
+  const chat = db.prepare("SELECT project_id, parent_chat_id, task_id, room_kind FROM chats WHERE id = ?").get(chatId) as any;
   // Приватный проект (задача 9d583c58…): его чаты не видны никому, кроме
   // владельца трекера — иначе утечка через название группового чата
   // (оно равно имени проекта) и через task_title темы.
@@ -241,6 +250,9 @@ function isMember(chatId: string, userId: string): boolean {  const chat = db.pr
     // убраны — для всех, кроме владельца.
     if (meta?.archived_at) return false;
   }
+  // Комната задачи видна тому, кому видна сама карточка: проект в доступе к
+  // ней больше не участвует (с 08.11.2026 комната задачи от проекта свободна).
+  if (chat?.room_kind === "task" && chat?.task_id && !getTaskForRead(chat.task_id, userId)) return false;
   if (chat?.parent_chat_id) {
     const task=chat.task_id ? getTaskForRead(chat.task_id,userId) : null;
     if (!task || task.project_id !== chat.project_id) return false;
@@ -289,7 +301,7 @@ function chatRow(chatId: string) {
     execution_mode: chatExecutionMode(chatId),
     slots: chat.task_id ? slotLabels(chat.task_id) : [],
     members,
-    closed_at: taskTopicClosedAt(chat as any),
+    closed_at: taskRoomClosedAt(chat as any),
     pinned_message_id: pinnedMessageId ?? null,
     pinned_message: pinned ? loadChatMessage(pinned.id) : null,
   };
@@ -306,51 +318,111 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     for (const chat of ordinary) syncChatKindFromMembers(chat.id);
   })();
 
-  function ensureProjectGroup(project: any, userId: string) {
-    let group = db.prepare("SELECT id FROM chats WHERE project_id=? AND parent_chat_id IS NULL").get(project.id) as any;
-    if (!group) {
-      group={id:uid()};
-      db.prepare("INSERT INTO chats (id,title,kind,created_by,project_id) VALUES (?,?,'group',?,?)").run(group.id,project.name,userId,project.id);
-    }
-    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(group.id,userId);
-    return group.id as string;
-  }
-  app.post("/api/projects/:projectId/chat",{preHandler:authPre},async(req:any,reply)=>{
-    const project=getProjectForWrite(req.params.projectId,req.userId);
-    if (!project) return reply.code(404).send({error:"Проект не найден"});
-    const id=db.transaction(()=>ensureProjectGroup(project,req.userId))();
-    return {chat:chatRow(id)};
-  });
+  // Проект — папка владельца, своего разговорного чата у него нет (владелец
+  // 08.11.2026): проектных чатов не существует, прежние удалены миграцией 202.
+  // Комната задачи заводится независимо от проекта и видна топиком в личной
+  // комнате каждой роли-участника (lib/projectTopics.ts).
   app.post("/api/tasks/:taskId/topic",{preHandler:authPre},async(req:any,reply)=>{
     const task=getTaskForRead(req.params.taskId,req.userId);
-    if (!task?.project_id) return reply.code(404).send({error:"Задача проекта не найдена"});
-    const project=getProjectForWrite(task.project_id,req.userId);
-    if (!project) return reply.code(403).send({error:"Нет доступа к группе проекта"});
-    const previous=db.prepare("SELECT project_id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as any;
-    const id=db.transaction(()=>{
-      const parent=ensureProjectGroup(project,req.userId);
-      if (previous && previous.project_id !== task.project_id) {
-        const moving=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as {id:string};
-        if (!rehomeEmptyTopic(moving.id,task.project_id,parent)) return null;
-      }
-      let topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as any;
-      if (!topic) {
-        topic={id:uid()};
-        db.prepare("INSERT INTO chats (id,title,kind,created_by,task_id,project_id,parent_chat_id) VALUES (?,?,'group',?,?,?,?)").run(topic.id,task.title,req.userId,task.id,task.project_id,parent);
-      }
-      db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(topic.id,req.userId);
-      return topic.id;
-    })();
-    if (!id) return reply.code(409).send({error:"Тема относится к прежнему проекту задачи"});
+    if (!task) return reply.code(404).send({error:"Задача не найдена"});
+    const id=db.transaction(()=>ensureTaskRoom(task.id))();
+    if (!id) return reply.code(404).send({error:"Задача не найдена"});
+    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(id,req.userId);
     return {chat:chatRow(id)};
   });
+  // Дочерние сессии комнаты (08.11.2026): у личной комнаты роли — карточки
+  // назначений по её слотам, каждая со своей комнатой задачи для разговора.
+  // Поиск по чатам (владелец 08.11.2026: «а поиск бы обязательно ещё бы
+  // сделал»). Ищем по названию комнаты, по имени роли и по тексту сообщений —
+  // один ответ на все три источника, чтобы человеку не думать, где искать.
+  // Слова соединяются через И, как в /api/search: «подрядчик аудит» находит
+  // «Договор с подрядчиком по аудиту».
+  app.get<{ Querystring: { q?: string; limit?: string } }>(
+    "/api/chats/search",
+    { preHandler: authPre },
+    async (req: any) => {
+      const query = String(req.query.q ?? "").trim();
+      if (query.length < 2) return { results: [] };
+      const userId = req.userId as string;
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 30) || 30, 1), 100);
+      const words = query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((w: string) => w.length > 0)
+        .slice(0, 6);
+
+      const MEMBERS = `(SELECT group_concat(u.name, ', ') FROM chat_members cm
+        JOIN users u ON u.id = cm.member_id WHERE cm.chat_id = c.id)`;
+      const SUBJECT = `COALESCE((SELECT t.title FROM tasks t WHERE t.id = c.task_id),
+        (SELECT p.name FROM projects p WHERE p.id = c.project_id), '')`;
+      const ALIVE = `COALESCE(m.message_type, '') != 'system'`;
+
+      const wordConditions: string[] = [];
+      const params: any[] = [];
+      for (const _word of words) {
+        wordConditions.push(
+          `(lower_uni(c.title) LIKE ? OR lower_uni(${SUBJECT}) LIKE ?
+            OR lower_uni(COALESCE(${MEMBERS}, '')) LIKE ?
+            OR EXISTS (SELECT 1 FROM chat_messages m
+                        WHERE m.chat_id = c.id AND ${ALIVE} AND lower_uni(m.text) LIKE ?))`,
+        );
+        params.push("%" + _word + "%", "%" + _word + "%", "%" + _word + "%", "%" + _word + "%");
+      }
+
+      // Подсветка: первое живое сообщение с самым длинным словом запроса.
+      const snippetWord = words.slice().sort((a: string, b: string) => b.length - a.length)[0] ?? query;
+      const rows = db
+        .prepare(
+          `SELECT c.id AS chat_id, c.title, c.kind, c.room_kind, c.task_id, c.project_id,
+                  ${SUBJECT} AS subject,
+                  c.updated_at AS last_at,
+                  (SELECT m.text FROM chat_messages m
+                    WHERE m.chat_id = c.id AND ${ALIVE} AND lower_uni(m.text) LIKE ?
+                    ORDER BY m.created_at DESC LIMIT 1) AS hit_text,
+                  (SELECT m.created_at FROM chat_messages m
+                    WHERE m.chat_id = c.id AND ${ALIVE} AND lower_uni(m.text) LIKE ?
+                    ORDER BY m.created_at DESC LIMIT 1) AS hit_at
+             FROM chats c
+            WHERE ${wordConditions.join("\n              AND ")}
+            ORDER BY last_at DESC
+            LIMIT ?`,
+        )
+        .all("%" + snippetWord + "%", "%" + snippetWord + "%", ...params, limit) as any[];
+
+      // Кому что видно — тот же isMember, что у списка чатов: поиск не должен
+      // показывать комнату, которую человек не открыл бы и руками.
+      const results = rows
+        .filter((row) => isMember(row.chat_id, userId))
+        .map((row) => ({
+          chat_id: row.chat_id,
+          title: row.title ?? row.subject ?? "Чат",
+          subject: row.subject || null,
+          kind: row.kind,
+          room_kind: row.room_kind,
+          hit_text: row.hit_text ? String(row.hit_text).slice(0, 240) : null,
+          hit_at: row.hit_at ?? null,
+          last_at: row.last_at ?? null,
+        }));
+      return { results };
+    },
+  );
+
+  app.get("/api/chats/:id/children", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+    return { children: assignmentsOf(req.params.id) };
+  });
+
   app.get("/api/chats/:id/topics",{preHandler:authPre},async(req:any,reply)=>{
     if (!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
-    // Закрытые темы в списке проекта не копятся (владелец 07.10.2026); переписка остаётся
-    // доступной из карточки задачи, весь список — с include_closed=1.
+    // Топики чата: у личной комнаты — комнаты задач её роли, у остальных —
+    // вложенные чаты (ветки прежней модели). Закрытые в списке не копятся
+    // (владелец 07.10.2026); весь список — с include_closed=1.
     const includeClosed = String(req.query?.include_closed ?? "") === "1";
-    const rows=db.prepare("SELECT id,task_id,parent_chat_id,closed_at FROM chats WHERE parent_chat_id=? ORDER BY updated_at DESC,id").all(req.params.id) as Array<{id:string;task_id:string|null;parent_chat_id:string|null;closed_at:string|null}>;
-    return {chats:rows.filter(c=>isMember(c.id,req.userId) && (includeClosed || !taskTopicClosedAt(c))).map(c=>({
+    const linked = roomsOfPersonalChat(req.params.id);
+    const rows = linked.length
+      ? linked
+      : db.prepare("SELECT id,task_id,room_kind,closed_at FROM chats WHERE parent_chat_id=? ORDER BY updated_at DESC,id").all(req.params.id) as Array<{id:string;task_id:string|null;room_kind:string|null;closed_at:string|null}>;
+    return {chats:rows.filter(c=>isMember(c.id,req.userId) && (includeClosed || !taskRoomClosedAt(c))).map(c=>({
       ...chatRow(c.id),
       unread_count:(db.prepare(`SELECT COUNT(*) AS n FROM chat_messages WHERE ${visibleChatSql()} AND chat_id=? AND from_user_id != ? AND created_at > COALESCE((SELECT last_read_at FROM chat_members WHERE chat_id=? AND member_id=?),'1970-01-01')`).get(c.id,req.userId,c.id,req.userId) as {n:number}).n,
     }))};
@@ -484,7 +556,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     // а не пересобираем список ради пересчёта хеша (тот же приём, что в
     // списке задач — `routes/tasks.ts`).
     const body = {
-      chats: rows.filter((c) => isMember(c.id,req.userId) && (includeClosed || !taskTopicClosedAt(c))).map((c) => {
+      chats: rows.filter((c) => isMember(c.id,req.userId) && (includeClosed || !taskRoomClosedAt(c))).map((c) => {
         // Имя отправителя — превью группы идёт с ним («QA: проверка
         // прошла»), счётчики вложений — чтобы клиент мог показать
         // «Голосовое»/«Файл» вместо пустой строки (у голосового текста нет).
@@ -682,10 +754,14 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!hasTask && !hasTitle)
         return reply.code(400).send({ error: "нечего менять" });
 
-      const managed=db.prepare("SELECT project_id FROM chats WHERE id=?").get(req.params.id) as any;
+      const managed=db.prepare("SELECT project_id, task_id, room_kind FROM chats WHERE id=?").get(req.params.id) as any;
       if (hasTask && managed?.project_id) return reply.code(409).send({error:"Тему проекта нельзя перепривязать"});
       const rawTask = req.body?.task_id;
       const taskId = typeof rawTask === "string" && rawTask ? rawTask : null;
+      // Комната задачи принадлежит своей карточке (08.11.2026): привязать её к
+      // другой задаче нельзя — это была бы чужая история под чужим именем.
+      if (hasTask && managed?.room_kind === "task" && taskId !== (managed.task_id ?? null))
+        return reply.code(409).send({ error: "Комнату задачи нельзя перепривязать" });
       if (hasTask && taskId && !db.prepare("SELECT id FROM tasks WHERE id = ?").get(taskId))
         return reply.code(400).send({ error: "нет такой задачи" });
 
@@ -1187,32 +1263,29 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     },
   );
 
-  // Ответ на вопрос роли номером варианта («2» или «1.2») — этап 3 плана
-  // note://a2475482: кнопки и текст не должны расходиться. Понимаем только
-  // короткий номер при ОТКРЫТОМ вопросе у этого же сообщения-вопроса, иначе
-  // обычный текст остаётся обычным текстом.
-  function answerQuestionByNumber(chatId: string, text: string, replyTo: string | null): { answer: AnswerPayload; questionId: string; payload: ReturnType<typeof payloadOf> } | null {
-    const clean = text.trim();
-    const match = /^(?:(\d{1,2})\s*[.)\-]\s*)?(\d{1,2})$/.exec(clean.length <= 6 ? clean : "");
-    if (!match) return null;
-    const replied = replyTo
-      ? (db.prepare("SELECT id FROM chat_questions WHERE chat_id=? AND message_id=? ORDER BY created_at DESC LIMIT 1").get(chatId, replyTo) as { id: string } | undefined)
-      : undefined;
-    const question = (replied ? questionById(replied.id) : undefined) ?? openQuestionOfChat(chatId);
-    if (!question || question.status !== "open") return null;
-    if (replyTo && question.message_id && question.message_id !== replyTo) return null;
-    const payload = payloadOf(question);
-    const questionIndex = match[1] ? Number(match[1]) - 1 : 0;
-    const optionIndex = Number(match[2]) - 1;
-    const item = payload.questions[questionIndex];
-    const option = item?.options[optionIndex];
-    if (!item || !option) return null;
-    try {
-      return { answer: validateAnswerPayload(payload, [{ questionIndex, selected: [option.label] }]), questionId: question.id, payload };
-    } catch {
-      return null;
-    }
-  }
+  // Отложенные сообщения и запуски роли из этого чата (под полем ввода).
+  app.get<{ Params: { id: string } }>("/api/chats/:id/composer-status", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+    return composerStatus(req.params.id);
+  });
+
+  // «Отправить сейчас»: вставить отложенное в текущий ход; хода нет — обычным порядком.
+  app.post<{ Params: { id: string; messageId: string } }>("/api/chats/:id/queued/:messageId/send-now", { preHandler: authPre }, async (req: any, reply) => {
+    const row = queuedRowFor(req, reply);
+    if (!row) return reply;
+    const ok = await sendQueued(row, true);
+    if (!ok) return reply.code(409).send({ error: "Сообщение не удалось отправить", ...composerStatus(req.params.id) });
+    return composerStatus(req.params.id);
+  });
+
+  // «Убрать»: отложенное не доставляется роли и в ленте не появляется.
+  app.delete<{ Params: { id: string; messageId: string } }>("/api/chats/:id/queued/:messageId", { preHandler: authPre }, async (req: any, reply) => {
+    const row = queuedRowFor(req, reply);
+    if (!row) return reply;
+    takeQueued(row.chat_id, row.message_id);
+    emitComposerStatus(row.chat_id);
+    return composerStatus(req.params.id);
+  });
 
   app.post<{
     Params: { id: string };
@@ -1220,361 +1293,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
   }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
-    async (req: any, reply) => {
-      if (!isMember(req.params.id, req.userId))
-        return reply.code(404).send({ error: "Чат не найден" });
-      if (isDirectRoom(req.params.id) && !db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(req.params.id, req.userId))
-        return reply.code(403).send({ error: "Это личная переписка ролей: её можно читать, писать — в личной комнате роли" });
-      let mode: ChatWorkMode;
-      try { mode = parseChatWorkMode(req.body?.work_mode); }
-      catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
-      if (mode !== "work" && roleFromUserId(req.userId)) return reply.code(403).send({error: "Режим выбирает человек"});
-      // Способ выполнения следует из привязки к задаче: старый клиент ещё шлёт поле, оно не влияет.
-      if (req.body?.execution_mode !== undefined && (!isOwner(req.userId) || roleFromUserId(req.userId))) return reply.code(403).send({error:"Способ выполнения следует из привязки к задаче"});
-      const text = String(req.body?.text || "").trim();
-      // MAK-98 и гейт формата ниже используют отправителя — считаем один раз.
-      const senderRole = roleFromUserId(req.userId);
-      // ФОРМАТ СООБЩЕНИЯ РОЛИ (карточка cea8d997). Тема задачи — то же место,
-      // где пишут роли, поэтому гейт тот же: очевидное сервер заменяет сам
-      // (таблица Markdown → блок table), неверный блок роль получает назад
-      // с образцом и переписывает. Текст владельца не трогаем: он пишет в чат
-      // сам, и молча переписанная его таблица — потеря его слов.
-      let storedText = text;
-      if (senderRole && text) {
-        const formatted = applyRoleFormat(text);
-        if (formatted.problems.length) {
-          return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });
-        }
-        storedText = formatted.text;
-      }
-      // Быстрые ответы (кнопки-развилки) и в ПРОМЕЖУТОЧНОМ сообщении роли
-      // (владелец 24.10.2026: «задавай, если что, мне вопрос с вариантами
-      // ответов — развилки»). Раньше строка `БЫСТРО:` разбиралась только в
-      // финальном ответе роли (extractQuickReplies ниже), и вопрос в середине
-      // хода оставался без кнопок: развилку нельзя было нажать. Ответ
-      // владельца приходит подмешиванием в этот же ход (chatSteering).
-      let quickReplies: string[] | null = null;
-      if (senderRole && storedText) {
-        const extracted = extractQuickReplies(storedText);
-        if (extracted.replies) {
-          quickReplies = extracted.replies;
-          storedText = extracted.clean;
-        }
-      }
-      // Промежуточные сообщения ИИ в чате не валидируем по длине —
-      // иначе агент падает на 400 посреди работы (владелец 04.10.2026).
-      // Лимит остаётся только для финального ответа роли (см. ниже,
-      // truncateAgentText): сообщение в чат всегда доходит, просто короче.
-      if (mode === "deep_research") {
-        // Глубокое исследование ведут Исследователь и Помощница владельца
-        // (карточка e11eae7a, пункт 3): Помощница отвечает сама своим
-        // именем, исследователь ей не нужен.
-        const members = chatMemberRoles(req.params.id);
-        const allowed = members.includes("researcher") || members.includes("secretary");
-        const foreignMention = parseRoleMentions(text).some((r) => r !== "researcher" && r !== "secretary");
-        if (!allowed || foreignMention)
-          return reply.code(400).send({error: "Глубокое исследование доступно в чате с Исследователем или с Помощником владельца"});
-      }
-      // Вложения без подписи — то же правило, что в /api/chat: пустой
-      // текст ок, когда есть файлы («вот голосовое» без комментария),
-      // а пустое совсем, без файлов — 400.
-      const attachmentIds: string[] = Array.isArray(req.body?.attachment_ids)
-        ? req.body.attachment_ids.filter(
-            (id: unknown) => typeof id === "string" && id,
-          )
-        : [];
-      if (!text && attachmentIds.length === 0)
-        return reply.code(400).send({ error: "пустое сообщение" });
-
-      const chatId = req.params.id;
-      // Привязка к задаче (владелец 21.09.2026: «чтобы не комментарии они там
-      // писать в самой задаче, а в чате переписываться»). Сообщение берёт
-      // задачу у СВОЕГО чата; явный task_id в теле перекрывает её — этим
-      // привязывается отдельное сообщение, когда чат живёт сам по себе.
-      const chat = db
-        .prepare<[string], { task_id: string | null; parent_chat_id: string | null; closed_at: string | null }>(
-          "SELECT task_id, parent_chat_id, closed_at FROM chats WHERE id = ?",
-        )
-        .get(chatId);
-      if (!chat) return reply.code(404).send({ error: "Чат не найден" });
-      const taskDiscussion = discussionByChatId(chatId);
-      if (taskDiscussion && taskDiscussion.state !== "open")
-        return reply.code(409).send({ error: "Обсуждение закрывается или закрыто: новые реплики не принимаются" });
-      // Закрытая тема задачи — read-only: история остаётся, новые сообщения не принимаем.
-      if (taskTopicClosedAt(chat)) return reply.code(409).send({ error: "Чат задачи закрыт" });
-      // Общий чат: сервер сюда не пишет. Владелец и роль через инструмент — можно.
-      try {
-        assertCommonChatWritable(
-          chatId,
-          roleFromUserId(req.userId) ? "role_tool" : "user",
-        );
-      } catch (error) {
-        return reply.code(403).send({ error: error instanceof Error ? error.message : "запись запрещена" });
-      }
-      const chatTaskId = chat.task_id;
-      const taskId =
-        typeof req.body?.task_id === "string" && req.body.task_id
-          ? req.body.task_id
-          : chatTaskId;
-      const replyTo = typeof req.body?.reply_to_message_id === "string" ? req.body.reply_to_message_id : null;
-      if(replyTo && !db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=?").get(replyTo,chatId)) return reply.code(400).send({error:"Исходное сообщение не принадлежит этому чату"});
-      if(taskId && !db.prepare("SELECT 1 FROM tasks WHERE id=?").get(taskId)) return reply.code(404).send({error:"Задача не найдена"});
-      const sourceSlot=roleFromUserId(req.userId) && typeof req.body?.subtask_id==="string" ? req.body.subtask_id : null;
-      const recipientSlot=typeof req.body?.recipient_subtask_id==="string" ? req.body.recipient_subtask_id : (chat.task_id && !senderRole ? slotFromMention(chat.task_id,text) : null);
-      const inTopicBranch=(stageTask:string)=>stageTask===chatTaskId || (!!chatTaskId && !!branchMembership(chatTaskId) && branchMembership(stageTask)?.root_plan_id===branchMembership(chatTaskId)?.root_plan_id);
-      if(sourceSlot){
-        const source=db.prepare("SELECT task_id FROM subtasks WHERE id=? AND agent_id=?").get(sourceSlot,req.userId) as {task_id:string}|undefined;
-        if(!source || (chat.parent_chat_id && !inTopicBranch(source.task_id)))return reply.code(403).send({error:"Этап твоего хода не закреплён за тобой или относится к другой ветке — сообщение не отправлено. Дальше: проверь taskflow_my_tasks; если этап с тебя сняли — заверши ход и коротко опиши итог в ответе; если этап твой — пиши в тему его ветки (taskflow_topic_send). Повтор того же вызова даст тот же отказ."});
-      }
-      if(recipientSlot){
-        const recipient=db.prepare("SELECT task_id,agent_id FROM subtasks WHERE id=?").get(recipientSlot) as {task_id:string;agent_id:string}|undefined;
-        if(!recipient || (chat.parent_chat_id ? !inTopicBranch(recipient.task_id) : !isMember(chatId,recipient.agent_id)))return reply.code(400).send({error:"Этап адресата не относится к согласованной ветке"});
-      }
-      // MAK-98: быстрый отказ, когда адресата некому исполнить — лучше
-      // сказать сразу с кодом причины, чем отправить вопрос в пустоту.
-      if (senderRole && recipientSlot && chat.parent_chat_id) {
-        const availability = evaluateRecipientAvailability({
-          recipientSubtaskId: recipientSlot,
-        });
-        if (!availability.ok) {
-          return reply
-            .code(409)
-            .send({ error: availability.error, code: availability.code });
-        }
-      }
-      const parentMessage=typeof req.body?.coordination_parent_message_id==="string" ? req.body.coordination_parent_message_id : replyTo;
-      let coordinationHop=0;
-      if(senderRole && parentMessage){
-        const parent=db.prepare("SELECT q.payload_json,q.status,m.chat_id FROM chat_message_queue q JOIN chat_messages m ON m.id=q.message_id WHERE q.message_id=? AND q.role_id=?").get(parentMessage,req.userId) as {payload_json:string;status:string;chat_id:string}|undefined;
-        if(parent){
-          if(parent.status==="superseded" || !isMember(parent.chat_id,req.userId))return reply.code(409).send({error:"Исходная переписка больше недоступна"});
-          coordinationHop=Number(JSON.parse(parent.payload_json).hop??0)+1;
-        }
-      }
-      if(coordinationHop>MAX_AGENT_HOPS)return reply.code(409).send({error:"Лимит цепочки вопросов коллегам достигнут; продолжи работу или зафиксируй препятствие"});
-      const outstanding=replyTo ? db.prepare("SELECT id,session_generation,status,payload_json FROM chat_message_queue WHERE message_id=? AND role_id=? AND chat_id=?").get(replyTo,req.userId,chatId) as {id:string;session_generation:number;status:string;payload_json:string}|undefined : undefined;
-      const addressedSlot=outstanding ? JSON.parse(outstanding.payload_json).subtaskId ?? (replyTo ? (db.prepare("SELECT recipient_subtask_id FROM chat_messages WHERE id=?").get(replyTo) as {recipient_subtask_id:string|null}|undefined)?.recipient_subtask_id : null) : null;
-      if(outstanding && addressedSlot && sourceSlot && addressedSlot!==sourceSlot)return reply.code(403).send({error:"Ответ должен исходить из адресованного этапа"});
-      if(outstanding && (outstanding.status==="superseded" || fenceDeliveryIfStale(outstanding.id,outstanding.session_generation)))return reply.code(409).send({error:"Вопрос относится к предыдущему поколению сессии"});
-      const id = uid();
-      const sourceMessage = senderRole && parentMessage ? db.prepare("SELECT chat_id FROM chat_messages WHERE id=?").get(parentMessage) as {chat_id:string}|undefined : undefined;
-      const executionMode = senderRole
-        ? sourceSlot ? "card" : sourceMessage && isMember(sourceMessage.chat_id,req.userId) ? effectiveExecutionMode(sourceMessage.chat_id,parentMessage) : "chat"
-        : isOwner(req.userId) && isCardHandoffCommand(text) ? "card" : effectiveExecutionMode(chatId);
-      // Явный вызов команды («/skill:имя » или «/mcp:имя ») проверяется при
-      // отправке: неизвестное имя отклоняется и НЕ исполняется; известный
-      // навык подключается настоящим текстом, инструмент — реальным вызовом
-      // в правах режима (карточка e11eae7a, пункт 5).
-      let roleText = storedText;
-      const slash = parseSlashInvocation(storedText);
-      if (slash) {
-        const targetRole = slashTargetRole(req.params.id, req.userId, slash, storedText);
-        if (!targetRole)
-          return reply.code(400).send({error:"Явную команду можно отправить роли, которая есть в чате: укажи @роль"});
-        const resolution = await resolveSlashCommand({
-          role: targetRole,
-          invocation: slash,
-          executionMode,
-          mode,
-          chatId: req.params.id,
-        });
-        if (!resolution.ok) return reply.code(400).send({ error: resolution.error });
-        roleText = resolution.text;
-      }
-      db.transaction(()=>{
-      db.prepare(
-        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id,quick_replies)
-         VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, req.userId, storedText, chatId, taskId, mode === "goal" ? "work" : mode, chat.task_id ? null : chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot,quickReplies?JSON.stringify(quickReplies):null);
-      db.prepare("UPDATE chat_messages SET execution_mode=? WHERE id=?").run(executionMode,id);
-      if(isOwner(req.userId)&&!senderRole&&!chat.task_id)snapshotChatPreferences(id,chatId,chatModelChoice(req.body?.model));
-      if(outstanding && ["pending","picked"].includes(outstanding.status)){
-        pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
-        db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);
-      }
-      })();
-      if (!senderRole) autoTitleChat(chatId, text);
-      db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
-        chatId,
-      );
-
-      // Файлы залиты заранее и лежат «ничьими» (chat_message_id = NULL,
-      // task_id = NULL) — здесь их подбирает отправленное сообщение.
-      // Берём только свои и только ещё не подобранные: чужое вложение к
-      // своему сообщению не привяжется, даже если знать его
-      // идентификатор. UPDATE, а не проверка через SELECT — ник заранее
-      // не знает, какие из переданных id реально «ничейные», а лишний
-      // SELECT ради этого был бы лишним раундом в БД.
-      if (attachmentIds.length) {
-        const attach = db.prepare(
-          `UPDATE attachments SET chat_message_id = ?
-             WHERE id = ? AND user_id = ?
-               AND chat_message_id IS NULL AND task_id IS NULL`,
-        );
-        for (const attId of attachmentIds) attach.run(id, attId, req.userId);
-      }
-
-      if(senderRole && parentMessage && !outstanding)traceCoordination(()=>registerCoordinationOrigin(id,parentMessage,req.userId));
-      const message = loadChatMessage(id);
-      if (senderRole === "secretary" && replyTo) { cancelTelegramProgress(replyTo); captureTelegramFinal(id); }
-      // Владелец написал в чат задачи — будим её план: готовые шаги стартуют, замолчавшие
-      // перезапускаются той же ролью (runtime/taskNudge.ts). Ответ на сообщение этим не задерживаем.
-      if (executionMode === "card" && chatTaskId && chat.parent_chat_id && isOwner(req.userId)) {
-        void nudgeTaskPlan(chatTaskId, req.userId).catch((error) => req.log?.warn?.({ err: error, taskId: chatTaskId }, "не удалось разбудить план задачи"));
-      }
-
-      // MAK-98: вопрос роли берём под срок жизни, ответ — снимаем с учёта.
-      try {
-        if (replyTo) answerRoleQuestionsBy(chatId, req.userId, replyTo);
-        else if (senderRole) answerRoleQuestionsBy(chatId, req.userId, null);
-        if (senderRole && recipientSlot) {
-            const toUserId = recipientUserIdFor(recipientSlot);
-            if (toUserId) {
-              openRoleQuestion({
-                messageId: id,
-                chatId,
-                taskId,
-                fromUserId: req.userId,
-                toUserId,
-                subtaskId: sourceSlot,
-                recipientSubtaskId: recipientSlot,
-                text,
-              });
-            }
-          }
-      } catch (error) {
-        console.warn(
-          `[chats] учёт вопроса роли не сработал для ${id}:`,
-          error instanceof Error ? error.message : error,
-        );
-      }
-
-      const audience = memberIds(chatId).filter((m) => m !== req.userId && isMember(chatId,m));
-      broadcastToUsers([...audience, req.userId], {
-        type: "chat:new",
-        message,
-      });
-
-      // Ответ номером варианта на открытый вопрос роли закрывает вопрос и
-      // уходит в ждущий ход — без нового хода и без ветки (этап 3 плана).
-      if (isOwner(req.userId) && !senderRole) {
-        const numbered = answerQuestionByNumber(chatId, storedText, replyTo);
-        if (numbered && answerQuestionRowIfOpen(numbered.questionId, numbered.answer)) {
-          const resumed = deliverAnswer(numbered.questionId, numbered.answer);
-          if (!resumed) {
-            try {
-              await dispatchRoleReplies({ chatId, messageId: id, fromUserId: req.userId, text: storedText, hop: 0, mode });
-            } catch (error) {
-              console.warn(`[chats] ответ номером не поднял ход роли chat=${chatId}:`, error);
-            }
-          }
-          return { message, question_answer: numbered.questionId, resumed };
-        }
-      }
-
-      // Свод ветки в основной чат (22.10.2026): ветка — отдельный поток, но
-      // владельцу не нужно заглядывать в каждую. Ответ роли в ветке одной
-      // строкой возвращается в комнату, из которой ветку открыли.
-      try {
-        if (senderRole) mirrorBranchResult(chatId, roleFromUserId(req.userId), storedText);
-        if (senderRole) {
-          const parentBranch = db.prepare("SELECT branch_of_chat_id FROM chats WHERE id = ?").get(chatId) as { branch_of_chat_id: string | null } | undefined;
-          const roleId = roleAccountId(roleFromUserId(req.userId) ?? "builder");
-          if (parentBranch?.branch_of_chat_id && roleId) postRoomSummaryIfAllBranchesAnswered(parentBranch.branch_of_chat_id, roleId);
-        }
-      } catch (error) {
-        console.warn(`[chats] свод ветки в основной чат не удался:`, error instanceof Error ? error.message : error);
-      }
-
-      // Новое сообщение владельца останавливает текущий ход роли: отвечать
-      // надо на новое, а не доканчивать старое (владелец 23.10.2026).
-      //
-      // Граница ставится ДО раскладки по веткам: пока роль занята прежней
-      // работой, новое сообщение уходило в параллельную ветку, и прежняя
-      // работа продолжалась — уточнение не мешало старому ходу. Теперь
-      // прежняя работа останавливается, а роль отвечает в этой же комнате
-      // на новое сообщение, со свежим контекстом (выжимка прежней работы).
-      // В теме задачи и в теме-потоке это не делается: там сообщение идёт
-      // в работу слота.
-      if (isOwner(req.userId) && !chatTaskId && !chat.parent_chat_id) {
-        try {
-          const stopped = await interruptChatTurnForOwner(chatId, req.userId);
-          // В чате пауза не нужна (владелец 23.10.2026: схема с паузой и
-          // веткой-срезом — только для режима задачи): ход просто
-          // останавливается, роль отвечает здесь же на новое сообщение.
-          if (stopped) console.log(`[chats] ход остановлен новым сообщением владельца chat=${chatId}`);
-        } catch (error) {
-          console.warn(`[chats] остановка хода не удалась chat=${chatId}:`, error instanceof Error ? error.message : error);
-        }
-      }
-
-      // Обсуждение карточки: ответ роли даёт отдельная discussion-сессия
-      // (read-only, своя аренга), а не рабочий ход. Промежуточные реплики
-      // в работу не уходят (контракт архитектора f3ada2e0, §5.2).
-      if (isDiscussionChat(chatId)) {
-        const discussion = discussionByChatId(chatId);
-        if (discussion) {
-          void runDiscussionTurn({
-            discussionId: discussion.discussion_id,
-            role: roleFromUserId(discussion.role_id) ?? "builder",
-            prompt: storedText,
-            cwd: slotWorkspace(discussion.task_id),
-          }).catch((error) =>
-            req.log?.warn?.({ err: error, discussion: discussion.discussion_id }, "обсуждение не ответило"),
-          );
-          return { message };
-        }
-      }
-
-
-      // Ветка на каждое сообщение владельца (22.10.2026): «принял — открыл
-      // ветку — работаю там». Основная комната остаётся разговором, каждая
-      // просьба живёт отдельным потоком и не ждёт конца чужого хода.
-      let handledByBranch = false;
-      try {
-        handledByBranch = await fanOutOwnerMessage({
-          chatId,
-          messageId: id,
-          text,
-          fromUserId: req.userId,
-          mode,
-          hop: coordinationHop,
-        });
-      } catch (error) {
-        console.warn(
-          `[chats] ветка по сообщению ${id} не создалась:`,
-          error instanceof Error ? error.message : error,
-        );
-      }
-
-      // Этап 2: авто-ответ ролей. «Best effort»: ошибки НЕ откатывают уже
-      // сохранённое сообщение и не роняют запрос — пользователь уже видит
-      // своё сообщение в ленте.
-      //
-      // Помощник владельца (владелец 25.09.2026, docs/ПЛАН Супер Помощник владельца/) —
-      // отдельная ветка: у него нет users.role_key. Его ходы тоже идут
-      // через очередь: раньше второе сообщение подряд попадало на занятый
-      // лок и молча терялось.
-
-      try {
-        if (!handledByBranch && !isDiscussionChat(chatId)) await dispatchRoleReplies({
-          chatId,
-          messageId: id,
-          fromUserId: req.userId,
-          text: roleText,
-          hop: coordinationHop,
-          mode,
-          idempotencyKey: readIdempotencyKey(req),
-        });
-      } catch (error) {
-        console.warn(
-          `[chats] постановка авто-ответа не удалась для chat=${chatId}:`,
-          error instanceof Error ? error.message : error,
-        );
-      }
-
-      return { message };
-    },
+    (req: any, reply) => postChatMessage(req, reply),
   );
 
   // Обращение владельца к роли (владелец 29.10.2026): владелец спрашивает
@@ -1826,10 +1545,11 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
   // отдаёт представление плана с текущим пунктом и состоянием каждого пункта.
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plans", { preHandler: authPre }, async (req: any, reply) => {
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
-    // Выполненный целиком план закрыт — полоска его не показывает; остановленный
-    // остаётся видимым: владелец должен видеть, что работа остановлена и почему.
+    // Полоска показывает только живые планы: сданный целиком и закрытый
+    // (в том числе закрытый стопом владельца) сюда не попадает — владелец
+    // 11.11.2026: закрытые чек-листы не должны маячить мусором.
     const { flat, tree } = chatPlanTree(req.params.id);
-    const visible = (plan: { items: unknown[]; status: string }) => plan.items.length >= OWNER_VISIBLE_PLAN_MIN_ITEMS && plan.status !== "finished";
+    const visible = (plan: { items: unknown[]; status: string }) => plan.items.length >= OWNER_VISIBLE_PLAN_MIN_ITEMS && plan.status === "active";
     return {
       // Прежнее поле: плоский список (к каждому плану добавлены parent_role_id, question_id, progress).
       // План из одного-двух пунктов владельцу не показываем (26.10.2026): роль ведёт его у себя.
@@ -1837,6 +1557,18 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       // Новое поле: план вызвавшей роли и внутри него children — планы вызванных ролей.
       plan_tree: tree.filter(visible),
     };
+  });
+  // Удалить чек-лист роли (владелец 06.11.2026: «по долгому нажатию удалял
+  // чек-листы в чатах»). Только владелец: роль свой план ведёт инструментом.
+  // Удаляется план роли и в самом чате, и в его ветках — как при новой сессии.
+  app.delete<{ Params: { id: string; roleId: string } }>("/api/chats/:id/work-plans/:roleId", { preHandler: authPre }, async (req: any, reply) => {
+    const chatId = req.params.id;
+    if (!db.prepare("SELECT 1 FROM chats WHERE id = ?").get(chatId)) return reply.code(404).send({ error: "Чат не найден" });
+    if (!isOwner(req.userId) || roleFromUserId(req.userId)) return reply.code(403).send({ error: "Удалить чек-лист может только владелец" });
+    const roleId = req.params.roleId;
+    clearChatWorkPlan(chatId, roleId);
+    broadcastToUsers(memberIds(chatId).concat(ownerIdsForChat(chatId)), { type: "chat:work_plan", chat_id: chatId, plan: { chat_id: chatId, role_id: roleId, revision: 0, items: [] } });
+    return { ok: true };
   });
   app.get<{ Params: { id: string } }>("/api/chats/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
     if (!isMember(req.params.id, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
@@ -1989,7 +1721,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
       const chatId = req.params.id;
       if (!isMember(chatId, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
-      if (taskTopicClosedAt(db.prepare("SELECT task_id, parent_chat_id, closed_at FROM chats WHERE id = ?").get(chatId) as any))
+      if (taskRoomClosedAt(db.prepare("SELECT task_id, room_kind, closed_at FROM chats WHERE id = ?").get(chatId) as any))
         return reply.code(409).send({ error: "Чат задачи закрыт" });
       const roleId = typeof req.body?.role_id === "string" ? req.body.role_id : "";
       if (!roleId) return reply.code(400).send({ error: "role_id обязателен" });
@@ -2215,7 +1947,7 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     if (!right.allowed) return reply.code(403).send({ error: right.reason });
     // Тема карточки, которая сейчас в работе, — рабочее место роли: её
     // никто не убирает, пока карточка не отдана (дефект D1).
-    if (isTaskTopic(chat) && !canArchiveTaskTopic(chat.task_id))
+    if (isTaskRoom(chat) && !canArchiveTaskTopic(chat.task_id))
       return reply.code(409).send({ error: "Чат задачи в работе убрать нельзя" });
     archiveChat(chat.id);
     await stopRoomRuns(chat.id, "owner_archive");
@@ -2235,6 +1967,45 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     "/api/chats/:id/archive",
     { preHandler: authPre },
     archiveChatRoute,
+  );
+
+  // Вернуть из архива (владелец 08.11.2026: «заархивировать, чтобы если что,
+  // потом когда-нибудь вернуть»). Права те же, что на уборку.
+  app.post<{ Params: { id: string } }>(
+    "/api/chats/:id/unarchive",
+    { preHandler: authPre },
+    async (req: any, reply: any) => {
+      const chat = chatRoomRow(req.params.id);
+      if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+      if (!isMember(chat.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const right = archiveRight(chat, req.userId);
+      if (!right.allowed) return reply.code(403).send({ error: right.reason });
+      unarchiveChat(chat.id);
+      return { ok: true, archived: false, chat: chatRow(chat.id) };
+    },
+  );
+
+  // Удаление насовсем (владелец 08.11.2026: «есть архив, есть просто удалить…
+  // если удалил, уже возвращать нечего»). Только из архива, только владелец
+  // трекера или автор чата; комнату задачи — только владелец.
+  app.post<{ Params: { id: string } }>(
+    "/api/chats/:id/purge",
+    { preHandler: authPre },
+    async (req: any, reply: any) => {
+      const chat = chatRoomRow(req.params.id);
+      if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+      if (!isMember(chat.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const right = purgeRight(chat, req.userId, isOwner(req.userId));
+      if (!right.allowed) return reply.code(403).send({ error: right.reason });
+      // Сначала останавливаем ходы: удалять комнату из-под работающей роли
+      // нельзя — её ответ писать будет уже некуда.
+      await stopRoomRuns(chat.id, "owner_purge");
+      const counts = purgeChat(chat.id);
+      req.log?.info?.({ chatId: chat.id, ...counts }, "чат удалён окончательно");
+      return { ok: true, deleted: true, ...counts };
+    },
   );
 
   // Уборка лишних чатов (карточка 0b7a8b81…). Кандидаты — пустые темы
@@ -2403,7 +2174,7 @@ async function recoverAgentDeliveryOnce(input: {
   const trigger=db.prepare("SELECT text,recipient_subtask_id FROM chat_messages WHERE id=?").get(row.message_id) as {text:string;recipient_subtask_id:string|null}|undefined;
   const saved=JSON.parse(row.payload_json);
   const recipientSlot=saved.subtaskId ?? trigger?.recipient_subtask_id ?? undefined;
-  const topic=chatExecutionMode(chatId,row.message_id) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
+  const topic=chatExecutionMode(chatId,row.message_id) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND room_kind='task'").get(chatId) as {task_id:string}|undefined : undefined;
   const slot=topic && trigger ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),recipientSlot) : null;
   const chatOnly=row.message_id.startsWith("review-return:") && saved.chatOnly===true;
   const activeDelivery=chatOnly || chatExecutionMode(chatId,row.message_id) === "chat" ? "idle" : slot ? await deliverTopicToWork(slot.task_id,role,row.message_id,trigger!.text,slot.plan_node_key)
@@ -2803,6 +2574,463 @@ async function waitForStopMarker(
   }
 }
 
+function queuedRowFor(req: any, reply: any): QueuedRow | null {
+  if (!isMember(req.params.id, req.userId)) { reply.code(404).send({ error: "Чат не найден" }); return null; }
+  const row = queuedById(req.params.id, req.params.messageId);
+  if (!row) { reply.code(404).send({ error: "Отложенного сообщения нет: оно уже ушло или убрано", ...composerStatus(req.params.id) }); return null; }
+  if (row.user_id !== req.userId && !isOwner(req.userId)) { reply.code(403).send({ error: "Чужое отложенное сообщение" }); return null; }
+  return row;
+}
+
+/** Идёт ли в чате (или его ветках) ход любой из его ролей. */
+function ownerTurnLive(chatId: string): boolean {
+  const roleIds = chatMemberRoles(chatId).map((role) => roleAccountId(role)).filter((id): id is string => Boolean(id));
+  if (!roleIds.length) return false;
+  const live = roomChatIds(chatId).flatMap((roomChat) => liveTurnsOfChat(roomChat));
+  return live.some((turn) => roleIds.includes(turn.user_id));
+}
+
+/** Сообщение, которое ещё не ушло роли: тот же вид, что у сообщения чата, плюс queued. */
+function queuedMessageView(id: string, chatId: string, userId: string, text: string, mode: ChatWorkMode): Record<string, unknown> {
+  const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const base = { id, from_user_id: userId, text, channel: "chat", chat_id: chatId, work_mode: mode, created_at: now };
+  try {
+    return { ...formatChatMessage({ ...base, from_user_name: (db.prepare("SELECT name FROM users WHERE id = ?").get(userId) as { name?: string } | undefined)?.name }), queued: true };
+  } catch {
+    return { ...base, queued: true };
+  }
+}
+
+/** Отправить отложенное так же, как обычное сообщение владельца. */
+async function releaseQueuedMessage(row: QueuedRow, steer: boolean): Promise<boolean> {
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(row.body_json); } catch { /* пустое тело — сработает проверка текста */ }
+  const headers: Record<string, unknown> = row.idempotency_key ? { "idempotency-key": row.idempotency_key } : {};
+  let status = 200;
+  const fakeReply: any = { code(n: number) { status = n; return fakeReply; }, send() { return fakeReply; } };
+  const result = await postChatMessage(
+    { params: { id: row.chat_id }, userId: row.user_id, body, headers, log: console },
+    fakeReply,
+    { release: true, steer, messageId: row.message_id },
+  );
+  return status === 200 && Boolean(result?.message);
+}
+
+configureQueuedRelease({ isBusy: ownerTurnLive, release: releaseQueuedMessage });
+
+
+/** Опции обработчика сообщений: release — сообщение уже отложено и теперь
+ *  уходит (не откладывать и не прерывать ход заново); steer — вставить в
+ *  идущий ход, а не открывать ветку; messageId — сохранить id, который
+ *  клиент уже видел у отложенного. */
+interface PostMessageOpts { release?: boolean; steer?: boolean; messageId?: string }
+
+// Ответ на вопрос роли номером варианта («2» или «1.2») — этап 3 плана
+// note://a2475482: кнопки и текст не должны расходиться. Понимаем только
+// короткий номер при ОТКРЫТОМ вопросе у этого же сообщения-вопроса, иначе
+// обычный текст остаётся обычным текстом.
+function answerQuestionByNumber(chatId: string, text: string, replyTo: string | null): { answer: AnswerPayload; questionId: string; payload: ReturnType<typeof payloadOf> } | null {
+  const clean = text.trim();
+  const match = /^(?:(\d{1,2})\s*[.)\-]\s*)?(\d{1,2})$/.exec(clean.length <= 6 ? clean : "");
+  if (!match) return null;
+  const replied = replyTo
+    ? (db.prepare("SELECT id FROM chat_questions WHERE chat_id=? AND message_id=? ORDER BY created_at DESC LIMIT 1").get(chatId, replyTo) as { id: string } | undefined)
+    : undefined;
+  const question = (replied ? questionById(replied.id) : undefined) ?? openQuestionOfChat(chatId);
+  if (!question || question.status !== "open") return null;
+  if (replyTo && question.message_id && question.message_id !== replyTo) return null;
+  const payload = payloadOf(question);
+  const questionIndex = match[1] ? Number(match[1]) - 1 : 0;
+  const optionIndex = Number(match[2]) - 1;
+  const item = payload.questions[questionIndex];
+  const option = item?.options[optionIndex];
+  if (!item || !option) return null;
+  try {
+    return { answer: validateAnswerPayload(payload, [{ questionIndex, selected: [option.label] }]), questionId: question.id, payload };
+  } catch {
+    return null;
+  }
+}
+
+async function postChatMessage(req: any, reply: any, opts: PostMessageOpts = {}): Promise<any> {
+      if (!isMember(req.params.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      // Архивная комната содержимое не принимает: явный отказ, а текст
+      // (спецификация §8) остаётся в поле у отправителя — клиент его не стирает.
+      if (roomArchivedAt(req.params.id))
+        return reply.code(409).send({
+          error: "Комната в архиве: отправка не выполнена, текст остался у тебя",
+          code: "chat_archived",
+          draft_kept: true,
+        });
+      if (isDirectRoom(req.params.id) && !db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(req.params.id, req.userId))
+        return reply.code(403).send({ error: "Это личная переписка ролей: её можно читать, писать — в личной комнате роли" });
+      let mode: ChatWorkMode;
+      try { mode = parseChatWorkMode(req.body?.work_mode); }
+      catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
+      if (mode !== "work" && roleFromUserId(req.userId)) return reply.code(403).send({error: "Режим выбирает человек"});
+      // Способ выполнения следует из привязки к задаче: старый клиент ещё шлёт поле, оно не влияет.
+      if (req.body?.execution_mode !== undefined && (!isOwner(req.userId) || roleFromUserId(req.userId))) return reply.code(403).send({error:"Способ выполнения следует из привязки к задаче"});
+      const text = String(req.body?.text || "").trim();
+      // MAK-98 и гейт формата ниже используют отправителя — считаем один раз.
+      const senderRole = roleFromUserId(req.userId);
+      // ФОРМАТ СООБЩЕНИЯ РОЛИ (карточка cea8d997). Тема задачи — то же место,
+      // где пишут роли, поэтому гейт тот же: очевидное сервер заменяет сам
+      // (таблица Markdown → блок table), неверный блок роль получает назад
+      // с образцом и переписывает. Текст владельца не трогаем: он пишет в чат
+      // сам, и молча переписанная его таблица — потеря его слов.
+      let storedText = text;
+      if (senderRole && text) {
+        const formatted = applyRoleFormat(text);
+        if (formatted.problems.length) {
+          return reply.code(400).send({ error: roleFormatRefusal(formatted), code: "role_format" });
+        }
+        storedText = formatted.text;
+      }
+      // Быстрые ответы (кнопки-развилки) и в ПРОМЕЖУТОЧНОМ сообщении роли
+      // (владелец 24.10.2026: «задавай, если что, мне вопрос с вариантами
+      // ответов — развилки»). Раньше строка `БЫСТРО:` разбиралась только в
+      // финальном ответе роли (extractQuickReplies ниже), и вопрос в середине
+      // хода оставался без кнопок: развилку нельзя было нажать. Ответ
+      // владельца приходит подмешиванием в этот же ход (chatSteering).
+      let quickReplies: string[] | null = null;
+      if (senderRole && storedText) {
+        const extracted = extractQuickReplies(storedText);
+        if (extracted.replies) {
+          quickReplies = extracted.replies;
+          storedText = extracted.clean;
+        }
+      }
+      // Промежуточные сообщения ИИ в чате не валидируем по длине —
+      // иначе агент падает на 400 посреди работы (владелец 04.10.2026).
+      // Лимит остаётся только для финального ответа роли (см. ниже,
+      // truncateAgentText): сообщение в чат всегда доходит, просто короче.
+      if (mode === "deep_research") {
+        // Глубокое исследование ведут Исследователь и Помощница владельца
+        // (карточка e11eae7a, пункт 3): Помощница отвечает сама своим
+        // именем, исследователь ей не нужен.
+        const members = chatMemberRoles(req.params.id);
+        const allowed = members.includes("researcher") || members.includes("secretary");
+        const foreignMention = parseRoleMentions(text).some((r) => r !== "researcher" && r !== "secretary");
+        if (!allowed || foreignMention)
+          return reply.code(400).send({error: "Глубокое исследование доступно в чате с Исследователем или с Помощником владельца"});
+      }
+      // Вложения без подписи — то же правило, что в /api/chat: пустой
+      // текст ок, когда есть файлы («вот голосовое» без комментария),
+      // а пустое совсем, без файлов — 400.
+      const attachmentIds: string[] = Array.isArray(req.body?.attachment_ids)
+        ? req.body.attachment_ids.filter(
+            (id: unknown) => typeof id === "string" && id,
+          )
+        : [];
+      if (!text && attachmentIds.length === 0)
+        return reply.code(400).send({ error: "пустое сообщение" });
+
+      const chatId = req.params.id;
+      // Привязка к задаче (владелец 21.09.2026: «чтобы не комментарии они там
+      // писать в самой задаче, а в чате переписываться»). Сообщение берёт
+      // задачу у СВОЕГО чата; явный task_id в теле перекрывает её — этим
+      // привязывается отдельное сообщение, когда чат живёт сам по себе.
+      const chat = db
+        .prepare<[string], { task_id: string | null; room_kind: string | null; closed_at: string | null }>(
+          "SELECT task_id, room_kind, closed_at FROM chats WHERE id = ?",
+        )
+        .get(chatId);
+      if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+      const taskDiscussion = discussionByChatId(chatId);
+      if (taskDiscussion && taskDiscussion.state !== "open")
+        return reply.code(409).send({ error: "Обсуждение закрывается или закрыто: новые реплики не принимаются" });
+      // Закрытая тема задачи — read-only: история остаётся, новые сообщения не принимаем.
+      if (taskRoomClosedAt(chat)) return reply.code(409).send({ error: "Чат задачи закрыт" });
+      // Общий чат: сервер сюда не пишет. Владелец и роль через инструмент — можно.
+      try {
+        assertCommonChatWritable(
+          chatId,
+          roleFromUserId(req.userId) ? "role_tool" : "user",
+        );
+      } catch (error) {
+        return reply.code(403).send({ error: error instanceof Error ? error.message : "запись запрещена" });
+      }
+      const chatTaskId = chat.task_id;
+      const taskId =
+        typeof req.body?.task_id === "string" && req.body.task_id
+          ? req.body.task_id
+          : chatTaskId;
+      const replyTo = typeof req.body?.reply_to_message_id === "string" ? req.body.reply_to_message_id : null;
+      if(replyTo && !db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=?").get(replyTo,chatId)) return reply.code(400).send({error:"Исходное сообщение не принадлежит этому чату"});
+      if(taskId && !db.prepare("SELECT 1 FROM tasks WHERE id=?").get(taskId)) return reply.code(404).send({error:"Задача не найдена"});
+      const sourceSlot=roleFromUserId(req.userId) && typeof req.body?.subtask_id==="string" ? req.body.subtask_id : null;
+      const recipientSlot=typeof req.body?.recipient_subtask_id==="string" ? req.body.recipient_subtask_id : (chat.task_id && !senderRole ? slotFromMention(chat.task_id,text) : null);
+      const inTopicBranch=(stageTask:string)=>stageTask===chatTaskId || (!!chatTaskId && !!branchMembership(chatTaskId) && branchMembership(stageTask)?.root_plan_id===branchMembership(chatTaskId)?.root_plan_id);
+      if(sourceSlot){
+        const source=db.prepare("SELECT task_id FROM subtasks WHERE id=? AND agent_id=?").get(sourceSlot,req.userId) as {task_id:string}|undefined;
+        if(!source || (chat.room_kind === "task" && !inTopicBranch(source.task_id)))return reply.code(403).send({error:"Этап твоего хода не закреплён за тобой или относится к другой ветке — сообщение не отправлено. Дальше: проверь taskflow_my_tasks; если этап с тебя сняли — заверши ход и коротко опиши итог в ответе; если этап твой — пиши в тему его ветки (taskflow_topic_send). Повтор того же вызова даст тот же отказ."});
+      }
+      if(recipientSlot){
+        const recipient=db.prepare("SELECT task_id,agent_id FROM subtasks WHERE id=?").get(recipientSlot) as {task_id:string;agent_id:string}|undefined;
+        if(!recipient || (chat.room_kind === "task" ? !inTopicBranch(recipient.task_id) : !isMember(chatId,recipient.agent_id)))return reply.code(400).send({error:"Этап адресата не относится к согласованной ветке"});
+      }
+      // MAK-98: быстрый отказ, когда адресата некому исполнить — лучше
+      // сказать сразу с кодом причины, чем отправить вопрос в пустоту.
+      if (senderRole && recipientSlot && chat.room_kind === "task") {
+        const availability = evaluateRecipientAvailability({
+          recipientSubtaskId: recipientSlot,
+        });
+        if (!availability.ok) {
+          return reply
+            .code(409)
+            .send({ error: availability.error, code: availability.code });
+        }
+      }
+      const parentMessage=typeof req.body?.coordination_parent_message_id==="string" ? req.body.coordination_parent_message_id : replyTo;
+      let coordinationHop=0;
+      if(senderRole && parentMessage){
+        const parent=db.prepare("SELECT q.payload_json,q.status,m.chat_id FROM chat_message_queue q JOIN chat_messages m ON m.id=q.message_id WHERE q.message_id=? AND q.role_id=?").get(parentMessage,req.userId) as {payload_json:string;status:string;chat_id:string}|undefined;
+        if(parent){
+          if(parent.status==="superseded" || !isMember(parent.chat_id,req.userId))return reply.code(409).send({error:"Исходная переписка больше недоступна"});
+          coordinationHop=Number(JSON.parse(parent.payload_json).hop??0)+1;
+        }
+      }
+      if(coordinationHop>MAX_AGENT_HOPS)return reply.code(409).send({error:"Лимит цепочки вопросов коллегам достигнут; продолжи работу или зафиксируй препятствие"});
+      const outstanding=replyTo ? db.prepare("SELECT id,session_generation,status,payload_json FROM chat_message_queue WHERE message_id=? AND role_id=? AND chat_id=?").get(replyTo,req.userId,chatId) as {id:string;session_generation:number;status:string;payload_json:string}|undefined : undefined;
+      const addressedSlot=outstanding ? JSON.parse(outstanding.payload_json).subtaskId ?? (replyTo ? (db.prepare("SELECT recipient_subtask_id FROM chat_messages WHERE id=?").get(replyTo) as {recipient_subtask_id:string|null}|undefined)?.recipient_subtask_id : null) : null;
+      if(outstanding && addressedSlot && sourceSlot && addressedSlot!==sourceSlot)return reply.code(403).send({error:"Ответ должен исходить из адресованного этапа"});
+      if(outstanding && (outstanding.status==="superseded" || fenceDeliveryIfStale(outstanding.id,outstanding.session_generation)))return reply.code(409).send({error:"Вопрос относится к предыдущему поколению сессии"});
+      const id = opts.messageId ?? uid();
+      const sourceMessage = senderRole && parentMessage ? db.prepare("SELECT chat_id FROM chat_messages WHERE id=?").get(parentMessage) as {chat_id:string}|undefined : undefined;
+      const executionMode = senderRole
+        ? sourceSlot ? "card" : sourceMessage && isMember(sourceMessage.chat_id,req.userId) ? effectiveExecutionMode(sourceMessage.chat_id,parentMessage) : "chat"
+        : isOwner(req.userId) && isCardHandoffCommand(text) ? "card" : effectiveExecutionMode(chatId);
+      // Явный вызов команды («/skill:имя » или «/mcp:имя ») проверяется при
+      // отправке: неизвестное имя отклоняется и НЕ исполняется; известный
+      // навык подключается настоящим текстом, инструмент — реальным вызовом
+      // в правах режима (карточка e11eae7a, пункт 5).
+      let roleText = storedText;
+      const slash = parseSlashInvocation(storedText);
+      if (slash) {
+        const targetRole = slashTargetRole(req.params.id, req.userId, slash, storedText);
+        if (!targetRole)
+          return reply.code(400).send({error:"Явную команду можно отправить роли, которая есть в чате: укажи @роль"});
+        const resolution = await resolveSlashCommand({
+          role: targetRole,
+          invocation: slash,
+          executionMode,
+          mode,
+          chatId: req.params.id,
+        });
+        if (!resolution.ok) return reply.code(400).send({ error: resolution.error });
+        roleText = resolution.text;
+      }
+      // Отложенное сообщение (12.11.2026, как в T3 Code): пока роль в этом
+      // чате отвечает, новое сообщение владельца не прерывает ход, а встаёт в
+      // очередь. В ленте его нет — оно уйдёт роли после хода, или владелец
+      // отправит его сразу («подмешать в ход») либо уберёт.
+      if (!opts.release && !senderRole && isOwner(req.userId) && !chatTaskId && chat.room_kind !== "task" && !isDiscussionChat(chatId)
+        && (ownerTurnLive(chatId) || queuedOfChat(chatId).length > 0)) {
+        const idemKey = readIdempotencyKey(req);
+        const again = idemKey ? queuedByKey(chatId, idemKey) : undefined;
+        if (!again) {
+          enqueueQueued({ message_id: id, chat_id: chatId, user_id: req.userId, text: storedText, body_json: JSON.stringify(req.body ?? {}), idempotency_key: idemKey });
+          emitComposerStatus(chatId);
+        }
+        const queuedId = again?.message_id ?? id;
+        return { message: queuedMessageView(queuedId, chatId, req.userId, again?.text ?? storedText, mode), queued: true };
+      }
+      db.transaction(()=>{
+      db.prepare(
+        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id,quick_replies)
+         VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, req.userId, storedText, chatId, taskId, mode === "goal" ? "work" : mode, chat.task_id ? null : chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot,quickReplies?JSON.stringify(quickReplies):null);
+      db.prepare("UPDATE chat_messages SET execution_mode=? WHERE id=?").run(executionMode,id);
+      if(isOwner(req.userId)&&!senderRole&&!chat.task_id)snapshotChatPreferences(id,chatId,chatModelChoice(req.body?.model));
+      if(outstanding && ["pending","picked"].includes(outstanding.status)){
+        pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
+        db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);
+      }
+      })();
+      if (!senderRole) autoTitleChat(chatId, text);
+      db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
+        chatId,
+      );
+
+      // Файлы залиты заранее и лежат «ничьими» (chat_message_id = NULL,
+      // task_id = NULL) — здесь их подбирает отправленное сообщение.
+      // Берём только свои и только ещё не подобранные: чужое вложение к
+      // своему сообщению не привяжется, даже если знать его
+      // идентификатор. UPDATE, а не проверка через SELECT — ник заранее
+      // не знает, какие из переданных id реально «ничейные», а лишний
+      // SELECT ради этого был бы лишним раундом в БД.
+      if (attachmentIds.length) {
+        const attach = db.prepare(
+          `UPDATE attachments SET chat_message_id = ?
+             WHERE id = ? AND user_id = ?
+               AND chat_message_id IS NULL AND task_id IS NULL`,
+        );
+        for (const attId of attachmentIds) attach.run(id, attId, req.userId);
+      }
+
+      if(senderRole && parentMessage && !outstanding)traceCoordination(()=>registerCoordinationOrigin(id,parentMessage,req.userId));
+      const message = loadChatMessage(id);
+      if (senderRole === "secretary" && replyTo) { cancelTelegramProgress(replyTo); captureTelegramFinal(id); }
+      // Владелец написал в чат задачи — будим её план: готовые шаги стартуют, замолчавшие
+      // перезапускаются той же ролью (runtime/taskNudge.ts). Ответ на сообщение этим не задерживаем.
+      if (executionMode === "card" && chatTaskId && chat.room_kind === "task" && isOwner(req.userId)) {
+        void nudgeTaskPlan(chatTaskId, req.userId).catch((error) => req.log?.warn?.({ err: error, taskId: chatTaskId }, "не удалось разбудить план задачи"));
+      }
+
+      // MAK-98: вопрос роли берём под срок жизни, ответ — снимаем с учёта.
+      try {
+        if (replyTo) answerRoleQuestionsBy(chatId, req.userId, replyTo);
+        else if (senderRole) answerRoleQuestionsBy(chatId, req.userId, null);
+        if (senderRole && recipientSlot) {
+            const toUserId = recipientUserIdFor(recipientSlot);
+            if (toUserId) {
+              openRoleQuestion({
+                messageId: id,
+                chatId,
+                taskId,
+                fromUserId: req.userId,
+                toUserId,
+                subtaskId: sourceSlot,
+                recipientSubtaskId: recipientSlot,
+                text,
+              });
+            }
+          }
+      } catch (error) {
+        console.warn(
+          `[chats] учёт вопроса роли не сработал для ${id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+
+      const audience = memberIds(chatId).filter((m) => m !== req.userId && isMember(chatId,m));
+      broadcastToUsers([...audience, req.userId], {
+        type: "chat:new",
+        message,
+      });
+
+      // Ответ номером варианта на открытый вопрос роли закрывает вопрос и
+      // уходит в ждущий ход — без нового хода и без ветки (этап 3 плана).
+      if (isOwner(req.userId) && !senderRole) {
+        const numbered = answerQuestionByNumber(chatId, storedText, replyTo);
+        if (numbered && answerQuestionRowIfOpen(numbered.questionId, numbered.answer)) {
+          const resumed = deliverAnswer(numbered.questionId, numbered.answer);
+          if (!resumed) {
+            try {
+              await dispatchRoleReplies({ chatId, messageId: id, fromUserId: req.userId, text: storedText, hop: 0, mode });
+            } catch (error) {
+              console.warn(`[chats] ответ номером не поднял ход роли chat=${chatId}:`, error);
+            }
+          }
+          return { message, question_answer: numbered.questionId, resumed };
+        }
+      }
+
+      // Свод ветки в основной чат (22.10.2026): ветка — отдельный поток, но
+      // владельцу не нужно заглядывать в каждую. Ответ роли в ветке одной
+      // строкой возвращается в комнату, из которой ветку открыли.
+      try {
+        if (senderRole) mirrorBranchResult(chatId, roleFromUserId(req.userId), storedText);
+        if (senderRole) {
+          const parentBranch = db.prepare("SELECT branch_of_chat_id FROM chats WHERE id = ?").get(chatId) as { branch_of_chat_id: string | null } | undefined;
+          const roleId = roleAccountId(roleFromUserId(req.userId) ?? "builder");
+          if (parentBranch?.branch_of_chat_id && roleId) postRoomSummaryIfAllBranchesAnswered(parentBranch.branch_of_chat_id, roleId);
+        }
+      } catch (error) {
+        console.warn(`[chats] свод ветки в основной чат не удался:`, error instanceof Error ? error.message : error);
+      }
+
+      // Новое сообщение владельца останавливает текущий ход роли: отвечать
+      // надо на новое, а не доканчивать старое (владелец 23.10.2026).
+      //
+      // Граница ставится ДО раскладки по веткам: пока роль занята прежней
+      // работой, новое сообщение уходило в параллельную ветку, и прежняя
+      // работа продолжалась — уточнение не мешало старому ходу. Теперь
+      // прежняя работа останавливается, а роль отвечает в этой же комнате
+      // на новое сообщение, со свежим контекстом (выжимка прежней работы).
+      // В теме задачи и в теме-потоке это не делается: там сообщение идёт
+      // в работу слота.
+      if (!opts.release && isOwner(req.userId) && !chatTaskId && chat.room_kind !== "task") {
+        try {
+          const stopped = await interruptChatTurnForOwner(chatId, req.userId);
+          // В чате пауза не нужна (владелец 23.10.2026: схема с паузой и
+          // веткой-срезом — только для режима задачи): ход просто
+          // останавливается, роль отвечает здесь же на новое сообщение.
+          if (stopped) console.log(`[chats] ход остановлен новым сообщением владельца chat=${chatId}`);
+        } catch (error) {
+          console.warn(`[chats] остановка хода не удалась chat=${chatId}:`, error instanceof Error ? error.message : error);
+        }
+      }
+
+      // Обсуждение карточки: ответ роли даёт отдельная discussion-сессия
+      // (read-only, своя аренга), а не рабочий ход. Промежуточные реплики
+      // в работу не уходят (контракт архитектора f3ada2e0, §5.2).
+      if (isDiscussionChat(chatId)) {
+        const discussion = discussionByChatId(chatId);
+        if (discussion) {
+          void runDiscussionTurn({
+            discussionId: discussion.discussion_id,
+            role: roleFromUserId(discussion.role_id) ?? "builder",
+            prompt: storedText,
+            cwd: slotWorkspace(discussion.task_id),
+          }).catch((error) =>
+            req.log?.warn?.({ err: error, discussion: discussion.discussion_id }, "обсуждение не ответило"),
+          );
+          return { message };
+        }
+      }
+
+
+      // Ветка на каждое сообщение владельца (22.10.2026): «принял — открыл
+      // ветку — работаю там». Основная комната остаётся разговором, каждая
+      // просьба живёт отдельным потоком и не ждёт конца чужого хода.
+      let handledByBranch = false;
+      try {
+        handledByBranch = opts.steer ? false : await fanOutOwnerMessage({
+          chatId,
+          messageId: id,
+          text,
+          fromUserId: req.userId,
+          mode,
+          hop: coordinationHop,
+        });
+      } catch (error) {
+        console.warn(
+          `[chats] ветка по сообщению ${id} не создалась:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+
+      // Этап 2: авто-ответ ролей. «Best effort»: ошибки НЕ откатывают уже
+      // сохранённое сообщение и не роняют запрос — пользователь уже видит
+      // своё сообщение в ленте.
+      //
+      // Помощник владельца (владелец 25.09.2026, docs/ПЛАН Супер Помощник владельца/) —
+      // отдельная ветка: у него нет users.role_key. Его ходы тоже идут
+      // через очередь: раньше второе сообщение подряд попадало на занятый
+      // лок и молча терялось.
+
+      try {
+        if (!handledByBranch && !isDiscussionChat(chatId)) await dispatchRoleReplies({
+          chatId,
+          messageId: id,
+          fromUserId: req.userId,
+          text: roleText,
+          hop: coordinationHop,
+          mode,
+          idempotencyKey: readIdempotencyKey(req),
+        });
+      } catch (error) {
+        console.warn(
+          `[chats] постановка авто-ответа не удалась для chat=${chatId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+
+      return { message };
+}
+
 async function interruptChatTurnForOwner(chatId: string, ownerId: string): Promise<boolean> {
   if (!isMember(chatId, ownerId) || !isOwner(ownerId)) return false;
   const roleIds = chatMemberRoles(chatId)
@@ -2924,7 +3152,7 @@ async function fanOutOwnerMessage(args: {
     ).get(args.chatId),
   );
   const fromOwner = isOwner(args.fromUserId);
-  const isTaskTopic = Boolean(chat.task_id) && Boolean(chat.parent_chat_id);
+  const isTaskTopic = isTaskRoom(chat);
   // Тема задачи: сообщение владельца идёт в работу слота (подмешивание) и
   // открывает ветку-срез, где роль сразу отвечает владельцу (23.10.2026).
   const topicSlice = shouldFanOutTaskTopic({
@@ -2941,7 +3169,7 @@ async function fanOutOwnerMessage(args: {
       direct: chat.kind === "direct",
       roleMembers: roles.length,
       isBranch: Boolean(chat.branch_of_chat_id),
-      isTaskTopic: Boolean(chat.task_id) || Boolean(chat.parent_chat_id),
+      isTaskTopic: isTaskRoom(chat),
       isCommon: chat.room_kind === "common",
       repliesToRole,
       roleBusy: busy,
@@ -3126,7 +3354,7 @@ async function dispatchRoleReplies(args: {
     targets = [];
   }
 
-  const topic=chatExecutionMode(chatId,args.messageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
+  const topic=chatExecutionMode(chatId,args.messageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND room_kind='task'").get(chatId) as {task_id:string}|undefined : undefined;
   for (const role of targets) {
     // Role selection may have awaited preparation while the author withdrew.
     if(!db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=?").get(args.messageId,chatId))return;
@@ -3347,11 +3575,6 @@ interface HistoryRow {
   task_id: string | null;
 }
 
-const HISTORY_SELECT = `SELECT m.task_id, m.id, m.from_user_id, m.text, m.created_at, m.recipient_subtask_id, m.subtask_id, f.name as from_name,
-        (SELECT group_concat(a.file_name, ', ') FROM attachments a
-          WHERE a.chat_message_id = m.id) as attachments
-   FROM chat_messages m
-   LEFT JOIN users f ON f.id = m.from_user_id`;
 
 function historyLine(row: HistoryRow): string {
   const who = row.from_name || row.from_user_id;
@@ -3429,7 +3652,7 @@ async function deliverAgentReply(args: {
   const intentGuidance=role!=="secretary" && isOwner(trigger.from_user_id) ? await chatIntentBlockForMessage(trigger.id) : "";
   const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}${intentGuidance}${(()=>{const line=crossChatNotice(trigger.id,chatId);return line?"\n"+line:"";})()}`;
 
-  const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined : undefined;
+  const topic=chatExecutionMode(chatId,args.triggerMessageId) === "card" ? db.prepare("SELECT task_id FROM chats WHERE id=? AND room_kind='task'").get(chatId) as {task_id:string}|undefined : undefined;
   // Обсуждение карточки — изолированная комната: доставки в работу нет.
   if (isDiscussionChat(chatId)) return null;
   const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;
@@ -3500,23 +3723,7 @@ async function deliverAgentReply(args: {
     });
   }
   else if (previousSessionId) {
-    const since = db
-      .prepare(
-        `${HISTORY_SELECT}
-          WHERE m.chat_id = ? AND m.id != ? AND COALESCE(m.is_session_marker, 0) = 0
-            AND m.rowid > COALESCE(
-              (SELECT MAX(rowid) FROM chat_messages WHERE chat_id = ? AND from_user_id = ?), 0)
-            AND m.rowid < (SELECT rowid FROM chat_messages WHERE id = ?)
-          ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
-      )
-      .all(
-        chatId,
-        trigger.id,
-        chatId,
-        roleUserId,
-        trigger.id,
-        CHAT_AGENT_FOLLOWUP_MESSAGES,
-      ) as HistoryRow[];
+    const since = historySince(chatId, trigger.id, roleUserId, CHAT_AGENT_FOLLOWUP_MESSAGES) as HistoryRow[];
     since.reverse();
     prompt = renderChatInput("chat.followup",{
       roleTitle,
@@ -3525,14 +3732,7 @@ async function deliverAgentReply(args: {
       userText,
     });
   } else {
-    const history = db
-      .prepare(
-        `${HISTORY_SELECT}
-          WHERE m.chat_id = ? AND m.id != ? AND COALESCE(m.is_session_marker, 0) = 0
-            AND m.rowid < (SELECT rowid FROM chat_messages WHERE id = ?)
-          ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
-      )
-      .all(chatId, trigger.id, trigger.id, CHAT_AGENT_CONTEXT_MESSAGES) as HistoryRow[];
+    const history = historyBefore(chatId, trigger.id, CHAT_AGENT_CONTEXT_MESSAGES) as HistoryRow[];
     history.reverse();
     // Состав команды (14.10.2026) — в первый ход сессии, дальше сессия помнит.
     // Инструкция роли (общий шаблон + AGENTS.md) уже в системном промпте чата
@@ -3563,14 +3763,17 @@ async function deliverAgentReply(args: {
   if (topic) { const brief = taskChatBrief(topic.task_id, role, slot?.id ?? null, chatId, fromOwner ? unwrapRoleEnvelope(trigger.text) : null); if (brief) prompt = `${brief}\n\n${prompt}`; }
   // Заблокированный слот: не запрет, а маячок предложить план решения.
   if (slot?.agent_state === "blocked" && fromOwner) prompt = `${prompt}\n\n${RESOLUTION_PLAN_BEACON}`;
-  const memory = taskChatScoped ? null : await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text, dataOnly:role==="secretary" }));
+  // Владелец 11.11.2026: после «Новая сессия» — нуль: без памяти, БЗ и проектов.
+  // Свод правил (системный промпт) остаётся. История первого хода уже ≤20.
+  const skipKnowledge = skipChatProjectKnowledge(chatId);
+  const memory = taskChatScoped || skipKnowledge ? null : await prepareChatValue(roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text, dataOnly:role==="secretary" }));
   if (memory) prompt = `${prompt}\n\n${memory}`;
   // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
   // последний снимок в общий контекст роли — и для чата, и для работы»).
   // Для конкретного этапа — его снимок, без этапа — короткий перечень моих
   // слотов. Это ДАННЫЕ о работе, а не инструкция: в чат ничего не отправляется
   // автоматически, роль сама решает, упоминать ли это в ответе.
-  const snapshots = taskChatScoped ? null : slot
+  const snapshots = taskChatScoped || skipKnowledge ? null : slot
     ? roleSlotSnapshotsBlock({ role, taskId: slot.task_id, subtaskId: slot.id })
     : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null, projectId: topic ? null : chatProject });
   if (snapshots) prompt = `${prompt}\n\n${snapshots}`;
@@ -3640,6 +3843,7 @@ async function deliverAgentReply(args: {
       sessionId: staleSession ? undefined : previousSessionId,
       onStep: (tool) => typing(true, tool),
       onEvent: (event) => { observeDeliveryActivity(chatId,roleUserId,event); live.onEvent(event); },
+      onSkills: (skills) => live.setSkills(skills),
       // «Цель»: промежуточный итог роли сразу ложится в чат отдельным
       // сообщением (владелец 20.10.2026). Без reply_to — иначе клиент
       // принял бы его за конец живого хода.
@@ -3675,10 +3879,17 @@ async function deliverAgentReply(args: {
             sessionId: reply?.sessionId ?? undefined,
             onStep: (tool) => typing(true, tool),
             onEvent: (event) => { observeDeliveryActivity(chatId,roleUserId,event); live.onEvent(event); },
+            onSkills: (skills) => live.setSkills(skills),
           });
     }
   } catch (error) {
     if(error instanceof MessageForwardedToWork)throw error;
+    const salvaged = salvageMarkdownFromJsonParseFailure(error, live.partialText());
+    if (salvaged) {
+      // JSON.parse упал на markdown: контракт не ослабляем — текст пойдёт в normalizeRoleReplyV1.
+      console.warn("[chats] JSON.parse финального ответа: нормализую markdown в конверт", { role, chatId });
+      reply = { sessionId: reply?.sessionId ?? null, text: salvaged };
+    } else {
     // Онлайн-сессия не роняет HTTP-запрос, но и молчать нельзя (владелец
     // 27.09.2026): о сорванном ходе в чат ложится сообщение с причиной.
     console.warn(
@@ -3687,6 +3898,7 @@ async function deliverAgentReply(args: {
       JSON.stringify(live.diagnostics()),
     );
     failure = error;
+    }
   }
   const partial = live.partialText();
   const cancelled = (failure as { code?: string } | null)?.code === "CHAT_RUN_CANCELLED";
@@ -3742,6 +3954,15 @@ async function deliverAgentReply(args: {
     } else {
       replyText = partial || "Ход завершился без текста ответа. Отправьте сообщение ещё раз.";
       if (!partial) failure = Object.assign(new Error("модель завершила ход без текста ответа"), { code: "CHAT_RUN_EMPTY" });
+    }
+  }
+  // Навыки хода дописывает сервер: строку видит любой клиент, правок в
+  // приложении не нужно (владелец 10.11.2026). Заголовки — по-русски.
+  if (replyText && !failure && !cancelled) {
+    const turnSkills = live.usedSkills();
+    if (turnSkills.length) {
+      replyText = appendSkillsNote(replyText, turnSkills, Boolean(storedRoleEnvelope));
+      if (storedRoleEnvelope) storedRoleEnvelope = replyText;
     }
   }
   if (!failure && !cancelled) live.replaceFinalText(replyText);

@@ -22,15 +22,17 @@ import {
   NEW_WIDGET_TYPE_SPECS,
   NEW_WIDGET_TYPES,
   newWidgetTypeLine,
+  newWidgetTypeLines,
   validateWidgetBlock,
+  widgetEnumValues,
   widgetExample,
   type NewWidgetTypeSpec,
 } from "../src/lib/widgetContract.js";
 import { NEW_WIDGET_TYPES as FLAG_TYPES, newWidgetTypesEnabled } from "../src/lib/widgetFeatureFlag.js";
 import { CANONICAL_WIDGET_TYPES } from "../src/lib/widgetNormalize.js";
 
-// Проза собирается при импорте instructionDefaults, поэтому флаг поднимаем
-// до импортов — иначе перечень типов в инструкции будет пустым.
+// Флаг проверяется отдельно от текста роли: инструкция берётся из реестра
+// и от флага не собирается.
 vi.hoisted(() => {
   process.env.TASKFLOW_WIDGET_NEW_TYPES = "1";
 });
@@ -95,14 +97,10 @@ describe("контракт восьми новых типов виджетов",
     }
   });
 
-  it("строка инструкции разбирается ровно в поля контракта — для всех восьми", async () => {
-    const { INSTRUCTION_DEFAULTS } = await import("../src/runtime/instructionDefaults.js");
-    const wrapper = String(INSTRUCTION_DEFAULTS["chat.wrapper"]);
+  it("строка каталога разбирается ровно в поля контракта — для всех восьми", () => {
     expect(newWidgetTypesEnabled()).toBe(true);
 
-    const lines = wrapper
-      .split("\n")
-      .filter((line) => NEW_WIDGET_TYPES.some((t) => line.startsWith(`${t} (`)));
+    const lines = newWidgetTypeLines();
     expect(lines).toHaveLength(8);
 
     for (const line of lines) {
@@ -147,32 +145,27 @@ describe("контракт восьми новых типов виджетов",
     expect(cmp.rootOptional).toContain("verdict");
   });
 
-  it("списки тонов и состояний в прозе совпадают с контрактом", async () => {
-    const { INSTRUCTION_DEFAULTS } = await import("../src/runtime/instructionDefaults.js");
-    const wrapper = String(INSTRUCTION_DEFAULTS["chat.wrapper"]);
-    const toneLine = wrapper.split("\n").find((l) => l.startsWith("tone — "))!;
-    const stateLine = wrapper.split("\n").find((l) => l.startsWith("state — "))!;
-    const listed = (line: string, prefix: string) =>
-      line
-        .slice(prefix.length)
-        .replace(/\.$/, "")
-        .split(", ")
-        .filter(Boolean);
-    expect(listed(toneLine, "tone — из списка: ")).toEqual([...NEW_WIDGET_TONES]);
-    expect(listed(stateLine, "state — из списка: ")).toEqual([...NEW_WIDGET_STATES]);
+  it("списки тонов и состояний берутся из каталога", () => {
+    const withTone = NEW_WIDGET_TYPE_SPECS.find((spec) =>
+      [...spec.member.required, ...spec.member.optional, ...spec.required, ...spec.optional].includes("tone"),
+    );
+    expect(withTone).toBeDefined();
+    expect([...(widgetEnumValues(withTone!, "tone") ?? [])]).toEqual([...NEW_WIDGET_TONES]);
+    expect([...(widgetEnumValues(withTone!, "state") ?? [])]).toEqual([...NEW_WIDGET_STATES]);
   });
 
-  it("при выключенном флаге перечня типов в инструкции нет", async () => {
+  it("флаг новых типов не меняет инструкцию роли", async () => {
+    vi.stubEnv("TASKFLOW_WIDGET_NEW_TYPES", "1");
+    vi.resetModules();
+    const on = String((await import("../src/runtime/instructionDefaults.js")).INSTRUCTION_DEFAULTS["chat.wrapper"]);
     vi.stubEnv("TASKFLOW_WIDGET_NEW_TYPES", "");
     vi.resetModules();
-    const { INSTRUCTION_DEFAULTS: off } = await import("../src/runtime/instructionDefaults.js");
-    const wrapper = String(off["chat.wrapper"]);
-    for (const type of NEW_WIDGET_TYPES) expect(wrapper).not.toContain(`${type} (`);
+    const off = String((await import("../src/runtime/instructionDefaults.js")).INSTRUCTION_DEFAULTS["chat.wrapper"]);
+    expect(on).toBe(off);
   });
 
-  // Карточка cea8d997: проверка и инструкция ролям собираются из одного
-  // каталога. Шесть базовых типов раньше были прозой в инструкции, а словарь
-  // валидатора лежал вне git — это и есть источник расхождения D1.
+  // Карточка cea8d997: снимок реестра для базовых типов совпадает со строками
+  // каталога. Словарь валидатора раньше расходился с прозой (дефект D1).
   it("строки базовых типов в инструкции собираются из каталога", async () => {
     const { INSTRUCTION_DEFAULTS } = await import("../src/runtime/instructionDefaults.js");
     const wrapper = String(INSTRUCTION_DEFAULTS["chat.wrapper"]);

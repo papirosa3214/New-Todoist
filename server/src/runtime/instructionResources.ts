@@ -3,6 +3,7 @@ import {behaviorInstruction,genderInstruction} from './roleBehavior.js';
 import {chatExecutionMode} from './chatExecutionMode.js';
 import {registryEnabled,buildRegistryRules} from './roleRegistryPrompt.js';
 import { stageSkillNames } from "../lib/collaborationTemplates.js";
+import { skillLabels, type SkillLabel } from "../lib/skillCatalog.js";
 import { PLANNING_TOOLS, chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,7 +29,8 @@ const builtinTools=(cwd:string)=>[...new Map([...createCodingTools(cwd),...creat
  */
 function skillPathsFor(role:string, sharedChatSkills:boolean):string[]{
  const home=ensureRoleHome(role);
- const paths=sharedChatSkills?[path.resolve(process.cwd(),'scripts','shared-skills'),home.skills]:[home.skills];
+ // Общие навыки — у всех ролей во всех режимах (владелец 07.11.2026).
+ const paths=[path.resolve(process.cwd(),'scripts','shared-skills'),home.skills];
  if(role==='secretary'){
   const researchSkills=roleHome('researcher').skills;
   if(fs.existsSync(researchSkills))paths.push(researchSkills);
@@ -126,7 +128,7 @@ export async function discoverChatResources(role:string, sharedChatSkills=false)
  const register=(file:string,title:string,text:string,readOnly=false,modes=ROLE_RESOURCE_MODES)=>{
   const key=keyFor(file);currentKeys.add(key);
  const shared=file.startsWith(path.resolve(process.cwd(),'scripts','shared-skills')+path.sep);
-  registerInstructionBlock({key,title,group:'Контекст',scope:file===systemPromptSourceFile()||shared?'command':'role',roles:file===systemPromptSourceFile()||shared?undefined:[role],modes:shared?['chat']:modes,sourceKind:'file',originRef:file,readOnly},text);
+  registerInstructionBlock({key,title,group:'Контекст',scope:file===systemPromptSourceFile()||shared?'command':'role',roles:file===systemPromptSourceFile()||shared?undefined:[role],modes,sourceKind:'file',originRef:file,readOnly},text);
  };
  // AGENTS.md uses the static role.prompt layer; never expose a second resource editor.
  for(const file of loader.getAgentsFiles().agentsFiles)if(path.basename(file.path)!=='AGENTS.md')register(file.path,path.basename(file.path),file.content);
@@ -182,18 +184,9 @@ export async function listRoleSkills(role: string) {
 }
 
 /** Тот же набор файлов роли; cwd задачи не меняется, executable extensions отключены. */
-export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}, sharedChatSkills=false):Promise<ResourceLoader & {disposeResources:()=>void}> {
+export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}, sharedChatSkills=false):Promise<ResourceLoader & {disposeResources:()=>void; usedSkills:()=>SkillLabel[]}> {
  const home=ensureRoleHome(role);
- if(hasSingleChatSystem(role) && sharedChatSkills && !work){
-  const loader=new DefaultResourceLoader({
-   cwd,agentDir:home.dir,settingsManager:SettingsManager.inMemory(),
-   noExtensions:true,noThemes:true,noSkills:true,noPromptTemplates:true,noContextFiles:true,
-   systemPrompt,appendSystemPrompt:[],
-   skillsOverride:()=>({skills:[],diagnostics:[]}),agentsFilesOverride:()=>({agentsFiles:[]}),
-  });
-  await loader.reload();
-  return Object.assign(loader,{disposeResources:()=>{}});
- }
+ // Навыки и папка роли подключаются и в чате (владелец 07.11.2026): сверка перед работой одинакова везде.
  const discovered=await discoverChatResources(role,sharedChatSkills);
  let snapshotDir:string|undefined;
  const skills=discovered.skills.map(skill=>{
@@ -217,6 +210,8 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  const missing=names?.filter(name=>!skills.some(s=>s.name===name)) ?? [];
  const keep=work ? await withObservationContext({role},()=>selectSkillsByJev({...work,step:[work.step,work.stageInstructions].filter(Boolean).join("\n")},candidates.map(s=>({name:s.name,description:s.description})),names ?? [])).catch(()=>null) : null;
  const usedSkills=keep ? candidates.filter(s=>keep.has(s.name)) : candidates;
+ // Владельцу показываем русские заголовки навыков, а не имена папок (lib/skillCatalog).
+ const usedSkillLabels=skillLabels(usedSkills.map(s=>({name:s.name,filePath:(s as {filePath?:string}).filePath ?? null})));
  const stagePrompt=work?.stageInstructions ? "\n\nЗадание текущего этапа:\n"+work.stageInstructions : "";
  const missingPrompt=missing.length ? "\n\nНедоступные навыки этапа: "+missing.join(", ")+". Не утверждай, что они подключены; укажи ограничение в результате." : "";
  const loader=new DefaultResourceLoader({
@@ -228,7 +223,9 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
   agentsFilesOverride:()=>({agentsFiles:registryEnabled()?[]:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))?.effective ?? fs.readFileSync(f.path,'utf8')})).filter(f=>!systemPrompt.includes(f.content))}),
  });
  await loader.reload();
- return Object.assign(loader,{disposeResources:()=>{if(snapshotDir)fs.rmSync(snapshotDir,{recursive:true,force:true});}});
+ return Object.assign(loader,{disposeResources:()=>{if(snapshotDir)fs.rmSync(snapshotDir,{recursive:true,force:true});},
+  /** Навыки, реально подключённые к этому ходу: имя папки + русский заголовок. */
+  usedSkills:()=>usedSkillLabels});
 }
 
 /**

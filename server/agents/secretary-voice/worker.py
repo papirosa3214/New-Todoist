@@ -28,6 +28,8 @@ from livekit.agents import (
     room_io,
 )
 from livekit.plugins.google.realtime import RealtimeModel
+from google.genai import types as google_types
+from secret_broker import broker_voice_options
 
 load_dotenv()
 
@@ -45,6 +47,7 @@ class Config:
     livekit_api_secret: str
     gemini_api_key: str
     taskflow_socket_path: str
+    gemini_broker_url: str | None = None
 
 
 REQUIRED_VARS = (
@@ -56,14 +59,16 @@ REQUIRED_VARS = (
 
 
 def load_config() -> Config:
-    missing = [v for v in REQUIRED_VARS if not os.environ.get(v)]
+    broker = broker_voice_options()
+    missing = [v for v in REQUIRED_VARS if not os.environ.get(v) and not (v == "GEMINI_API_KEY" and broker)]
     if missing:
         raise ConfigError(f"не заданы переменные окружения: {', '.join(missing)}")
     return Config(
         livekit_url=os.environ["LIVEKIT_URL"],
         livekit_api_key=os.environ["LIVEKIT_API_KEY"],
         livekit_api_secret=os.environ["LIVEKIT_API_SECRET"],
-        gemini_api_key=os.environ["GEMINI_API_KEY"],
+        gemini_api_key=broker["api_key"] if broker else os.environ["GEMINI_API_KEY"],
+        gemini_broker_url=broker["base_url"] if broker else None,
         taskflow_socket_path=os.environ.get("TASKFLOW_VOICE_SOCKET", os.path.join(
             os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
             "taskflow-secretary", "voice.sock")),
@@ -562,6 +567,7 @@ async def entrypoint(ctx: JobContext) -> None:
             model="gemini-3.8-live",
             api_key=cfg.gemini_api_key,
             voice=voice,
+            **({"http_options": google_types.HttpOptions(base_url=cfg.gemini_broker_url)} if cfg.gemini_broker_url else {}),
         ),
     )
     async def write_transcript(item_id: str, role: str, text: str) -> None:

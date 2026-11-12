@@ -76,14 +76,12 @@ it("на закрытом плане сервер молчит: вести бо�
   expect(chatWorkPlanPrompt(chatId, role)).toBe("");
 });
 
-it("на остановленном плане роль видит запрет начинать следующие пункты", () => {
+it("на закрытом стопом плане сервер молчит: роль ведёт только новый план", () => {
   const { chatId } = chatWithRun();
   saveChatWorkPlan(chatId, role, 0, items as any);
   stopChatWorkPlan(chatId, role, "owner_stop");
-  const text = chatWorkPlanPrompt(chatId, role);
-  expect(text).toContain("ОСТАНОВЛЕН");
-  expect(text).toContain("остановил владелец");
-  expect(text).toContain("Следующие пункты не начинай");
+  // Стоп сразу закрывает план (11.11.2026): вести больше не по чему.
+  expect(chatWorkPlanPrompt(chatId, role)).toBe("");
 });
 
 it("ведущий пункт берётся из сохранённого плана чата, а не из головы роли", () => {

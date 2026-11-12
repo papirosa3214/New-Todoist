@@ -1,7 +1,7 @@
 // Локальные модели на видеокарте .110 (решение владельца 06.11.2026): постоянно живут
-// ровно две — qwen3-8b-observer (фоновая работа) и bge-m3-embed (эмбеддинги). 27B-модели
+// ровно две — eriktonon/deepseek-v4.1-flash-1017:9b (фоновая работа) и bge-m3-embed (эмбеддинги). 27B-модели
 // только разово по поручению. Ключ keep_alive=-1 в запросах к ним не даёт Ollama их выгрузить.
-export const LOCAL_DEFAULT_MODEL = "qwen3-8b-observer:latest";
+export const LOCAL_DEFAULT_MODEL = "eriktonon/deepseek-v4.1-flash-1017:9b";
 export const LOCAL_EMBED_MODEL = "bge-m3-embed:latest";
 export const KEEP_ALIVE_FOREVER = -1;
 const RESIDENT = new Set([LOCAL_DEFAULT_MODEL, LOCAL_EMBED_MODEL]);

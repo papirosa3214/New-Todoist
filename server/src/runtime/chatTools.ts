@@ -17,6 +17,7 @@ import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolv
 import db from "../db.js";
 import { captureQuestionToTelegram } from "../integrations/telegram.js";
 import { restartSlotFromOwnerChat } from "./slotRestart.js";
+import { restartOwnSlotByOwnerMessage } from "./slotOwnerRestart.js";
 import { proposeWork } from "./chatWork.js";
 import { collectTaskSummary, parseSummaryRequest } from "../lib/secretaryTaskSummary.js";
 import { buildChatFile, chatFileName, CHAT_FILE_FORMATS, ChatFileError } from "../lib/chatFileExport.js";
@@ -33,6 +34,7 @@ import { broadcastToUsers } from "../ws.js";
 import { liveInterruptEvent, liveResumeEvent, waitForAnswer } from "../lib/questionWait.js";
 import { saveUploadedFile, UploadRejected } from "../routes/attachments.js";
 import { roleUserId } from "../roleRouting.js";
+import { lazyTaskChatContext, type ChatContext } from "./taskChatContext.js";
 
 
 function qs(params: Record<string, string | undefined>): string {
@@ -47,7 +49,10 @@ function asTasks(payload: any): any[] {
 
 /** Набор инструментов чата для роли. Описания — из реестра инструкций
  *  (`tool.runtime.<имя>`), владелец правит их на экране «Команда». */
-export function chatTools(role: string, ownerContext?: {chatId:string;messageId:string}) {
+export function chatTools(role: string, ownerContext?: {chatId:string;messageId:string}, taskId?: string) {
+  // Инструменты «в чат» есть у роли везде (владелец 07.11.2026): в чате — текущее
+  // сообщение, в карточке — чат задачи (находится или заводится при первом вызове).
+  const chatCtx: ChatContext|undefined = ownerContext ?? (taskId ? lazyTaskChatContext(role, taskId) : undefined);
   const T = (name: string, description: string, parameters: any, run: (p: any, signal?: AbortSignal) => Promise<unknown>) => {
     const key = "tool.runtime." + name;
     registerInstructionBlock({
@@ -152,31 +157,22 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           в_чате: resp?.chat_message_id,
         };
       }),
-    T("taskflow_chat_typing",
-      "Зажечь в чате отметку «печатает…» — ПЕРЕД тем, как сочинять ответ. Одного вызова хватает на весь ответ. state='stop' — передумал отвечать.",
-      Type.Object({ state: S("stop — снять отметку") }), async (p) => {
-        const resp = await asRole(role, "POST", "/api/chat/typing", p.state === "stop" ? { state: "stop" } : {});
-        return {
-          печатает: resp?.["печатает"],
-          "гаснет через": resp?.["печатает"] ? `${Math.floor((resp?.["гаснет_через_мс"] ?? 0) / 1000)} с` : "—",
-        };
-      }),
-    ...(ownerContext ? [T("taskflow_chat_share_material",
+    ...(chatCtx ? [T("taskflow_chat_share_material",
       "Отправить владельцу документ Библиотеки/базы знаний для чтения ВНУТРИ TaskFlow, без системного просмотрщика iPhone. note_id — существующая заметка (taskflow_doc_write/taskflow_kb_search/taskflow_docs). Сначала сохрани готовый материал через taskflow_doc_write, если заметки ещё нет. Инструмент проверит документ; в активном ходе сервер сохранит ссылку для итогового отчёта без отдельной карточки. Вне активного хода отправит карточку «Открыть в TaskFlow». Не копирует заметку и не прикладывает файл. Для скачивания отдельного файла используй taskflow_chat_attach_file. В итоговом artifacts/sections.materials используй возвращённый material целиком; не подставляй пути сервера или голый ID вместо ссылки.",
       Type.Object({note_id:Type.String(),caption:S("краткое пояснение к материалу")}),
       async p=>{
         const note=await asRole(role,"GET",`/api/notes/${encodeURIComponent(p.note_id)}?format=markdown`);
         const material={kind:"document",title:note.title || "Документ",ref:`note://${note.id}`};
-        if(prepareReportMaterial(ownerContext.chatId,roleUserId(role),ownerContext.messageId,material))
+        if(prepareReportMaterial(chatCtx.chatId,roleUserId(role),chatCtx.messageId ?? "",material))
           return {material,message_id:null,delivery:"report",итог:"Материал подготовлен к итоговому ответу. Сервер добавит ссылку один раз; отдельная карточка не отправляется."};
         const card={type:"card",title:material.title,subtitle:String(p.caption??"Документ Библиотеки TaskFlow"),link:{title:"Открыть в TaskFlow",url:material.ref}};
-        const response=await asRole(role,"POST",`/api/chats/${ownerContext.chatId}/messages`,{
-          text:"```widget\n"+JSON.stringify(card)+"\n```",reply_to_message_id:ownerContext.messageId,work_mode:"work",
+        const response=await asRole(role,"POST",`/api/chats/${chatCtx.chatId}/messages`,{
+          text:"```widget\n"+JSON.stringify(card)+"\n```",reply_to_message_id:chatCtx.messageId,work_mode:"work",
         });
         return {material,message_id:response?.message?.id??response?.id,итог:"Карточка документа уже отправлена в этот чат. Открывается оригинал внутри TaskFlow; файл не создавался."};
       })] : []),
     // Файл в чат — настоящим вложением, а не ссылкой (владелец 14.10.2026).
-    ...(ownerContext ? [T("taskflow_chat_attach_file",
+    ...(chatCtx ? [T("taskflow_chat_attach_file",
       "Приложить файл к ответу в этом чате — владелец скачает его из сообщения. Для чтения документа внутри TaskFlow используй taskflow_chat_share_material; этот инструмент — для скачивания файла. Ссылки на файлы не выдумывай. format: md, txt, csv, json, html — содержимое как есть; pdf, docx, odt — content пишешь в Markdown, сервер соберёт документ; xlsx, ods — content в CSV (запятая, первая строка — заголовки). caption — подпись к файлу, по желанию.",
       Type.Object({ file_name: Type.String(), format: Type.String({ enum: [...CHAT_FILE_FORMATS] }), content: Type.String(), caption: S("подпись к файлу") }),
       async (p) => {
@@ -193,8 +189,8 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
                VALUES (?, NULL, NULL, NULL, 'comment', ?, ?, ?, ?, ?)`)
               .run(f.id, roleUserId(role), f.fileName, f.mime, f.size, f.storedName));
         } catch (e) { throw new ToolError(e instanceof UploadRejected ? e.message : String(e)); }
-        const resp = await asRole(role, "POST", `/api/chats/${ownerContext.chatId}/messages`, {
-          text: String(p.caption ?? "").trim(), attachment_ids: [attachmentId], reply_to_message_id: ownerContext.messageId, work_mode: "work",
+        const resp = await asRole(role, "POST", `/api/chats/${chatCtx.chatId}/messages`, {
+          text: String(p.caption ?? "").trim(), attachment_ids: [attachmentId], reply_to_message_id: chatCtx.messageId, work_mode: "work",
         });
         return { файл: fileName, размер_байт: built.body.length, сообщение: resp?.message?.id ?? resp?.id, итог: "Файл уже в чате. В ответе не давай на него ссылок — просто скажи, что приложил." };
       })] : []),
@@ -231,7 +227,7 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           дальше: "id подставлять в taskflow_create_task(project_id=...) и taskflow_doc_write(project_id=...)",
         };
       }),
-    ...(ownerContext ? [T("taskflow_work_start",
+    ...(chatCtx ? [T("taskflow_work_start",
       "Для разовой проверки уже готового результата передай profile=result_review (только критик, без Git) или profile=code_review (критик, а после одобрения результат сам идёт в очередь слияния). steps тогда не передавай. title, description с исходным поручением/материалами и project_id обязательны. Оба шаблона завершаются одним вердиктом без автоматической доработки. Даже при идущей работе это новое предложение с кнопкой владельца, оно не запускается само. Не навязывай проверку обычному разговору. Без profile — прежний режим командной работы. Запустить работу прямо из разговора с владельцем. Когда вы с владельцем решили, что нужно сделать, не уходи из чата и не описывай план словами: вызови этот инструмент — сервер заведёт ОДНУ рабочую карточку разговора (без дочерних), положит в неё шаги по ролям и сам отправит её в чат готовой карточкой с кнопкой «Запустить». По нажатию владельца исполнители начнут работать. Если работа по этому разговору уже идёт, новые шаги добавляются в ту же карточку и стартуют сами — кнопка не нужна. steps: role — ключ роли-исполнителя; result — какой результат от неё нужен; key — короткий ключ шага латиницей; after — ключи шагов, которых этот ждёт. Шаги без after идут параллельно, с after — последовательно. Сам работу исполнителя не делай: ты ведёшь разговор и раздаёшь шаги.",
       Type.Object({
         title: S("Название работы — так будет называться карточка. Для добавления шагов в идущую работу не нужно"),
@@ -245,11 +241,11 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           after: Type.Optional(Type.Array(Type.String(), { description: "ключи шагов, которых этот ждёт" })),
           report: S("Заполняй ТОЛЬКО если владелец в разговоре сам попросил сообщить о выполнении или что-то прислать: что именно исполнитель должен прислать в этот чат, когда закончит (например: «отчёт одним абзацем и ссылку на документ»). Без такой просьбы не указывай — исполнитель сдаёт работу обычным порядком"),
         }))),
-      }), async (p) => proposeWork(role, ownerContext.chatId, p, ownerContext.messageId))] : []),
-    ...(ownerContext ? ([
+      }), async (p) => proposeWork(role, chatCtx.chatId, p, chatCtx.messageId ?? undefined))] : []),
+    ...(chatCtx ? ([
       ["taskflow_review_result","result_review","Разовая проверка готового результата критиком. Git-интеграция не требуется."],
       ["taskflow_review_code","code_review","Разовое ревью готовых изменений кода; только после одобрения подключается архитектор для интеграции."],
-    ] as const).map(([name,profile,description])=>T(name,description+" Не выполняет работу заново и не создаёт автоматических циклов доработки. По умолчанию launch_mode=propose: владелец получает существующую карточку с кнопкой Запустить. Если владелец заранее явно разрешил этот вызов — launch_mode=authorized, authorization_message_id и точная authorization_quote из его сообщения в этом чате; повторный вопрос не нужен. Разрешение критика не расширяй до интеграции. project_id, title и description с исходным поручением и материалами обязательны. Любой вердикт, включая отрицательный и blocked, сохраняется и возвращается в исходный чат, сервер будит запросившую роль; обсуждай его с владельцем, не запускай доработку автоматически. Новая проверка — новое поручение.",Type.Object({title:Type.String(),description:Type.String(),project_id:Type.String(),launch_mode:S("propose | authorized"),authorization_message_id:S("Сообщение владельца с разрешением"),authorization_quote:S("Точная цитата разрешения")}),async p=>proposeWork(role,ownerContext.chatId,{...p,profile},ownerContext.messageId))) : []),
+    ] as const).map(([name,profile,description])=>T(name,description+" Не выполняет работу заново и не создаёт автоматических циклов доработки. По умолчанию launch_mode=propose: владелец получает существующую карточку с кнопкой Запустить. Если владелец заранее явно разрешил этот вызов — launch_mode=authorized, authorization_message_id и точная authorization_quote из его сообщения в этом чате; повторный вопрос не нужен. Разрешение критика не расширяй до интеграции. project_id, title и description с исходным поручением и материалами обязательны. Любой вердикт, включая отрицательный и blocked, сохраняется и возвращается в исходный чат, сервер будит запросившую роль; обсуждай его с владельцем, не запускай доработку автоматически. Новая проверка — новое поручение.",Type.Object({title:Type.String(),description:Type.String(),project_id:Type.String(),launch_mode:S("propose | authorized"),authorization_message_id:S("Сообщение владельца с разрешением"),authorization_quote:S("Точная цитата разрешения")}),async p=>proposeWork(role,chatCtx.chatId,{...p,profile},chatCtx.messageId ?? undefined))) : []),
     T("taskflow_create_task",
       "Завести задачу. Для плана ролей передай preparation и card.subtasks из taskflow_structure_dictation; план сохраняется черновиком без запуска.",
       Type.Object({
@@ -367,15 +363,39 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           })),
         };
       }),
-    ...(ownerContext ? [T("taskflow_slot_restart",
+    ...(chatCtx ? [T("taskflow_slot_restart",
       "По прямой просьбе владельца заменить зависшего исполнителя свежим агентом ТОЙ ЖЕ роли в существующем слоте и запустить. Не добавляет узлы и не меняет связи. Перед вызовом прочитай карточку; укажи точный subtask_id и неизменную роль. Если слотов несколько — уточни у владельца. Не вызывай для обычного сообщения, консультации или простого назначения. Сохраняет историю и передаёт снимок работы в новую сессию.",
-      Type.Object({subtask_id:Type.String(),role:Type.String(),reason:Type.String()}),p=>restartSlotFromOwnerChat(ownerContext.chatId,ownerContext.messageId,p))] : []),
+      Type.Object({subtask_id:Type.String(),role:Type.String(),reason:Type.String()}),p=>restartSlotFromOwnerChat(chatCtx.chatId,chatCtx.messageId ?? "",p))] : []),
+    // Замена СВОЕГО заблокированного слота — только по решению владельца
+    // (владелец 07.11.2026: «критерий — моё решение, а не кто-то там попросит»).
+    // Роль ничего не запрашивает и не подтверждает: сервер сам проверяет, что
+    // в этом чате есть сообщение владельца (или Оркестратора) и что слот —
+    // этой же роли.
+    ...(chatCtx ? [T("taskflow_restart_own_slot",
+      "Перезапустить СВОЙ заблокированный или зависший слот по решению владельца. Вызывай только когда владелец прямо сказал поднять/перезапустить шаг в этом чате: сервер сам сверяет, что сообщение-источник от владельца и что слот принадлежит твоей роли. Чужие слоты не трогает, узлы и связи не меняет, работать за владельца не решает.",
+      Type.Object({subtask_id:Type.String(),reason:Type.String()}), async (p) => {
+        const subtaskId = String(p.subtask_id ?? "").trim();
+        const reason = String(p.reason ?? "").trim();
+        if (!subtaskId) throw new ToolError("subtask_id — свой слот");
+        if (!reason) throw new ToolError("reason — что поднимаем и что делать новому агенту");
+        const итог = await restartOwnSlotByOwnerMessage({
+          chatId: chatCtx.chatId,
+          messageId: chatCtx.messageId ?? "",
+          role,
+          subtaskId,
+          reason,
+        });
+        if (итог.status === "restarted") {
+          return { статус: "перезапущено", итог: "Слот остановлен и запущен свежим агентом той же роли." };
+        }
+        throw new ToolError(итог.reason);
+      })] : []),
     // Уточнение у владельца (26.10.2026). С 27.10.2026 ход ждёт ответа
     // (пауза, как interrupt в AG-UI): вопрос записывается в БД и показывается
     // в чате, в поток хода уходит chats:live:interrupt, ответ владельца
     // возвращается результатом этого же вызова. Ход оборван или пауза вышла
     // по таймауту — ответ поднимет новый ход роли, как раньше.
-    ...(ownerContext ? [T("taskflow_ask_user_question",
+    ...(chatCtx ? [T("taskflow_ask_user_question",
       "Задать владельцу уточняющий вопрос с вариантами ответа. Вопросов — от одного до четырёх, у каждого от двух до четырёх вариантов с коротким пояснением (description). header — короткая метка до 16 символов, label варианта — до 60. Свои варианты не называй «Other», «Type something.», «Next» — свой ответ владелец вводит сам. multiSelect — можно ли выбрать несколько вариантов. Инструмент показывает вопрос владельцу и ждёт его ответа: результат вызова — выбранные варианты, после него продолжай работу с того же места. Вопрос не повторяй. Если в результате статус «open» — владелец не ответил вовремя: заверши ход, ответ придёт отдельным сообщением и сервер поднимет новый ход роли.",
       Type.Object({
         questions: Type.Array(Type.Object({
@@ -397,24 +417,24 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           throw error;
         }
         const roleId = roleUserId(role);
-        const вопрос = createQuestionRow({ chatId: ownerContext.chatId, roleId, payload });
+        const вопрос = createQuestionRow({ chatId: chatCtx.chatId, roleId, payload });
         const messageId = crypto.randomUUID();
         db.prepare(
           `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id)
            VALUES (?, ?, ?, 'chat', ?, ?)`,
-        ).run(messageId, roleId, renderQuestionText(payload), ownerContext.chatId, ownerContext.messageId);
+        ).run(messageId, roleId, renderQuestionText(payload), chatCtx.chatId, chatCtx.messageId);
         db.prepare("UPDATE chat_questions SET message_id = ? WHERE id = ?").run(messageId, вопрос.id);
-        db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(ownerContext.chatId);
-        const участники = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(ownerContext.chatId) as Array<{ member_id: string }>)
+        db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatCtx.chatId);
+        const участники = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(chatCtx.chatId) as Array<{ member_id: string }>)
           .map((row) => row.member_id);
         broadcastToUsers(участники, { type: "chat:new", message: loadChatMessage(messageId) });
         // Вопрос в Telegram уходит кнопками вместе с нумерованным текстом
         // (этап 3 плана): текстовый ответ и ответ номером работают всегда.
         try { captureQuestionToTelegram(вопрос.id); } catch (error) { console.warn("[chatTools] вопрос не ушёл в Telegram:", error); }
         const ждём = waitForAnswer(вопрос.id, { signal });
-        broadcastToUsers(участники, liveInterruptEvent({ chatId: ownerContext.chatId, userId: roleId, questionId: вопрос.id, messageId, payload }));
+        broadcastToUsers(участники, liveInterruptEvent({ chatId: chatCtx.chatId, userId: roleId, questionId: вопрос.id, messageId, payload }));
         const ответ = await ждём;
-        broadcastToUsers(участники, liveResumeEvent({ chatId: ownerContext.chatId, userId: roleId, questionId: вопрос.id, outcome: ответ ? "answered" : "expired" }));
+        broadcastToUsers(участники, liveResumeEvent({ chatId: chatCtx.chatId, userId: roleId, questionId: вопрос.id, outcome: ответ ? "answered" : "expired" }));
         if (ответ) {
           return {
             вопрос: вопрос.id,
@@ -444,3 +464,4 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
       }),
   ];
 }
+

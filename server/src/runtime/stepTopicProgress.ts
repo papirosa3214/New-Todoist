@@ -22,7 +22,7 @@
 
 import crypto from "node:crypto";
 import db from "../db.js";
-import { ensurePlanTopic, isTaskTopicClosed } from "../lib/projectTopics.js";
+import { ensureTaskRoom, isTaskRoomClosed } from "../lib/projectTopics.js";
 import { loadChatMessage } from "../lib/chatMessages.js";
 import { roleTitle } from "../roleRouting.js";
 
@@ -138,16 +138,16 @@ function announce(subtaskId: string, notice: StepNotice, reason?: string | null)
     .prepare("SELECT status FROM task_collaboration_plans WHERE id=?")
     .get(step.collaboration_plan_id) as { status: string } | undefined;
   if (plan?.status !== "approved") return null;
-  if (isTaskTopicClosed(step.task_id)) return null;
+  if (isTaskRoomClosed(step.task_id)) return null;
 
   let topicId = (
     db
-      .prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL")
+      .prepare("SELECT id FROM chats WHERE task_id=? AND room_kind='task'")
       .get(step.task_id) as { id: string } | undefined
   )?.id;
   if (!topicId) {
     try {
-      topicId = ensurePlanTopic(step.task_id) ?? undefined;
+      topicId = ensureTaskRoom(step.task_id) ?? undefined;
     } catch (error) {
       console.warn(`[stepTopicProgress] тему задачи ${step.task_id} создать не удалось:`, error);
     }

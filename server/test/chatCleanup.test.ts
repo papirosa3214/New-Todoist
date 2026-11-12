@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db, { hashApiToken } from "../src/db.js";
-import { ensurePlanTopic } from "../src/lib/projectTopics.js";
+import { ensureTaskRoom } from "../src/lib/projectTopics.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
 const ROLE_TOKEN = "role-builder-cleanup-token";
@@ -75,7 +75,7 @@ describe("Уборка лишних чатов: правило прав", () => 
         payload: { title: "Задача с темой", project_id: project.id },
       })
     ).json().task.id;
-    topicId = ensurePlanTopic(taskId)!;
+    topicId = ensureTaskRoom(taskId)!;
     expect(topicId).toBeTruthy();
     // Роль — участник темы задачи (заводит её план, а не человек).
     db.prepare(
@@ -279,7 +279,7 @@ describe("Уборка лишних чатов: удаление как архи
         payload: { title: "Задача архива", project_id: project.id },
       })
     ).json().task.id;
-    const topicId = ensurePlanTopic(taskId)!;
+    const topicId = ensureTaskRoom(taskId)!;
 
     const res = await app.inject({
       method: "POST",
@@ -318,7 +318,7 @@ describe("Уборка лишних чатов: удаление как архи
         payload: { title: "Задача переоткрытия", project_id: project.id },
       })
     ).json().task.id;
-    const topicId = ensurePlanTopic(taskId)!;
+    const topicId = ensureTaskRoom(taskId)!;
 
     await app.inject({
       method: "POST",
@@ -326,9 +326,9 @@ describe("Уборка лишних чатов: удаление как архи
       headers: ownerAuth,
     });
     // Задача закрылась (тема закрылась вместе с ней) и вернулась в работу.
-    const { setTaskTopicClosed } = await import("../src/lib/projectTopics.js");
-    setTaskTopicClosed(taskId, true);
-    setTaskTopicClosed(taskId, false);
+    const { setTaskRoomClosed } = await import("../src/lib/projectTopics.js");
+    setTaskRoomClosed(taskId, true);
+    setTaskRoomClosed(taskId, false);
 
     const row = db
       .prepare("SELECT closed_at, archived_at FROM chats WHERE id = ?")
@@ -376,7 +376,7 @@ describe("Уборка лишних чатов: отбор кандидатов"
         payload: { title, project_id: project.id },
       })
     ).json().task.id;
-    return { taskId, topicId: ensurePlanTopic(taskId)! };
+    return { taskId, topicId: ensureTaskRoom(taskId)! };
   }
 
   beforeAll(async () => {

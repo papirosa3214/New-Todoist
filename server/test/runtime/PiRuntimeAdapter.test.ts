@@ -359,7 +359,8 @@ describe("PiRuntimeAdapter", () => {
     const config = JSON.parse(fs.readFileSync(file, "utf8"));
     const env = config.mcpServers.taskflow.env;
     expect(env.TASKFLOW_MCP_ROLE).toBe("architect");
-    expect(env.TASKFLOW_MCP_TOOLS).toContain("taskflow_claim");
+    // Пустой список — полный набор (владелец 07.11.2026).
+    expect(env.TASKFLOW_MCP_TOOLS).toBe("");
     expect(resolveUserIdFromToken(app, env.TASKFLOW_TOKEN)).toBe("role_architect");
     expect(fs.statSync(file).mode & 0o077).toBe(0);
 

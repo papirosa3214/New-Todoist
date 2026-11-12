@@ -27,24 +27,25 @@ export type SlotLabel = { subtask_id: string; role_id: string; label: string; st
 export function slotLabels(taskId: string): SlotLabel[] {
   const rows = db
     .prepare(
-      `SELECT s.id, n.role_key, s.agent_state FROM subtasks s
+      `SELECT s.id, n.role_key, s.agent_state, s.slot_number FROM subtasks s
          JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
          JOIN task_collaboration_plans p ON p.id = n.plan_id
         WHERE s.task_id = ? AND p.status = 'approved' AND n.skipped_at IS NULL
         ORDER BY s.position, s.rowid`,
     )
-    .all(taskId) as Array<{ id: string; role_key: string; agent_state: string | null }>;
+    .all(taskId) as Array<{ id: string; role_key: string; agent_state: string | null; slot_number: number | null }>;
   const total = new Map<string, number>();
   for (const row of rows) total.set(row.role_key, (total.get(row.role_key) ?? 0) + 1);
-  const seen = new Map<string, number>();
-  return rows.map((row) => {
-    const index = (seen.get(row.role_key) ?? 0) + 1;
-    seen.set(row.role_key, index);
+  return rows.map((row, index) => {
     const title = roleTitle(row.role_key);
+    // Номер хранится в слоте (`subtasks.slot_number`) и не зависит от того,
+    // какое место он занимает сейчас. Старые строки без номера — порядковый
+    // номер как запасной вариант, пока миграция их не заполнила.
+    const number = row.slot_number ?? index + 1;
     return {
       subtask_id: row.id,
       role_id: roleUserId(row.role_key),
-      label: (total.get(row.role_key) ?? 0) > 1 ? `${title} ${index}` : title,
+      label: (total.get(row.role_key) ?? 0) > 1 ? `${title} ${number}` : title,
       state: row.agent_state,
     };
   });

@@ -663,7 +663,6 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
         // удаляем (он уйдёт ниже) — чистим явно, чтобы не зависеть от
         // порядка каскадов в SQLite.
         db.prepare("DELETE FROM memories WHERE project_id = ?").run(req.params.id);
-        db.prepare("DELETE FROM chats WHERE project_id = ?").run(req.params.id);
 
         if (withDocs && project.notes_folder_id) {
           // Документы стираются явным шагом: сначала заметки, потом папка.

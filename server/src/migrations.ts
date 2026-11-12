@@ -1,3 +1,4 @@
+import { reindexAllTopics, topicsOf } from "./lib/memoryTopics.js";
 import crypto from "node:crypto";
 import { BUDGET_CASE_SCHEMA } from "./runtime/chatBudgetCases.js";
 import { ROLE_TOOL_REQUEST_SCHEMA } from "./routes/role-tool-requests.js";
@@ -5883,6 +5884,631 @@ const migrations: Migration[] = [
     up: () => {
       const settings = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='server_settings'").get();
       if (settings) db.prepare("UPDATE server_settings SET value = ?, updated_at = datetime('now'), updated_by = NULL WHERE key = 'auto_merge_mode' AND value = ?").run(JSON.stringify("on"), JSON.stringify("pr"));
+    },
+  },
+
+  // 08.11.2026, владелец (спецификация
+  // `docs/2026-11-08-role-slot-chat-branches-spec.md`, §1–3): «чатов в рамках
+  // проектов просто не должно существовать». Комната задачи перестаёт быть
+  // темой проектного чата и становится групповой комнатой задачи — одна на
+  // задачу, независимо от проекта, и видна топиком в личной комнате каждой
+  // роли-участника. Тот же чат, а не копия: ID и переписка одни.
+  //
+  // Что делает миграция:
+  //  1. разрешает `room_kind='task'` (пересборка `chats`: CHECK-список в
+  //     SQLite не меняется через ALTER, а подделывать признак под другой
+  //     room_kind значило бы врать в схеме — так уже было с 053);
+  //  2. переводит прежние темы задач в комнаты задач: без project_id, без
+  //     parent_chat_id, уникальные на задачу;
+  //  3. заводит `chat_room_topics` — где какая комната видна топиком;
+  //  4. отвязывает от проекта ручную переписку, жившую внутри проектной группы
+  //     (её историю не теряем — она становится обычным групповым чатом);
+  //  5. удаляет сами проектные чаты. Переписка комнат задач при этом остаётся
+  //     полностью: комнаты к этому моменту уже отвязаны от групп.
+  {
+    id: "202_task_rooms",
+    description:
+      "Групповая комната задачи вместо темы проектного чата: chats.room_kind='task', " +
+      "без project_id/parent_chat_id, UNIQUE(task_id); таблица chat_room_topics " +
+      "(комната задачи топиком в личной комнате роли); проектные чаты удалены",
+    // Пересборка таблицы держит свою транзакцию: обёртка прогона сломала бы её.
+    noTransaction: true,
+    up: () => {
+      const count = (sql: string) =>
+        (db.prepare(sql).get() as { n: number }).n;
+      const roomsBefore = count(
+        "SELECT COUNT(*) AS n FROM chats WHERE task_id IS NOT NULL AND parent_chat_id IS NOT NULL",
+      );
+      const messagesBefore = count("SELECT COUNT(*) AS n FROM chat_messages");
+
+      // 1. CHECK-список room_kind: пересборка таблицы с сохранением строк.
+      const ddl = (
+        db
+          .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chats'")
+          .get() as { sql: string } | undefined
+      )?.sql;
+      if (!ddl || !ddl.includes("'handoff'")) throw new Error("202: схема chats не найдена или неожиданна");
+      if (!ddl.includes("'task'")) {
+        const columns = (
+          db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>
+        ).map((column) => column.name);
+        const indexes = (
+          db
+            .prepare(
+              "SELECT sql FROM sqlite_master WHERE tbl_name='chats' AND type='index' AND sql IS NOT NULL",
+            )
+            .all() as Array<{ sql: string }>
+        ).map((row) => row.sql);
+        const nextDdl = ddl
+          .replace("'handoff')", "'handoff','task')")
+          .replace(/CREATE TABLE\s+"?chats"?/i, 'CREATE TABLE "chats_new"');
+        if (!nextDdl.includes("'task'") || !nextDdl.includes('CREATE TABLE "chats_new"'))
+          throw new Error("202: небезопасная пересборка chats");
+        const fkBefore = (db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length;
+        db.pragma("foreign_keys = OFF");
+        try {
+          db.exec("BEGIN");
+          db.exec(nextDdl);
+          db.prepare(
+            `INSERT INTO chats_new (${columns.join(",")}) SELECT ${columns.join(",")} FROM chats`,
+          ).run();
+          db.exec("DROP TABLE chats");
+          db.exec("ALTER TABLE chats_new RENAME TO chats");
+          for (const sql of indexes) db.exec(sql);
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        } finally {
+          db.pragma("foreign_keys = ON");
+        }
+        const rowsAfter = count("SELECT COUNT(*) AS n FROM chats");
+        const fkAfter = (db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length;
+        if (fkAfter > fkBefore) throw new Error("202: пересборка chats дала FK-нарушения");
+        if (rowsAfter < 1) throw new Error("202: пересборка chats потеряла строки");
+      }
+
+      // 2. Ручная переписка внутри проектной группы — не тема задачи. Историю
+      //    сохраняем: чат перестаёт быть частью проекта и живёт как обычный
+      //    групповой. Удалять чужую переписку миграция не вправе.
+      db.prepare(
+        `UPDATE chats SET project_id = NULL, parent_chat_id = NULL
+          WHERE project_id IS NOT NULL AND parent_chat_id IS NOT NULL AND task_id IS NULL`,
+      ).run();
+
+      // 3. Прежние темы задач → комнаты задач.
+      db.exec("DROP TRIGGER IF EXISTS project_topic_insert");
+      db.prepare(
+        `UPDATE chats SET room_kind = 'task', parent_chat_id = NULL, project_id = NULL
+          WHERE task_id IS NOT NULL AND parent_chat_id IS NOT NULL`,
+      ).run();
+      db.exec(`
+        DROP INDEX IF EXISTS idx_task_topic;
+        DROP INDEX IF EXISTS idx_project_chat;
+        DROP INDEX IF EXISTS idx_chat_topics;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_room ON chats(task_id)
+          WHERE task_id IS NOT NULL AND room_kind = 'task';
+        CREATE TABLE IF NOT EXISTS chat_room_topics (
+          personal_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          room_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (personal_chat_id, room_chat_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_room_topics_room ON chat_room_topics(room_chat_id);
+        CREATE INDEX IF NOT EXISTS idx_chats_task ON chats(task_id);
+      `);
+
+      // 4. Топики в личных комнатах участников: у каждой роли-участницы
+      //    комнаты задачи — строка в своей личной комнате.
+      const rooms = db
+        .prepare("SELECT id FROM chats WHERE room_kind='task'")
+        .all() as Array<{ id: string }>;
+      const roleMembers = db.prepare(
+        `SELECT DISTINCT cm.member_id FROM chat_members cm JOIN users u ON u.id = cm.member_id
+          WHERE cm.chat_id = ? AND u.type='ai' AND u.role_key IS NOT NULL`,
+      );
+      const personalOf = db.prepare(
+        `SELECT c.id FROM chats c JOIN chat_members m ON m.chat_id = c.id
+          WHERE c.room_kind='personal' AND m.member_id = ?
+          ORDER BY c.created_at, c.id LIMIT 1`,
+      );
+      const link = db.prepare(
+        `INSERT OR IGNORE INTO chat_room_topics (personal_chat_id, room_chat_id, role_id)
+         VALUES (?, ?, ?)`,
+      );
+      for (const room of rooms) {
+        for (const member of roleMembers.all(room.id) as Array<{ member_id: string }>) {
+          const personal = personalOf.get(member.member_id) as { id: string } | undefined;
+          if (personal) link.run(personal.id, room.id, member.member_id);
+        }
+      }
+
+      // 5. Проектные чаты. Детей у них уже нет (шаг 3), поэтому удаление не
+      //    задевает комнаты задач; собственная переписка группы уходит вместе
+      //    с ней — владелец распорядился проектных чатов не иметь.
+      const doomed = db
+        .prepare(
+          `SELECT id FROM chats WHERE project_id IS NOT NULL AND parent_chat_id IS NULL
+             AND NOT EXISTS (SELECT 1 FROM chats child WHERE child.parent_chat_id = chats.id)`,
+        )
+        .all() as Array<{ id: string }>;
+      for (const chat of doomed) db.prepare("DELETE FROM chats WHERE id = ?").run(chat.id);
+
+      // 6. Проверки: ни одна комната задачи не потеряна, переписка не выросла.
+      const roomsAfter = count("SELECT COUNT(*) AS n FROM chats WHERE room_kind='task'");
+      if (roomsAfter !== roomsBefore)
+        throw new Error(`202: комнат задач было ${roomsBefore}, стало ${roomsAfter}`);
+      const messagesAfter = count("SELECT COUNT(*) AS n FROM chat_messages");
+      if (messagesAfter > messagesBefore)
+        throw new Error("202: переписка не должна расти от миграции");
+      const leftovers = count(
+        "SELECT COUNT(*) AS n FROM chats WHERE project_id IS NOT NULL AND parent_chat_id IS NULL",
+      );
+      if (leftovers !== 0) throw new Error("202: проектные чаты остались");
+    },
+  },
+
+  // 08.11.2026 (спецификация `docs/2026-11-08-role-slot-chat-branches-spec.md`,
+  // §1–2, §4–6): дочерние сессии личной комнаты роли. Личная комната —
+  // родитель, работа по слоту — её ребёнок; разговор идёт в общей комнате
+  // задачи (`talk_chat_id`). Карточка назначения живёт здесь, а не в
+  // `chat_messages`: отображаемая карточка не должна попадать во вход модели
+  // ни через историю, ни через выжимку, ни через кэш (§5).
+  {
+    id: "203_chat_child_sessions",
+    description:
+      "Дочерние сессии личной комнаты роли: chat_child_sessions(kind, parent_chat_id, " +
+      "talk_chat_id, role_id, task_id, slot_id, attempt_no, context_generation, status); " +
+      "UNIQUE(kind, slot_id) — повтор назначения не создаёт вторую связь",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_child_sessions (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('branch', 'assignment')),
+          parent_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          talk_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          slot_id TEXT REFERENCES subtasks(id) ON DELETE CASCADE,
+          attempt_no INTEGER NOT NULL DEFAULT 1,
+          context_generation INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'assigned'
+            CHECK (status IN ('assigned', 'delivered', 'answered', 'waiting', 'failed')),
+          title TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (kind, slot_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_child_parent ON chat_child_sessions(parent_chat_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_child_talk ON chat_child_sessions(talk_chat_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_child_task ON chat_child_sessions(task_id);
+      `);
+    },
+  },
+
+  // 08.11.2026 (спецификация `docs/2026-11-08-role-slot-chat-branches-spec.md`,
+  // §6): номер слота закрепляется за слотом и НЕ выводится из текущего
+  // порядкового места. Раньше «Разработчик 1 / 2» считались по `position` и
+  // `rowid` в момент чтения: добавили слот раньше — и подписи в старых
+  // сообщениях поехали, а упоминание «@Разработчик 2» стало указывать на
+  // другой слот.
+  {
+    id: "204_subtask_slot_number",
+    description:
+      "subtasks.slot_number — постоянный номер слота внутри роли (назначается при " +
+      "первом появлении, дальше не меняется); триггер выдачи номера и заполнение старых строк",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(subtasks)").all() as Array<{ name: string }>).map((c) => c.name),
+      );
+      if (!cols.has("slot_number")) db.exec("ALTER TABLE subtasks ADD COLUMN slot_number INTEGER");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_subtasks_slot_number ON subtasks(task_id, slot_number)");
+      // Заполнение уже существующих слотов: один раз, по текущему порядку
+      // плана. Дальше номера живут своей жизнью и не пересчитываются.
+      const rows = db
+        .prepare(
+          `SELECT s.id, s.task_id, COALESCE(n.role_key, '') AS role_key
+             FROM subtasks s
+             LEFT JOIN task_collaboration_plan_nodes n
+               ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+            WHERE s.slot_number IS NULL
+            ORDER BY s.task_id, role_key, s.position, s.rowid`,
+        )
+        .all() as Array<{ id: string; task_id: string; role_key: string }>;
+      const counters = new Map<string, number>();
+      const assign = db.prepare("UPDATE subtasks SET slot_number = ? WHERE id = ?");
+      for (const row of rows) {
+        const key = `${row.task_id}|${row.role_key}`;
+        const next = (counters.get(key) ?? 0) + 1;
+        counters.set(key, next);
+        assign.run(next, row.id);
+      }
+      // Новый слот получает следующий свободный номер своей роли и задачи.
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS subtask_slot_number_insert
+        AFTER INSERT ON subtasks
+        WHEN NEW.slot_number IS NULL AND NEW.collaboration_plan_id IS NOT NULL AND NEW.plan_node_key IS NOT NULL
+        BEGIN
+          UPDATE subtasks SET slot_number = COALESCE((
+            SELECT MAX(s.slot_number) FROM subtasks s
+              JOIN task_collaboration_plan_nodes n2
+                ON n2.plan_id = s.collaboration_plan_id AND n2.slot_key = s.plan_node_key
+             WHERE s.task_id = NEW.task_id
+               AND n2.role_key = (SELECT role_key FROM task_collaboration_plan_nodes
+                                   WHERE plan_id = NEW.collaboration_plan_id AND slot_key = NEW.plan_node_key)
+          ), 0) + 1
+          WHERE id = NEW.id;
+        END;
+      `);
+    },
+  },
+
+  {
+    id: "205_slot_handoffs",
+    description:
+      "slot_handoffs — выжимка передачи работы по границе комнаты задачи: предел считается " +
+      "от окна модели, повтор с той же границей отдаёт тот же текст, сбой сжатия фиксируется с причиной",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS slot_handoffs (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          boundary_message_id TEXT,
+          window_tokens INTEGER,
+          budget_chars INTEGER NOT NULL,
+          digest TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('ready', 'failed')),
+          reason TEXT,
+          evidence TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec("DROP INDEX IF EXISTS idx_slot_handoffs_boundary");
+      db.exec(
+        "CREATE UNIQUE INDEX idx_slot_handoffs_boundary ON slot_handoffs(task_id, boundary_message_id)",
+      );
+      db.exec("CREATE INDEX IF NOT EXISTS idx_slot_handoffs_task ON slot_handoffs(task_id, created_at)");
+    },
+  },
+
+  {
+    id: "206_child_session_archived",
+    description:
+      "chat_child_sessions.status — состояние 'archived' для рабочих дочерних связей, " +
+      "которые стали неактивными вместе с окончательным закрытием задачи (спецификация §8)",
+    up: () => {
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.exec(`
+        CREATE TABLE chat_child_sessions_new (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('branch', 'assignment')),
+          parent_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          talk_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          slot_id TEXT REFERENCES subtasks(id) ON DELETE CASCADE,
+          attempt_no INTEGER NOT NULL DEFAULT 1,
+          context_generation INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'assigned'
+            CHECK (status IN ('assigned', 'delivered', 'answered', 'waiting', 'failed', 'archived')),
+          title TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (kind, slot_id)
+        )
+      `);
+      db.exec(
+        `INSERT INTO chat_child_sessions_new
+           (id, kind, parent_chat_id, talk_chat_id, role_id, task_id, slot_id, attempt_no,
+            context_generation, status, title, created_at, updated_at)
+         SELECT id, kind, parent_chat_id, talk_chat_id, role_id, task_id, slot_id, attempt_no,
+                context_generation, status, title, created_at, updated_at
+           FROM chat_child_sessions`,
+      );
+      db.exec("DROP TABLE chat_child_sessions");
+      db.exec("ALTER TABLE chat_child_sessions_new RENAME TO chat_child_sessions");
+      db.exec("CREATE INDEX idx_chat_child_parent ON chat_child_sessions(parent_chat_id)");
+      db.exec("CREATE INDEX idx_chat_child_talk ON chat_child_sessions(talk_chat_id)");
+      db.exec("CREATE INDEX idx_chat_child_task ON chat_child_sessions(task_id)");
+      db.exec("PRAGMA foreign_keys = ON");
+    },
+  },
+
+  {
+    id: "207_archive_old_task_rooms",
+    description:
+      "Разово: комнаты задач, которые уже закрыты (или чья задача выполнена), уходят в архив — " +
+      "до появления архива закрытие ставило только closed_at, и такие комнаты продолжали получать " +
+      "фоновую доставку. Рассылки нет: это приведение истории к новому контракту (спецификация §8)",
+    up: () => {
+      const before = db
+        .prepare(
+          `SELECT count(*) AS c FROM chats
+            WHERE room_kind = 'task' AND archived_at IS NULL
+              AND (closed_at IS NOT NULL OR task_id IN (SELECT id FROM tasks WHERE status = 'completed'))`,
+        )
+        .get() as { c: number };
+      if (!before.c) return;
+
+      db.transaction(() => {
+        db.exec(`
+          UPDATE chats
+             SET archived_at = datetime('now'),
+                 closed_at = COALESCE(closed_at, datetime('now')),
+                 updated_at = datetime('now')
+           WHERE room_kind = 'task' AND archived_at IS NULL
+             AND (closed_at IS NOT NULL OR task_id IN (SELECT id FROM tasks WHERE status = 'completed'))
+        `);
+        db.exec(`
+          UPDATE chat_message_queue
+             SET status = 'superseded', finished_at = datetime('now')
+           WHERE status IN ('pending', 'picked')
+             AND chat_id IN (SELECT id FROM chats WHERE room_kind = 'task' AND archived_at IS NOT NULL)
+        `);
+        db.exec(`
+          UPDATE chat_child_sessions
+             SET status = 'archived', updated_at = datetime('now')
+           WHERE status != 'archived'
+             AND talk_chat_id IN (SELECT id FROM chats WHERE room_kind = 'task' AND archived_at IS NOT NULL)
+        `);
+      })();
+    },
+  },
+
+  {
+    id: "208_memory_mnemosyne",
+    description:
+      "Память ролей переезжает в Mnemosyne (владелец 08.11.2026: «чтобы всё записывалось в Mnemosyne и пользовались им»): " +
+      "таблица memory_mnemo_ids связывает локальную запись с частями, лежащими в банке Mnemosyne. " +
+      "Тело записи живёт в банке, локальная строка остаётся кэшем для списка памяти в приложении",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_mnemo_ids (
+          memory_id TEXT NOT NULL,
+          bank TEXT NOT NULL,
+          mnemo_id TEXT NOT NULL,
+          chunk_no INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (bank, mnemo_id)
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_mnemo_memory ON memory_mnemo_ids(memory_id);`);
+    },
+  },
+
+  {
+    id: "209_memory_topics",
+    description:
+      "Темы памяти для детерминированной подсказки (владелец 08.11.2026: «темы были, иди ищи там ещё»): " +
+      "memory_topics — нормализованные слова каждой записи, memory_hint_log — журнал выданных подсказок. " +
+      "Темы считаются без модели, поэтому совпадение с записанным буквальное",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_topics (
+          topic TEXT NOT NULL,
+          memory_id TEXT NOT NULL,
+          PRIMARY KEY (topic, memory_id)
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_topics_memory ON memory_topics(memory_id);`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_hint_log (
+          id TEXT NOT NULL PRIMARY KEY,
+          role_key TEXT,
+          chat_id TEXT,
+          task_id TEXT,
+          query_text TEXT NOT NULL,
+          matched_topics TEXT NOT NULL,
+          hit_count INTEGER NOT NULL,
+          memory_ids TEXT NOT NULL,
+          shown_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_hint_log_shown ON memory_hint_log(shown_at);`);
+      const rows = db
+        .prepare(`SELECT id, title, text FROM memories WHERE kind <> 'file'`)
+        .all() as Array<{ id: string; title: string | null; text: string }>;
+      const del = db.prepare(`DELETE FROM memory_topics WHERE memory_id = ?`);
+      const ins = db.prepare(`INSERT OR IGNORE INTO memory_topics (topic, memory_id) VALUES (?, ?)`);
+      for (const row of rows) {
+        del.run(row.id);
+        for (const topic of topicsOf(`${row.title ?? ""} ${row.text}`.slice(0, 4000))) ins.run(topic, row.id);
+      }
+    },
+  },
+
+  {
+    id: "210_memory_topic_weights",
+    description:
+      "Вес темы: слово из заголовка записи весит вдвое — подсказка должна звать ту запись, " +
+      "которая про эту тему, а не ту, где слово случайно встретилось. Индекс тем пересчитывается тем же кодом",
+    up: () => {
+      const columns = db.prepare(`PRAGMA table_info(memory_topics)`).all() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === "weight")) {
+        db.exec(`ALTER TABLE memory_topics ADD COLUMN weight REAL NOT NULL DEFAULT 1;`);
+      }
+      const count = reindexAllTopics();
+      console.log(`[210] темы пересчитаны: ${count} записей`);
+    },
+  },
+
+  {
+    // Очередь забывания: удаление и правка записи не теряют тело в Mnemosyne,
+    // если служба в этот момент недоступна.
+    id: "211_memory_forget_queue",
+    description: "Очередь забывания частей записи в банках Mnemosyne",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_forget_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          bank TEXT NOT NULL,
+          mnemo_id TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_forget_once
+          ON memory_forget_queue(bank, mnemo_id);
+      `);
+    },
+  },
+
+  {
+    // Журнал обращений к памяти (владелец 08.11.2026: «хочу видеть, кто
+    // туда обращается и сколько раз»). Пишется на каждый recall роли и на
+    // каждый ручной поиск из приложения. Тело записи здесь не хранится —
+    // только вопрос, кто спросил и сколько нашлось.
+    id: "212_memory_access_log",
+    description: "Журнал обращений к памяти: кто, о чём и сколько нашлось",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_access_log (
+          id TEXT PRIMARY KEY,
+          role_key TEXT,
+          chat_id TEXT,
+          query TEXT NOT NULL,
+          hits INTEGER NOT NULL DEFAULT 0,
+          kind TEXT NOT NULL DEFAULT 'recall',
+          at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_access_role
+          ON memory_access_log(role_key, at);
+        CREATE INDEX IF NOT EXISTS idx_memory_access_at
+          ON memory_access_log(at);
+      `);
+    },
+  },
+
+  {
+    // Реестр датасетов базы знаний (09.11.2026, владелец: «нужно как-то базу
+    // знаний нашу с TaskFlow сшить»). Здесь то, чего в RAGFlow нет: включён ли
+    // датасет в TaskFlow, в каком он разделе-тематике, как он назван в
+    // приложении и каким ролям выдан доступ. Сам список датасетов по-прежнему
+    // берётся из RAGFlow — он источник правды о существовании и размерах.
+    //
+    // «Память — заметки» заводится выключенной: её наполняет синк Mnemosyne,
+    // это память агентов, а не база знаний приложения.
+    id: "213_knowledge_registry",
+    description:
+      "Реестр датасетов базы знаний: разделы-тематики, включение в TaskFlow, доступы ролям",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_dataset_sections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          position INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS knowledge_datasets (
+          dataset_id TEXT PRIMARY KEY,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          section_id INTEGER,
+          title TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS knowledge_dataset_roles (
+          dataset_id TEXT NOT NULL,
+          role_key TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (dataset_id, role_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_datasets_section
+          ON knowledge_datasets(section_id);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_dataset_roles_role
+          ON knowledge_dataset_roles(role_key);
+        INSERT OR IGNORE INTO knowledge_datasets (dataset_id, enabled)
+          VALUES ('aad90ec0901f11f1be69a9ef96f0a9d6', 0);
+      `);
+    },
+  },
+  {
+    id: "214_knowledge_index_jobs",
+    description:
+      "Очередь индексации заметок в базу знаний: сохранённая заметка уезжает в RAGFlow через секунды, а не суточным прогоном",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_index_jobs (
+          note_id TEXT PRIMARY KEY,
+          dataset_id TEXT,
+          queued_at TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'queued',
+          error TEXT,
+          ragflow_doc_id TEXT,
+          finished_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_index_jobs_due
+          ON knowledge_index_jobs(status, queued_at);
+      `);
+    },
+  },
+  {
+    id: "215_knowledge_uploads",
+    description:
+      "Загруженные вручную документы базы знаний: кто залил — тот и удаляет",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_uploads (
+          ragflow_doc_id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          uploaded_by TEXT,
+          uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_uploads_dataset
+          ON knowledge_uploads(dataset_id, uploaded_at);
+      `);
+    },
+  },
+
+  // Ветку роли убирают и с хостов (GitHub, Gitea), не только локально:
+  // до 10.11.2026 `cleanupWorktree` удалял ветку в живом дереве, а на хостах
+  // `roles/*` копились сотнями. Отметка нужна обходу
+  // `sweepClosedRoleBranches` (runtime/worktreeMergeQueue.ts), чтобы не
+  // ходить по сети к одной и той же карточке каждый проход.
+  {
+    id: "216_task_host_branch_cleared",
+    description:
+      "Ветка роли убрана с хостов после слияния: tasks.host_branch_cleared_at " +
+      "(владелец 10.11.2026 — сервер сам закрывает ветку, когда роль закончила работу)",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!cols.has("host_branch_cleared_at")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN host_branch_cleared_at TEXT");
+      }
+    },
+  },
+  {
+    id: "217_role_rule_overrides",
+    description: "Реестр правил: переопределения владельца (включить/выключить, адресаты, рекомендация) и пояснения простым языком",
+    up: () => {
+      db.exec(`CREATE TABLE IF NOT EXISTS role_rule_overrides (
+        id TEXT PRIMARY KEY, active INTEGER NULL, roles_json TEXT NULL,
+        recommended INTEGER NOT NULL DEFAULT 0, updated_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS role_rule_explanations (
+        id TEXT PRIMARY KEY, text_hash TEXT, explanation TEXT, created_at TEXT
+      )`);
+    },
+  },
+  {
+    id: "218_chat_queued_messages",
+    description: "Отложенные сообщения владельца: пока роль отвечает, сообщение ждёт в очереди и уходит после хода",
+    up: () => {
+      db.exec(`CREATE TABLE IF NOT EXISTS chat_queued_messages (
+        message_id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        body_json TEXT NOT NULL,
+        idempotency_key TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_queued_chat ON chat_queued_messages(chat_id)`);
     },
   },
 

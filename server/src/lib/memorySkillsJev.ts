@@ -4,6 +4,7 @@
 // прежнее поведение. JEV только убирает лишнее, ничего не добавляет сам.
 import { skippedObservation, updateObservation } from "./contextObservability.js";
 import { jevSkipReason, evaluateJev, jevScenario, type JevQuestion } from "./jev.js";
+import { getEmbeddings } from "./embeddingClient.js";
 
 /** Память подбирается на каждом ходу роли — дольше ждать нельзя. */
 const MEMORY_TIMEOUT_MS = 3000;
@@ -11,6 +12,81 @@ const MEMORY_TIMEOUT_MS = 3000;
 export const MEMORY_CANDIDATES = 15;
 /** Меньше навыков — выбирать не из чего, JEV не зовём. */
 export const SKILLS_MIN_TO_SELECT = 7;
+
+
+const YOUTUBE_SKILL = "youtube-research";
+const YOUTUBE_REQUEST = /(?:youtu\.be|(?:www\.)?youtube\.com|youtube\s+(?:видео|ролик)|(?:видео|ролик)\s+(?:с|из)\s*youtube)/i;
+const BGE_YOUTUBE_MIN_SIMILARITY = 0.42;
+
+function cosineSimilarity(left: number[], right: number[]): number {
+  if (left.length !== right.length || left.length === 0) return -1;
+  let dot = 0; let leftNorm = 0; let rightNorm = 0;
+  for (let i = 0; i < left.length; i++) {
+    dot += left[i] * right[i]; leftNorm += left[i] * left[i]; rightNorm += right[i] * right[i];
+  }
+  return leftNorm && rightNorm ? dot / Math.sqrt(leftNorm * rightNorm) : -1;
+}
+
+/** Local semantic reserve for the one explicit YouTube skill.  It only runs
+ * after an observable YouTube trigger, so BGE cannot silently narrow unrelated
+ * skill packs when JEV is unavailable. */
+async function selectYoutubeSkillByBge(
+  work: { title: string; description: string | null; step?: string | null },
+  skills: Array<{ name: string; description: string }>,
+  requiredNames: readonly string[],
+): Promise<Set<string> | null> {
+  const youtube = skills.find((skill) => skill.name === YOUTUBE_SKILL);
+  const state = [work.title, work.description, work.step].filter(Boolean).join("\n");
+  if (!youtube || !YOUTUBE_REQUEST.test(state)) return null;
+  try {
+    const out = await getEmbeddings(
+      ["Запрос о видео YouTube:\n" + state, youtube.description],
+      { purpose: "skill_youtube_fallback", maxBatch: 2 },
+    );
+    const vectors = out.embeddings;
+    if (!Array.isArray(vectors) || !Array.isArray(vectors[0]) || !Array.isArray(vectors[1])) return null;
+    if (cosineSimilarity(vectors[0] as number[], vectors[1] as number[]) < BGE_YOUTUBE_MIN_SIMILARITY) return null;
+    return new Set([...requiredNames, YOUTUBE_SKILL]);
+  } catch {
+    // BGE is a reserve, never a new reason to deprive the role of all skills.
+    return null;
+  }
+}
+
+
+async function rankByBge(query: string, candidates: string[], purpose: string): Promise<number[] | null> {
+  if (!query.trim() || !candidates.length) return null;
+  try {
+    const out = await getEmbeddings([query, ...candidates], { purpose, maxBatch: candidates.length + 1 });
+    const vectors = out.embeddings;
+    if (!Array.isArray(vectors) || !Array.isArray(vectors[0])) return null;
+    const queryVector = vectors[0] as number[];
+    const scores = (vectors as number[][]).slice(1).map((vector) => cosineSimilarity(queryVector, vector));
+    return scores.every(Number.isFinite) ? scores : null;
+  } catch { return null; }
+}
+
+async function selectSkillsByBge(
+  work: { title: string; description: string | null; step?: string | null },
+  skills: Array<{ name: string; description: string }>, requiredNames: readonly string[],
+): Promise<Set<string> | null> {
+  const query = [work.title, work.description, work.step].filter(Boolean).join("\n");
+  const scores = await rankByBge(query, skills.map((skill) => skill.name + ": " + skill.description), "skill_selection_bge");
+  if (!scores) return null;
+  const keep = new Set(requiredNames);
+  scores.forEach((score, index) => { if (score >= 0.42) keep.add(skills[index].name); });
+  return keep.size ? keep : null;
+}
+
+async function filterMemoryByBge<T extends { text: string; title: string | null; pinned: boolean }>(query: string, items: T[]): Promise<T[] | null> {
+  const candidates = items.filter((item) => !item.pinned).slice(0, MEMORY_CANDIDATES);
+  const scores = await rankByBge(query, candidates.map((item) => (item.title ? item.title + "\n" : "") + item.text), "memory_recall_bge");
+  if (!scores || Math.max(...scores) < 0.42) return null;
+  const ranked = candidates.map((item, index) => ({ item, score: scores[index] })).sort((a,b) => b.score - a.score).map((entry) => entry.item);
+  const pinned = items.filter((item) => item.pinned);
+  const rest = items.filter((item) => !item.pinned && !candidates.includes(item));
+  return [...pinned, ...ranked, ...rest];
+}
 
 /**
  * Отбор памяти для роли. На вход — найденные по сходству записи (уже
@@ -21,8 +97,11 @@ export const SKILLS_MIN_TO_SELECT = 7;
 export async function filterMemoryByJev<
   T extends { text: string; title: string | null; pinned: boolean },
 >(query: string, items: T[]): Promise<T[] | null> {
+  if (!query.trim()) {skippedObservation("memoryRecall","empty_query");return null;}
+  const byBge = await filterMemoryByBge(query, items);
+  if (byBge) return byBge;
   const cfg = jevScenario("memoryRecall");
-  if (!cfg || !query.trim()) {skippedObservation("memoryRecall",!cfg?jevSkipReason("memoryRecall"):"empty_query");return null;}
+  if (!cfg) {skippedObservation("memoryRecall",jevSkipReason("memoryRecall"));return null;}
   const candidates = items.filter((i) => !i.pinned).slice(0, MEMORY_CANDIDATES);
   if (candidates.length === 0) {skippedObservation("memoryRecall","no_candidates");return null;}
 
@@ -111,8 +190,14 @@ export async function selectSkillsByJev(
   if (skills.length && skills.every(s => requiredNames.includes(s.name))) {
     skippedObservation("skills","required_skills");return null;
   }
+  const byBge = await selectSkillsByBge(work, skills, requiredNames);
+  if (byBge) return byBge;
   const cfg = jevScenario("skills");
-  if (!cfg || skills.length < SKILLS_MIN_TO_SELECT) {skippedObservation("skills",!cfg?jevSkipReason("skills"):"too_few_skills");return null;}
+  if (!cfg) {
+    skippedObservation("skills", jevSkipReason("skills"));
+    return selectYoutubeSkillByBge(work, skills, requiredNames);
+  }
+  if (skills.length < SKILLS_MIN_TO_SELECT) {skippedObservation("skills","too_few_skills");return null;}
   const questions: Record<string, JevQuestion> = {};
   skills.forEach((s, i) => {
     questions[`s${i}`] = {
@@ -132,7 +217,7 @@ export async function selectSkillsByJev(
     questions,
     {scenario:"skills"},
   );
-  if (!result) return null;
+  if (!result) return selectYoutubeSkillByBge(work, skills, requiredNames);
   const keep = new Set(skills.filter(s => requiredNames.includes(s.name)).map(s => s.name));
   skills.forEach((s, i) => {
     const a = result.answers[`s${i}`];

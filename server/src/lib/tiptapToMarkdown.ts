@@ -79,6 +79,7 @@ function applyMarks(text: string, marks: TiptapMark[] | undefined): string {
   if (has("bold")) out = `**${out}**`;
   if (has("italic")) out = `*${out}*`;
   if (has("strike")) out = `~~${out}~~`;
+  if (has("underline")) out = `<u>${out}</u>`;
   // ==выделение== — синтаксис Obsidian; в «чистом» markdown его нет, но
   // цель экспорта именно Obsidian, а прочие редакторы просто покажут ==.
   if (has("highlight")) out = `==${out}==`;

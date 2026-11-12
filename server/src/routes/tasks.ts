@@ -1,4 +1,4 @@
-import { commentWithBlocks, ownerBlocks } from "../lib/chatBlocks.js";
+import { commentWithBlocks, ownerBlocks, taskTextWithBlocks } from "../lib/chatBlocks.js";
 import { listDescription, projectionOf } from "../lib/windowProjection.js";
 import {visibleTaskComments, isQuietSystemMessage} from "../lib/serviceNoise.js";
 import { registerIntegrationResponsibilityRoutes } from '../lib/integrationResponsibility.js';
@@ -50,7 +50,7 @@ import {
   resultFromSubtasks,
 } from "../resultVersions.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
-import { ensurePlanTopic, setTaskTopicClosed } from "../lib/projectTopics.js";
+import { archiveTaskRoom } from "../lib/taskRoomArchive.js";
 import { closeTaskTree } from "../lib/taskCloseCascade.js";
 import { criticApproved } from "../lib/criticApproved.js";
 
@@ -248,6 +248,7 @@ export function withSubtaskState(s: any) {
     s.agent_state === "in_progress" && isStale(s.agent_heartbeat_at);
   return {
     ...s,
+    title_document: taskTextWithBlocks(s).title_document,
     done: !!s.done,
     agent_stale: stale,
     // Результат роли готовыми блоками для владельца (lib/chatBlocks.ts).
@@ -395,7 +396,7 @@ export function hydrateTask(task: any) {
     });
 
   return {
-    ...withAgentStale(task, subtasks, children),
+    ...taskTextWithBlocks(withAgentStale(task, subtasks, children)),
     // Живое значение общего рубильника, а не сохранённый в карточке флаг:
     // решает в моменте, включён он сейчас или нет (см. reviewerPolicy.ts).
     requires_reviewer_review: reviewerFirstEnabled(),
@@ -1344,7 +1345,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         .all(task.id);
 
       return {
-        ...withAgentStale(full, subtasks, children),
+        ...taskTextWithBlocks(withAgentStale(full, subtasks, children)),
         // Снимок промпта (десятки КБ) карточке не нужен: клиенты его не
         // показывают, а телефон перекачивал его при каждом событии
         // (владелец 20.10.2026: карточка тормозила на 422 КБ). В базе остаётся.
@@ -1691,17 +1692,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
       });
       createTaskTxn();
 
-      // Тема задачи заводится сразу при создании (карточка ca816271, п. 4),
-      // а не только на подготовке плана: пропущенная подготовка (гонка
-      // автоприёма) оставляла задачу без темы вовсе. Приватные проекты не
-      // трогаем — там темы не нужны. Ошибка темы не должна ронять создание.
-      if (!isPrivateProject) {
-        try {
-          ensurePlanTopic(id);
-        } catch (error) {
-          req.log?.warn?.({ err: String(error), taskId: id }, "не удалось завести тему задачи");
-        }
-      }
+      // Комнату задачи при создании НЕ заводим (владелец 11.11.2026:
+      // «комната не должна создаваться, пока задачка ещё не в работе»).
+      // Пустая комната без единого сообщения только наполняла список чатов.
+      // Комната появляется при первом запуске роли по задаче
+      // (runtime/inProcessRun.ts) и по первому обращению в чат карточки.
 
       // Первая запись ленты — «создал задачу»: до этого лента начиналась с
       // первого же изменения, и по ней нельзя было понять, кто и когда
@@ -2444,12 +2439,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
         );
       }
 
-      // Тема задачи закрывается вместе с задачей и снова открывается при
-      // возврате в работу (карточка ca816271, п. 4). История остаётся.
+      // Окончательное закрытие задачи уводит её комнату в архив
+      // (спецификация §8). Возврат в работу комнату не поднимает: владелец
+      // 08.11.2026 — «пересоздайте задачу заново», а не восстанавливайте архив.
       if (body.status === "completed" && existing.status !== "completed") {
-        setTaskTopicClosed(id, true);
-      } else if (body.status === "active" && existing.status === "completed") {
-        setTaskTopicClosed(id, false);
+        archiveTaskRoom(id, { reason: "задача выполнена" });
       }
 
       // Гашение agent_state у самой задачи выше очищало только её колонку, а

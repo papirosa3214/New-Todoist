@@ -28,6 +28,13 @@ import { cleanupWorktree, sweepTestLeftovers } from "../lib/worktree/cleanup.js"
 import { parseFailedTestFiles, selectTargetedTests } from "../lib/worktree/testGate.js";
 import { pushMainToHosts, type PushStatus } from "../lib/worktree/pushHosts.js";
 import {
+  branchClosedEverywhere,
+  closeRoleBranchOnHosts,
+  type BranchCloseResult,
+} from "../lib/worktree/branchCleanup.js";
+import { runOperation, type OperationResult } from "../host/gateway.js";
+import { projectHostRepo, projectRepo } from "./roleWorkspace.js";
+import {
   GitError,
   dirtyFiles,
   git,
@@ -558,6 +565,23 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   } catch (error) {
     journal({ task_id: taskId, state: "push", error: String(error) });
   }
+
+  // 7. Ветка роли на хостах больше не нужна: работа в main и уже разъехалась
+  // по хостам. Владелец 10.11.2026: «сервер сам закрывает ветку, когда роль
+  // закончила работу» — триггер выбран после зелёного слияния.
+  // Отказ не отменяет слияние: он виден в журнале и в branch-cleanup.json,
+  // оттуда его поднимает сторож автослияния; следующий проход повторит.
+  try {
+    const results = closeRoleBranchOnHosts(live, branch);
+    journal({ task_id: taskId, state: "branch_close", branch, results });
+    if (branchClosedEverywhere(results)) {
+      db.prepare(
+        "UPDATE tasks SET host_branch_cleared_at = datetime('now') WHERE id = ?",
+      ).run(taskId);
+    }
+  } catch (error) {
+    journal({ task_id: taskId, state: "branch_close", branch, error: String(error) });
+  }
   return outcome;
 }
 
@@ -763,6 +787,84 @@ export async function sweepMergedWorkspaces(limit = 20): Promise<number> {
  * Проход обслуживания рабочих копий: очередь, уборка подтверждённого,
  * хвост тестовых каталогов. Вызывается планировщиком.
  */
+/**
+ * Закрыть ветки ролей, чьё слияние подтверждено раньше: хвост старых карточек,
+ * слитых до 10.11.2026, когда ветку никто не убирал. По сети — точечно и
+ * по чуть-чуть за проход: у каждой карточки свой `ls-remote` на каждый хост.
+ */
+/** Один и тот же каталог (realpath: симлинки и хвостовые слэши не в счёт). */
+function sameRepo(a: string, b: string): boolean {
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
+export async function sweepClosedRoleBranches(limit = 5): Promise<number> {
+  if (String(process.env.TASKFLOW_ROLE_WORKTREES ?? "").trim() === "off") return 0;
+  const live = liveRepo();
+  const rows = db
+    .prepare(
+      "SELECT id FROM tasks WHERE merged_at IS NOT NULL AND host_branch_cleared_at IS NULL " +
+        "AND merged_at >= datetime('now', '-90 day') ORDER BY merged_at DESC LIMIT ?",
+    )
+    .all(limit) as Array<{ id: string }>;
+  let closed = 0;
+  for (const row of rows) {
+    try {
+      // Репозиторий карточки может жить не здесь: у iOS-проекта рабочая папка
+      // на маке. Тогда ветку снимает операция хоста, а сервер только просит и
+      // запоминает итог — иначе `roles/<id>` в этом репозитории просто нет, и
+      // «закрыто» было бы враньём при живой ветке на GitHub.
+      // Сначала — есть ли репозиторий проекта на машине. `projectRepo` для
+      // незаведённого проекта откатывается на репозиторий сервера, поэтому
+      // сравнивать пути первыми нельзя: iOS-карточки выглядели бы «своими».
+      const хост = projectHostRepo(row.id);
+      if (хост && !sameRepo(хост.repo, live)) {
+        const ветка = roleBranch(row.id);
+        let итог: OperationResult | null = null;
+        try {
+          итог = await runOperation(хост.machineId, "git_delete_branch", {
+            repo: хост.repo,
+            branch: ветка,
+          });
+        } catch (err) {
+          journal({
+            task_id: row.id,
+            state: "branch_close",
+            branch: ветка,
+            results: [{ remote: "host", branch: ветка, state: "failed", detail: String(err) }],
+          });
+          continue;
+        }
+        const данные = (итог?.ok ? итог.data : null) as { results?: BranchCloseResult[] } | null;
+        const результаты = данные?.results ?? [];
+        journal({ task_id: row.id, state: "branch_close", branch: ветка, results: результаты });
+        if (итог?.ok && branchClosedEverywhere(результаты)) {
+          db.prepare(
+            "UPDATE tasks SET host_branch_cleared_at = datetime('now') WHERE id = ?",
+          ).run(row.id);
+          closed += 1;
+        }
+        continue;
+      }
+      // Дальше — только свой репозиторий: без этого «ветки нет» ничего не
+      // доказывает (путь мог указывать в никуда).
+      if (!sameRepo(projectRepo(row.id), live)) continue;
+      const results = closeRoleBranchOnHosts(live, roleBranch(row.id));
+      if (!branchClosedEverywhere(results)) continue;
+      db.prepare(
+        "UPDATE tasks SET host_branch_cleared_at = datetime('now') WHERE id = ?",
+      ).run(row.id);
+      closed += 1;
+    } catch {
+      /* следующий проход: сюда попадают обрывы сети, а не политика */
+    }
+  }
+  return closed;
+}
+
 export async function worktreeMaintenancePass(): Promise<number> {
   // Возврат снятых помех — до разбора: вернувшаяся строка сразу же
   // разбирается тем же проходом, а не следующим через 5 минут.
@@ -772,6 +874,7 @@ export async function worktreeMaintenancePass(): Promise<number> {
   const recovered = recoverStaleRunning().length;
   const merged = (await drainMergeQueue(1)).filter((row) => row.state === "merged").length;
   const cleaned = await sweepMergedWorkspaces();
+  const branches = await sweepClosedRoleBranches();
   const leftovers = sweepTestLeftovers() + sweepMergeScratch();
-  return unblocked + recovered + merged + cleaned + leftovers;
+  return unblocked + recovered + merged + cleaned + branches + leftovers;
 }

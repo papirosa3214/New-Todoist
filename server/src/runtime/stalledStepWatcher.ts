@@ -25,7 +25,6 @@ import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { logStepAbandoned } from "./abandonedStep.js";
 import { enqueueRoleRunJob, rearmRoleRunJob } from "./roleRunQueue.js";
 import { startPlanSubtaskRun } from "./planSubtaskAdmission.js";
-import { wakeAndDeliverStalled } from "./orchestratorWake.js";
 import { activeInProcessRun } from "./inProcessRun.js";
 import { MISTAKE_LIMIT, stopRoleOnErrorLoop, toolOutcomeStats } from "./errorLoopStop.js";
 import { ownerId, postOwnerNotification, postRoleNote, taskHeads } from "./stepNotes.js";
@@ -176,20 +175,8 @@ function endAttemptAsAutoRestarted(attemptId: string, reason: string): number {
     .run(reason.slice(0, 500), attemptId).changes;
 }
 
-/** Личность события для сообщения оркестратору: id закрываемой попытки,
- *  а если попытки не было — цикл допуска (детерминированно в обоих
- *  случаях, поэтому повторный тик не заведёт второе сообщение). */
-function attemptKeyFor(subtask: StalledSubtask): string {
-  if (subtask.current_attempt_id) return subtask.current_attempt_id;
-  const cycle = db.prepare("SELECT admission_cycle FROM subtasks WHERE id = ?").get(subtask.id) as { admission_cycle: number | null } | undefined;
-  return `cycle:${cycle?.admission_cycle ?? "none"}`;
-}
-
-function markRestartedAndEnqueue(subtask: StalledSubtask, role: string, reason: string): { closed: boolean; attemptKey: string } {
-  const attemptKey = attemptKeyFor(subtask);
-  const closed = subtask.current_attempt_id
-    ? endAttemptAsAutoRestarted(subtask.current_attempt_id, reason) === 1
-    : false;
+function markRestartedAndEnqueue(subtask: StalledSubtask, role: string, reason: string): void {
+  if (subtask.current_attempt_id) endAttemptAsAutoRestarted(subtask.current_attempt_id, reason);
   db.prepare("UPDATE subtasks SET agent_state = NULL, agent_id = NULL, current_attempt_id = NULL, agent_heartbeat_at = NULL WHERE id = ?")
     .run(subtask.id);
   // Ключ дедупликации СТАБИЛЬНЫЙ на шаг: именно на этом держится защита
@@ -216,11 +203,9 @@ function markRestartedAndEnqueue(subtask: StalledSubtask, role: string, reason: 
     `«${subtask.title}»: поток событий остановился — перезапускаю попытку (${restartCount(subtask) + 1} из ${MAX_RESTARTS_PER_WINDOW}).`,
   );
   logEvent({ taskId: subtask.task_id, actorId: null, kind: "stalled_step_auto_restart", field: subtask.plan_node_key ?? subtask.id, toValue: reason.slice(0, 160) });
-  return { closed, attemptKey };
 }
 
 function blockAsStalled(subtask: StalledSubtask, role: string, reason: string): void {
-  const attemptKey = attemptKeyFor(subtask);
   if (subtask.current_attempt_id) {
     db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'stalled_blocked', reason = ? WHERE id = ? AND ended_at IS NULL")
       .run(reason.slice(0, 500), subtask.current_attempt_id);
@@ -247,19 +232,7 @@ function blockAsStalled(subtask: StalledSubtask, role: string, reason: string): 
     `⏸ Шаг «${subtask.title}» (${roleTitle(role)}) остановлен: поток событий молчит ${STALL_AFTER_MIN}+ минут, автоперезапуск ${MAX_RESTARTS_PER_WINDOW}/${MAX_RESTARTS_PER_WINDOW} не помог. Задача: «${heads.title}».`,
   );
   logEvent({ taskId: subtask.task_id, actorId: null, kind: "stalled_step_blocked_user", field: subtask.plan_node_key ?? subtask.id, toValue: roleTitle(role) });
-  // Оркестратор ведёт план и должен узнать о зависании сам: молчаливый
-  // автоблок — тот же дефект, что и молчаливый авторестарт (карточка
-  // 2beb2bf2). Ключ события (`attemptKeyFor`) детерминирован и без
-  // попытки — цикл допуска, поэтому сообщение уходит и у узла с пустым
-  // `current_attempt_id` (D3, ревью критика 16.10.2026): раньше такой узел
-  // блокировался в полной тишине, а запасной ключ был недостижим.
-  // Повторы гасит сам ключ — `chat_messages.id` это primary key.
-  wakeAndDeliverStalled(
-    subtask.id,
-    "stalled_blocked",
-    attemptKey,
-    `Роль: ${roleTitle(role)}. Поток событий молчал дольше ${STALL_AFTER_MIN} минут, автоперезапуск ${MAX_RESTARTS_PER_WINDOW}/${MAX_RESTARTS_PER_WINDOW} исчерпан — шаг переведён в blocked, снимок шага и уведомление владельцу записаны. Причина: ${reason}`,
-  );
+
 }
 
 /** Сколько тик сторожа ждёт подтверждения, что новая попытка реально
@@ -297,57 +270,26 @@ async function confirmWithin<T>(work: Promise<T>, ms: number): Promise<T | typeo
  *  ушло), отказ — отдельное сообщение с другим ключом события. `ours`
  *  отличает наше зависание от чужого события: если попытку закрыл не
  *  этот тик, молчим, о нём расскажет тот, кто его создал. */
-function reportStart(
-  subtask: StalledSubtask,
-  attemptKey: string,
-  fact: string,
-  started: { ok: true; runId: string } | { ok: false; error: string },
-  ours: boolean,
-): void {
+function reportStart(subtask: StalledSubtask, started: { ok: true; runId: string } | { ok: false; error: string }): void {
   if (started.ok) return;
   logEvent({ taskId: subtask.task_id, actorId: null, kind: "stalled_step_restart_failed", field: subtask.plan_node_key ?? subtask.id, toValue: started.error });
-  if (!ours) return;
-  wakeAndDeliverStalled(subtask.id, "stalled_restart_failed", attemptKey, `${fact} Запуск не удался: ${started.error}`);
 }
 
 async function restartAttempt(subtask: StalledSubtask, role: string, sinceMin: number): Promise<void> {
-  const { closed, attemptKey } = markRestartedAndEnqueue(subtask, role, `авто-перезапуск после ${sinceMin} минут без событий хода`);
-  // Зависание наше, если попытку закрыл этот тик (замок `.changes === 1`).
-  // Узлу без текущей попытки закрывать нечего, но зависание всё равно
-  // наше — иначе такой авторестарт прошёл бы в тишине, тот же класс
-  // дефекта, что D3 на автоблоке. Всё прочее — чужое событие.
-  const ours = closed || !subtask.current_attempt_id;
-  const closedFact = closed
-    ? `Сторож закрыл попытку ${attemptKey}`
-    : subtask.current_attempt_id
-      ? `Попытка ${attemptKey} была закрыта ранее, текущей у шага нет`
-      : `У шага не было текущей попытки (${attemptKey})`;
-  const fact = `Поток событий молчал ${sinceMin} минут (порог ${STALL_AFTER_MIN}). Роль: ${roleTitle(role)}. ${closedFact}, снял шаг с умершего запуска и запустил перезапуск ${restartCount(subtask)} из ${MAX_RESTARTS_PER_WINDOW}: новая попытка поставлена в очередь.`;
-  // Уведомление уходит ЗДЕСЬ, до старта, и не зависит от его исхода:
-  // при умершем держателе слота старт не разрешится никогда, а раньше
-  // в этом случае не уходило ничего и тик замирал (D1). Формулировка
-  // обещает только запуск перезапуска. Повторный тик по тому же
-  // событию ничего не добавит: messageId детерминирован, а
-  // `chat_messages.id` — primary key (`INSERT OR IGNORE`).
-  if (ours) {
-    wakeAndDeliverStalled(subtask.id, "stalled_restarted", attemptKey, `${fact} Перезапуск запущен; если старт не пройдёт, придёт отдельное сообщение.`);
-  }
-  // `enqueueRoleRunJob` положил задание в очередь; стартанём role
-  // in-process сами, чтобы ход не ждал следующего тика worker'а — иначе
-  // карточка выглядит «тишина в ленте» ещё минуту (Г1-к/Г1-л).
+  markRestartedAndEnqueue(subtask, role, `авто-перезапуск после ${sinceMin} минут без событий хода`);
   const started = startPlanSubtaskRun(subtask.id, roleUserId(role));
   const waitMs = startConfirmWaitMs();
   const confirmed = await confirmWithin(started, waitMs);
   if (confirmed === START_UNCONFIRMED) {
     // Слот, скорее всего, держит умерший запуск. Тик его не ждёт —
     // иначе замерзнет совсем, — но отказа тоже не выдумывает: старт
-    // продолжается сам, и сообщение о нём уйдёт по факту.
+    // продолжается сам, и результат запишется в журнал по факту.
     logEvent({ taskId: subtask.task_id, actorId: null, kind: "stalled_step_restart_pending", field: subtask.plan_node_key ?? subtask.id, toValue: `подтверждение старта не пришло за ${Math.round(waitMs / 1000)} с` });
-    const late = (result: { ok: true; runId: string } | { ok: false; error: string }) => reportStart(subtask, attemptKey, fact, result, ours);
+    const late = (result: { ok: true; runId: string } | { ok: false; error: string }) => reportStart(subtask, result);
     void started.then(late, (error: unknown) => late({ ok: false, error: error instanceof Error ? error.message : String(error) }));
     return;
   }
-  reportStart(subtask, attemptKey, fact, confirmed, ours);
+  reportStart(subtask, confirmed);
 }
 
 export type StalledStepReport = {

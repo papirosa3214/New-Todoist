@@ -33,6 +33,18 @@ export const WATCHED_KINDS = new Set([
   "test_budget_blocked",
 ]);
 
+/** Будим ли оркестратора (владелец 08.11.2026: «не надо, чтобы его будили
+ *  на блоках, я сам гляну»). По умолчанию канал молчит: события продолжают
+ *  писаться в `orchestrator_events` — на них живут подписки iOS, — но
+ *  приёмнику оркестратора ничего не отправляется, пока флаг не выставлен
+ *  явно. `ORCHESTRATOR_WEBHOOK_DISABLED=1` сильнее включения. */
+export function orchestratorWebhookEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.ORCHESTRATOR_WEBHOOK_DISABLED === "1") return false;
+  return env.ORCHESTRATOR_WEBHOOK_ENABLED === "1";
+}
+
 export const REGISTRY_FILE =
   process.env.TASKFLOW_ORCHESTRATOR_HOOK_FILE ||
   path.join(os.homedir(), ".local", "state", "taskflow", "orchestrator-hook.json");

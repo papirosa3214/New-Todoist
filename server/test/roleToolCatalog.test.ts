@@ -4,9 +4,16 @@ import {runMigrations} from "../src/migrations.js";
 import {seedRoleAccounts} from "./helpers/seedOwner.js";
 import {allRoles} from "../src/roleRouting.js";
 import {buildRoleToolCatalog,installNativeToolCore} from "../src/runtime/roleToolCatalog.js";
+import {setSetting,resetSetting} from "../src/lib/serverSettings.js";
 import {secretaryThings3Tools} from "../src/runtime/secretaryThings3Tools.js";
 beforeAll(()=>{migrate();runMigrations();seedRoleAccounts(db);});
 const decode=(r:any)=>JSON.parse(r.content[0].text);
+/** Legacy-шлюз operation/arguments — через настройку сервера. */
+function withLegacyGateway<T>(run:()=>T):T{
+ setSetting("pi_legacy_taskflow_gateway",true,"test");
+ try{return run();}finally{resetSetting("pi_legacy_taskflow_gateway","test");}
+}
+const legacyCatalog=(opts:Parameters<typeof buildRoleToolCatalog>[0],adapters:Parameters<typeof buildRoleToolCatalog>[1]=[])=>withLegacyGateway(()=>buildRoleToolCatalog(opts,adapters));
 /** Живая сессия в тесте: активный набор видят и загрузчик, и обработчик. */
 function fakeSession(){
  let active:string[]=[];
@@ -26,10 +33,10 @@ it("every configured role exposes native schemas from the common registry in cha
   const discussion=make("discussion",{taskId:"task",subtaskId:"slot",chatId:"chat",messageId:"msg"});
   for(const c of [chat,work,discussion]){
    expect(c.activeNames).not.toContain("taskflow");
-   // Активно ядро и загрузчик; полный каталог живёт в реестре и подключается
-   // по требованию (setActiveToolsByName) — в каждый запрос он не уходит.
-   expect(c.activeNames).toContain("taskflow_tools");
-   expect(c.activeNames.length).toBeLessThan(c.registeredNames.length);
+    // Активны группы, отдельные операции и пакетный вызов; прежние имена — в реестре.
+    expect(c.activeNames).toContain("taskflow_batch");
+    expect(c.activeNames).toContain("taskflow_tools");
+    expect(c.activeNames.length).toBeLessThan(c.registeredNames.length);
    expect(c.registeredNames).toEqual(c.customTools.filter(t=>t.name!=="taskflow").map(t=>t.name));
    expect(new Set(c.operations.map(t=>t.name)).size).toBe(c.operations.length);
   }
@@ -46,14 +53,16 @@ it("secretary chat keeps each Things 3 operation once alongside the rest of her 
  expect(work.operations.some(t=>t.name==="taskflow_things3")).toBe(false);
 });
 it("secretary cannot start card work from chat execution mode",async()=>{
- const c=buildRoleToolCatalog({role:"secretary",mode:"work",runId:"test",chatId:"chat",messageId:"msg"});
- const result=decode(await c.customTools[0].execute("x",{action:"invoke",operation:"taskflow_plan_request",version:1,arguments:{}}));
+ const c=legacyCatalog({role:"secretary",mode:"work",runId:"test",chatId:"chat",messageId:"msg"});
+ const gateway=c.customTools.find((t:any)=>t.name==="taskflow")!;
+ const result=decode(await gateway.execute("x",{action:"invoke",operation:"taskflow_plan_request",version:1,arguments:{}}));
  expect(result.ok).toBe(false);
  expect(result.error.code).toBe("EXECUTION_MODE_RESTRICTED");
 });
 it("missing message context is explained rather than silently removing attachment support",async()=>{
- const c=buildRoleToolCatalog({role:"builder",mode:"work",runId:"test",taskId:"task"});
- const result=decode(await c.customTools[0].execute("x",{action:"describe",operation:"taskflow_chat_attach_file"}));
+ const c=legacyCatalog({role:"builder",mode:"work",runId:"test",taskId:"task"});
+ const gateway=c.customTools.find((t:any)=>t.name==="taskflow")!;
+ const result=decode(await gateway.execute("x",{action:"describe",operation:"taskflow_chat_attach_file"}));
  expect(result.data.restriction.code).toBe("CONTEXT_REQUIRED");
 });
 it("отказ «инструмент не подключён» не роняет ход и пишет отдельный код аудита",()=>{
@@ -91,8 +100,9 @@ it("отказ самого сервера (уточнение посреди х
  expect(codeOf("PLANNING_REFUSAL")).toBe(2);
 });
 it("действие в чате пишется событием с областью chat и id чата",async()=>{
- const c=buildRoleToolCatalog({role:"builder",mode:"work",runId:"chat-action",chatId:"chat-x",messageId:"msg-x"});
- const out=(await c.customTools[0].execute("e",{action:"invoke",operation:"taskflow_plan_read",version:1,arguments:{}})) as any;
+ const c=legacyCatalog({role:"builder",mode:"work",runId:"chat-action",chatId:"chat-x",messageId:"msg-x"});
+ const gateway=c.customTools.find((t:any)=>t.name==="taskflow")!;
+ const out=(await gateway.execute("e",{action:"invoke",operation:"taskflow_plan_read",version:1,arguments:{}})) as any;
  expect(out).toBeTruthy();
  const rows=db.prepare("SELECT scope, item_id, outcome FROM role_tool_audit WHERE run_id=? ORDER BY rowid DESC LIMIT 1").get("chat-action") as any;
  expect(rows.scope).toBe("chat");
@@ -138,8 +148,9 @@ it("one adapter appears through the same catalog in every entry point",async()=>
  const execute=vi.fn(async()=>({content:[{type:"text",text:"status"}]}));
  for(const mode of ["work","discussion","plan"]){
   const c=buildRoleToolCatalog({role:"infra_engineer",mode,runId:"test"},[{name:"mcp__infra__probe",description:"infra status",parameters:{type:"object"},execute}]);
-  const result=decode(await c.customTools[0].execute("x",{action:"invoke",operation:"mcp__infra__probe",version:1,arguments:{}}));
-  expect(result.ok).toBe(true);
+  const probe=c.customTools.find((t:any)=>t.name==="mcp__infra__probe")!;
+  const raw=await probe.execute("x",{});
+  expect(raw.content[0].text).toBe("status");
  }
  expect(execute).toHaveBeenCalledTimes(3);
 });

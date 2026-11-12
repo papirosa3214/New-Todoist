@@ -8,7 +8,7 @@ import {installSteeringBoundary} from "./steeringBoundary.js";
 import {queueWorkCoordination,markDeliveredToWork,traceCoordination} from "./chatCoordination.js";
 import { reserveReviewRun, assertReviewRunAllowed, finishReviewRun } from "./reviewRunBudget.js";
 import { chatTools } from "./chatTools.js";
-import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, ROLE_TOOL_INSTRUCTION, roleToolInstruction } from "./roleToolCatalog.js";
+import { buildRoleToolCatalog, installNativeToolCore, installNativeToolSchemas, roleToolInstruction, roleToolUiNames } from "./roleToolCatalog.js";
 import { teamReadTools } from "./teamReadTools.js";
 import { allRoles } from "../roleRouting.js";
 import { roleToolAllowed } from "../lib/roleToolScope.js";
@@ -30,13 +30,15 @@ import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import { secretaryAppleTools } from "./secretaryAppleTools.js";
 import { openMidPlanCritic } from "./planSubtaskAdmission.js";
 import { ensureResultVersionForReview } from "../resultVersions.js";
-import { PLAN_ROLE_HELP_POLICY, planRoleHelpPolicy } from "./instructionDefaults.js";
+import { planRoleHelpPolicy } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { pickRecipientSlot } from "./roleMessageWait.js";
 import { connectRoleMcp } from "./graftMcp.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import { branchMembership } from "./branchPlan.js";
-import { ensurePlanTopic, topicContext } from "../lib/projectTopics.js";
+import { ensureTaskRoom, taskRoomOf, topicContext } from "../lib/projectTopics.js";
+import { conversationDigest, handoffText as slotHandoffText } from "../lib/slotHandoff.js";
+import { handoffDigest as handoffDigestOf } from "../lib/slotHandoffDigest.js";
 import { markPlanFinalReviewerStarted, markPlanFinalReviewerWaiting, hasPendingPlanFinalReview, planReviewRouteContext } from "./planReviewLifecycle.js";
 import { instructionResources, createTaskResourceLoader } from "./instructionResources.js";
 import { ensureRoleHome, renderPromptAddendum } from "./roleHome.js";
@@ -67,6 +69,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import db from "../db.js";
+import { ragSearchForRole } from "../lib/roleRagSearch.js";
 import { AGENT_RULES, logEvent } from "../agentState.js";
 import { loadRoleRouting, providerOfModel, rolePromptText, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
@@ -439,7 +442,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     T("taskflow_topic_reply", "Ответить на конкретное сообщение темы своей задачи: message_id и короткий text. Сервер определяет автора вопроса и его этап; подходит для ответа человеку и коллеге.",Type.Object({message_id:Type.String(),text:Type.String()}),async(p)=>{
       if(!taskId)throw new ToolError("Нет текущей задачи");
       if(topicSends>=4)throw new ToolError("Лимит обращений в этом запуске исчерпан");
-      const original=db.prepare("SELECT m.chat_id,m.from_user_id,m.subtask_id,c.task_id,u.name,u.role_key FROM chat_messages m JOIN chats c ON c.id=m.chat_id JOIN users u ON u.id=m.from_user_id WHERE m.id=? AND c.parent_chat_id IS NOT NULL").get(p.message_id) as {chat_id:string;from_user_id:string;subtask_id:string|null;task_id:string;name:string;role_key:string|null}|undefined;
+      const original=db.prepare("SELECT m.chat_id,m.from_user_id,m.subtask_id,c.task_id,u.name,u.role_key FROM chat_messages m JOIN chats c ON c.id=m.chat_id JOIN users u ON u.id=m.from_user_id WHERE m.id=? AND c.room_kind='task'").get(p.message_id) as {chat_id:string;from_user_id:string;subtask_id:string|null;task_id:string;name:string;role_key:string|null}|undefined;
       if(!original || (original.task_id!==taskId && (!branchMembership(taskId) || branchMembership(original.task_id)?.root_plan_id!==branchMembership(taskId)?.root_plan_id)))throw new ToolError("Сообщение не относится к согласованной ветке");
       if(original.from_user_id===roleUserId(role))throw new ToolError("Не отвечай сам себе");
       const recipient=original.subtask_id && original.role_key ? resolveTopicSlot(original.task_id,original.role_key,undefined,original.subtask_id)?.id : undefined;
@@ -458,7 +461,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       if(topicSends>=4) throw new ToolError("Лимит обращений в этом запуске исчерпан; зафиксируй блок или результат");
       const target=p.task_id??taskId;
       if(target!==taskId && (!branchMembership(taskId) || branchMembership(target)?.root_plan_id!==branchMembership(taskId)?.root_plan_id)) throw new ToolError("Тема вне согласованной ветки");
-      const topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(target) as {id:string}|undefined;
+      const topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND room_kind='task'").get(target) as {id:string}|undefined;
       if(!topic) throw new ToolError("У задачи пока нет темы");
       if(!ROLE_NAMES.includes(p.to)) throw new ToolError("Укажи доступную роль");
       if(p.to===role){
@@ -808,6 +811,19 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) recordTaskDocument(taskId, n.id, roleUserId(role));
         return { готово: "заметка создана", id: n.id, material: {kind:"document",title:n.title || "Документ",ref:`note://${n.id}`}, подсказка:"Для чтения в чате отправь через taskflow_chat_share_material. В materials/artifacts используй material, не голый ID." };
       }),
+    // Поиск по датасетам RAGFlow, выданным этой роли (владелец 09.11.2026).
+    // Отдельный инструмент, а не расширение taskflow_kb_search: тот ищет по
+    // заметкам TaskFlow (FTS5) и остаётся как есть — у них разные источники,
+    // и смешивать «мои заметки» с «датасетом, который мне выдали» нельзя.
+    T("taskflow_rag_search", "Поиск по датасетам базы знаний, доступ к которым выдан этой роли. Отвечает кусками с названием документа и датасета. Для поиска по заметкам TaskFlow есть taskflow_kb_search. Если доступа не выдано, инструмент так и скажет — не выдумывай содержимое базы.",
+      Type.Object({ query: Type.String(), top_k: Type.Optional(Type.Number()) }),
+      async (p) => {
+        try {
+          return await ragSearchForRole(String(role ?? ""), String(p.query ?? ""), p.top_k);
+        } catch (e: any) {
+          throw new ToolError(`база знаний недоступна: ${String(e?.message || e)}`);
+        }
+      }),
     T("taskflow_kb_search", "Поиск по внутренней базе знаний TaskFlow: заметки и документация всех проектов. Отвечает отрывками с id заметки; целиком заметку читает taskflow_doc_read. Не нашлось — повтори короче, ключевыми словами.",
       Type.Object({ query: Type.String(), top_k: Type.Optional(Type.Number()) }),
       async (p) => ({ запрос: p.query, куски: searchNotes(String(p.query ?? ""), p.top_k ?? 5).map((r) => ({ название: r.title, папка: r.folder, обновлена: r.updated_at, текст: r.text, id_заметки: r.id })) })),
@@ -921,7 +937,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  const chatOperations = chatTools(role, chatContext);
+  const chatOperations = chatTools(role, chatContext, taskId);
   // Один и тот же инструмент может прийти из обоих наборов: перезапуск слота
   // есть и в чате (chatTools), и среди инструментов управления планом
   // (orchestratorTools — только при orchestrate). Дубль ломает ход целиком:
@@ -933,7 +949,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   const managementOperations = orchestratorTools(role, T).filter((tool) => !chatOperationNames.has(tool.name));
   const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? [...secretaryMailTools(T), ...secretaryThings3Tools({role,subtaskId}), ...secretaryAppleTools({role,subtaskId})] : [])];
   if (unscoped) return all;
-  return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
+  return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim"));
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -952,7 +968,7 @@ const HEARTBEAT_MS = 90_000;
 
 /** Что агент роли получает на заходе внутри сервера — для экрана «Команда». */
 export function inProcessToolNames(role = ""): string[] {
-  return [...BUILTIN_TOOLS, "taskflow"];
+  return [...BUILTIN_TOOLS, ...roleToolUiNames(role)];
 }
 
 function rolePrompt(role: string): string {
@@ -1559,7 +1575,9 @@ try {
   // разработчика падали на старте, хотя задаче он не нужен. Не поднялся — роль
   // работает без его инструментов.
   const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId).catch(error => { console.warn(`[composio] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
-  if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
+  // Комната задачи заводится здесь — в момент, когда задача действительно
+  // пошла в работу (владелец 11.11.2026). До первого запуска роли комнаты нет.
+  ensureTaskRoom(taskId);
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
   const infra = await connectRoleMcp(role, cwd).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
   const toolCatalog = buildRoleToolCatalog({role,model:model.id??modelId,taskId,subtaskId:input.subtaskId,mode:"work",runId:manager.getSessionId()}, [...composio.tools,...infra.tools]);
@@ -1872,7 +1890,21 @@ try {
       // читала его как часть постановки, а не как приложение.
       const snapshot=input.subtaskId ? slotSnapshotBlock(input.subtaskId) : null;
       const reportAdvice=role==="critic_verifier" && mode==="review" ? await reportReviewBlockForTask(taskId,input.subtaskId) : "";
-      const prompt = `${task}${reportAdvice}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
+      // Передача работы (08.11.2026, спецификация §7): слот получает итог
+      // предыдущих слотов и сжатую часть разговора, а не весь сырой лог.
+      const handoffRaw = slotHandoffText(taskId);
+      // Выжимка передачи (спецификация §7, критерии 8–10): предел считается
+      // от окна модели принимающей роли, граница фиксируется в slot_handoffs,
+      // повтор отдаёт тот же текст. Сбой сжатия — передача без правки.
+      const handoffDigest = handoffRaw
+        ? handoffDigestOf(taskId, { roomId: taskRoomOf(taskId) ?? '', roleKey: role })
+        : null;
+      const handoff =
+        handoffDigest && handoffDigest.state === 'ready' && handoffDigest.text
+          ? handoffDigest.text
+          : handoffRaw;
+      const digest = conversationDigest(taskId, taskRoomOf(taskId) ?? "");
+      const prompt = `${task}${reportAdvice}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId, { conversation: "digest" })}${handoff ? `\n\n${handoff}` : ""}${digest ? `\n\n${digest}` : ""}${memory ? `\n\n${memory}` : ""}`;
       // Чек-лист идёт ПЕРЕД задачей (13.10.2026, владелец: «подсунуть ему
       // промп поближе»). В хвосте промпта, после задачи, переписки, контекста
       // запуска и памяти, инструкция о плане терялась: модель к этому месту

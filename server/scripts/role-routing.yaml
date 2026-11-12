@@ -15,43 +15,36 @@ defaults:
   claude_code: pi_runtime
 fallbacks:
   researcher:
-    - opencode-go/deepseek-v4.1-flash
     - opencode/beam-free
   analyst:
-    - opencode-go/deepseek-v4.1-flash
     - opencode/beam-free
   critic_verifier:
     - opencode-go/minimax-m3
     - opencode/beam-free
   architect:
-    - opencode-go/deepseek-v4.1-flash
     - opencode/beam-free
   builder:
-    - opencode-go/deepseek-v4.1-flash
     - opencode/beam-free
   qa:
     - opencode-go/minimax-m3
     - opencode/beam-free
   designer:
-    - opencode-go/deepseek-v4.1-flash
     - opencode/beam-free
   secretary:
-    - opencode-go/deepseek-v4.1-flash
     - opencode/beam-free
   code_orchestrator:
-    - opencode-go/deepseek-v4.1-flash
     - opencode/beam-free
   infra_engineer: []
   claude_code: []
 models:
-  researcher: xai/grok-4.5
-  analyst: xai/grok-4.5
-  critic_verifier: xai/grok-4.5
-  architect: xai/grok-4.5
-  builder: xai/grok-4.5
-  qa: xai/grok-4.5
-  designer: xai/grok-4.5
-  secretary: xai/grok-4.5
-  code_orchestrator: xai/grok-4.5
-  infra_engineer: xai/grok-4.5
-  claude_code: xai/grok-4.5
+  researcher: opencode-go/deepseek-v4.1-flash
+  analyst: opencode-go/deepseek-v4.1-flash
+  critic_verifier: opencode-go/deepseek-v4.1-flash
+  architect: opencode-go/deepseek-v4.1-flash
+  builder: opencode-go/deepseek-v4.1-flash
+  qa: opencode-go/deepseek-v4.1-flash
+  designer: opencode-go/deepseek-v4.1-flash
+  secretary: opencode-go/deepseek-v4.1-flash
+  code_orchestrator: opencode-go/deepseek-v4.1-flash
+  infra_engineer: opencode-go/deepseek-v4.1-flash
+  claude_code: opencode-go/deepseek-v4.1-flash

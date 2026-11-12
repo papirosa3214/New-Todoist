@@ -9,7 +9,7 @@ import db from "../db.js";
 import { roleUserId, roleTitle } from "../roleRouting.js";
 import { bumpContextVersion } from "./taskContextVersion.js";
 import { logEvent } from "../agentState.js";
-import { ensurePlanTopic } from "../lib/projectTopics.js";
+import { ensureTaskRoom } from "../lib/projectTopics.js";
 
 type Card = {id:string;title:string;description:string|null;needs_clarification:number;current_revision:number;parent_id:string|null;status:string;agent_state:string|null;project_id:string|null;created_at:string};
 type Plan = {id:string;task_id:string;status:string;revision:number;version:number};
@@ -135,7 +135,7 @@ export function approveBranch(rootPlanId:string,ownerId:string,snapshot:string):
       db.prepare("UPDATE task_collaboration_plans SET status='superseded' WHERE task_id=? AND status='approved'").run(card.id);
       db.prepare("UPDATE task_collaboration_plans SET status='approved',approved_by=?,approved_at=datetime('now') WHERE id=?").run(ownerId,plan.id);
     }
-    for(const {card} of selected) ensurePlanTopic(card.id);
+    for(const {card} of selected) ensureTaskRoom(card.id);
     return selected.filter(x=>x.card.status!=='completed').map(x=>({id:x.plan!.id,task_id:x.card.id}));
   })();
 }
@@ -150,7 +150,7 @@ export function branchTeamContext(taskId:string):string {
       const plan=binding ? db.prepare("SELECT * FROM task_collaboration_plans WHERE id=?").get(binding.plan_id) as Plan : selectedCardPlan(card.id);let responsible="пока не определён";
       if(member) responsible=roleTitle(member.responsible_role);
       else if(plan) try{responsible=roleTitle(responsibleRole(plan.id,card.id===root));}catch{}
-      const topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(card.id) as {id:string}|undefined;
+      const topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND room_kind='task'").get(card.id) as {id:string}|undefined;
       return `${card.id}: ${card.title}; ответственный: ${responsible}; состояние: ${card.agent_state??card.status}; тема: ${topic?.id??"ещё не создана"}\n`+
         (plan ? planNodes(plan.id).map(n=>`@${n.role_key} [slot: ${n.slot_key}] — ${n.expected_result}`).join("\n") : "План готовится");
     }),

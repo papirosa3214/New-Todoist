@@ -2809,26 +2809,6 @@ def wake_creator(task: dict, owner_id: str, agent: dict) -> bool:
         "об этом говорит он сам")
     return True
 
-    # Шлём от имени службы: from_user_id отбрасывает собственное эхо,
-    # to_user_id — это и есть оркестратор.
-    sent = api("POST", "/api/chat", {
-        "text": (f"Исполнитель {what} по задаче «{title}» "
-                 f"(#{task_id[:8]}). Карточка остаётся на проверке — "
-                 "загляни и реши, что с ней делать."),
-        "to_user_id": agent_id_of(agent),
-        "task_id": task_id,
-        "kind": "делегирование",
-    }) if os.environ.get("TASKFLOW_TRIGGER_DRY") != "1" else {"dry": True}
-    if sent is None:
-        log(f"  не смог уведомить создателя-оркестратора о {task_id[:8]} — "
-            "чат не принял сообщение")
-        # Откатываем метку, чтобы следующая попытка не ушла в TTL-молчание.
-        with LOCK:
-            CREATOR_WAKED.pop(task_id, None)
-        return False
-    log(f"  «{task_id[:8]}» {what} → сообщил создателю «{agent_label(agent)}» в чат")
-    return True
-
 
 REVIEWER_AGENT_ID = "role_critic_verifier"
 REVIEWER_ROLE = "critic_verifier"

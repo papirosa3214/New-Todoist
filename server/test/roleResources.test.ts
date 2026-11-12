@@ -28,14 +28,16 @@ fs.writeFileSync(designer.agents, "Только инструкции дизай�
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 describe("инструментарий роли в обоих видах запуска", () => {
+  // Общие навыки (scripts/shared-skills) теперь подключаются всем ролям (владелец 07.11.2026).
+  const notShared = (s: { filePath: string }) => !s.filePath.includes("shared-skills");
   it("chat discovery выбирает только роль, не подмешивает навыки проекта и другой роли", async () => {
     fs.mkdirSync(path.join(project, ".pi", "skills"), { recursive: true });
     fs.writeFileSync(path.join(project, ".pi", "skills", "intruder.md"), "---\nname: intruder\ndescription: Wrong skill\n---\nWrong.\n");
     const resources = await discoverChatResources("builder");
-    expect(resources.skills.map(s => s.name)).toEqual(["build"]);
+    expect(resources.skills.filter(notShared).map(s => s.name)).toEqual(["build"]);
     expect(resources.agentsFiles.map(f => f.content)).toEqual(["Только инструкции разработчика"]);
     const designerResources = await discoverChatResources("designer");
-    expect(designerResources.skills.map(s => s.name)).toEqual(["paint"]);
+    expect(designerResources.skills.filter(notShared).map(s => s.name)).toEqual(["paint"]);
     const builderLayers = LAYER_CATALOG.filter(s => s.originRef === designer.agents);
     expect(builderLayers.every(s => composeLayer("builder", s.key) === null)).toBe(true);
   });
@@ -44,7 +46,7 @@ describe("инструментарий роли в обоих видах зап�
     const loader = await createTaskResourceLoader("builder", project, "Системная инструкция");
     expect(loader.getSystemPrompt()).toContain("Системная инструкция");
     expect(loader.getSystemPrompt()).toContain(builder.skills);
-    expect(loader.getSkills().skills.map(s => s.filePath)).toEqual([skillFile]);
+    expect(loader.getSkills().skills.filter(notShared).map(s => s.filePath)).toEqual([skillFile]);
     expect(loader.getAgentsFiles().agentsFiles.map(f => f.path)).toEqual([builder.agents]);
     expect(loader.getExtensions().extensions).toEqual([]);
     expect(fs.existsSync(path.join(project, "skills"))).toBe(false);
@@ -97,7 +99,7 @@ describe("инструментарий роли в обоих видах зап�
     applyOverride({ scope: "role", roleKey: "builder", layer: key, text, action: "set", expectedVersion: 0, sourceKind: "file", sourceRef: skillFile, createdBy: owner });
     const loader = await createTaskResourceLoader("builder", project, "Инструкция");
     try {
-      const skill = loader.getSkills().skills[0];
+      const skill = loader.getSkills().skills.find(s => s.name === "build")!;
       expect(skill.description).toBe("Updated build instructions");
       expect(fs.readFileSync(skill.filePath, "utf8")).toContain("Effective body.");
       expect(fs.readFileSync(skill.filePath, "utf8")).toContain(path.dirname(skillFile));
@@ -116,7 +118,7 @@ describe("инструментарий роли в обоих видах зап�
     const key = LAYER_CATALOG.find(s => s.originRef === skillFile)!.key;
     fs.unlinkSync(skillFile);
     const resources = await discoverChatResources("builder");
-    expect(resources.skills).toEqual([]);
+    expect(resources.skills.filter(notShared)).toEqual([]);
     expect(composeLayer("builder", key)).toBeNull();
   });
 });

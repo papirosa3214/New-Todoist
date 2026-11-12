@@ -80,6 +80,17 @@ describe("tcpo_791b4519: согласование владельца удерж�
   });
   afterAll(async () => { await app.close(); });
 
+
+  it("согласование в плане orchestrated приходит владельцу без комнаты Заминок", () => {
+    const {taskId,planId}=makeCardWithPlan();
+    db.prepare("UPDATE task_collaboration_plans SET profile='orchestrated' WHERE id=?").run(planId);
+    const opId=proposeOverBudget(planId);
+    const notification=db.prepare("SELECT text FROM notifications WHERE task_id=? AND type='plan_approval_request'").get(taskId) as {text:string}|undefined;
+    expect(notification?.text).toContain(opId);
+    expect(db.prepare("SELECT id FROM chats WHERE id=?").get("wake:"+taskId)).toBeUndefined();
+    expect(db.prepare("SELECT id FROM chat_message_queue WHERE chat_id=?").get("wake:"+taskId)).toBeUndefined();
+  });
+
   it("pending proposal удерживает карточку — finishPlanIfComplete возвращает false", () => {
     const { taskId, planId } = makeCardWithPlan();
     const opId = proposeOverBudget(planId);
@@ -92,7 +103,7 @@ describe("tcpo_791b4519: согласование владельца удерж�
     expect(finishPlanIfComplete(planId, taskId, null)).toBe(false);
     expect(card(taskId).agent_state).not.toBe("review");
     // Уведомление владельцу — отдельный тип, с opId/planId/taskId в тексте.
-    const notif = db.prepare("SELECT type, text FROM notifications WHERE user_id=? AND type='plan_approval_request' ORDER BY created_at DESC LIMIT 1").get(ownerIdValue) as { type: string; text: string } | undefined;
+    const notif = db.prepare("SELECT type, text FROM notifications WHERE user_id=? AND type='plan_approval_request' AND task_id=? ORDER BY created_at DESC LIMIT 1").get(ownerIdValue, taskId) as { type: string; text: string } | undefined;
     expect(notif).toBeDefined();
     expect(notif!.text).toContain(`[op:${opId}`);
     expect(notif!.text).toContain(`plan:${planId}`);

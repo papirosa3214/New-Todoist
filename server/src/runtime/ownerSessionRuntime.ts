@@ -15,16 +15,25 @@ import {
   type ChildSessionSpawnRequest,
   type SpawnedChildSession,
 } from "./spawnChildSessionTool.js";
+import { getModelRuntime } from "./PiRuntimeAdapter.js";
 
 export type OwnerSessionPromptMode = "prompt" | "steer" | "follow_up";
 export type OwnerSessionRelation = "root" | "fork" | "subagent";
 export type OwnerSessionListItem = SessionInfo & { relation: OwnerSessionRelation };
 
 const SESSION_RELATION_ENTRY = "taskflow.session-relation";
+export const OWNER_ROOT_DEFAULT_MODEL = {
+  provider: "opencode-go",
+  id: "deepseek-v4.1-flash",
+} as const;
 
 export interface OwnerAgentSession {
   readonly sessionManager: SessionManager;
   readonly isStreaming: boolean;
+  /// Текущая модель сессии (объект каталога Pi).
+  readonly model?: any;
+  /// Смена модели: Pi проверяет авторизацию и пишет model_change.
+  setModel?(model: any): Promise<void>;
   readonly isIdle: boolean;
   prompt(text: string): Promise<void>;
   steer(text: string): Promise<unknown>;
@@ -41,6 +50,7 @@ export interface OwnerSessionSnapshot {
   cwd: string;
   sessionFile?: string;
   parentSession?: string;
+  model: { provider: string; id: string } | null;
   relation: OwnerSessionRelation;
   name?: string;
   leafId: string | null;
@@ -59,6 +69,7 @@ export interface OwnerSessionRuntimeOptions {
 export interface OwnerSessionCreateOptions {
   tools?: readonly string[];
   customTools?: ToolDefinition[];
+  modelRef?: { provider: string; id: string };
 }
 
 export class OwnerSessionNotFoundError extends Error {
@@ -82,6 +93,13 @@ export class OwnerSessionBranchError extends Error {
   }
 }
 
+export class OwnerSessionModelError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerSessionModelError";
+  }
+}
+
 type SessionHandle = {
   manager: SessionManager;
   session: OwnerAgentSession;
@@ -94,10 +112,19 @@ async function createDefaultSession(
   options: OwnerSessionCreateOptions = {},
 ): Promise<OwnerAgentSession> {
   const cwd = manager.getCwd();
+  const modelRuntime = options.modelRef ? await getModelRuntime() : undefined;
+  const model = options.modelRef
+    ? modelRuntime?.getModel(options.modelRef.provider, options.modelRef.id)
+    : undefined;
+  if (options.modelRef && !model) {
+    throw new Error(`Owner session model ${options.modelRef.provider}/${options.modelRef.id} is unavailable`);
+  }
   const { session } = await createAgentSession({
     cwd,
     sessionManager: manager,
     settingsManager: SettingsManager.create(cwd),
+    modelRuntime,
+    model,
     tools: options.tools ? [...options.tools] : undefined,
     customTools: options.customTools,
   });
@@ -237,6 +264,7 @@ export class OwnerSessionRuntime {
       cwd: handle.manager.getCwd(),
       sessionFile: handle.manager.getSessionFile(),
       parentSession: header?.parentSession,
+      model: this.modelRef(handle.session),
       relation: this.relation(handle.manager),
       name: handle.manager.getSessionName(),
       leafId: handle.manager.getLeafId(),
@@ -258,6 +286,34 @@ export class OwnerSessionRuntime {
     };
   }
 
+  /**
+   * Переключение модели живой сессии.
+   *
+   * Модель принадлежит сессии, а не клиенту: Pi сам проверяет авторизацию
+   * провайдера и пишет model_change в транскрипт, поэтому выбор переживает
+   * перезапуск сервера и виден в истории.
+   */
+  async setModel(id: string, modelRef: { provider: string; id: string }): Promise<OwnerSessionSnapshot> {
+    const handle = await this.ensureHandle(id);
+    if (handle.session.isStreaming) throw new OwnerSessionStreamingConflictError(id);
+    if (!handle.session.setModel) throw new OwnerSessionModelError(`Session ${id} does not support model switching`);
+    const modelRuntime = await getModelRuntime();
+    const model = modelRuntime?.getModel(modelRef.provider, modelRef.id);
+    if (!model) throw new OwnerSessionModelError(`Model ${modelRef.provider}/${modelRef.id} is unavailable`);
+    try {
+      await handle.session.setModel(model);
+    } catch (error) {
+      throw new OwnerSessionModelError(error instanceof Error ? error.message : String(error));
+    }
+    return this.snapshot(id);
+  }
+
+  private modelRef(session: OwnerAgentSession): { provider: string; id: string } | null {
+    const model = session.model as { provider?: unknown; id?: unknown } | undefined;
+    if (typeof model?.provider !== "string" || typeof model?.id !== "string") return null;
+    return { provider: model.provider, id: model.id };
+  }
+
   private async ensureHandle(id: string): Promise<SessionHandle> {
     const current = this.handles.get(id);
     if (current) return current;
@@ -270,7 +326,7 @@ export class OwnerSessionRuntime {
     const id = manager.getSessionId();
     const existing = this.handles.get(id);
     if (existing) return existing;
-    const session = await this.createSession(manager);
+    const session = await this.createSession(manager, this.defaultCreateOptions(manager));
     const handle: SessionHandle = { manager, session, listeners: new Set() };
     this.handles.set(id, handle);
     this.attachSdkSubscription(handle);
@@ -282,7 +338,7 @@ export class OwnerSessionRuntime {
     this.detachSdkSubscription(handle);
     handle.session.dispose();
     handle.manager = manager;
-    handle.session = await this.createSession(manager);
+    handle.session = await this.createSession(manager, this.defaultCreateOptions(manager));
     if (hadListeners) this.attachSdkSubscription(handle);
   }
 
@@ -332,6 +388,12 @@ export class OwnerSessionRuntime {
     if (!manager.getHeader()?.parentSession) return "root";
     const marker = [...manager.getEntries()].reverse().find(entry => this.isRelationEntry(entry)) as any;
     return marker?.data?.kind === "subagent" ? "subagent" : "fork";
+  }
+
+  private defaultCreateOptions(manager: SessionManager): OwnerSessionCreateOptions {
+    if (this.relation(manager) !== "root") return {};
+    const hasPersistedModel = manager.getBranch().some(entry => entry.type === "model_change");
+    return hasPersistedModel ? {} : { modelRef: OWNER_ROOT_DEFAULT_MODEL };
   }
 
   private isRelationEntry(entry: SessionEntry): boolean {

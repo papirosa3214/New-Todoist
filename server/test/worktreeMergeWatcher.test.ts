@@ -147,6 +147,37 @@ describe("сторож автослияния", () => {
     expect(checkWorktreeMerge().ok).toBe(true);
   });
 
+  it("видит незакрытую ветку роли на хостах после слияния", () => {
+    const file = path.join(
+      process.env.TASKFLOW_ROLE_WORKTREES!,
+      "branch-cleanup.json",
+    );
+    const entry = (state: string, detail?: string) => ({
+      updated_at: new Date().toISOString(),
+      entries: [
+        {
+          at: new Date().toISOString(),
+          branch: "roles/abc",
+          results: [
+            { remote: "origin", branch: "roles/abc", state: "deleted" },
+            { remote: "github", branch: "roles/abc", state, detail },
+          ],
+        },
+      ],
+    });
+    fs.writeFileSync(
+      file,
+      JSON.stringify(entry("failed", "Permission denied")),
+    );
+    const { ok, problems } = checkWorktreeMerge();
+    expect(ok).toBe(false);
+    expect(problems.join("\n")).toContain("roles/abc");
+    expect(problems.join("\n")).toContain("github — отказ");
+
+    fs.writeFileSync(file, JSON.stringify(entry("deleted")));
+    expect(checkWorktreeMerge().ok).toBe(true);
+  });
+
   it("подсказка про снятие помехи обещает автовозврат, а не ручную правку БД", () => {
     const text = MERGE_WATCH_ACTIONS.join("\n");
     // Раньше здесь было «очередь продолжит сама» — этого не происходило:

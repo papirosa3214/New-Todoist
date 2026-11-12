@@ -43,7 +43,7 @@ describe("реестр: выбор и рендер", () => {
   it("в сборку идут только нужные категории; код-тексты и data не попадают", () => {
     const got = rulesFor("builder", "card");
     const cats = new Set(got.map((r) => r.category));
-    for (const c of cats) expect(["общий шаблон", "личные инструкции", "характер", "новое 06.11.2026", "данные (подстановка), не правило"]).toContain(c);
+    for (const c of cats) expect(["общий шаблон v2", "общий шаблон", "личные инструкции", "характер", "новое 06.11.2026", "данные (подстановка), не правило"]).toContain(c);
     expect(got.some((r) => r.category.startsWith("текст из кода"))).toBe(false);
     expect(got.filter((r) => r.kind === "data").every((r) => /^\{\{[A-Z]+\}\}$/.test(r.text.trim()))).toBe(true);
     expect(got.every((r) => r.roles === "all" || r.roles.includes("builder"))).toBe(true);
@@ -87,10 +87,14 @@ describe("реестр: подключение", () => {
     expect(loader.getAgentsFiles().agentsFiles).toHaveLength(0);
     expect(loader.getSystemPrompt() ?? "").not.toContain(MARKER);
   });
-  it("исключение: текстовый чат secretary и researcher остаётся на коротких файлах", async () => {
-    for (const role of ["secretary", "researcher"]) {
-      expect(await chatSystemPrompt(role, "work", roleHome(role).workspace)).toBe(singleChatSystemPrompt(role));
-    }
+  it("исключение: текстовый чат researcher остаётся на коротком файле", async () => {
+    expect(await chatSystemPrompt("researcher", "work", roleHome("researcher").workspace)).toBe(singleChatSystemPrompt("researcher"));
+  });
+  // Владелец 11.11.2026: «давай присоединяй её уже к реестру».
+  it("текстовый чат secretary собирается из реестра правил, а не из secretary-chat-system.md", async () => {
+    const prompt = await chatSystemPrompt("secretary", "work", roleHome("secretary").workspace);
+    expect(prompt.startsWith(buildRegistryRules("secretary", "chat").text)).toBe(true);
+    expect(prompt).not.toContain("# Системная инструкция: Помощник владельца (secretary)");
   });
   it("выключатель false → прежний путь (SYSTEM.md + AGENTS.md + behavior)", async () => {
     setSetting("role_registry_enabled", false, null);

@@ -192,8 +192,11 @@ afterAll(async () => {
 });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Граница прерывания хода: кнопка «Стоп» (новое сообщение ход больше не прерывает). */
+const ownerStop = () =>
+  app!.inject({ method: "POST", url: `/api/chats/${chatId}/stop`, headers: ownerHeader, payload: {} });
 
-describe("обычный чат: уточнение прерывает прежнюю работу", () => {
+describe("обычный чат: остановка хода владельцем", () => {
   it("прежний ход остановлен, поколение увеличено, новый ход идёт с выжимкой", async () => {
     // Первая сессия «висит» на долгом действии.
     hangText = "Начни долгую работу А";
@@ -210,12 +213,7 @@ describe("обычный чат: уточнение прерывает преж�
     const generationBefore = currentChatGeneration(chatId, roleUserId);
 
     // Второе сообщение владельца — уточнение: прежняя работа прерывается.
-    const second = await app!.inject({
-      method: "POST",
-      url: `/api/chats/${chatId}/messages`,
-      headers: ownerHeader,
-      payload: { text: "@builder Стоп, хватит А" },
-    });
+    const second = await ownerStop();
     expect(second.statusCode).toBe(200);
 
     // Граница сработала: поколение пары увеличилось.
@@ -244,12 +242,7 @@ describe("обычный чат: уточнение прерывает преж�
     });
     for (let i = 0; i < 100 && !(hung()?.waiting ?? false); i += 1) await sleep(20);
     expect(hung()?.waiting).toBe(true);
-    await app!.inject({
-      method: "POST",
-      url: `/api/chats/${chatId}/messages`,
-      headers: ownerHeader,
-      payload: { text: "@builder Стоп Б" },
-    });
+    await ownerStop();
     for (let i = 0; i < 100; i += 1) {
       const marked = db
         .prepare(
@@ -278,7 +271,9 @@ describe("обычный чат: уточнение прерывает преж�
     for (let i = 0; i < 100 && !(hung()?.waiting ?? false); i += 1) await sleep(20);
     expect(hung()?.waiting).toBe(true);
 
-    // Уточнение владельца прерывает прежнюю работу.
+    // Владелец останавливает ход и пишет новое (сообщение во время хода
+    // теперь встаёт в очередь — test/chatQueued.test.ts, 12.11.2026).
+    await ownerStop();
     await app!.inject({
       method: "POST",
       url: `/api/chats/${chatId}/messages`,

@@ -101,6 +101,14 @@ function log(msg: string) {
 
 const sha = (s: string) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
 
+/** Викилинки обсидиана. Конвертер сервера экранирует «[» и «]» (чтобы квадратные
+ *  скобки в тексте не стали ссылкой), а обсидиан понимает только «[[…]]» без
+ *  экранирования. Разэкранируем ровно двойные скобки — одиночные остаются
+ *  экранированными, как и задумано конвертером. */
+function unescapeWikilinks(md: string): string {
+  return md.replace(/\\\[\\\[/g, "[[").replace(/\\\]\\\]/g, "]]");
+}
+
 // ── frontmatter ───────────────────────────────────────────────────────────
 
 /** YAML-значение: JSON-строка — валидный YAML flow-scalar. */
@@ -109,11 +117,24 @@ function yamlValue(v: unknown): string {
   return JSON.stringify(String(v));
 }
 
-function renderFrontmatter(fm: Record<string, string | null>): string {
-  const keys = Object.keys(fm);
-  if (!keys.length) return "";
+type FmValue = string | string[] | null;
+
+/** Пустое свойство не пишем вовсе: «tags: null» в файле — мусор, который
+ *  ломает и обсидиан, и выборки по свойствам. */
+function renderFrontmatter(fm: Record<string, FmValue>): string {
   const lines = ["---"];
-  for (const k of keys) lines.push(`${k}: ${yamlValue(fm[k])}`);
+  for (const [k, v] of Object.entries(fm)) {
+    if (Array.isArray(v)) {
+      const items = v.filter((x) => x !== null && x !== undefined && x !== "");
+      if (!items.length) continue;
+      lines.push(`${k}:`);
+      for (const item of items) lines.push(`  - ${yamlValue(item)}`);
+      continue;
+    }
+    if (v === null || v === undefined || v === "" || v === "null") continue;
+    lines.push(`${k}: ${yamlValue(v)}`);
+  }
+  if (lines.length === 1) return "";
   lines.push("---");
   return lines.join("\n") + "\n";
 }
@@ -126,13 +147,12 @@ function parseFrontmatter(text: string): { fm: Record<string, string>; body: str
   if (end < 0) return { fm: {}, body: norm };
   const head = norm.slice(4, end);
   const rest = norm.slice(end + 4);
-  const fm: Record<string, string> = {};
-  for (const line of head.split("\n")) {
-    const m = /^([A-Za-z0-9_а-яА-ЯёЁ-]+):\s*(.*)$/.exec(line);
-    if (!m) continue;
-    let v = m[2].trim();
-    if (v === "null" || v === "~" || v === "") v = "";
-    else if (v.startsWith('"') && v.endsWith('"') && v.length >= 2) {
+  const fm: Record<string, FmValue> = {};
+  let listKey: string | null = null;
+  const scalar = (raw: string): string => {
+    let v = raw.trim();
+    if (v === "null" || v === "~" || v === "") return "";
+    if (v.startsWith('"') && v.endsWith('"') && v.length >= 2) {
       try {
         v = JSON.parse(v);
       } catch {
@@ -141,7 +161,27 @@ function parseFrontmatter(text: string): { fm: Record<string, string>; body: str
     } else if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) {
       v = v.slice(1, -1);
     }
-    fm[m[1]] = v;
+    return v;
+  };
+  for (const line of head.split("\n")) {
+    // элемент YAML-списка: «  - значение»
+    const item = /^\s+-\s+(.*)$/.exec(line);
+    if (item && listKey) {
+      (fm[listKey] as string[]).push(scalar(item[1]));
+      continue;
+    }
+    const m = /^([A-Za-z0-9_а-яА-ЯёЁ-]+):\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const key = m[1];
+    const raw = m[2].trim();
+    if (raw === "") {
+      // дальше может идти список — кладём пустой и ждём продолжения
+      fm[key] = [];
+      listKey = key;
+      continue;
+    }
+    fm[key] = scalar(raw);
+    listKey = null;
   }
   return { fm, body: rest.replace(/^\n+/, "") };
 }
@@ -398,6 +438,10 @@ function main() {
       byId.set(id, list);
     }
     const liveById = new Map<string, (typeof parsedFiles)[number]>();
+    // Путь файла → id заметки (из состояния): по нему узнаём файл, у которого
+    // из frontmatter потерялся id.
+    const stateByPath = new Map<string, string>();
+    for (const [id, v] of Object.entries(state.imported)) stateByPath.set(v.path, id);
     for (const [id, list] of byId) {
       const prev = state.imported[id];
       const live = (prev && list.find((x) => x.rel === prev.path)) || list[0];
@@ -419,7 +463,11 @@ function main() {
 
     for (const f of parsedFiles) {
       const { fm, body, hash } = f;
-      const id = (fm.id || "").trim();
+      const rawId = (fm.id || "").trim();
+      // Файл без id, но путь известен по состоянию: id потерялся в frontmatter
+      // (заметку переписали вручную). Это наш же файл — узнаём его по пути,
+      // иначе каждое чтение плодило бы копию заметки.
+      const id = rawId || (stateByPath.get(f.rel) ?? "");
 
       if (id && notesById.has(id)) {
         // Живой файл заметки — только он задаёт содержимое.
@@ -447,17 +495,43 @@ function main() {
         importedThisRun.add(id);
         state.imported[id] = { hash, path: f.rel };
         pathOwners.set(f.rel, id);
+        // Вернём потерянный id в frontmatter.
+        if (!rawId && !dryRun) {
+          const out = renderFrontmatter({ ...fm, id }) + "\n" + body;
+          fs.writeFileSync(f.abs, out, "utf8");
+          log(`id возвращён в frontmatter: ${f.rel}`);
+        }
         continue;
       }
 
       // Файл без id (или с чужим id) — новая заметка, созданная в обсидиане.
       if (id && !notesById.has(id)) {
+        if (state.imported[id]) {
+          // Заметку удалили из базы, а файл остался — это осиротевший файл
+          // удалённой заметки: убираем в бэкапы, в волте он лишний.
+          if (!dryRun) {
+            const bakDir = path.join(BACKUP_DIR, "stale");
+            fs.mkdirSync(bakDir, { recursive: true });
+            fs.writeFileSync(path.join(bakDir, path.basename(f.rel)), fs.readFileSync(f.abs, "utf8"), "utf8");
+            fs.unlinkSync(f.abs);
+          }
+          delete state.imported[id];
+          stalePaths.add(f.rel);
+          log(`файл удалённой заметки убран в kb-state/backups/stale: ${f.rel}`);
+          stats.stale++;
+          continue;
+        }
         log(`пропуск: в frontmatter id «${id}», которого нет в базе (файл не наш)`);
         stats.skipped++;
         continue;
       }
       const title = (fm.title || "").trim() || deriveTitleFromMarkdown(body) || path.basename(f.rel, ".md");
-      const folderRel = (fm.folder || "").trim() || path.dirname(f.rel).split("/").filter(Boolean).join("/");
+      // Файл в корне волта: dirname даёт ".", а это не папка — иначе в базе
+      // появлялась мусорная папка «.», а заметка уезжала в «Без названия».
+      const dir = path.dirname(f.rel);
+      const folderRel =
+        (fm.folder || "").trim() ||
+        (dir === "." ? "" : dir.split("/").filter(Boolean).join("/"));
       const folderId = folderByRel(folderRel);
       const newId = crypto.randomUUID();
       const content = markdownToTiptap(body);
@@ -495,7 +569,7 @@ function main() {
   // ── 2. ЭКСПОРТ: база → файлы ───────────────────────────────────────────
   const exportTx = db.transaction(() => {
     for (const note of notes) {
-      const body = tiptapToMarkdown(note.content);
+      const body = unescapeWikilinks(tiptapToMarkdown(note.content));
       const bodyHash = sha(body);
       const dbTitle = (note.title || "").trim();
       // Хэш состояния покрывает тело И заголовок (как в импорте).
@@ -525,25 +599,14 @@ function main() {
       const abs = path.join(KB_DIR, rel);
 
       let existingBody: string | null = null;
-      let existingFm: Record<string, string> = {};
+      let existingFm: Record<string, FmValue> = {};
       if (fs.existsSync(abs)) {
         const parsed = parseFrontmatter(fs.readFileSync(abs, "utf8"));
         existingBody = parsed.body;
         existingFm = parsed.fm;
       }
 
-      // Файл совпадает с базой — не трогаем (свойства обсидиана остаются).
-      // Исключение: свойство title устарело (заголовок в базе изменили) —
-      // тогда файл переписываем, чтобы свойство не расходилось с базой.
-      const titleStale = (existingFm.title || "").trim() !== dbTitle;
-      if (existingBody !== null && sha(existingBody) === bodyHash && !titleStale) {
-        state.imported[note.id] = { hash: stateHash, path: rel };
-        pathOwners.set(rel, note.id);
-        stats.skipped++;
-        continue;
-      }
-
-      const ourFm: Record<string, string | null> = {
+      const ourFm: Record<string, FmValue> = {
         id: note.id,
         title: note.title,
         category: note.kb_category,
@@ -552,14 +615,43 @@ function main() {
         created: note.created_at,
         updated: note.updated_at,
       };
+
+      // Файл совпадает с базой — не трогаем (свойства обсидиана остаются).
+      // Исключение: какое-то наше свойство разошлось с базой (заголовок
+      // изменили, папку переложили, проставили категорию, обновили дату) —
+      // тогда файл переписываем, чтобы свойства не расходились с базой.
+      const norm = (v: FmValue | undefined) => {
+        if (Array.isArray(v)) return v.join(",");
+        const s = (v ?? "").trim();
+        return s === "null" || s === "~" ? "" : s;
+      };
+      const propsStale = Object.entries(ourFm).some(([k, want]) => {
+        if (k === "id") return false;
+        const w = norm(want);
+        // Пустое свойство в файле быть не должно вовсе («category: null» — мусор).
+        if (!w) return k in existingFm;
+        return norm(existingFm[k]) !== w;
+      }) ||
+        // Чужое свойство с пустым значением («tags: null») — тоже мусор: файл
+        // переписываем, чтобы свойство исчезло совсем.
+        Object.entries(existingFm).some(
+          ([k, v]) => !MANAGED_KEYS.has(k) && (Array.isArray(v) ? v.length === 0 : norm(v) === ""),
+        );
+      if (existingBody !== null && sha(existingBody) === bodyHash && !propsStale) {
+        state.imported[note.id] = { hash: stateHash, path: rel };
+        pathOwners.set(rel, note.id);
+        stats.skipped++;
+        continue;
+      }
+
       // Чужие ключи frontmatter (свойства обсидиана) сохраняем.
-      const merged: Record<string, string | null> = {};
+      const merged: Record<string, FmValue> = {};
       for (const [k, v] of Object.entries(existingFm)) {
         if (!MANAGED_KEYS.has(k)) merged[k] = v;
       }
       for (const [k, v] of Object.entries(ourFm)) {
+        // Пустое свойство не пишем вовсе: «category: null» в файле только шумит.
         if (v !== null && v !== undefined && v !== "") merged[k] = v;
-        else if (!(k in merged)) merged[k] = null;
       }
 
       if (!dryRun) {

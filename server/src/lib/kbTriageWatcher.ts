@@ -24,17 +24,21 @@ import { dirname, join } from "path";
  * Задача идёт в основной проект, а НЕ в «Серверные уведомления»: разбор —
  * рутина, а не поломка. В уведомления летят только сбои приборов.
  *
- * ОДНА карточка, а не по одной на каждый порог (решение владельца
- * 16.10.2026). Раньше каждое достижение порога заводило новую задачу, и в
- * проекте копились тринадцать одинаковых «Разобрать накопившиеся заметки»:
- * у Помощника владельца этот ручной поток не в очереди, поэтому они висели
- * мёртвым грузом. Теперь сторож ведёт ОДНУ живую карточку:
+ * ОДНА карточка на весь разбор (решения владельца 16.10.2026 и 11.11.2026).
+ * Раньше каждое достижение порога заводило новую задачу, и в проекте копились
+ * десятки одинаковых «Разобрать накопившиеся заметки»: у Помощника владельца
+ * этот ручной поток не в очереди, поэтому они висели мёртвым грузом.
+ * Владелец 11.11.2026: «должна быть создана только одна задача, изменять
+ * можно». Поэтому:
  *
- *   • порог достигнут, живой карточки нет  → заводим карточку;
- *   • порог достигнут, карточка жива       → обновляем её счётчик, дубль
- *                                             не заводим никогда;
- *   • порог достигнут, карточку закрыли     → следующая проверка заводит
- *                                             новую (разбор-то не сделан).
+ *   • карточки нет                     → заводим её один раз;
+ *   • карточка есть, она жива          → обновляем счётчик в ней же;
+ *   • карточку закрыли или убрали      → возвращаем ЭТУ ЖЕ карточку в работу,
+ *                                        новую не заводим никогда;
+ *   • рядом остались живые дубли       → убираем в архив (не удаляем).
+ *
+ * В заголовке счётчика нет — он меняется только в описании, чтобы карточка
+ * не выглядела новой на каждом пороге.
  *
  * И рядом с карточкой — сигнал в личный чат Помощника владельца: сколько
  * заметок ждёт, какая карточка и что делать. Молчаливый счётчик роль не
@@ -129,7 +133,7 @@ export function kbTriageState(): {
     last_raised_at: typeof raised === "number" ? new Date(raised).toISOString() : null,
     pending: pendingCount(),
     threshold: TRIAGE_THRESHOLD,
-    task_id: liveTriageCard()?.id ?? state.raised_task_id ?? null,
+    task_id: standingTriageCard()?.id ?? state.raised_task_id ?? null,
   };
 }
 
@@ -165,35 +169,69 @@ function triageProjectId(): string | null {
   return row?.id ?? null;
 }
 
-type TriageCard = { id: string; title: string; description: string | null };
+type TriageCard = {
+  id: string;
+  title: string;
+  description: string | null;
+  status?: string | null;
+  archived_at?: string | null;
+};
 
 /**
- * Живая карточка разбора, если она есть.
+ * Карточка разбора — одна на всё время.
  *
- * Ищем не по отметке в состоянии, а по базе — отметка может потеряться или
- * устареть, а карточка видна всегда. Порядок: карточка, которой сторож уже
- * владеет (её нельзя бросить ради более новой), иначе самая свежая из живых.
- * Именно этот поиск и убирает тринадцать дублей: после перезапуска сервера
- * сторож подхватывает любую живую карточку вместо новой.
+ * Ищем не по отметке в состоянии, а по базе: отметка может потеряться, а
+ * карточка видна всегда. Порядок: карточка, которой сторож уже владеет (её
+ * нельзя бросить ради более новой), иначе самая свежая. Статус и архив при
+ * поиске не важны: закрытую карточку сторож возвращает в работу, а не заводит
+ * рядом вторую (владелец 11.11.2026).
  */
-function liveTriageCard(): TriageCard | null {
+function standingTriageCard(): TriageCard | null {
   const rows = db
     .prepare(
-      `SELECT id, title, description FROM tasks
+      `SELECT id, title, description, status, archived_at FROM tasks
         WHERE id LIKE 'kb-triage-%'
-          AND status = 'active'
-          AND archived_at IS NULL
         ORDER BY created_at DESC, id DESC`,
     )
     .all() as TriageCard[];
   if (!rows.length) return null;
   const preferred = readState().raised_task_id;
-  const own = rows.find((r) => r.id === preferred);
-  return own ?? rows[0];
+  return rows.find((r) => r.id === preferred) ?? rows[0];
 }
 
-function triageTitle(count: number): string {
-  return `Разобрать накопившиеся заметки: ${count} ждут разбора`;
+/** Вернуть единственную карточку в работу. Разбор не сделан — значит карточка
+ *  живая; закрытая остаётся той же карточкой, а не поводом завести новую. */
+function reviveTriageCard(card: TriageCard): void {
+  if (card.status === "active" && !card.archived_at) return;
+  db.prepare(
+    "UPDATE tasks SET status = 'active', completed_at = NULL, archived_at = NULL, updated_at = datetime('now') WHERE id = ?",
+  ).run(card.id);
+  card.status = "active";
+  card.archived_at = null;
+  console.error(`[kb-triage-watch] карточку ${card.id} закрывали — вернул её в работу вместо новой`);
+}
+
+/** Остальные карточки разбора, оставшиеся живыми, убираем в архив: разбор
+ *  один, а не по карточке на каждый порог. Ничего не удаляем. */
+function archiveTriageDuplicates(keepId: string): void {
+  const rows = db
+    .prepare(
+      `SELECT id FROM tasks
+        WHERE id LIKE 'kb-triage-%' AND id <> ?
+          AND status = 'active' AND archived_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM role_run_jobs j WHERE j.task_id = tasks.id)`,
+    )
+    .all(keepId) as Array<{ id: string }>;
+  for (const row of rows) {
+    db.prepare("UPDATE tasks SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(row.id);
+    console.error(`[kb-triage-watch] лишняя карточка разбора ${row.id} убрана в архив`);
+  }
+}
+
+/** Заголовок карточки постоянный: счётчик живёт в описании, иначе каждый
+ *  порог выглядел как новая задача (жалоба владельца 11.11.2026). */
+function triageTitle(): string {
+  return "Разобрать накопившиеся заметки";
 }
 
 /** Строка счётчика в описании карточки. Сторож ей владеет и переписывает
@@ -240,7 +278,7 @@ function createTriageCard(projectId: string, count: number): string {
       ) VALUES (?, ?, ?, ?, ?, 'active', NULL, ?, 'secretary', 0, datetime('now'), datetime('now'))`,
     ).run(
       id,
-      triageTitle(count),
+      triageTitle(),
       triageDescription(count),
       PRIORITY,
       OWNER_ID,
@@ -255,7 +293,7 @@ function createTriageCard(projectId: string, count: number): string {
 /** Обновить счётчик живой карточки вместо заведения дубля. */
 function refreshTriageCard(card: TriageCard, count: number): void {
   const description = withCount(card.description, count);
-  const title = triageTitle(count);
+  const title = triageTitle();
   if (card.title === title && card.description === description) return;
   db.prepare("UPDATE tasks SET title = ?, description = ?, updated_at = datetime('now') WHERE id = ?").run(
     title,
@@ -285,7 +323,7 @@ function notifySecretary(count: number, taskId: string): boolean {
   const text = [
     `Порог разбора заметок достигнут: ${count} ждут разбора.`,
     "",
-    `Что делать: взять карточку «${triageTitle(count)}» (${taskId}) и разобрать накопившиеся заметки — порядок и границы описаны внутри.`,
+    `Что делать: взять карточку «${triageTitle()}» (${taskId}) и разобрать накопившиеся заметки — порядок и границы описаны внутри.`,
     "",
     "Пока карточка жива, новых карточек разбора не будет: сторож обновит счётчик в ней же. Повтор этого сигнала по той же карточке — не чаще раза в сутки.",
   ].join("\n");
@@ -312,17 +350,32 @@ function raise(count: number) {
   writeState({ checked_at_epoch: now, pending: count });
   // Порог проверяется ЗДЕСЬ, а не в вызывающем коде: иначе любой путь,
   // минуя таймер, мог бы завести задачу на пять заметок.
-  if (count < TRIAGE_THRESHOLD) return;
+  if (count < TRIAGE_THRESHOLD) {
+    // Ниже порога карточку не трогаем, но дубли прежней версии сторожа
+    // убираем: карточка разбора одна, и ждать следующего порога, чтобы это
+    // исправить, незачем (жалоба владельца 11.11.2026).
+    const standing = standingTriageCard();
+    if (standing) archiveTriageDuplicates(standing.id);
+    return;
+  }
   const projectId = triageProjectId();
   if (!projectId) {
     console.error("[kb-triage-watch] нет проекта для разбора — молчу, чтобы не плодить задачи в хабе");
     return;
   }
 
-  // Одна живая карточка на разбор. Пока она не закрыта — новых не будет.
-  const live = liveTriageCard();
-  const taskId = live ? live.id : createTriageCard(projectId, count);
-  if (live) refreshTriageCard(live, count);
+  // Одна карточка на разбор на всё время: закрытую возвращаем в работу,
+  // новую заводим только если карточек нет вовсе (владелец 11.11.2026).
+  const card = standingTriageCard();
+  let taskId: string;
+  if (card) {
+    reviveTriageCard(card);
+    refreshTriageCard(card, count);
+    taskId = card.id;
+  } else {
+    taskId = createTriageCard(projectId, count);
+  }
+  archiveTriageDuplicates(taskId);
 
   const state = readState();
   if (state.raised_task_id !== taskId) {

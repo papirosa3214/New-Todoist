@@ -1,3 +1,5 @@
+import {prepareSecretBrokerRuntime,secretBrokerBindings} from "./secretBrokerRuntime.js";
+import {storeBrokerOAuthCredential} from "./brokerOAuth.js";
 import { roleBashKillError } from "./roleBashGuard.js";
 import { TASK_CHAT_FILE_TOOLS, TASK_CHAT_MODE } from "./taskChatTools.js";
 import {chatTurnSystemText,installSecretarySystem,chatUserTurnText,chatRuntimeGuidanceEnabled} from "./secretaryChatPrompt.js";
@@ -19,7 +21,6 @@ import {
   buildRoleToolCatalog,
   installNativeToolCore,
   installNativeToolSchemas,
-  ROLE_TOOL_INSTRUCTION,
   roleToolInstruction,
 } from "./roleToolCatalog.js";
 import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
@@ -44,6 +45,7 @@ import {
 import { parseModelRef } from "../lib/attemptModel.js";
 import { resolveCatalogModel } from "./modelCatalog.js";
 import { closeChatSession, measureChatSession, openChatSession } from "./chatContextUsage.js";
+import { compactByMessageCount } from "./compactionFallback.js";
 import { providerAvailable } from "../lib/modelLadder.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import {
@@ -181,7 +183,9 @@ export async function getModelRuntime(): Promise<ModelRuntime> {
   if (modelRuntime) return modelRuntime;
   modelRuntimePending ??= (async () => {
     try {
+      const bindings=secretBrokerBindings();
       const rt = await ModelRuntime.create();
+      await prepareSecretBrokerRuntime(rt,bindings);
       installProviderDiagnostics(rt);
       installProxyAwareGlobalFetch();
       modelRuntime = rt;
@@ -857,7 +861,7 @@ export const piRuntime: RuntimeAdapter = {
 
   async startAuthSession(provider: string): Promise<AuthSessionView> {
     const rt = await getModelRuntime();
-    const session = authSessionManager.startOAuth(provider, rt);
+    const session = authSessionManager.startOAuth(provider, rt, async (credential) => { await storeBrokerOAuthCredential(provider, credential as any); });
     return session.toView();
   },
 
@@ -1250,6 +1254,9 @@ export async function modelExists(ref: string): Promise<boolean> {
 export interface StartChatRunInput {
   /** Чат задачи: только чтение своей задачи (владелец 05.11.2026). */
   taskChatTaskId?: string;
+  /** Навыки, реально подключённые к ходу: имя папки и русский заголовок.
+   *  Нужны, чтобы владелец видел, чем роль пользуется (см. SavedSteps.skills). */
+  onSkills?: (skills: Array<{ name: string; title: string }>) => void;
   /** Settles after the visible reply is persisted, never merely on SDK completion. */
   deliveryOutcome?: Promise<boolean>;
   mode?: ChatWorkMode;
@@ -1336,6 +1343,9 @@ export const CHAT_RUN_IDLE_MS = 0;
 export const CHAT_RUN_CEILING_MS = 30 * 60_000;
 
 function resolveChatRunTimeout(override?: number): number {
+  // Явный 0 — «без потолка»: ход идёт, пока модель не закончит или пока
+  // владелец не остановит (дочерняя сессия, карточки 11.11.2026).
+  if (override === 0) return 0;
   const raw =
     override && override > 0
       ? override
@@ -1548,22 +1558,16 @@ async function startChatRunOnce(
       undefined,
       true,
     ), resource => resource.disposeResources());
+    try { input.onSkills?.(resourceLoader.usedSkills()); } catch { /* показ навыков не должен ломать ход */ }
     const composio = await preparation.wait(connectRoleComposio(role, mode, input.chatId).catch(
       (error) => {
         console.warn(`[chats] Composio для ${role} не подключился:`, error);
         return { tools: [] as any[], close: async () => {} };
       },
     ), resource => resource.close());
-    // «Обсуждение» — как «Работа» (владелец 20.10.2026); ограничен только «План».
-    const allowed = (name: string) =>
-      input.taskChatTaskId ? TASK_CHAT_FILE_TOOLS.includes(name) :
-      mode !== "plan" ||
-      PLANNING_TOOLS.includes(name) ||
-      [
-        "COMPOSIO_SEARCH_TOOLS",
-        "COMPOSIO_MULTI_EXECUTE_TOOL",
-        "COMPOSIO_GET_TOOL_SCHEMAS",
-      ].some((n) => name.endsWith(n));
+    // Один набор во всех режимах чата (владелец 07.11.2026): ни «План», ни чат задачи
+    // встроенные инструменты не урезают.
+    const allowed = (_name: string) => true;
     const builtin = [
       ...new Map(
         [...createCodingTools(cwd), ...createReadOnlyTools(cwd)].map((t) => [
@@ -1639,16 +1643,7 @@ async function startChatRunOnce(
         // («у меня нет инструментов», владелец 02.10.2026). Встроенные с
         // описаниями владельца — через customTools: одноимённый перекрывает.
         tools: [...builtin.map((t) => t.name), ...toolCatalog.registeredNames],
-        customTools: guardChatActions([...builtin, ...toolCatalog.customTools], callId => reserveChatItemAction({chatId:input.chatId,roleId:input.roleId,messageId:input.messageId,callId:runId+":"+callId}), () => {
-          budgetFailure=Object.assign(new Error("Дополнительные 50 действий исчерпаны; материалы сохранены в приватной карточке разбора"),{code:"CHAT_ACTION_BUDGET"});
-          stopChatWorkPlan(input.chatId, input.roleId, "budget_exhausted");
-          db.prepare("UPDATE chat_sessions SET pi_session_id='' WHERE chat_id=? AND role_id=?").run(input.chatId,input.roleId);
-          void session?.abort().catch(() => {});
-        }, () => {
-          budgetFailure=Object.assign(new Error("Продолжение в новой сессии на 50 действий"),{code:"CHAT_ACTION_CONTINUE"});
-          safelyCaptureBudgetCases(input.chatId,input.roleId,{sessionFile:sessionManager.getSessionFile(),systemPrompt,events:budgetEvents});
-          void session?.abort().catch(() => {});
-        }),
+        customTools: [...builtin, ...toolCatalog.customTools],
         sessionManager,
         settingsManager: SettingsManager.inMemory({
           // Compaction uses Pi defaults and the actual model token window.
@@ -1700,8 +1695,19 @@ async function startChatRunOnce(
     if (roleThinking && session.thinkingLevel !== roleThinking && typeof session.setThinkingLevel === "function") {
       session.setThinkingLevel(roleThinking);
     }
-    // Restoring a session is not a reason to compact. Pi checks the model's
-    // token window itself before prompts and between tool turns.
+    // Восстановление сессии само по себе — не повод сжимать: окно модели Pi
+    // проверяет сам. Но владелец 10.11.2026 попросил свой порог по числу
+    // сообщений: больше пятидесяти реплик в контексте — сжимаем перед ходом,
+    // иначе история растёт незаметно и роль платит за неё каждый ход.
+    await compactByMessageCount(session, {
+      label: `${role} chat ${input.chatId}`,
+      log: (message) => console.warn(message),
+    }).catch((error) => {
+      // Сжатие — улучшение, а не условие хода: не вышло — работаем как раньше.
+      console.warn("[chats] сжатие по числу сообщений не прошло:", error);
+      return null;
+    });
+
 
     const run: ActiveChatRun = {
       runId,
@@ -1800,6 +1806,8 @@ async function startChatRunOnce(
     // 30-минутный потолок оборвал бы долгую цель посередине.
     const armCeiling = () => {
       clearTimeout(ceilingTimer);
+      // timeoutMs === 0 — потолка нет: обещание, которое не срабатывает.
+      if (timeoutMs <= 0) return new Promise<never>(() => {});
       const ceiling = new Promise<never>((_, reject) => {
         ceilingTimer = setTimeout(() => {
           stopChatWorkPlan(input.chatId, input.roleId, "budget_exhausted");
@@ -1828,7 +1836,6 @@ async function startChatRunOnce(
       const promptOnce = async (text: string) => {
         try {
           await Promise.race([session.prompt(text), watchdog, armCeiling()]);
-          assertChatBudgetAtTurnEnd(input);
           measureChatSession(input.chatId, input.roleId);
         } catch (error) {
           if((error as {code?:string}).code==="CHAT_ACTION_BUDGET"){
@@ -2018,6 +2025,8 @@ async function runExternalChat(
           : input.prompt,
       ),
       new Promise<never>((_, reject) => {
+        // timeoutMs === 0 — потолка нет (дочерняя сессия, 11.11.2026).
+        if (timeoutMs <= 0) return;
         ceilingTimer = setTimeout(() => {
           void session.abort();
           reject(new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs));

@@ -276,3 +276,15 @@ export function weeklySummaryWithBlocks<T>(summary: T): T {
   }
   return out as T;
 }
+
+/** Reading and editing share server-prepared documents; clients never parse source text. */
+export function taskTextWithBlocks<T extends { title?: unknown; description?: unknown }>(task: T) {
+  const title = typeof task.title === "string" ? task.title : "";
+  const description = typeof task.description === "string" ? task.description : "";
+  return {
+    ...task,
+    title_document: JSON.parse(markdownToTiptap(title)),
+    description_document: JSON.parse(markdownToTiptap(description)),
+    description_blocks: chatBlocksCached(description),
+  };
+}

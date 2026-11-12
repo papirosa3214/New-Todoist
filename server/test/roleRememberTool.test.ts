@@ -23,11 +23,12 @@ describe("запись роли в память", () => {
     if (app) await app.close();
   });
 
-  it("taskflow_remember входит в ядро — роль видит его без taskflow_tools", () => {
+  it("память роли — в активной группе taskflow_memory, прежние имена в реестре", () => {
     for (const role of allRoles()) {
       const catalog = buildRoleToolCatalog({ role: role.key, mode: "work", runId: "remember-core" });
-      expect(catalog.activeNames, role.key).toContain("taskflow_remember");
-      expect(catalog.activeNames, role.key).toContain("taskflow_recall");
+      expect(catalog.activeNames, role.key).toContain("taskflow_memory");
+      expect(catalog.registeredNames, role.key).toContain("taskflow_remember");
+      expect(catalog.registeredNames, role.key).toContain("taskflow_recall");
     }
   });
 

@@ -136,15 +136,34 @@ function documentOf(row: NoteRow): KnowledgeDocument | null {
   return { name: `${PREFIX}${row.id}.md`, dataset: (row.dataset_id ?? "").trim() || defaultDataset(), text };
 }
 
+/** Отчёт сдачи работы — рассказ роли, не знание. В индекс базы он не входит. */
+export function isDeliveryReport(noteId: string): boolean {
+  return Boolean(
+    db.prepare(
+      "SELECT 1 AS ok FROM task_events WHERE kind = 'role_result_report' AND to_value = ? LIMIT 1",
+    ).get(noteId),
+  );
+}
+
 export function noteDocument(noteId: string): KnowledgeDocument | null {
   const row = db.prepare(`${NOTE_SQL} WHERE un.id = ?`).get(noteId) as NoteRow | undefined;
   if (!row) throw new Error("Заметка не найдена");
+  if (isDeliveryReport(noteId)) return null;
   return documentOf(row);
 }
 
+function deliveryReportIds(): Set<string> {
+  const rows = db.prepare(
+    "SELECT DISTINCT to_value AS id FROM task_events WHERE kind = 'role_result_report' AND to_value IS NOT NULL",
+  ).all() as Array<{ id: string }>;
+  return new Set(rows.map((row) => row.id));
+}
+
 function allDocuments(): Map<string, KnowledgeDocument> {
+  const reports = deliveryReportIds();
   const out = new Map<string, KnowledgeDocument>();
   for (const row of db.prepare(NOTE_SQL).all() as NoteRow[]) {
+    if (reports.has(row.id)) continue;
     const doc = documentOf(row);
     if (doc) out.set(doc.name, doc);
   }
@@ -226,6 +245,53 @@ export async function uploadDocs(dataset: string, docs: KnowledgeDocument[]): Pr
     });
   }
   return ids;
+}
+
+/**
+ * Перезалить ОДНУ заметку сейчас (09.11.2026, очередь индексации).
+ *
+ * Отличие от `pushNoteToKnowledge` (кнопка «В базу знаний»): здесь снимаются
+ * копии и в прежнем датасете. Заметка переехала в другой проект — значит, у
+ * неё другой датасет, и старая копия иначе осталась бы в чужом индексе
+ * навсегда: суточный прогон убирает такое только по своему состоянию, а
+ * состояние знает лишь один «текущий» датасет на имя.
+ *
+ * Пустая заметка — не сбой: индексировать нечего, копии убираем.
+ */
+export async function reindexNote(
+  noteId: string,
+): Promise<{ dataset: string; document_id: string | null; empty: boolean }> {
+  const name = `${PREFIX}${noteId}.md`;
+  const doc = noteDocument(noteId);
+  const state = loadState();
+  const previous = state[name];
+  const previousDataset = previous?.includes("@") ? previous.slice(previous.lastIndexOf("@") + 1) : "";
+
+  const datasets = new Set<string>();
+  if (previousDataset) datasets.add(previousDataset);
+  if (doc) datasets.add(doc.dataset);
+
+  for (const dataset of datasets) {
+    const listed = await ragflow(
+      `/api/v1/datasets/${dataset}/documents?name=${encodeURIComponent(name)}&page=1&page_size=10`,
+    );
+    const old = ((listed?.data?.docs ?? []) as Array<{ id: string; name: string }>)
+      .filter((d) => d.name === name)
+      .map((d) => d.id);
+    if (old.length) await deleteDocs(dataset, old);
+  }
+
+  if (!doc) {
+    if (state[name]) {
+      delete state[name];
+      saveState(state);
+    }
+    return { dataset: "", document_id: null, empty: true };
+  }
+
+  const [documentId] = await uploadDocs(doc.dataset, [doc]);
+  rememberUploaded(doc);
+  return { dataset: doc.dataset, document_id: documentId ?? null, empty: false };
 }
 
 // ── Прогон ───────────────────────────────────────────────────────────────

@@ -7,7 +7,8 @@
 только `graft build --deep` моделью; до 27.09.2026 их никто не пересобирал
 с 10.09, и граф описывал проект двухнедельной давности.
 
-КАК. Модель — постоянная локальная qwen3-8b-observer в Ollama .110 (своих тегов под
+КАК. Модель — постоянная локальная eriktonon/deepseek-v4.1-flash-1017:9b в Ollama .110
+(09.11.2026: qwen3-8b-observer заменена на модель, которая реально живёт на карте) (своих тегов под
 сервисы не заводим — паспорт ~/.claude/models-local.md). Запуск:
   - ночью, graft-refresh.timer (01:00, окно без других потребителей карты);
   - по требованию: --if-stale (только если `graft check` говорит «устарел»).
@@ -47,7 +48,7 @@ OLLAMA = os.environ.get("GRAFT_OLLAMA", "http://127.0.0.1:11434")
 # гонять с отключёнными рассуждениями — graft сам этого поля не шлёт, а с
 # размышлениями два крошечных файла собирались 150 с.
 LLM_URL = os.environ.get("GRAFT_LLM_URL", "http://127.0.0.1:11500")
-MODEL = os.environ.get("GRAFT_REFRESH_MODEL", "qwen3-8b-observer:latest")
+MODEL = os.environ.get("GRAFT_REFRESH_MODEL", "eriktonon/deepseek-v4.1-flash-1017:9b")
 BUILD_TIMEOUT_S = 4 * 3600
 # Сколько файлов может не описаться, прежде чем это тревога. В репозитории
 # сервера лежат сторонние минифицированные vega*.min.js: один не влезает в

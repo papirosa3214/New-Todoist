@@ -173,8 +173,8 @@ describe("чип памяти в чате после observeSlotMemory", () => {
       "INSERT INTO chats(id, kind, created_by, project_id) VALUES (?, 'group', ?, ?)",
     ).run(groupId, owner, projectId);
     db.prepare(
-      "INSERT INTO chats(id, kind, created_by, task_id, parent_chat_id, project_id) VALUES (?, 'group', ?, ?, ?, ?)",
-    ).run(topicId, owner, taskId, groupId, projectId);
+      "INSERT INTO chats(id, kind, created_by, task_id, room_kind) VALUES (?, 'group', ?, ?, 'task')",
+    ).run(topicId, owner, taskId);
     db.prepare("INSERT OR IGNORE INTO chat_members(chat_id, member_id) VALUES (?, ?)").run(
       topicId,
       "role_builder",

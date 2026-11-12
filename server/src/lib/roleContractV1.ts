@@ -1,4 +1,8 @@
 import {compactChatReportMaterials} from "./chatReportMaterials.js";
+// Готовая разметка таблиц, графиков и схем — кладётся сервером в блоки
+// (`server_html`), см. chatTemplates.ts. Клиент, который вид знает, продолжает
+// рисовать нативно; поле серверное, от модели оно не принимается.
+import {attachServerHtml, blocksFromMarkdown} from "./chatTemplates.js";
 // JSON-контракт роли v1 (карточка 237d6f34, 17.10.2026).
 //
 // Что это. Промпты ролей (scripts/role-prompts/*.md) и паспорта ролей
@@ -86,7 +90,7 @@ export const ROLE_BLOCK_GUIDE: Record<string, string> = {
   report: "`report_kind` (`intermediate`|`final`), `sections`",
   handoff: "`artifact_key`, `summary`",
   command: "`command`, необязательный `title`: команда для запуска на .110; у владельца рядом кнопка «Запустить». Одна команда — один блок",
-  link: "`title`, `url`: кликабельная ссылка. Внешний адрес — http(s); заметка в приложении на телефоне — `note://<id заметки>`",
+  link: "`title`, `url`: кликабельная ссылка. Внешний адрес — http(s); заметка в приложении на телефоне — `note://<id заметки>`. Клиент сам рисует иконку хоста и короткую подпись (`o/r#12`), длинный адрес прятать не надо. Пути к файлам оформляй полным путём со строкой через двоеточие — `Sources/…/File.swift:42`",
   html: "`title`, `html`: интерактив в окне чата — самодостаточная страница HTML/CSS/JS",
   widget: "`widget`: объект виджета (`metrics`, `progress`, `checklist`, `card`, `chart` и др.); сервер проверяет его по каталогу виджетов",
 };
@@ -407,12 +411,37 @@ function asV1Candidate(body: string): unknown | null {
   }
 }
 
+// Имена из кода, пути и файлы — в обратных кавычках, что бы ни написала роль
+// (владелец 11.11.2026: «чтобы от роли не зависело, сервер сам вставлял»).
+// Без кавычек `note_accesses` шло курсивом, путь — голым текстом без значка.
+// Уже размеченное (код, ссылки, адреса) не трогаем.
+const CODE_TOKEN = new RegExp([
+  String.raw`(?<![\w/~.\-])(?:~|\.{1,2})?\/[\w.\-]+(?:\/[\w.\-]+)*\/?(?![\w/])`,
+  String.raw`(?<![\w/.\-])[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+(?![\w/])`,
+  String.raw`(?<![\w/.\-])[\w\-]+(?:\.[\w\-]+)*\.(?:ts|tsx|js|mjs|cjs|jsx|swift|py|md|json|sh|yml|yaml|sql|db|txt|log|html|css|toml|plist|kt|go|rs)(?![\w/])`,
+].join("|"), "g");
+const PROTECTED = /(```[\s\S]*?```|`[^`\n]+`|\[[^\]\n]*\]\([^)\n]*\)|<[^>\n]+>|https?:\/\/\S+|[a-z]+:\/\/\S+)/g;
+
+export function codeIdentifiers(text: string): string {
+  return text.split(PROTECTED).map((part, index) => index % 2 === 1 ? part
+    : part.replace(CODE_TOKEN, (token) => "`" + token + "`")).join("");
+}
+
+function materialLine(item: any): string {
+  const title = String(item?.title ?? "").replace(/[\[\]]/g, "").trim();
+  const ref = String(item?.ref ?? "").trim();
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const href = uuid.test(ref) ? "note://" + ref : /^(note|task|taskflow|https?):\/\//i.test(ref) ? ref : "";
+  if (href) return "- [" + (title || href) + "](" + href + ")";
+  return "- " + codeIdentifiers(title || ref);
+}
+
 export function structuredOutputText(blocks: Record<string, unknown>[]): string {
   return blocks.map((block) => {
     switch (block.type) {
-      case "text": return String(block.text ?? "");
+      case "text": return codeIdentifiers(String(block.text ?? ""));
       case "heading": return "#".repeat(Number(block.level ?? 2)) + " " + String(block.text ?? "");
-      case "list": return (Array.isArray(block.items) ? block.items : []).map((item) => "• " + String(item)).join("\n");
+      case "list": return (Array.isArray(block.items) ? block.items : []).map((item) => "- " + codeIdentifiers(String(item))).join("\n");
       case "table": {
         // Таблица Markdown: клиенты рисуют её как таблицу (сервер сам делает из неё виджет).
         const cell = (v: unknown) => String(v ?? "").replace(/\|/g, "\\|").replace(/\n/g, " ");
@@ -428,12 +457,23 @@ export function structuredOutputText(blocks: Record<string, unknown>[]): string 
         points: (Array.isArray(block.points) ? block.points : []).map((p: any) => ({ x: String(p?.label ?? ""), y: Number(p?.value ?? 0) })) }) + "\n```";
       case "diagram": return String(block.title ?? "") + ": " + (Array.isArray(block.items) ? block.items.map((item: any) => String(item.label ?? "")).join(" → ") : "");
       case "report": {
+        // Разделы отчёта — те же блоки, что и обычный output: собираем их тем же
+        // рендером. Раньше здесь бралось только `text|label|title` верхнего
+        // уровня, и владелец видел заголовки без содержимого: пункты `list`,
+        // ограничения и статусы проверок пропадали (жалоба 10.11.2026).
         const sections = block.sections as Record<string, any> | undefined;
         if (!sections) return "";
-        return ["result", "work", "checks", "limitations", "materials"].flatMap((key) => {
-          const value = sections[key];
-          return Array.isArray(value) ? value.map((item) => typeof item === "string" ? item : item.text ?? item.label ?? item.title ?? "") : [];
-        }).filter(Boolean).join("\n");
+        const parts: string[] = [];
+        const pushSection = (title: string, rendered: string) => { if (rendered) parts.push("## " + title + "\n" + rendered); };
+        const renderBlocks = (value: unknown) => Array.isArray(value) ? structuredOutputText(value.filter(isObject)) : "";
+        pushSection("Результат", renderBlocks(sections.result));
+        pushSection("Что сделано", renderBlocks(sections.work));
+        const checks = Array.isArray(sections.checks) ? sections.checks.filter(isObject) : [];
+        pushSection("Проверки", checks.map((check: any) => "- " + codeIdentifiers(String(check.label ?? "")) + (check.status ? " — " + String(check.status) : "")).join("\n"));
+        pushSection("Ограничения", renderBlocks(sections.limitations));
+        const materials = Array.isArray(sections.materials) ? sections.materials.filter(isObject) : [];
+        pushSection("Материалы", materials.map(materialLine).join("\n"));
+        return parts.join("\n\n");
       }
       case "handoff": return String(block.summary ?? "");
       case "command": return (block.title ? String(block.title) + "\n" : "") + "```bash\n" + String(block.command ?? "").trim() + "\n```";
@@ -571,8 +611,9 @@ function salvageStructured(original: Record<string, unknown>): StructuredRoleEnv
   return checked.valid ? checked.envelope : null;
 }
 
-/** Сообщение вместо сырого JSON, когда конверт битый и текста вытащить нечего. */
-const BROKEN_CONTRACT_NOTE = "⚠️ Ответ роли не прошёл проверку контракта JSON — запроси повтор.";
+/** Внутренний маркер: сервер не смог извлечь содержимое. Владельцу он не отображается;
+ *  обычный маршрут отправляет роль на однократное исправление. */
+const BROKEN_CONTRACT_NOTE = "";
 
 /** Из битого JSON-конверта вытащить текст `output` (или `error`), чтобы владелец
  *  видел содержимое, а не сырой объект с ключами. null — текста нет. */
@@ -754,13 +795,57 @@ function partialStructuredText(text: string): string | null {
   while (/\s/.test(text[cursor] ?? "")) cursor += 1;
   if (text[cursor] === '"') return decodeJSONStringPrefix(text, cursor);
   if (text[cursor] !== "[") return null;
-  const tail = text.slice(cursor);
-  const type = /"type"\s*:\s*"text"/.exec(tail);
-  if (!type) return null;
-  const field = /"text"\s*:\s*"/.exec(tail.slice(type.index + type[0].length));
-  if (!field) return null;
-  const quoteAt = cursor + type.index + type[0].length + field.index + field[0].length - 1;
-  return decodeJSONStringPrefix(text, quoteAt);
+  // Весь массив блоков потоком (владелец 06.11.2026: ответ в конверте
+  // «прилетает за раз»). Готовый блок — целиком, как в сохранённом ответе
+  // (таблица, виджет, код встают на своё место); недописанный текст или
+  // заголовок — по мере поступления; недописанный блок другого вида ждёт.
+  const parts: string[] = [];
+  let i = cursor + 1;
+  while (i < text.length) {
+    while (i < text.length && /[\s,]/.test(text[i])) i += 1;
+    if (text[i] !== "{") break;
+    const close = matchingBrace(text, i);
+    if (close < 0) {
+      const partial = text.slice(i);
+      const type = /"type"\s*:\s*"(text|heading)"/.exec(partial);
+      const field = /"text"\s*:\s*"/.exec(partial);
+      if (type && field) {
+        const prefix = decodeJSONStringPrefix(text, i + field.index + field[0].length - 1);
+        if (prefix) {
+          const level = Number(/"level"\s*:\s*(\d)/.exec(partial)?.[1] ?? 2);
+          parts.push(type[1] === "heading" ? "#".repeat(level) + " " + prefix : prefix);
+        }
+      }
+      break;
+    }
+    try {
+      const block = JSON.parse(text.slice(i, close + 1));
+      const rendered = structuredOutputText([block]);
+      if (rendered) parts.push(rendered);
+    } catch {
+      break;
+    }
+    i = close + 1;
+  }
+  return parts.length ? parts.join("\n\n") : null;
+}
+
+/** Закрывающая скобка объекта с учётом строк; -1 — объект не дописан. */
+function matchingBrace(text: string, open: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i += 1;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") { depth -= 1; if (depth === 0) return i; }
+  }
+  return -1;
 }
 
 /** Текст для показа владельцу: конверт снят, обычный ответ не тронут. */
@@ -792,15 +877,39 @@ export interface NormalizedRoleReplyV1 {
   validationErrors: string[];
 }
 
+/** Стеклянное замечание роли: сервер обернул брак формы, контракт не ослаблен. */
+export const ROLE_REPLY_GLASS_REMARK =
+  "Стекло: финальный ответ не был JSON-конвертом v1. Сервер обернул текст в output[]; в следующий ход верни один JSON-объект.";
+
+export function isJsonParseFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /is not valid JSON|Unexpected token|JSON\.parse/i.test(message);
+}
+
+/** Если ход упал на JSON.parse markdown — вернуть текст для normalizeRoleReplyV1, иначе null. */
+export function salvageMarkdownFromJsonParseFailure(error: unknown, partialText = ""): string | null {
+  if (!isJsonParseFailure(error)) return null;
+  const partial = partialText.trim();
+  if (partial && !/^\s*[{[]/.test(partial)) return partial;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  // Node: Unexpected token '#', "## Результ"... is not valid JSON
+  const snippet = /Unexpected token [^,]*, "([\s\S]*?)"(?:\.\.\.)?\s*is not valid JSON/.exec(message);
+  const recovered = snippet?.[1]?.trim() ?? "";
+  if (recovered && !recovered.startsWith("{") && !recovered.startsWith("[")) {
+    return partial || recovered;
+  }
+  return partial || null;
+}
+
 /**
  * Исправимая ошибка финального ответа: роль получает один адресный повтор,
  * прежде чем сервер покажет владельцу безопасно нормализованный fallback.
  */
 export function shouldRetryRoleReply(normalized: NormalizedRoleReplyV1): boolean {
-  return normalized.normalizedByServer && !(
-    normalized.validationErrors.length === 1 &&
-    normalized.validationErrors[0] === "Ответ не содержит JSON v1 конверт"
-  );
+  // Сервер сам строит канонический конверт, когда смог извлечь смысл ответа.
+  // Повтор роли нужен только при пустом результате: ему не место в чате владельца.
+  const hasRecoverableContent = normalized.displayText.trim().length > 0;
+  return normalized.normalizedByServer && !hasRecoverableContent;
 }
 
 export function roleReplyCorrectionPrompt(errors: string[]): string {
@@ -846,8 +955,12 @@ export function exhaustedRoleReplyFallback(normalized: NormalizedRoleReplyV1): N
 export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
   const parsed = parseRoleContractV1(text);
   if (parsed.structuredEnvelope) {
+    // Разметку таблиц/графиков/схем собирает сервер: блок остаётся с данными,
+    // рядом ложится `server_html`. Так новый вид блока не требует пересборки
+    // приложения, а клиент, который вид знает, продолжает рисовать нативно.
+    const envelope = attachServerHtml(compactChatReportMaterials(parsed.structuredEnvelope).envelope);
     return {
-      envelope: compactChatReportMaterials(parsed.structuredEnvelope).envelope,
+      envelope,
       displayText: structuredOutputText(parsed.structuredEnvelope.output),
       // Спасённый конверт (кривые блоки отброшены) — тоже правка сервера:
       // претензии уходят в журнал, а не теряются.
@@ -883,15 +996,19 @@ export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
   const preservedText = rawEnvelope
     ? partialStructuredText(text) ?? BROKEN_CONTRACT_NOTE
     : text.trim() || "Ответ не содержит текста.";
-  const envelope: StructuredRoleEnvelopeV1 = {
-    schema_version: 1,
-    ok: true,
-    output: [{ type: "text", text: preservedText }],
-    artifacts: [],
-    plan_artifact: null,
-    error: null,
-    next_hint: null,
-    needs_human: false,
-  };
+  // Разметка в свободном ответе роли становится блоками: заголовки, списки,
+  // таблицы, чекбоксы, эмодзи-статусы, команды и ссылки. Иначе владелец видит
+  // один сплошной текст — без кнопки «Запустить» и без таблицы.
+  const envelope: StructuredRoleEnvelopeV1 = attachServerHtml({
+      schema_version: 1,
+      ok: true,
+      output: blocksFromMarkdown(preservedText),
+      artifacts: [],
+      plan_artifact: null,
+      error: null,
+      next_hint: null,
+      needs_human: false,
+    });
+  if (!validationErrors.includes(ROLE_REPLY_GLASS_REMARK)) validationErrors.push(ROLE_REPLY_GLASS_REMARK);
   return { envelope, displayText: preservedText, normalizedByServer: true, validationErrors };
 }

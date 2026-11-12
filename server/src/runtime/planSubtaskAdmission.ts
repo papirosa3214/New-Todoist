@@ -1,7 +1,6 @@
 import { isOwner } from "../access.js";
 import { prepareOwnerManualRun } from "./ownerManualRun.js";
 import {isRoutineServiceComment} from "../lib/serviceNoise.js";
-import { wakeAndDeliver } from "./orchestratorWake.js";
 import {
   artifactHasEvidence,
   artifactGateSatisfied,
@@ -444,6 +443,9 @@ export async function startPlanSubtaskRun(
   }
 
   const attemptId = crypto.randomUUID();
+  // Номер попытки слота: растёт с каждым допуском и уходит в карточку
+  // назначения — попытка продолжает ту же дочернюю связь, а не создаёт новую.
+  let claimedCycle = 1;
   const acquired = db.transaction(() => {
     const latest = subtask(current.id);
     if (
@@ -486,6 +488,7 @@ export async function startPlanSubtaskRun(
     // closeOpenCriticPlanNode(changes_requested) рядом с инкрементом
     // admission_cycle.
     const expectedFingerprint = latest.admission_fingerprint ?? null;
+    claimedCycle = (latest.admission_cycle ?? 0) + 1;
     const newFingerprint = computeAdmissionFingerprint({
       taskId: current.task_id,
       planId: current.collaboration_plan_id,
@@ -515,6 +518,29 @@ export async function startPlanSubtaskRun(
       error: "Слот уже запущен или его входные данные изменились",
     };
 
+  // Личная комната роли получает карточку назначения этого слота, а работа
+  // идёт в общей комнате задачи (08.11.2026). Идемпотентно: повторный запуск
+  // продолжает ту же дочернюю связь; ошибка карточки не срывает работу.
+  try {
+    const { ensureSlotAssignment } = await import("../lib/chatChildren.js");
+    const assignment = ensureSlotAssignment({
+      taskId: current.task_id,
+      slotId: current.id,
+      role: node.role_key,
+      attemptNo: claimedCycle,
+    });
+    // Комната задачи в архиве — дочерней связи уже не будет. Молчать нельзя:
+    // владелец решает сам, поднимать ли задачу заново (08.11.2026).
+    if (!assignment) {
+      const { roomArchivedAt, refuseArchivedWork } = await import("../lib/taskRoomArchive.js");
+      const { taskRoomOf } = await import("../lib/projectTopics.js");
+      const room = taskRoomOf(current.task_id);
+      if (room && roomArchivedAt(room)) refuseArchivedWork(current.task_id);
+    }
+  } catch (error) {
+    console.warn("[plan-admission] карточка назначения не создана:", error);
+  }
+
   try {
     const run = await withObservationContext({taskId:current.task_id,subtaskId:current.id,role:node.role_key,runId:attemptId},async()=>runRoleInProcess({
       taskId: current.task_id,
@@ -542,9 +568,6 @@ export async function startPlanSubtaskRun(
       field: current.plan_node_key,
       toValue: roleTitle(node.role_key),
     });
-    // Режим «Оркестратор»: повторная попытка того же шага — повод взглянуть.
-    if ((subtask(current.id)?.admission_cycle ?? 0) > 1)
-      wakeAndDeliver(current.id, actorId, "retry", null);
     return { ok: true, runId: run.runId };
   } catch (error) {
     db.prepare(
@@ -1480,6 +1503,24 @@ function closeNodeWithVerdict(
   db.prepare(
     "UPDATE subtasks SET done = 1, agent_state = NULL, current_attempt_id = NULL, agent_heartbeat_at = NULL, result = ? WHERE id = ?",
   ).run(`${verdict}: ${findings}`, row.id);
+  // Карточка назначения в личной комнате роли получает подтверждение «ответ
+  // получен» (08.11.2026) — только по факту вердикта, а не по факту доставки.
+  void import("../lib/chatChildren.js")
+    .then(({ markAssignmentAnswered }) => markAssignmentAnswered(row.id))
+    .catch((error) =>
+      console.warn("[plan-admission] подтверждение карточки назначения не записано:", error),
+    );
+  // Карточка передачи в комнате задачи (08.11.2026, спецификация §7): человеку
+  // видно, кто закрыл этап и что сдал. Карточка отображаемая — в историю
+  // модели не идёт (`message_type='system'`), преемник получает передачу
+  // строкой в постановке этапа (`lib/slotHandoff.ts`).
+  void import("../lib/slotHandoff.js")
+    .then(async ({ insertHandoffCard }) => {
+      const { taskRoomOf } = await import("../lib/projectTopics.js");
+      const room = taskRoomOf(taskId);
+      if (room) insertHandoffCard(taskId, room, row.id);
+    })
+    .catch((error) => console.warn("[plan-admission] карточка передачи не записана:", error));
   logEvent({
     taskId,
     actorId: null,

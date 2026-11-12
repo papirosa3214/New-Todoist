@@ -44,3 +44,29 @@ it("captures each context and final replacement payload at the diagnostics bound
   expect(readFileSync(join(dir,entries[1].object),"utf8")).toContain("final replacement");
  }finally{vi.unstubAllEnvs();rmSync(dir,{recursive:true,force:true});}
 });
+
+// Владелец 11.11.2026: «журналы всем поставь, чтобы я видел, какой контекст им идёт».
+it("keeps a readable digest of every role request: system text, tools and attached turn",async()=>{
+ const {extractRequestContext,checkPromptContextInstrument}=await import("../src/runtime/promptAudit.js");
+ const dir=mkdtempSync(join(tmpdir(),"prompt-digest-"));
+ try{
+  const anthropic={system:[{type:"text",text:"BUILDER SYSTEM"}],tools:[{name:"read"},{name:"taskflow_docs"}],
+   messages:[{role:"user",content:[{type:"text",text:"CLOCK + HISTORY + owner text"}]},{role:"assistant",content:[{type:"tool_use",id:"t",name:"read",input:{}}]},
+    {role:"user",content:[{type:"tool_result",tool_use_id:"t",content:"file body"}]}]};
+  expect(extractRequestContext(anthropic)).toMatchObject({system:"BUILDER SYSTEM",tools:["read","taskflow_docs"],lastUser:"CLOCK + HISTORY + owner text",messages:3});
+  const responses={input:[{role:"developer",content:"SECRETARY FILE"},{role:"user",content:[{type:"input_text",text:"turn json"}]},{type:"function_call_output",call_id:"c",output:"x"}],
+   tools:[{type:"function",name:"bash"}]};
+  expect(extractRequestContext(responses)).toMatchObject({system:"SECRETARY FILE",tools:["bash"],lastUser:"turn json"});
+  recordPromptAudit({role:"builder",call_id:"b1",phase:"payload",origin:"chat",chat_id:"c1",model:"m",content:{...anthropic,apiKey:"SECRET"}},dir);
+  const latest=readFileSync(join(dir,"roles","builder","latest.md"),"utf8");
+  for(const part of ["BUILDER SYSTEM","taskflow_docs","CLOCK + HISTORY + owner text","c1"])expect(latest).toContain(part);
+  expect(latest).not.toContain("SECRET");
+  expect(readdirSync(dir)).not.toContain("objects"); // полный архив — только у Помощника
+  const day=readdirSync(join(dir,"roles","builder")).find(x=>x.endsWith(".jsonl"))!;
+  expect(JSON.parse(readFileSync(join(dir,"roles","builder",day),"utf8").trim())).toMatchObject({call_id:"b1",tools_count:2,system_chars:14});
+  recordPromptAudit({role:"builder",call_id:"b0",phase:"context",content:anthropic},dir);
+  expect(readFileSync(join(dir,"roles","builder",day),"utf8").trim().split("\n")).toHaveLength(1);
+  expect(checkPromptContextInstrument(dir)).toEqual({ok:true,reason:""});
+  expect(readdirSync(join(dir,"roles"))).toEqual(["builder"]);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});

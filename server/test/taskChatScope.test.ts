@@ -121,10 +121,8 @@ describe("слова владельца", () => {
 describe("инструменты чата задачи", () => {
   const names = () => buildRoleToolCatalog({ role: "builder", mode: "task_chat", runId: "t", taskId: "scope_team", subtaskId: "scope_team_dev1", chatId: "scope_chat", messageId: "m_none" }).registeredNames;
 
-  it("только чтение: ни записи, ни поиска по чужому", () => {
-    for (const name of ["taskflow_subtask_done", "taskflow_state", "taskflow_doc_write", "taskflow_comment", "taskflow_work_plan", "taskflow_slot_snapshot", "taskflow_kb_search", "taskflow_recall", "taskflow_my_tasks", "taskflow_projects", "taskflow_docs", "taskflow_project_tasks", "taskflow_task_summary"])
-      expect(names()).not.toContain(name);
-    for (const name of ["taskflow_task", "taskflow_plan_read", "taskflow_doc_read"]) expect(names()).toContain(name);
+  it("чат задачи получает тот же полный набор (владелец 07.11.2026)", () => {
+    for (const name of ["taskflow_task", "taskflow_plan_read", "taskflow_doc_read", "taskflow_subtask_done", "taskflow_doc_write"]) expect(names()).toContain(name);
   });
 
   it("обычный режим роли не сужается", () => {

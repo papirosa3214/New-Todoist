@@ -54,12 +54,6 @@ function describeAction(method: string, url: string): string {
   const m = (method || "GET").toUpperCase();
   const path = url.split("?")[0] || "/";
 
-  // Чат: GET /api/chat — читает; POST — пишет.
-  if (path === "/api/chat" || path.startsWith("/api/chat/")) {
-    if (m === "GET") return "читает чат";
-    if (m === "POST") return "пишет в чат";
-    return "работает с чатом";
-  }
   // Доска и задачи.
   if (path === "/api/tasks" || path === "/api/tasks/") {
     if (m === "GET") return "читает доску";

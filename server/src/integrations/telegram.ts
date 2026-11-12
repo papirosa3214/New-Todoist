@@ -213,6 +213,18 @@ export function telegramReactionsEnabled(): boolean {
   return value === "1" || value === "on" || value === "true" || value === "yes";
 }
 
+/**
+ * Авто-пересылка финального ответа роли в Telegram выключена по умолчанию
+ * (владелец 11.11.2026): Помощник показывает итог нативными сообщениями
+ * (sendWidget/sendRichMessage), дубль обычным текстом не нужен.
+ * Включить обратно — `TASKFLOW_TELEGRAM_FINAL=on`.
+ * Прогресс/typing и реакции 👍/👎 выключатель не затрагивает.
+ */
+export function telegramFinalEnabled(): boolean {
+  const value = String(process.env.TASKFLOW_TELEGRAM_FINAL ?? "").trim().toLowerCase();
+  return value === "1" || value === "on" || value === "true" || value === "yes";
+}
+
 /** Транспорт живого потока: `auto` — черновик с безусловным откатом на правку. */
 export function telegramStreamMode(): "auto" | "draft" | "edit" | "off" {
   const value = String(process.env.TASKFLOW_TELEGRAM_STREAM ?? "").trim().toLowerCase();
@@ -610,23 +622,29 @@ export function captureTelegramFinal(messageId: string): number {
   let count = 0;
   for (const link of links) {
     const exists = db.prepare("SELECT 1 FROM telegram_delivery_outbox WHERE source_message_id=? AND kind='final'").get(reply.id);
-    if (exists) continue;
-    // Одно намерение — один delivery_id: либо rich-сообщение, либо части.
-    // Двух путей доставки одного ответа нет (DoD этапа 6).
-    const payload: Record<string, unknown> = richHtml
-      ? { method: "sendRichMessage", rich_message: { html: richHtml }, plain_text: text, link_preview_options: { is_disabled: true } }
-      : parts.length > 1
-        ? { parts: parts.map((part, index) => ({ index: index + 1, total: parts.length, text: part, sent: false })), part_pause_ms: TELEGRAM_PART_PAUSE_MS }
-        : { text: parts[0] ?? "" };
     // Финал идёт со звуком: disable_notification не ставим (критерий владельца).
-    // Тред — часть адреса ответа: финал в топик уходит в тот же топик.
-    enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload, replyToMessageId: link.message_id, sourceMessageId: reply.id, threadId: link.thread_id });
+    // Выключатель TASKFLOW_TELEGRAM_FINAL (по умолчанию выключен, владелец
+    // 11.11.2026): текст в Telegram не пересылаем — Помощник показывает итог
+    // нативными сообщениями. Реакции и прогресс выключатель не трогает.
+    if (telegramFinalEnabled() && !exists) {
+      // Одно намерение — один delivery_id: либо rich-сообщение, либо части.
+      // Двух путей доставки одного ответа нет (DoD этапа 6).
+      const payload: Record<string, unknown> = richHtml
+        ? { method: "sendRichMessage", rich_message: { html: richHtml }, plain_text: text, link_preview_options: { is_disabled: true } }
+        : parts.length > 1
+          ? { parts: parts.map((part, index) => ({ index: index + 1, total: parts.length, text: part, sent: false })), part_pause_ms: TELEGRAM_PART_PAUSE_MS }
+          : { text: parts[0] ?? "" };
+      // Тред — часть адреса ответа: финал в топик уходит в тот же топик.
+      enqueueTelegramDelivery({ kind: "final", chatId: link.chat_id, payload, replyToMessageId: link.message_id, sourceMessageId: reply.id, threadId: link.thread_id });
+      count++;
+    }
     // Прерванный ход или ошибка — 👎 на сообщении-триггере, успех — 👍.
     // source_message_id не заполняем: уникальный индекс (source_message_id,kind='final')
     // принадлежит самой доставке финала, а реакция — отдельное намерение.
+    const reactionQueued = db.prepare("SELECT 1 FROM telegram_delivery_outbox WHERE kind IN ('final','error') AND payload_json LIKE '%setMessageReaction%' AND json_extract(payload_json,'$.message_id')=?").get(link.message_id);
+    if (reactionQueued) continue;
     const failed = Boolean(reply.stop_reason) || Boolean(reply.partial);
     enqueueTelegramReaction({ kind: failed ? "error" : "final", chatId: link.chat_id, messageId: link.message_id, emoji: failed ? "👎" : "👍", sourceMessageId: null });
-    count++;
   }
   return count;
 }

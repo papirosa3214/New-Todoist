@@ -29,6 +29,10 @@ export const DEFAULT_COMPACTION_LIMITS = {
   summaryTailMessages: 4, // столько последних реплик диалога попадает в локальную выжимку
   summaryTailChars: 600,
   summaryTools: 12, // сколько разных инструментов перечисляем в локальной выжимке
+  // Владелец 10.11.2026: «компакция самих сообщений, не всего контекста —
+  // когда сообщений больше пятидесяти». Порог по числу сообщений сессии:
+  // до него история не режется, даже если выдачи инструментов тяжёлые.
+  maxContextMessages: 50,
 };
 export type CompactionLimits = typeof DEFAULT_COMPACTION_LIMITS;
 
@@ -345,4 +349,30 @@ export async function compactSessionSafely(
       error: message,
     };
   }
+}
+
+/** Сколько реплик лежит в контексте сессии сейчас. */
+export function contextMessageCount(session: any): number {
+  return readContextMessages(session).length;
+}
+
+/**
+ * Порог по числу сообщений (владелец 10.11.2026). Окно модели бывает
+ * огромным, и сжатие по токенам не срабатывает, пока сессия не раздуется в
+ * сотни реплик — роль платит за это каждый ход. Здесь своё правило: в
+ * контексте больше `maxContextMessages` — сжимаем перед ходом.
+ *
+ * `null` — порог не достигнут, сжимать нечего.
+ */
+export async function compactByMessageCount(
+  session: any,
+  ctx: { label: string; limits?: CompactionLimits; log?: (message: string) => void },
+): Promise<{ messagesBefore: number; result: Awaited<ReturnType<typeof compactSessionSafely>> } | null> {
+  const limits = ctx.limits ?? DEFAULT_COMPACTION_LIMITS;
+  const log = ctx.log ?? ((message: string) => console.warn(message));
+  const messagesBefore = contextMessageCount(session);
+  if (messagesBefore <= limits.maxContextMessages) return null;
+  log(`[compact] ${ctx.label}: ${messagesBefore} сообщений > порога ${limits.maxContextMessages} — сжимаем перед ходом.`);
+  const result = await compactSessionSafely(session, { ...ctx, limits });
+  return { messagesBefore, result };
 }
