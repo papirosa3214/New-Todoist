@@ -6511,6 +6511,20 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_chat_queued_chat ON chat_queued_messages(chat_id)`);
     },
   },
+  {
+    id: "219_owner_session_meta",
+    description: "Метки сессий владельца: название, проект-папка, закрепление, архив (владелец 12.11.2026)",
+    up: () => {
+      db.exec(`CREATE TABLE IF NOT EXISTS owner_session_meta (
+        session_id TEXT PRIMARY KEY,
+        title TEXT,
+        project_id TEXT,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+    },
+  },
 
 ];
 /**

@@ -65,15 +65,31 @@ class FakeRuntime {
   }
 }
 
+class InMemoryMeta {
+  rows = new Map<string, any>();
+  read(ids: string[]) {
+    return new Map(ids.filter(id => this.rows.has(id)).map(id => [id, this.rows.get(id)]));
+  }
+  patch(id: string, fields: any) {
+    const { archived, ...rest } = fields;
+    const row = { title: null, projectId: null, pinned: false, archivedAt: null, ...this.rows.get(id), ...rest };
+    if (archived !== undefined) row.archivedAt = archived ? "2026-11-12T00:00:00.000Z" : null;
+    this.rows.set(id, row);
+    return row;
+  }
+}
+
 describe("owner session API", () => {
   let app: FastifyInstance;
   let runtime: FakeRuntime;
   let events: OwnerSessionEventBuffer;
   let broadcast: ReturnType<typeof vi.fn>;
+  let meta: InMemoryMeta;
 
   beforeEach(async () => {
     app = Fastify();
     runtime = new FakeRuntime();
+    meta = new InMemoryMeta();
     events = new OwnerSessionEventBuffer({ capacity: 3, epoch: "test", clock: () => new Date(0) });
     broadcast = vi.fn();
     registerOwnerSessionRoutes(app, {
@@ -86,6 +102,7 @@ describe("owner session API", () => {
         request.userId = userId;
       },
       isOwner: (userId: string) => userId === "owner",
+      meta,
     });
     await app.ready();
   });
@@ -110,9 +127,8 @@ describe("owner session API", () => {
 
     expect(opened.statusCode).toBe(200);
     expect(opened.json()).toEqual({ session: rootSnapshot });
-    expect(listed.json()).toEqual({
-      sessions: [{ id: "root-session", cwd: "/workspace", name: "Owner assistant", relation: "root" }],
-    });
+    expect(listed.json().sessions).toHaveLength(1);
+    expect(listed.json().sessions[0]).toMatchObject({ id: "root-session", cwd: "/workspace", name: "Owner assistant", relation: "root" });
     expect(snapshot.json()).toEqual({ session: rootSnapshot });
     expect(runtime.listeners.get("root-session")?.size).toBe(1);
   });
@@ -127,6 +143,33 @@ describe("owner session API", () => {
     expect(repeated.json().session.id).toBe("new-root-1");
     expect(runtime.createdRoots).toBe(1);
     expect(runtime.listeners.get("new-root-1")?.size).toBe(1);
+  });
+
+  // Владелец 12.11.2026: «сессия, сессия, сессия на всех экранах» — строке
+  // нужны название, превью, время, проект и закрепление.
+  it("lists sessions with preview, time and owner labels, hiding archived ones", async () => {
+    runtime.list = async () => [
+      { id: "a", cwd: "/w", name: undefined, relation: "root", firstMessage: "Привет", modified: new Date("2026-11-12T09:00:00Z"), messageCount: 4 },
+      { id: "b", cwd: "/w", name: "Pi name", relation: "root", firstMessage: "Второй", modified: new Date("2026-11-12T10:00:00Z"), messageCount: 2 },
+      { id: "c", cwd: "/w", relation: "root", firstMessage: "Старое", modified: new Date("2026-11-11T10:00:00Z"), messageCount: 1 },
+    ] as any;
+    await app.inject({ method: "PATCH", url: "/api/sessions/a", headers: ownerHeaders,
+      payload: { title: "Сборка iOS", project_id: "p1", pinned: true } });
+    await app.inject({ method: "PATCH", url: "/api/sessions/c", headers: ownerHeaders, payload: { archived: true } });
+
+    const listed = (await app.inject({ method: "GET", url: "/api/sessions", headers: ownerHeaders })).json().sessions;
+    const archived = (await app.inject({ method: "GET", url: "/api/sessions?archived=1", headers: ownerHeaders })).json().sessions;
+
+    expect(listed.map((s: any) => s.id)).toEqual(["b", "a"]);
+    expect(listed[1]).toMatchObject({ title: "Сборка iOS", projectId: "p1", pinned: true,
+      firstMessage: "Привет", modified: "2026-11-12T09:00:00.000Z", messageCount: 4 });
+    expect(listed[0]).toMatchObject({ title: "Pi name", pinned: false, projectId: null });
+    expect(archived.map((s: any) => s.id)).toEqual(["c"]);
+  });
+
+  it("rejects an unknown label field", async () => {
+    const response = await app.inject({ method: "PATCH", url: "/api/sessions/a", headers: ownerHeaders, payload: { colour: "red" } });
+    expect(response.statusCode).toBe(400);
   });
 
   it.each(["prompt", "steer", "follow_up"])("dispatches explicit %s mode", async mode => {

@@ -14,6 +14,7 @@ import {
 } from "../runtime/ownerSessionRuntime.js";
 import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
 import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
+import { ownerSessionMeta, type OwnerSessionMetaPatch, type OwnerSessionMetaStore } from "../lib/ownerSessionMeta.js";
 
 type RuntimeContract = Pick<OwnerSessionRuntime,
   "openRoot" | "createRoot" | "open" | "list" | "snapshot" | "prompt" | "abort" | "branch" | "fork" | "subscribe" | "setModel"
@@ -29,6 +30,7 @@ export interface OwnerSessionRouteDependencies {
   broadcast: (userId: string, event: unknown) => void;
   authorize: Authorize;
   isOwner: (userId: string) => boolean;
+  meta?: OwnerSessionMetaStore;
 }
 
 let defaultRuntime: OwnerSessionRuntime | undefined;
@@ -87,6 +89,7 @@ export function registerOwnerSessionRoutes(
   dependencies: OwnerSessionRouteDependencies = productionDependencies(),
 ): void {
   const { runtime, events, broadcast, authorize, isOwner } = dependencies;
+  const metaStore = dependencies.meta ?? ownerSessionMeta;
   const subscriptions = new Map<string, () => void>();
   const idempotency = new Map<string, CachedResponse>();
 
@@ -161,15 +164,48 @@ export function registerOwnerSessionRoutes(
       return { session };
     }));
 
-  app.get("/api/sessions", { preHandler: ownerOnly }, async () => {
-    const sessions = (await runtime.list()).map(session => ({
-      id: session.id,
-      cwd: session.cwd,
-      name: session.name,
-      parentSession: session.parentSessionPath,
-      relation: session.relation,
-    }));
+  // Строка сессии в приложении — как строка чата: название, превью, время,
+  // проект, закрепление (владелец 12.11.2026). Архивные — только по ?archived=1.
+  app.get("/api/sessions", { preHandler: ownerOnly }, async (request: any) => {
+    const wantArchived = request.query?.archived === "1";
+    const list = await runtime.list();
+    const labels = metaStore.read(list.map(session => session.id));
+    const sessions = list
+      .map(session => {
+        const label = labels.get(session.id);
+        const modified = (session as any).modified;
+        return {
+          id: session.id,
+          cwd: session.cwd,
+          name: session.name,
+          parentSession: session.parentSessionPath,
+          relation: session.relation,
+          title: label?.title ?? session.name ?? null,
+          firstMessage: (session as any).firstMessage ?? null,
+          modified: modified instanceof Date ? modified.toISOString() : modified ?? null,
+          messageCount: (session as any).messageCount ?? null,
+          projectId: label?.projectId ?? null,
+          pinned: label?.pinned ?? false,
+          archivedAt: label?.archivedAt ?? null,
+        };
+      })
+      .filter(session => Boolean(session.archivedAt) === wantArchived)
+      .sort((a, b) => String(b.modified ?? "").localeCompare(String(a.modified ?? "")));
     return { sessions };
+  });
+
+  app.patch("/api/sessions/:id", { preHandler: ownerOnly }, async (request: any, reply) => {
+    const body = request.body ?? {};
+    const allowed = new Set(["title", "project_id", "pinned", "archived"]);
+    if (typeof body !== "object" || Object.keys(body).some(key => !allowed.has(key))) {
+      return reply.code(400).send({ error: "unknown_field" });
+    }
+    const patch: OwnerSessionMetaPatch = {};
+    if ("title" in body) patch.title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : null;
+    if ("project_id" in body) patch.projectId = typeof body.project_id === "string" ? body.project_id : null;
+    if ("pinned" in body) patch.pinned = body.pinned === true;
+    if ("archived" in body) patch.archived = body.archived === true;
+    return { meta: metaStore.patch(request.params.id, patch) };
   });
 
   app.get<{ Params: { id: string } }>("/api/sessions/:id", { preHandler: ownerOnly }, async (request: any, reply) => {
