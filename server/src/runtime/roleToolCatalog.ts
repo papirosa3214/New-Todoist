@@ -79,7 +79,7 @@ const CORE_OPERATIONS = new Set<string>(STARTER_TOOLS);
  *  20 Things — 71 схема, 84 844 символа из 169 525. Роль зовёт их изредка, а платят
  *  за них все запросы сессии. Права не меняются: операции остаются в реестре сессии,
  *  загрузчик отдаёт только то, что роль и так имеет право вызывать. */
-export const ON_DEMAND_PREFIXES = ["todoist_", "mcp__composio__", "things_", "wealthfolio_", "changedetection_", "archify_"] as const;
+export const ON_DEMAND_PREFIXES = ["todoist_", "mcp__composio__", "things_", "wealthfolio_", "changedetection_", "archify_", "rea_"] as const;
 /** Что грузится по требованию, а не висит в каждом запросе. Экспорт — чтобы
  *  правило можно было проверить тестом: цена ошибки — 65 схем финансового
  *  трекера в каждом запросе роли. */

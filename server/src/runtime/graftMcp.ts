@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { connectInfraPanel } from "./infraPanelMcp.js";
 import { connectWealthfolio } from "./wealthfolioMcp.js";
 import { connectChangedetection } from "./changedetectionMcp.js";
+import { connectRea } from "./reaMcp.js";
 
 // Граф кода для ролей (владелец 20.10.2026): роли искали код вслепую по
 // дискам — десятки шагов на ответ. Теперь у каждой роли инструменты `graft_*`
@@ -183,9 +184,10 @@ export async function connectGraft(cwd?: string) {
 
 /** Внешние MCP роли одним вызовом: Пульт .110 (только инженер), граф кода
  *  (все роли) и финансовый трекер (только помощник владельца). Сбой одного не
- *  лишает роль другого. */
+ *  лишает роль другого. Разбор бинарников REA (исследователь, инженер) —
+ *  владелец 12.11.2026: без него роли зовут CLI вручную на каждый вызов. */
 export async function connectRoleMcp(role: string, cwd?: string) {
-  const [infra, graft, finance, pages] = await Promise.all([
+  const [infra, graft, finance, pages, rea] = await Promise.all([
     connectInfraPanel(role).catch((error) => {
       console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`);
       return empty();
@@ -202,15 +204,20 @@ export async function connectRoleMcp(role: string, cwd?: string) {
       console.warn(`[changedetection] ${role}: ${error instanceof Error ? error.message : error}`);
       return empty();
     }),
+    connectRea(role).catch((error) => {
+      console.warn(`[rea] ${role}: ${error instanceof Error ? error.message : error}`);
+      return empty();
+    }),
   ]);
   return {
-    tools: [...infra.tools, ...graft.tools, ...finance.tools, ...pages.tools],
+    tools: [...infra.tools, ...graft.tools, ...finance.tools, ...pages.tools, ...rea.tools],
     close: async () => {
       await Promise.all([
         infra.close().catch(() => {}),
         graft.close().catch(() => {}),
         finance.close().catch(() => {}),
         pages.close().catch(() => {}),
+        rea.close().catch(() => {}),
       ]);
     },
   };
