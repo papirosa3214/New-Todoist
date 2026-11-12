@@ -218,7 +218,12 @@ export class OwnerSessionRuntime {
     const handle = await this.ensureHandle(id);
     if (mode === "prompt") {
       if (handle.session.isStreaming) throw new OwnerSessionStreamingConflictError(id);
-      await handle.session.prompt(text);
+      // Подтверждаем приём, а не конец ответа: ответ с инструментами идёт
+      // минутами, а клиент видит его событиями. Сбой хода приходит событием
+      // сессии; здесь только запись в журнал.
+      void handle.session.prompt(text).catch(error => {
+        console.warn(`[owner-sessions] ход сессии ${id} оборвался:`, error);
+      });
       return;
     }
     if (mode === "steer") {

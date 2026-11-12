@@ -141,6 +141,28 @@ describe("OwnerSessionRuntime", () => {
     expect(roots.map(session => session.id).sort()).toEqual([first.id, second.id].sort());
   });
 
+  // Телефон ждёт подтверждения команды не дольше 120 с, а ответ Помощника
+  // с инструментами идёт минутами: prompt подтверждает приём, а не конец ответа.
+  it("accepts a prompt without waiting for the whole answer", async () => {
+    const h = harness();
+    const runtime = new OwnerSessionRuntime({
+      ...h,
+      createSession: async (manager: SessionManager, options?: unknown) => {
+        const session = await h.createSession(manager, options);
+        session.prompt = () => new Promise<void>(() => {});
+        return session;
+      },
+    });
+    const root = await runtime.openRoot();
+
+    const accepted = await Promise.race([
+      runtime.prompt(root.id, "long work", "prompt").then(() => "accepted"),
+      new Promise(resolve => setTimeout(() => resolve("waiting"), 200)),
+    ]);
+
+    expect(accepted).toBe("accepted");
+  });
+
   it("reuses the persisted root session", async () => {
     const h = harness();
     const firstRuntime = new OwnerSessionRuntime(h);
