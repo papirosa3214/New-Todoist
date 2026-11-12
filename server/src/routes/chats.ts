@@ -733,7 +733,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // шапка показывают состав участников, как у группы без названия.
   app.patch<{
     Params: { id: string };
-    Body: { task_id?: string | null; title?: string | null };
+    Body: { task_id?: string | null; title?: string | null; project_id?: string | null };
   }>(
     "/api/chats/:id",
     { preHandler: authPre },
@@ -751,11 +751,21 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
 
       const hasTask = Object.prototype.hasOwnProperty.call(req.body ?? {}, "task_id");
       const hasTitle = Object.prototype.hasOwnProperty.call(req.body ?? {}, "title");
-      if (!hasTask && !hasTitle)
+      // Папка сессии (владелец 12.11.2026): сессию кладут в проект — так
+      // Помощник получает память и контекст проекта, а задачи из разговора
+      // живут в той же «папке». Комнаты задач и служебные комнаты не трогаем.
+      const hasProject = Object.prototype.hasOwnProperty.call(req.body ?? {}, "project_id");
+      if (!hasTask && !hasTitle && !hasProject)
         return reply.code(400).send({ error: "нечего менять" });
 
       const managed=db.prepare("SELECT project_id, task_id, room_kind FROM chats WHERE id=?").get(req.params.id) as any;
       if (hasTask && managed?.project_id) return reply.code(409).send({error:"Тему проекта нельзя перепривязать"});
+      const rawProject = req.body?.project_id;
+      const projectId = typeof rawProject === "string" && rawProject ? rawProject : null;
+      if (hasProject && (managed?.task_id || (managed?.room_kind && managed.room_kind !== "personal")))
+        return reply.code(409).send({ error: "В проект кладутся только сессии, не комнаты задач и служебные" });
+      if (hasProject && projectId && !db.prepare("SELECT id FROM projects WHERE id = ?").get(projectId))
+        return reply.code(400).send({ error: "нет такого проекта" });
       const rawTask = req.body?.task_id;
       const taskId = typeof rawTask === "string" && rawTask ? rawTask : null;
       // Комната задачи принадлежит своей карточке (08.11.2026): привязать её к
@@ -773,6 +783,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const txn = db.transaction(() => {
         if (hasTitle) {
           db.prepare("UPDATE chats SET title = ? WHERE id = ?").run(title, req.params.id);
+        }
+        if (hasProject) {
+          db.prepare("UPDATE chats SET project_id = ? WHERE id = ?").run(projectId, req.params.id);
         }
         if (hasTask) {
           db.prepare("UPDATE chats SET task_id = ? WHERE id = ?").run(taskId, req.params.id);
