@@ -37,7 +37,7 @@ function withAnswerBlocks<T extends { entries: any[] }>(snapshot: T): T {
 import { ownerSessionMeta, type OwnerSessionMetaPatch, type OwnerSessionMetaStore } from "../lib/ownerSessionMeta.js";
 
 type RuntimeContract = Pick<OwnerSessionRuntime,
-  "openRoot" | "createRoot" | "open" | "list" | "snapshot" | "prompt" | "abort" | "branch" | "fork" | "subscribe" | "setModel"
+  "openRoot" | "createRoot" | "open" | "list" | "contextUsage" | "snapshot" | "prompt" | "abort" | "branch" | "fork" | "subscribe" | "setModel"
 > & {
   subscribeAll?: OwnerSessionRuntime["subscribeAll"];
 };
@@ -235,6 +235,14 @@ export function registerOwnerSessionRoutes(
       const session = await runtime.open(request.params.id);
       await ensureForwarding(session.id, request.userId);
       return { session: withAnswerBlocks(session) };
+    } catch (error) {
+      return sendRuntimeError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/sessions/:id/context", { preHandler: ownerOnly }, async (request: any, reply) => {
+    try {
+      return { context: await runtime.contextUsage(request.params.id) };
     } catch (error) {
       return sendRuntimeError(reply, error);
     }

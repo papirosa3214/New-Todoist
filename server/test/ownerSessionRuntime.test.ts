@@ -185,6 +185,20 @@ describe("OwnerSessionRuntime", () => {
     ]);
   });
 
+  // Владелец 12.11.2026: «где у нас контекст» — кольцо контекста в сессии.
+  it("measures context of a live session in the chat context shape", async () => {
+    const h = harness();
+    const runtime = new OwnerSessionRuntime(h);
+    const root = await runtime.openRoot();
+    (h.sessions[0] as any).getContextUsage = () => ({ tokens: 1200, contextWindow: 128000 });
+
+    expect(await runtime.contextUsage(root.id)).toMatchObject({
+      roleID: "session", sessionID: root.id, tokens: 1200, contextWindow: 128000, status: "measured", isEstimate: false,
+    });
+    (h.sessions[0] as any).getContextUsage = () => undefined;
+    expect((await runtime.contextUsage(root.id)).status).toBe("no_session");
+  });
+
   it("reuses the persisted root session", async () => {
     const h = harness();
     const firstRuntime = new OwnerSessionRuntime(h);

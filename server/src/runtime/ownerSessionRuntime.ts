@@ -196,6 +196,28 @@ export class OwnerSessionRuntime {
     return this.snapshot(this.rootSessionId);
   }
 
+  /** Замер контекста живой сессии — в форме замера чата, чтобы приложение
+   *  показало то же кольцо (владелец 12.11.2026: «где у нас контекст»). */
+  async contextUsage(id: string) {
+    const handle = await this.ensureHandle(id);
+    let usage: any;
+    try { usage = (handle.session as any).getContextUsage?.(); } catch { usage = undefined; }
+    const model = this.modelRef(handle.session);
+    const measured = usage && typeof usage.tokens === "number" && typeof usage.contextWindow === "number";
+    return {
+      roleID: "session",
+      sessionID: id,
+      model: model?.id ?? null,
+      provider: model?.provider ?? null,
+      tokens: measured ? usage.tokens : null,
+      contextWindow: measured ? usage.contextWindow : null,
+      measuredAt: new Date().toISOString(),
+      status: measured ? "measured" : "no_session",
+      isEstimate: false,
+      breakdown: null,
+    };
+  }
+
   /** Есть ли сессия владельца с таким id (голосовой мост различает чат и сессию). */
   hasSession(id: string): boolean {
     if (this.handles.has(id)) return true;
