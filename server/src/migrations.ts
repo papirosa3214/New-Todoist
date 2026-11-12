@@ -5824,6 +5824,35 @@ const migrations: Migration[] = [
   },
 
   {
+    id: "202_telegram_topics",
+    description: "Топики Telegram как рабочие пространства: thread_id в ledger/outbox и привязка топик→комната (этап 7, карточка 7406889e)",
+    up: () => {
+      // Колонки добавляются только если их нет: миграция должна пережить
+      // повторный прогон после падения между ALTER и отметкой в схеме.
+      const ledgerCols = new Set((db.prepare("PRAGMA table_info(telegram_inbound_ledger)").all() as Array<{ name: string }>).map((c) => c.name));
+      if (!ledgerCols.has("thread_id")) db.exec("ALTER TABLE telegram_inbound_ledger ADD COLUMN thread_id INTEGER");
+      const outboxCols = new Set((db.prepare("PRAGMA table_info(telegram_delivery_outbox)").all() as Array<{ name: string }>).map((c) => c.name));
+      if (!outboxCols.has("thread_id")) db.exec("ALTER TABLE telegram_delivery_outbox ADD COLUMN thread_id INTEGER");
+      // Сама привязка топика к комнате: без неё «топик = рабочее пространство»
+      // остаётся косметикой (один чат, разные ветки).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS telegram_topic_binding (
+          bot_id TEXT NOT NULL,
+          chat_id TEXT NOT NULL,
+          thread_id INTEGER NOT NULL,
+          chat_id_target TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL,
+          title TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (bot_id, chat_id, thread_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_telegram_topic_binding_target
+          ON telegram_topic_binding(chat_id_target);
+      `);
+    },
+  },
+
+  {
     id: "200_context_operation_items",
     description: "Что именно попало в контекст роли: записи, источник и объём (владелец 05.11.2026)",
     up: () => {

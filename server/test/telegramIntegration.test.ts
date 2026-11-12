@@ -12,6 +12,9 @@ const env = () => {
   // Поток — правкой: режим «черновик» статус-пузырь не заводит (этап 4).
   process.env.TASKFLOW_TELEGRAM_STREAM = "edit";
   delete process.env.TASKFLOW_TELEGRAM_REACTIONS;
+  // По умолчанию авто-пересылка финала выключена; старые тесты проверяют
+  // включённое поведение — им нужен явный "on". Выключенное проверяется ниже.
+  process.env.TASKFLOW_TELEGRAM_FINAL = "on";
 };
 
 describe("telegram secretary integration", () => {
@@ -119,6 +122,24 @@ describe("telegram secretary integration", () => {
     const mark = db.prepare("SELECT kind,payload_json FROM telegram_delivery_outbox WHERE kind='error' AND payload_json LIKE '%setMessageReaction%' ORDER BY created_at DESC").get() as any;
     expect(mark.kind).toBe("error");
     expect(JSON.parse(mark.payload_json).reaction).toEqual([{ type: "emoji", emoji: "👎" }]);
+    delete process.env.TASKFLOW_TELEGRAM_REACTIONS;
+  });
+
+  it("does not enqueue the final text while TASKFLOW_TELEGRAM_FINAL is off", async () => {
+    delete process.env.TASKFLOW_TELEGRAM_FINAL;
+    process.env.TASKFLOW_TELEGRAM_REACTIONS = "on";
+    const first = await acceptTelegramInbound({ bot_id: "42", update_id: 41, chat_id: 100, user_id: 100, chat_type: "private", message_id: 91, text: "без дубля" });
+    const reply = "reply-final-off-" + Date.now();
+    db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES(?,?,?,'chat',?,?)").run(reply, "u-secretary", "Ответ без Telegram", "chat-secretary", first.message_id);
+    expect(captureTelegramFinal(reply)).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM telegram_delivery_outbox WHERE source_message_id=? AND kind='final'").get(reply) as any).toEqual({ n: 0 });
+    // Реакция 👍 на финале остаётся — выключатель касается только текста.
+    const mark = db.prepare("SELECT kind,payload_json FROM telegram_delivery_outbox WHERE kind='final' AND payload_json LIKE '%setMessageReaction%' ORDER BY created_at DESC").get() as any;
+    expect(mark.kind).toBe("final");
+    expect(JSON.parse(mark.payload_json).reaction).toEqual([{ type: "emoji", emoji: "👍" }]);
+    // Прогресс и typing выключатель не трогает: на чистом триггере статус ставится.
+    const next = await acceptTelegramInbound({ bot_id: "42", update_id: 42, chat_id: 100, user_id: 100, chat_type: "private", message_id: 92, text: "Долгий" });
+    expect(captureTelegramProgress(next.message_id as string)).toBe(1);
     delete process.env.TASKFLOW_TELEGRAM_REACTIONS;
   });
 

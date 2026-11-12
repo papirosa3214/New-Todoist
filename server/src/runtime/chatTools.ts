@@ -15,6 +15,7 @@ import { Type } from "typebox";
 import { asRole, asText, short, ToolError, unwrap } from "./inProcessRun.js";
 import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolver.js";
 import db from "../db.js";
+import { captureQuestionToTelegram } from "../integrations/telegram.js";
 import { restartSlotFromOwnerChat } from "./slotRestart.js";
 import { restartOwnSlotByOwnerMessage } from "./slotOwnerRestart.js";
 import { proposeWork } from "./chatWork.js";
@@ -428,10 +429,17 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         const участники = (db.prepare("SELECT member_id FROM chat_members WHERE chat_id = ?").all(chatCtx.chatId) as Array<{ member_id: string }>)
           .map((row) => row.member_id);
         broadcastToUsers(участники, { type: "chat:new", message: loadChatMessage(messageId) });
+        // Вопрос в Telegram: либо виджет (одно сообщение, выключатель
+        // TASKFLOW_TELEGRAM_QUESTION_WIDGET), либо текст с кнопками. Два
+        // сообщения об одном вопросе владелец видеть не должен (11.11.2026).
+        let виджетУшёл = 0;
+        try { виджетУшёл = captureQuestionWidget(вопрос.id); } catch (error) { console.warn("[chatTools] виджет вопроса не ушёл в Telegram:", error); }
+        if (!виджетУшёл) {
+          // Текст с кнопками: текстовый ответ и ответ номером работают всегда.
+          try { captureQuestionToTelegram(вопрос.id); } catch (error) { console.warn("[chatTools] вопрос не ушёл в Telegram:", error); }
+        }
         const ждём = waitForAnswer(вопрос.id, { signal });
         broadcastToUsers(участники, liveInterruptEvent({ chatId: chatCtx.chatId, userId: roleId, questionId: вопрос.id, messageId, payload }));
-        // Telegram получает ОДНО сообщение — виджет вопроса. Текстового дубля нет.
-        try { captureQuestionWidget(вопрос.id); } catch (error) { console.warn("[chatTools] вопрос не ушёл в Telegram:", error); }
         const ответ = await ждём;
         broadcastToUsers(участники, liveResumeEvent({ chatId: chatCtx.chatId, userId: roleId, questionId: вопрос.id, outcome: ответ ? "answered" : "expired" }));
         if (ответ) {

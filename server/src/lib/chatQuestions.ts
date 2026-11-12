@@ -202,6 +202,28 @@ export function questionByMessageId(messageId: string): QuestionRow | undefined 
   return db.prepare("SELECT * FROM chat_questions WHERE message_id = ?").get(messageId) as QuestionRow | undefined;
 }
 
+/**
+ * Вопрос по короткому id (8 hex-символов из `callback_data` кнопки Telegram).
+ * В кнопку Bot API пускает 1–64 байта (core.telegram.org/bots/api#inlinekeyboardbutton),
+ * поэтому полный UUID там не помещается и живёт на сервере, а в кнопке —
+ * первые 8 символов без дефисов. Ищем самый свежий вопрос с таким началом. */
+export function questionByShortId(short: string): QuestionRow | undefined {
+  const prefix = String(short ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{8}$/.test(prefix)) return undefined;
+  return db
+    .prepare(
+      "SELECT * FROM chat_questions WHERE lower(replace(id,'-','')) LIKE ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+    )
+    .get(`${prefix}%`) as QuestionRow | undefined;
+}
+
+/** Последний открытый вопрос чата — на него отвечает и текст, и кнопка. */
+export function openQuestionOfChat(chatId: string): QuestionRow | undefined {
+  return db
+    .prepare("SELECT * FROM chat_questions WHERE chat_id = ? AND status = 'open' ORDER BY created_at DESC, rowid DESC LIMIT 1")
+    .get(chatId) as QuestionRow | undefined;
+}
+
 export function questionsOfChat(chatId: string): QuestionRow[] {
   return db
     .prepare("SELECT * FROM chat_questions WHERE chat_id = ? ORDER BY created_at DESC, rowid DESC")
@@ -216,6 +238,16 @@ export function answerQuestionRow(id: string, answer: AnswerPayload): QuestionRo
   const строка = questionById(id);
   if (!строка) throw new Error("chat_questions: вопрос не найден");
   return строка;
+}
+
+/** Атомарно закрыть открытый вопрос. false — уже закрыт: два нажатия кнопки
+ *  дают ровно один ответ без журнала callback_id. */
+export function answerQuestionRowIfOpen(id: string, answer: AnswerPayload): boolean {
+  return db
+    .prepare(
+      "UPDATE chat_questions SET status='answered', answer_json=?, answered_at=datetime('now') WHERE id=? AND status='open'",
+    )
+    .run(JSON.stringify(answer), id).changes > 0;
 }
 
 export function payloadOf(row: QuestionRow): QuestionPayload {
