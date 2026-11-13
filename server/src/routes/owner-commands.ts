@@ -31,6 +31,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { authOrApiToken } from "../auth.js";
 import { isOwner } from "../access.js";
 import db, { DB_PATH } from "../db.js";
+import { createUtf8StreamDecoder } from "../lib/utf8Stream.js";
 
 const DEFAULT_ACTION_TIMEOUT_MS = 30_000;
 const SIGTERM_GRACE_MS = 5_000;
@@ -222,11 +223,15 @@ async function runAction(
     let stderr = "";
     const STDOUT_LIMIT = 64 * 1024;
     const STDERR_LIMIT = 64 * 1024;
+    // Декодер на поток, а не на кусок: иначе буква на границе чтения
+    // превращается в два U+FFFD (см. src/lib/utf8Stream.ts).
+    const stdoutDecoder = createUtf8StreamDecoder();
+    const stderrDecoder = createUtf8StreamDecoder();
     child.stdout?.on("data", (chunk: Buffer) => {
-      stdout = (stdout + chunk.toString("utf8")).slice(0, STDOUT_LIMIT);
+      stdout = (stdout + stdoutDecoder.write(chunk)).slice(0, STDOUT_LIMIT);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      stderr = (stderr + chunk.toString("utf8")).slice(0, STDERR_LIMIT);
+      stderr = (stderr + stderrDecoder.write(chunk)).slice(0, STDERR_LIMIT);
     });
 
     let settled = false;

@@ -290,6 +290,23 @@ describe("POST /api/owner-command/run", () => {
     expect(logRows()[0].exit_code).toBe(7);
   });
 
+  it("stdout: буква на границе кусков stdio не превращается в U+FFFD", async () => {
+    // 13.11.2026: `chunk.toString("utf8")` на каждом куске превращал одну
+    // многобайтную букву в два U+FFFD, если она попадала на границу
+    // чтения. Здесь процесс печатает половину байтов буквы «о», ждёт,
+    // чтобы Node отдал куски по отдельности, и печатает остаток.
+    // Без StringDecoder получалось "\ufffd\ufffdк".
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/owner-command/run",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { action: "chat.bash", command: "printf '\\320'; sleep 0.15; printf '\\276'; printf '\\320\\272\\n'", confirm: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().stdout).toBe("ок\n");
+    expect(res.json().stdout.includes("\ufffd")).toBe(false);
+  });
+
   it("db.snapshot делает файл и возвращает путь в backup.path", async () => {
     const res = await app.inject({
       method: "POST",

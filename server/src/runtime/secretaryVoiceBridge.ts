@@ -2,6 +2,7 @@ import {roleInstructionText} from './roleHome.js';
 import {chatExecutionMode,chatExecutionInstruction} from "./chatExecutionMode.js";
 import { assertVoiceChat, voiceChatContext, saveVoiceMessage, voiceSummaryText } from "../lib/secretaryVoiceConversation.js";
 import { randomUUID } from "node:crypto";
+import { createUtf8StreamDecoder } from "../lib/utf8Stream.js";
 import { NonTaskInputError } from "../lib/taskPreparation.js";
 import { composeLayer, instructionManifest } from "../lib/roleContextResolver.js";
 // Закрытый канал Python-воркера к живому серверу. Никаких TCP-маршрутов
@@ -62,8 +63,11 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
     }
     try {
       let raw = "";
+      // Декодер на поток: текст вопроса приходит по-русски, и буква на
+      // границе кусков иначе станет двумя U+FFFD (см. src/lib/utf8Stream.ts).
+      const bodyDecoder = createUtf8StreamDecoder();
       for await (const chunk of req) {
-        raw += chunk.toString();
+        raw += bodyDecoder.write(chunk as Buffer);
         if (Buffer.byteLength(raw) > 1048576) { send(413, {error:"слишком большой запрос"}); return; }
       }
       let body: any;

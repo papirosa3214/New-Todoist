@@ -24,6 +24,7 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { getSetting } from "../lib/serverSettings.js";
 import { inspectWorktree } from "../lib/worktree/inspect.js";
+import { createUtf8StreamDecoder } from "../lib/utf8Stream.js";
 import { cleanupWorktree, sweepTestLeftovers } from "../lib/worktree/cleanup.js";
 import { parseFailedTestFiles, selectTargetedTests } from "../lib/worktree/testGate.js";
 import { pushMainToHosts, type PushStatus } from "../lib/worktree/pushHosts.js";
@@ -121,8 +122,11 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<{ ok
     });
     let output = "";
     const cap = 200_000;
+    // Декодер на поток: git печатает по-русски, и буква на границе куска
+    // иначе станет двумя U+FFFD (см. src/lib/utf8Stream.ts).
+    const decoder = createUtf8StreamDecoder();
     const collect = (chunk: Buffer): void => {
-      output += chunk.toString();
+      output += decoder.write(chunk);
       if (output.length > cap) output = output.slice(-cap);
     };
     child.stdout?.on("data", collect);
