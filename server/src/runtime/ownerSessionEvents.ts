@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { recordModelUsage } from "../lib/modelUsage.js";
+import { sourcedChatBlocks } from "../sessions/sessionChatBlocks.js";
 import {
   addAnswerToTurn,
   finishTurn,
@@ -82,6 +83,14 @@ const PASSTHROUGH_EVENTS = new Set([
   "bash_execution_update",
 ]);
 
+/** Весь текст части ответа на этот момент (часть contentIndex сообщения). */
+function partText(message: any, index: unknown, kind: "text" | "thinking"): string {
+  const parts = Array.isArray(message?.content) ? message.content : [];
+  const part = typeof index === "number" ? parts[index] : undefined;
+  const value = kind === "text" ? part?.text : part?.thinking;
+  return typeof value === "string" ? value : "";
+}
+
 /** Translate one live Pi event without turning it into a second transcript. */
 export function normalizePiEvent(
   sessionId: string,
@@ -93,15 +102,21 @@ export function normalizePiEvent(
     case "message_update": {
       const stream = raw.assistantMessageEvent as Record<string, any>;
       if (stream?.type === "text_delta") {
+        // Тонкий клиент (владелец 13.11.2026): к куску — весь текст части и
+        // готовые блоки, как у живого хода ролей (liveTurnForClient).
+        const full = partText(raw.message, stream.contentIndex, "text");
         return envelope(sessionId, "assistant_text_delta", {
           delta: stream.delta,
           contentIndex: stream.contentIndex,
+          ...(full ? { text: full, blocks: sourcedChatBlocks(full, true) } : {}),
         }, meta);
       }
       if (stream?.type === "thinking_delta") {
+        const full = partText(raw.message, stream.contentIndex, "thinking");
         return envelope(sessionId, "assistant_thinking_delta", {
           delta: stream.delta,
           contentIndex: stream.contentIndex,
+          ...(full ? { text: full, blocks: sourcedChatBlocks(full, true) } : {}),
         }, meta);
       }
       return envelope(sessionId, "assistant_stream_event", {

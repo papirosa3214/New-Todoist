@@ -15,7 +15,7 @@ import {
 import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
 import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
 import { setOwnerSessionVoiceTarget } from "../lib/secretaryVoiceConversation.js";
-import { chatBlocksCached } from "../lib/chatBlocks.js";
+import { chatBlocksCached } from "../sessions/sessionChatBlocks.js";
 import { pullQuickReplies } from "../sessions/sessionQuickReplies.js";
 import { normalizeRoleReplyV1, structuredOutputText } from "../sessions/sessionRoleContractV1.js";
 import { normalizeWidgetBlocks } from "../sessions/sessionWidgetNormalize.js";

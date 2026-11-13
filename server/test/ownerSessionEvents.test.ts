@@ -158,3 +158,17 @@ describe("OwnerSessionEventBuffer", () => {
     expect(buffer.eventsAfter(undefined, "two")).toEqual({ resetRequired: false, events: [two] });
   });
 });
+
+describe("тонкий клиент: блоки в событиях текста (владелец 13.11.2026)", () => {
+  it("к куску текста кладёт весь текст части и готовые блоки", async () => {
+    const { normalizePiEvent } = await import("../src/runtime/ownerSessionEvents.js");
+    const out: any = normalizePiEvent("s1", {
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: "## Итог\n\n- пункт" }] },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "пункт" },
+    } as any, { cursor: "c1", sequence: 1, epoch: "e" } as any);
+    expect(out.payload.text).toBe("## Итог\n\n- пункт");
+    expect(Array.isArray(out.payload.blocks)).toBe(true);
+    expect(out.payload.blocks.length).toBeGreaterThan(0);
+  });
+});
