@@ -45,6 +45,16 @@ export interface OwnerSessionProfile {
 
 const ASSISTANT_ROLE = "secretary";
 
+/** Ответ с источниками (владелец 13.11.2026: «в ответах должен быть источник
+ *  — на основании чего он так говорит, ссылками»). */
+const SESSION_SOURCES_INSTRUCTION = [
+  "Источники в ответе (обязательно): каждое утверждение о фактах опирается на то, что ты в этом ходе",
+  "реально прочитал, запустил или открыл. В конце ответа — раздел «Источники»: списком, ссылками —",
+  "файлы с путём и строкой (`путь/файл.ts:42`), команды с их итогом, страницы URL-ами, карточки/документы",
+  "TaskFlow их ссылками. Нет источника — так и скажи («не проверял»), не утверждай. Сам ответ по памяти",
+  "без проверки не выдавай за факт.",
+].join(" ");
+
 /** Готовые расширения Pi для сессии Помощника (владелец 13.11.2026: «зачем
  *  самописное, когда есть готовое»). Только те, что имеют смысл в сессии:
  *  hesitation-gate (не буксовать — спросить владельца кнопками) и
@@ -72,7 +82,7 @@ export async function ownerAssistantProfile(sessionId: string, role: string = AS
   const systemPrompt = chatTurnSystemText(
     ASSISTANT_ROLE_FOR_SESSION,
     await chatSystemPrompt(ASSISTANT_ROLE_FOR_SESSION, ASSISTANT_MODE, cwd, undefined, "session"),
-    [roleToolInstruction()],
+    [roleToolInstruction(), SESSION_SOURCES_INSTRUCTION],
   );
   const resourceLoader = await createTaskResourceLoader(ASSISTANT_ROLE_FOR_SESSION, cwd, systemPrompt, undefined, true,
     ASSISTANT_ROLE_FOR_SESSION === ASSISTANT_ROLE ? SESSION_PI_EXTENSIONS.filter((file) => fs.existsSync(file)) : []);
