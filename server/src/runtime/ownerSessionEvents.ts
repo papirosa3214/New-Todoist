@@ -180,8 +180,16 @@ export function normalizePiEvent(
         // Тонкий клиент (владелец 13.11.2026): к куску — весь текст части и
         // готовые блоки, как у живого хода ролей (liveTurnForClient).
         // Строка БЫСТРО: — не текст, а кнопки: в блоки не идёт.
+        const accumulated = partText(raw.message, stream.contentIndex, "text");
+        // Владелец 13.11.2026: конверт v1 в живом ходе виден сырым JSON
+        // («сервер отправлял мне вот это недоразумение»). Пока часть ответа
+        // начинается как конверт, куски в чат не идут: итог придёт готовой
+        // разметкой на message_end. Карта путей: note://103b08ba-2492-4f0f-b24c-503195786d1e
+        if (/^\s*(?:```[a-z0-9]*\s*)?\{\s*"schema_version"/i.test(accumulated)) {
+          return envelope(sessionId, "assistant_stream_event", { event: stream, held: "envelope" }, meta);
+        }
         const due = blocksDue(sessionId + ":t:" + stream.contentIndex, stream.delta);
-        const full = due ? sessionDisplayText(partText(raw.message, stream.contentIndex, "text")) : "";
+        const full = due ? sessionDisplayText(accumulated) : "";
         return envelope(sessionId, "assistant_text_delta", {
           delta: stream.delta,
           contentIndex: stream.contentIndex,

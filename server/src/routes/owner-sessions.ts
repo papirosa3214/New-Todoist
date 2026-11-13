@@ -17,7 +17,7 @@ import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
 import { setOwnerSessionVoiceTarget } from "../lib/secretaryVoiceConversation.js";
 import { chatBlocksCached, sourcedChatBlocks } from "../sessions/sessionChatBlocks.js";
 import { pullQuickReplies } from "../sessions/sessionQuickReplies.js";
-import { normalizeRoleReplyV1, structuredOutputText } from "../sessions/sessionRoleContractV1.js";
+import { normalizeRoleReplyV1, roleReplyCorrectionPrompt, shouldRetryRoleReply, structuredOutputText } from "../sessions/sessionRoleContractV1.js";
 import { normalizeWidgetBlocks } from "../sessions/sessionWidgetNormalize.js";
 import { sessionDisplayText } from "../runtime/ownerSessionEvents.js";
 import { ownerSessionEntryKey, ownerSessionTurnUsageByEntry } from "../runtime/ownerSessionTurnUsage.js";
@@ -44,7 +44,14 @@ export function roleReplyFields(rawText: string): Record<string, unknown> {
     );
     normalized.envelope.output = withReplies.output as any;
     // Тот же мягкий разбор, что в живом ходе: история и живой ход совпадают.
-    const display = sessionDisplayText(rawText) || structuredOutputText(normalized.envelope.output).trim() || rawText;
+    // Сырой конверт владельцу не показываем ни при каких условиях (владелец
+    // 13.11.2026: «сервер отправлял мне вот это недоразумение»). Если разбор
+    // не дал текста, берём текст блоков, а в последнюю очередь — честную
+    // строку о формате, а не JSON. Карта путей: note://103b08ba-2492-4f0f-b24c-503195786d1e
+    const looksEnvelope = /^\s*(?:```[a-z0-9]*\s*)?\{\s*"schema_version"/i.test(rawText);
+    const display = sessionDisplayText(rawText)
+      || structuredOutputText(normalized.envelope.output).trim()
+      || (looksEnvelope ? "Ответ пришёл в неверном формате; показываю без разметки." : rawText);
     return {
       display_text: display,
       text_blocks: chatBlocksCached(display),
@@ -178,11 +185,45 @@ export function registerOwnerSessionRoutes(
     }
   };
 
+  // Ответ, который не прошёл формат, возвращается роли на переделку (владелец
+  // 13.11.2026: «сервер должен возвращать мне ответ с ошибкой формата, а роль
+  // пусть переделает»). Одна попытка на ход: повторяем, только если с прошлой
+  // попытки прошла минута, иначе две неверные подряд дали бы карусель.
+  // Карта путей чата и сессий: note://103b08ba-2492-4f0f-b24c-503195786d1e
+  const retriedReplies = new Map<string, number>();
+  const retryBrokenReply = (targetSessionId: string, event: any) => {
+    try {
+      if (!event || event.type !== "message_end") return;
+      const parts = Array.isArray(event.message?.content) ? event.message.content : [];
+      const text = parts
+        .filter((part: any) => part?.type === "text" && typeof part.text === "string")
+        .map((part: any) => part.text)
+        .join("")
+        .trim();
+      if (!text) return;
+      const normalized = normalizeRoleReplyV1(text);
+      if (!shouldRetryRoleReply(normalized)) return;
+      const previous = retriedReplies.get(targetSessionId) ?? 0;
+      if (Date.now() - previous < 60_000) return;
+      retriedReplies.set(targetSessionId, Date.now());
+      console.warn("[owner-sessions] ответ возвращён роли на переделку формата:", {
+        sessionId: targetSessionId,
+        errors: normalized.validationErrors.slice(0, 3),
+      });
+      void runtime
+        .prompt(targetSessionId, roleReplyCorrectionPrompt(normalized.validationErrors), "follow_up")
+        .catch((error: unknown) => console.warn("[owner-sessions] повтор не запустился:", error));
+    } catch {
+      // Ответ уже показан владельцу — повтор не обязателен, ход не роняем.
+    }
+  };
+
   const ensureForwarding = async (sessionId: string, ownerId: string) => {
     if (runtime.subscribeAll) {
       const globalKey = `${ownerId}:*`;
       if (subscriptions.has(globalKey)) return;
       const unsubscribe = runtime.subscribeAll((eventSessionId, event) => {
+        retryBrokenReply(eventSessionId, event);
         const normalized = events.push(eventSessionId, event);
         broadcast(ownerId, { type: "session:event", event: normalized });
       });
@@ -192,6 +233,7 @@ export function registerOwnerSessionRoutes(
     const key = `${ownerId}:${sessionId}`;
     if (subscriptions.has(key)) return;
     const unsubscribe = await runtime.subscribe(sessionId, event => {
+      retryBrokenReply(sessionId, event);
       const normalized = events.push(sessionId, event);
       broadcast(ownerId, { type: "session:event", event: normalized });
     });
