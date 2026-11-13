@@ -129,6 +129,16 @@ export function isRoleAuthor(userId: string): boolean {
 }
 
 /**
+ * Учётка «Оркестратор Claude» (users.role = 'orchestrator') — внешний агент
+ * для отладки. Владелец 13.11.2026 дал ей доступ к сессиям владельца
+ * (/api/sessions): читать и писать в них, чтобы проверять работу Помощника.
+ * Только эта учётка: Помощник и роли с правом orchestrate сюда не входят.
+ */
+export function isSessionAgent(userId: string): boolean {
+  return callerOf(userId)?.role === "orchestrator";
+}
+
+/**
  * Делегированный доступ без удаления: живой оркестратор и Помощник владельца.
  * Оба управляют задачами наравне с владельцем; DELETE закрывается общей
  * дверью authOrApiToken (auth.ts). Секретарь распознаётся по role_key, а

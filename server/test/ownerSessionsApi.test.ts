@@ -103,6 +103,7 @@ describe("owner session API", () => {
         request.userId = userId;
       },
       isOwner: (userId: string) => userId === "owner",
+      isSessionAgent: (userId: string) => userId === "orchestrator-claude",
       meta,
     });
     await app.ready();
@@ -119,6 +120,13 @@ describe("owner session API", () => {
     expect(unauthenticated.statusCode).toBe(401);
     expect(forbidden.statusCode).toBe(403);
     expect(runtime.listeners.size).toBe(0);
+  });
+
+  it("пускает к сессиям учётку Оркестратор Claude, но не другие роли (владелец 13.11.2026)", async () => {
+    const agent = await app.inject({ method: "GET", url: "/api/sessions", headers: { "x-user-id": "orchestrator-claude" } });
+    const role = await app.inject({ method: "GET", url: "/api/sessions", headers: { "x-user-id": "role_builder" } });
+    expect(agent.statusCode).toBe(200);
+    expect(role.statusCode).toBe(403);
   });
 
   it("opens the reusable root, lists sessions, and returns a snapshot", async () => {

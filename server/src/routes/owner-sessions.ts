@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { authOrApiToken } from "../auth.js";
-import { isOwner as userIsOwner } from "../access.js";
+import { isOwner as userIsOwner, isSessionAgent as userIsSessionAgent } from "../access.js";
 import { broadcast as socketBroadcast } from "../ws.js";
 import {
   OwnerSessionModelError,
@@ -60,6 +60,8 @@ export interface OwnerSessionRouteDependencies {
   broadcast: (userId: string, event: unknown) => void;
   authorize: Authorize;
   isOwner: (userId: string) => boolean;
+  /** Агент с доступом к сессиям владельца (Оркестратор Claude, владелец 13.11.2026). */
+  isSessionAgent?: (userId: string) => boolean;
   meta?: OwnerSessionMetaStore;
 }
 
@@ -90,6 +92,7 @@ function productionDependencies(): OwnerSessionRouteDependencies {
     broadcast: socketBroadcast,
     authorize: authOrApiToken,
     isOwner: userIsOwner,
+    isSessionAgent: userIsSessionAgent,
   };
 }
 
@@ -129,7 +132,7 @@ export function registerOwnerSessionRoutes(
     await authorize(request, reply);
     if (reply.sent) return;
     const userId = (request as any).userId as string | undefined;
-    if (!userId || !isOwner(userId)) {
+    if (!userId || !(isOwner(userId) || dependencies.isSessionAgent?.(userId))) {
       return reply.code(403).send({ error: "owner_only" });
     }
   };
