@@ -185,7 +185,7 @@ export async function listRoleSkills(role: string) {
 }
 
 /** Тот же набор файлов роли; cwd задачи не меняется, executable extensions отключены. */
-export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}, sharedChatSkills=false):Promise<ResourceLoader & {disposeResources:()=>void; usedSkills:()=>SkillLabel[]}> {
+export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}, sharedChatSkills=false, extensionPaths:string[]=[]):Promise<ResourceLoader & {disposeResources:()=>void; usedSkills:()=>SkillLabel[]}> {
  const home=ensureRoleHome(role);
  // Навыки и папка роли подключаются и в чате (владелец 07.11.2026): сверка перед работой одинакова везде.
  const discovered=await discoverChatResources(role,sharedChatSkills);
@@ -218,6 +218,9 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  const loader=new DefaultResourceLoader({
   cwd,agentDir:home.dir,settingsManager:SettingsManager.inMemory(),
   noExtensions:true,noThemes:true,noSkills:true,noPromptTemplates:true,noContextFiles:true,
+  // Явно перечисленные расширения Pi грузятся и при noExtensions (сессии
+  // владельца, 13.11.2026); автопоиск расширений по-прежнему выключен.
+  additionalExtensionPaths:extensionPaths,
   systemPrompt:systemPrompt+'\n\n'+roleHomeInstruction(role)+stagePrompt+missingPrompt,
   appendSystemPrompt:[],
   skillsOverride:()=>({skills:usedSkills,diagnostics:discovered.diagnostics}),

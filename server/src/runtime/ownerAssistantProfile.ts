@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   createCodingTools,
   createReadOnlyTools,
@@ -41,6 +44,15 @@ export interface OwnerSessionProfile {
 }
 
 const ASSISTANT_ROLE = "secretary";
+
+/** Готовые расширения Pi для сессии Помощника (владелец 13.11.2026: «зачем
+ *  самописное, когда есть готовое»). Только те, что имеют смысл в сессии:
+ *  hesitation-gate (не буксовать — спросить владельца кнопками) и
+ *  verify-before-claim (проверить, прежде чем утверждать). subagent,
+ *  taskflow-activity, taskflow-todo-mirror, orca-agent-status — для
+ *  терминального Pi и карточек, сюда не идут. Субагентам-ролям — без них. */
+const SESSION_PI_EXTENSIONS = ["hesitation-gate.ts", "verify-before-claim.ts"]
+  .map((name) => path.join(os.homedir(), ".pi", "agent", "extensions", name));
 const ASSISTANT_MODE = "work";
 
 export async function ownerAssistantProfile(sessionId: string, role: string = ASSISTANT_ROLE): Promise<OwnerSessionProfile> {
@@ -52,7 +64,8 @@ export async function ownerAssistantProfile(sessionId: string, role: string = AS
     await chatSystemPrompt(ASSISTANT_ROLE_FOR_SESSION, ASSISTANT_MODE, cwd, undefined, "session"),
     [roleToolInstruction()],
   );
-  const resourceLoader = await createTaskResourceLoader(ASSISTANT_ROLE_FOR_SESSION, cwd, systemPrompt, undefined, true);
+  const resourceLoader = await createTaskResourceLoader(ASSISTANT_ROLE_FOR_SESSION, cwd, systemPrompt, undefined, true,
+    ASSISTANT_ROLE_FOR_SESSION === ASSISTANT_ROLE ? SESSION_PI_EXTENSIONS.filter((file) => fs.existsSync(file)) : []);
   const none = { tools: [] as any[], close: async () => {} };
   const composio = await connectRoleComposio(ASSISTANT_ROLE_FOR_SESSION, ASSISTANT_MODE, sessionId).catch((error) => {
     console.warn("[owner-sessions] Composio Помощника не подключился:", error);
