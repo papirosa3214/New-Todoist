@@ -15,7 +15,7 @@ import {
 import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
 import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
 import { setOwnerSessionVoiceTarget } from "../lib/secretaryVoiceConversation.js";
-import { chatBlocksCached } from "../sessions/sessionChatBlocks.js";
+import { chatBlocksCached, sourcedChatBlocks } from "../sessions/sessionChatBlocks.js";
 import { pullQuickReplies } from "../sessions/sessionQuickReplies.js";
 import { normalizeRoleReplyV1, structuredOutputText } from "../sessions/sessionRoleContractV1.js";
 import { normalizeWidgetBlocks } from "../sessions/sessionWidgetNormalize.js";
@@ -72,6 +72,14 @@ export function withAnswerBlocks<T extends { entries: any[] }>(snapshot: T): T {
     const usage = turnUsage.get(ownerSessionEntryKey(entry, index));
     const patch: Record<string, unknown> = {};
     if (text.trim()) Object.assign(patch, roleReplyFields(text));
+    // Размышления из истории — тоже с готовой разметкой (тонкий клиент,
+    // владелец 13.11.2026: «не удаётся получить подготовленное содержимое»).
+    if (entry?.type === "message" && entry.message?.role === "assistant" && Array.isArray(entry.message.content)) {
+      const thinking = entry.message.content
+        .filter((part: any) => part?.type === "thinking" && typeof part.thinking === "string" && part.thinking.trim())
+        .map((part: any) => ({ text: part.thinking, blocks: sourcedChatBlocks(part.thinking, false) }));
+      if (thinking.length) patch.thinking_blocks = thinking;
+    }
     if (usage) patch.turn_usage = usage;
     return Object.keys(patch).length ? { ...entry, ...patch } : entry;
   });

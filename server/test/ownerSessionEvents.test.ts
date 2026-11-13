@@ -217,3 +217,18 @@ describe("файл в обратных кавычках — ссылкой (вл
     expect(linkifyFileRefs("команда `git log -1`")).toBe("команда `git log -1`");
   });
 });
+
+describe("размышления — с разметкой и в конце, и в истории (владелец 13.11.2026)", () => {
+  it("message_end несёт хвост размышления с блоками", async () => {
+    const { normalizePiEvent } = await import("../src/runtime/ownerSessionEvents.js");
+    const end: any = normalizePiEvent("think", { type: "message_end", message: { role: "assistant", content: [{ type: "thinking", thinking: "Думаю **так**" }, { type: "text", text: "Ответ" }] } } as any, { cursor: "c", sequence: 1, epoch: "e" } as any);
+    expect(end.payload.thinking.text).toBe("Думаю **так**");
+    expect(end.payload.thinking.blocks.length).toBeGreaterThan(0);
+  });
+  it("снимок кладёт thinking_blocks к записи ответа", async () => {
+    const { withAnswerBlocks } = await import("../src/routes/owner-sessions.js");
+    const out: any = withAnswerBlocks({ entries: [{ type: "message", id: "a", message: { role: "assistant", content: [{ type: "thinking", thinking: "Мысль" }, { type: "text", text: "Ответ" }] } }] } as any);
+    expect(out.entries[0].thinking_blocks[0].text).toBe("Мысль");
+    expect(out.entries[0].thinking_blocks[0].blocks.length).toBeGreaterThan(0);
+  });
+});

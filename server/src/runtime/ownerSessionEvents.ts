@@ -208,9 +208,12 @@ export function normalizePiEvent(
       const lastText = [...parts].reverse().find((part: any) => part?.type === "text" && typeof part.text === "string");
       for (const key of [...lastBlocksAt.keys()]) if (key.startsWith(sessionId + ":")) lastBlocksAt.delete(key);
       const text = lastText ? sessionDisplayText(lastText.text) : "";
+      // И хвост размышления — его разметка тоже шлётся не на каждый кусок.
+      const lastThinking = [...parts].reverse().find((part: any) => part?.type === "thinking" && typeof part.thinking === "string" && part.thinking.trim());
       return envelope(sessionId, "message_end", {
         message: raw.message,
         ...(text ? { text, blocks: sourcedChatBlocks(text, false) } : {}),
+        ...(lastThinking ? { thinking: { text: lastThinking.thinking, blocks: sourcedChatBlocks(lastThinking.thinking, false) } } : {}),
       }, meta);
     }
     case "tool_execution_start":
