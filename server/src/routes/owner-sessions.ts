@@ -19,6 +19,7 @@ import { chatBlocksCached } from "../sessions/sessionChatBlocks.js";
 import { pullQuickReplies } from "../sessions/sessionQuickReplies.js";
 import { normalizeRoleReplyV1, structuredOutputText } from "../sessions/sessionRoleContractV1.js";
 import { normalizeWidgetBlocks } from "../sessions/sessionWidgetNormalize.js";
+import { sessionDisplayText } from "../runtime/ownerSessionEvents.js";
 import { ownerSessionEntryKey, ownerSessionTurnUsageByEntry } from "../runtime/ownerSessionTurnUsage.js";
 
 /** Ответы Помощника в снимке сессии — с той же разметкой, что в чате
@@ -42,7 +43,8 @@ export function roleReplyFields(rawText: string): Record<string, unknown> {
       )),
     );
     normalized.envelope.output = withReplies.output as any;
-    const display = structuredOutputText(normalized.envelope.output).trim() || rawText;
+    // Тот же мягкий разбор, что в живом ходе: история и живой ход совпадают.
+    const display = sessionDisplayText(rawText) || structuredOutputText(normalized.envelope.output).trim() || rawText;
     return {
       display_text: display,
       text_blocks: chatBlocksCached(display),

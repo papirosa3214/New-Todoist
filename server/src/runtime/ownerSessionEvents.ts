@@ -103,6 +103,46 @@ function blocksDue(key: string, delta: unknown, now = Date.now()): boolean {
   return true;
 }
 
+/**
+ * Текст для показа: ответ, написанный служебным конвертом JSON v1 (целиком
+ * ```json {"schema_version":…}```), раскладывается так же, как готовый ответ
+ * роли — заголовки, таблицы, текст; сырой JSON на экран не идёт (владелец
+ * 13.11.2026, скриншот). Недописанный конверт — как есть: блоки сервера
+ * покажут его заглушкой до конца.
+ */
+export function sessionDisplayText(raw: string): string {
+  const body = raw.trim();
+  const looksEnvelope = /^```json\s*\{[\s\S]*"schema_version"[\s\S]*\}\s*```$/.test(body)
+    || (/^\{[\s\S]*"schema_version"[\s\S]*\}$/.test(body));
+  if (!looksEnvelope) return extractQuickReplies(raw).clean;
+  // Мягкий разбор: модели пишут блоки и без обязательных полей (heading без
+  // level) — строгая проверка конверта такой ответ отбрасывала целиком.
+  try {
+    const json = JSON.parse(body.replace(/^```json\s*/, "").replace(/\s*```$/, ""));
+    const output = Array.isArray(json?.output) ? json.output : null;
+    if (!output) return extractQuickReplies(raw).clean;
+    const parts: string[] = [];
+    for (const block of output) {
+      const type = String(block?.type ?? "");
+      if (type === "heading" && block.text) parts.push(`${"#".repeat(Math.min(3, Math.max(1, Number(block.level) || 2)))} ${block.text}`);
+      else if ((type === "text" || type === "markdown") && block.text) parts.push(String(block.text));
+      else if (type === "table" && Array.isArray(block.columns) && Array.isArray(block.rows)) {
+        const cols = block.columns.map(String);
+        parts.push([`| ${cols.join(" | ")} |`, `| ${cols.map(() => "---").join(" | ")} |`,
+          ...block.rows.map((row: unknown[]) => `| ${(Array.isArray(row) ? row : []).map((cell) => String(cell ?? "")).join(" | ")} |`)].join("\n"));
+      } else if ((type === "status" || type === "callout") && (block.label || block.text)) parts.push(`**${block.label ?? block.text}**${block.detail ? " — " + block.detail : ""}`);
+      else if (typeof block?.text === "string") parts.push(block.text);
+    }
+    const artifacts = Array.isArray(json?.artifacts) ? json.artifacts : [];
+    for (const a of artifacts) if (a?.title) parts.push(a.ref ? `[${a.title}](${a.ref})` : String(a.title));
+    if (typeof json?.next_hint === "string" && json.next_hint.trim()) parts.push(json.next_hint.trim());
+    const text = parts.join("\n\n").trim();
+    return extractQuickReplies(text || raw).clean;
+  } catch {
+    return extractQuickReplies(raw).clean;
+  }
+}
+
 /** Весь текст части ответа на этот момент (часть contentIndex сообщения). */
 function partText(message: any, index: unknown, kind: "text" | "thinking"): string {
   const parts = Array.isArray(message?.content) ? message.content : [];
@@ -126,7 +166,7 @@ export function normalizePiEvent(
         // готовые блоки, как у живого хода ролей (liveTurnForClient).
         // Строка БЫСТРО: — не текст, а кнопки: в блоки не идёт.
         const due = blocksDue(sessionId + ":t:" + stream.contentIndex, stream.delta);
-        const full = due ? extractQuickReplies(partText(raw.message, stream.contentIndex, "text")).clean : "";
+        const full = due ? sessionDisplayText(partText(raw.message, stream.contentIndex, "text")) : "";
         return envelope(sessionId, "assistant_text_delta", {
           delta: stream.delta,
           contentIndex: stream.contentIndex,
@@ -152,7 +192,7 @@ export function normalizePiEvent(
       const parts = Array.isArray(raw.message?.content) ? raw.message.content : [];
       const lastText = [...parts].reverse().find((part: any) => part?.type === "text" && typeof part.text === "string");
       for (const key of [...lastBlocksAt.keys()]) if (key.startsWith(sessionId + ":")) lastBlocksAt.delete(key);
-      const text = lastText ? extractQuickReplies(lastText.text).clean : "";
+      const text = lastText ? sessionDisplayText(lastText.text) : "";
       return envelope(sessionId, "message_end", {
         message: raw.message,
         ...(text ? { text, blocks: sourcedChatBlocks(text, false) } : {}),

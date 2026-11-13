@@ -194,3 +194,17 @@ describe("разметка живого хода — по абзацам и не
     expect(end.payload.blocks.length).toBeGreaterThan(0);
   });
 });
+
+describe("ответ конвертом JSON v1 — без сырого JSON (владелец 13.11.2026)", () => {
+  it("целый ```json-конверт раскладывается в текст", async () => {
+    const { sessionDisplayText } = await import("../src/runtime/ownerSessionEvents.js");
+    const envelope = { schema_version: 1, ok: true, output: [{ type: "heading", text: "Итог" }, { type: "text", text: "Всё готово" }], artifacts: [], plan_artifact: null, error: null, next_hint: null };
+    const shown = sessionDisplayText("```json\n" + JSON.stringify(envelope, null, 2) + "\n```");
+    expect(shown).toContain("Всё готово");
+    expect(shown).not.toContain("schema_version");
+  });
+  it("обычный текст не трогает", async () => {
+    const { sessionDisplayText } = await import("../src/runtime/ownerSessionEvents.js");
+    expect(sessionDisplayText("Просто ответ")).toBe("Просто ответ");
+  });
+});
