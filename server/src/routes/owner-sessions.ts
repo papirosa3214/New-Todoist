@@ -16,12 +16,18 @@ import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
 import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
 import { setOwnerSessionVoiceTarget } from "../lib/secretaryVoiceConversation.js";
 import { chatBlocksCached } from "../lib/chatBlocks.js";
+import { ownerSessionEntryKey, ownerSessionTurnUsageByEntry } from "../runtime/ownerSessionTurnUsage.js";
 
 /** Ответы Помощника в снимке сессии — с той же разметкой, что в чате
  *  (владелец 12.11.2026): к записи ответа и голосовой реплике Помощника
- *  добавляется text_blocks. Файл сессии не меняется. */
-function withAnswerBlocks<T extends { entries: any[] }>(snapshot: T): T {
-  const entries = snapshot.entries.map((entry: any) => {
+ *  добавляется text_blocks. Файл сессии не меняется.
+ *  Плюс расход хода (13.11.2026): на ПОСЛЕДНЮЮ запись ответа хода кладётся
+ *  turn_usage той же формы, что строка расхода под ответом в чате.
+ *  Незаконченный ход тоже получает итог — клиент обновит его по живому
+ *  событию agent_settled. */
+export function withAnswerBlocks<T extends { entries: any[] }>(snapshot: T): T {
+  const turnUsage = ownerSessionTurnUsageByEntry(snapshot.entries);
+  const entries = snapshot.entries.map((entry: any, index: number) => {
     let text = "";
     if (entry?.type === "message" && entry.message?.role === "assistant") {
       const content = entry.message.content;
@@ -30,7 +36,11 @@ function withAnswerBlocks<T extends { entries: any[] }>(snapshot: T): T {
     } else if (entry?.type === "custom_message" && entry.customType === "taskflow.voice" && entry.details?.role === "assistant") {
       text = String(entry.details.text ?? "");
     }
-    return text.trim() ? { ...entry, text_blocks: chatBlocksCached(text) } : entry;
+    const usage = turnUsage.get(ownerSessionEntryKey(entry, index));
+    const patch: Record<string, unknown> = {};
+    if (text.trim()) patch.text_blocks = chatBlocksCached(text);
+    if (usage) patch.turn_usage = usage;
+    return Object.keys(patch).length ? { ...entry, ...patch } : entry;
   });
   return { ...snapshot, entries };
 }

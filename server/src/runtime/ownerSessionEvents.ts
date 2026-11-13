@@ -1,5 +1,14 @@
 import crypto from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { recordModelUsage } from "../lib/modelUsage.js";
+import {
+  addAnswerToTurn,
+  finishTurn,
+  ownerSessionAnswerCall,
+  startTurn,
+  type OwnerSessionFinishedTurn,
+  type OwnerSessionTurnDraft,
+} from "./ownerSessionTurnUsage.js";
 
 export interface OwnerSessionEventEnvelope {
   cursor: string;
@@ -175,6 +184,8 @@ export class OwnerSessionEventBuffer {
   private readonly epoch: string;
   private sequence = 0;
   private retained: OwnerSessionEventEnvelope[] = [];
+  /** Накопитель расхода живого хода по сессии (13.11.2026). */
+  private readonly liveTurns = new Map<string, OwnerSessionTurnDraft>();
 
   constructor(options: OwnerSessionEventBufferOptions = {}) {
     const capacity = options.capacity ?? 512;
@@ -186,15 +197,83 @@ export class OwnerSessionEventBuffer {
 
   push(sessionId: string, event: AgentSessionEvent): OwnerSessionEventEnvelope {
     const cursor = `${this.epoch}:${++this.sequence}`;
+    this.observeTurn(sessionId, event);
     const normalized = normalizePiEvent(sessionId, event, {
       cursor,
       timestamp: this.clock().toISOString(),
     });
-    this.retained.push(normalized);
+    let envelopeOut = normalized;
+    if (normalized.type === "agent_settled") {
+      const finished = this.settleTurn(sessionId);
+      if (finished) {
+        envelopeOut = {
+          ...normalized,
+          payload: { ...normalized.payload, turn_usage: finished.turn_usage },
+        };
+        this.recordTurnUsage(sessionId, finished);
+      }
+    }
+    this.retained.push(envelopeOut);
     if (this.retained.length > this.capacity) {
       this.retained = this.retained.slice(this.retained.length - this.capacity);
     }
-    return normalized;
+    return envelopeOut;
+  }
+
+  /** Ход копится по живым событиям: agent_start начинает заново, каждый
+   *  ответ ассистента прибавляется к текущему ходу. */
+  private observeTurn(sessionId: string, event: AgentSessionEvent): void {
+    const raw = event as unknown as Record<string, any>;
+    if (raw.type === "agent_start") {
+      this.liveTurns.delete(sessionId);
+      return;
+    }
+    if (raw.type !== "message_end") return;
+    const message = raw.message;
+    if (message?.role === "user") {
+      const stamp = typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+        ? message.timestamp
+        : this.clock().getTime();
+      this.liveTurns.set(sessionId, startTurn(new Date(stamp).toISOString(), stamp));
+      return;
+    }
+    const call = ownerSessionAnswerCall(message);
+    if (!call) return;
+    const draft = this.liveTurns.get(sessionId)
+      ?? startTurn(this.clock().toISOString(), this.clock().getTime());
+    this.liveTurns.set(sessionId, addAnswerToTurn(draft, call));
+  }
+
+  private settleTurn(sessionId: string): OwnerSessionFinishedTurn | null {
+    const draft = this.liveTurns.get(sessionId);
+    this.liveTurns.delete(sessionId);
+    return draft ? finishTurn(draft) : null;
+  }
+
+  /** Итог хода сессии владельца в model_usage — одна строка на ход, как у
+   *  чатов (chatLiveTurn.ts). Повтор того же события отсекается отпечатком
+   *  записи в recordModelUsage. */
+  private recordTurnUsage(sessionId: string, finished: OwnerSessionFinishedTurn): void {
+    const usage = finished.turn_usage;
+    if (finished.occurred_at_ms === null || usage.calls < 1) return;
+    try {
+      recordModelUsage({
+        role: "assistant",
+        timestamp: finished.occurred_at_ms,
+        provider: finished.provider ?? "unknown",
+        model: usage.model ?? "unknown",
+        usage: {
+          input: usage.input,
+          output: usage.output,
+          cacheRead: usage.cache_read,
+          cacheWrite: usage.cache_write,
+          ...(usage.cost_usd === null ? {} : { cost: { total: usage.cost_usd } }),
+        },
+        content: `owner-session ${sessionId} ${usage.started_at ?? ""}`,
+      }, "owner_session");
+    } catch {
+      /* счётчик расхода не должен ронять живые события */
+    }
   }
 
   eventsAfter(cursor?: string, sessionId?: string): OwnerSessionReconnectSlice {
