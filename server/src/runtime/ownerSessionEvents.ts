@@ -84,6 +84,25 @@ const PASSTHROUGH_EVENTS = new Set([
   "bash_execution_update",
 ]);
 
+/**
+ * Как часто слать разметку живого хода (владелец 13.11.2026, правило
+ * «тонкий клиент без нагрева»): не на каждый кусок, а когда закончился
+ * абзац или прошло BLOCKS_INTERVAL_MS. Раньше телефон грелся именно от
+ * разбора всего ответа на каждом куске; слать всё заново на каждый кусок —
+ * тот же путь. Последний хвост досылается с message_end.
+ */
+const BLOCKS_INTERVAL_MS = 300;
+const lastBlocksAt = new Map<string, number>();
+
+function blocksDue(key: string, delta: unknown, now = Date.now()): boolean {
+  const paragraphDone = typeof delta === "string" && delta.includes("\n\n");
+  const last = lastBlocksAt.get(key) ?? 0;
+  if (!paragraphDone && now - last < BLOCKS_INTERVAL_MS) return false;
+  lastBlocksAt.set(key, now);
+  if (lastBlocksAt.size > 500) lastBlocksAt.delete(lastBlocksAt.keys().next().value!);
+  return true;
+}
+
 /** Весь текст части ответа на этот момент (часть contentIndex сообщения). */
 function partText(message: any, index: unknown, kind: "text" | "thinking"): string {
   const parts = Array.isArray(message?.content) ? message.content : [];
@@ -106,7 +125,8 @@ export function normalizePiEvent(
         // Тонкий клиент (владелец 13.11.2026): к куску — весь текст части и
         // готовые блоки, как у живого хода ролей (liveTurnForClient).
         // Строка БЫСТРО: — не текст, а кнопки: в блоки не идёт.
-        const full = extractQuickReplies(partText(raw.message, stream.contentIndex, "text")).clean;
+        const due = blocksDue(sessionId + ":t:" + stream.contentIndex, stream.delta);
+        const full = due ? extractQuickReplies(partText(raw.message, stream.contentIndex, "text")).clean : "";
         return envelope(sessionId, "assistant_text_delta", {
           delta: stream.delta,
           contentIndex: stream.contentIndex,
@@ -114,7 +134,8 @@ export function normalizePiEvent(
         }, meta);
       }
       if (stream?.type === "thinking_delta") {
-        const full = partText(raw.message, stream.contentIndex, "thinking");
+        const due = blocksDue(sessionId + ":k:" + stream.contentIndex, stream.delta);
+        const full = due ? partText(raw.message, stream.contentIndex, "thinking") : "";
         return envelope(sessionId, "assistant_thinking_delta", {
           delta: stream.delta,
           contentIndex: stream.contentIndex,
@@ -125,8 +146,18 @@ export function normalizePiEvent(
         event: stream,
       }, meta);
     }
-    case "message_end":
-      return envelope(sessionId, "message_end", { message: raw.message }, meta);
+    case "message_end": {
+      // Хвост ответа: последняя разметка текста — здесь, раз куски шлют её
+      // не каждый раз. Клиент кладёт её в живой ход (тонкий клиент).
+      const parts = Array.isArray(raw.message?.content) ? raw.message.content : [];
+      const lastText = [...parts].reverse().find((part: any) => part?.type === "text" && typeof part.text === "string");
+      for (const key of [...lastBlocksAt.keys()]) if (key.startsWith(sessionId + ":")) lastBlocksAt.delete(key);
+      const text = lastText ? extractQuickReplies(lastText.text).clean : "";
+      return envelope(sessionId, "message_end", {
+        message: raw.message,
+        ...(text ? { text, blocks: sourcedChatBlocks(text, false) } : {}),
+      }, meta);
+    }
     case "tool_execution_start":
       return envelope(sessionId, "tool_start", {
         toolCallId: raw.toolCallId,

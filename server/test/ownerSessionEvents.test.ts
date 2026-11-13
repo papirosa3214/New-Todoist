@@ -172,3 +172,25 @@ describe("тонкий клиент: блоки в событиях текста
     expect(out.payload.blocks.length).toBeGreaterThan(0);
   });
 });
+
+describe("разметка живого хода — по абзацам и не чаще 300 мс (владелец 13.11.2026)", () => {
+  const update = (text: string, delta: string) => ({
+    type: "message_update",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
+  }) as any;
+  const meta = { cursor: "c", sequence: 1, epoch: "e" } as any;
+
+  it("второй кусок без конца абзаца — без блоков, конец абзаца — с блоками, хвост — в message_end", async () => {
+    const { normalizePiEvent } = await import("../src/runtime/ownerSessionEvents.js");
+    const first: any = normalizePiEvent("thr", update("Раз", "Раз"), meta);
+    const second: any = normalizePiEvent("thr", update("Раз два", " два"), meta);
+    const paragraph: any = normalizePiEvent("thr", update("Раз два\n\nТри", "\n\nТри"), meta);
+    const end: any = normalizePiEvent("thr", { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Раз два\n\nТри" }] } } as any, meta);
+    expect(first.payload.blocks).toBeDefined();
+    expect(second.payload.blocks).toBeUndefined();
+    expect(paragraph.payload.blocks).toBeDefined();
+    expect(end.payload.text).toBe("Раз два\n\nТри");
+    expect(end.payload.blocks.length).toBeGreaterThan(0);
+  });
+});
