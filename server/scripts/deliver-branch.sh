@@ -22,7 +22,17 @@ set -uo pipefail
 
 DB=/home/maksim/Проекты/New-Todoist/server/taskflow.db
 LIVE=${MAK70_LIVE_REPO:-/home/maksim/Проекты/New-Todoist}
-WT_BASE=${TASKFLOW_WORKTREES:-$HOME/.local/state/taskflow-runs/worktrees}
+# Рабочие копии карточек лежат под maksim даже если скрипт зовут от другого
+# пользователя (например, из сессии роли под tfrole).
+if [ -z "${TASKFLOW_WORKTREES:-}" ]; then
+  if [ -d /home/maksim/.local/state/taskflow-runs/worktrees ]; then
+    WT_BASE=/home/maksim/.local/state/taskflow-runs/worktrees
+  else
+    WT_BASE=$HOME/.local/state/taskflow-runs/worktrees
+  fi
+else
+  WT_BASE=$TASKFLOW_WORKTREES
+fi
 KEY=${GITHUB_KEY:-$HOME/.ssh/github_ed25519}
 
 TASK_ID=${1:-}
