@@ -124,10 +124,17 @@ function parseSchemaIssue(text:string):{field?:string;expected?:string}|undefine
  return {field:field||undefined,expected:match[2]};
 }
 
-export type CatalogContext={onErrorLoop?:()=>void;role:string;model?:string|null;mode:string;runId:string;taskId?:string;subtaskId?:string;chatId?:string;messageId?:string;executionMode?:ChatExecutionMode};
+/** Сессии владельца — режим «один Помощник» (владелец 13.11.2026, как
+ *  «сеансы» у Гермеса): писать ролям в чаты/темы отсюда нельзя, роли —
+ *  только субагенты сессии (taskflow_spawn_session с role). */
+export const OWNER_SESSION_DENIED_OPS=new Set(["taskflow_chat_send","taskflow_chat_reply","taskflow_topic_send","taskflow_topic_reply"]);
+export type CatalogContext={ownerSession?:boolean;onErrorLoop?:()=>void;role:string;model?:string|null;mode:string;runId:string;taskId?:string;subtaskId?:string;chatId?:string;messageId?:string;executionMode?:ChatExecutionMode};
+/** Какие операции разрешены ходу (вынесено для проверки). */
+export function catalogAuthorize(input:Pick<CatalogContext,"role"|"subtaskId"|"ownerSession">){
+ return (name:string)=>roleToolAllowed(input.role,name) && (!input.subtaskId || name!=="taskflow_claim") && !(input.ownerSession && OWNER_SESSION_DENIED_OPS.has(name));
+}
 export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
- const context:Context={...input,executionMode:input.taskId ? "card" : input.executionMode ?? (input.chatId ? chatExecutionMode(input.chatId,input.messageId) : undefined),actor:roleUserId(input.role),authorize:(name)=>
-  roleToolAllowed(input.role,name) && (!input.subtaskId || name!=="taskflow_claim")};
+ const context:Context={...input,executionMode:input.taskId ? "card" : input.executionMode ?? (input.chatId ? chatExecutionMode(input.chatId,input.messageId) : undefined),actor:roleUserId(input.role),authorize:catalogAuthorize(input)};
  const taskflowOperations=taskflowTools(input.role,input.model??null,input.taskId,input.subtaskId,true,{chatId:input.chatId??"",messageId:input.messageId??""});
  const adapterNames=new Set(adapters.map(tool=>tool.name));
  const hostTools=createHostRoleTools(input.role,input.taskId,input.subtaskId);
@@ -147,7 +154,7 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  ? [createRoleSubagentSteerTool(context)] : [];
  // Новый ход роли — счётчик вызовов субагента сбрасывается: лимит «3 за ход».
  if(subagentCallTools.length)resetSubagentCallCounters(input.role,input.chatId??"");
- const allowed=(tool:Tool)=>roleToolAllowed(input.role,tool.name);
+ const allowed=(tool:Tool)=>roleToolAllowed(input.role,tool.name) && !(input.ownerSession && OWNER_SESSION_DENIED_OPS.has(tool.name));
  const allOperations=[...taskflowOperations.filter(tool=>!adapterNames.has(tool.name)),...roleHostAccessTools(input).filter(allowed),...hostTools.filter(allowed),...archifyTools,...openBranchTools,...subagentCallTools,...subagentSteerTools,...adapters];
  // Чат задачи: чужую карточку, документ и коллегу пускает только слово владельца.
  // Один набор во всех режимах (владелец 07.11.2026): чат задачи больше не урезается.

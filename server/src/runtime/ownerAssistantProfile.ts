@@ -82,7 +82,7 @@ export async function ownerAssistantProfile(sessionId: string, role: string = AS
   // 13.11.2026). Каталог собирается «как у субагента» — тогда этих
   // инструментов в нём нет с самого начала.
   const catalog = runAsSubagent({ requesterRole: "owner", recipientRole: ASSISTANT_ROLE_FOR_SESSION }, () => buildRoleToolCatalog(
-    { role: ASSISTANT_ROLE_FOR_SESSION, mode: ASSISTANT_MODE, runId: sessionId },
+    { role: ASSISTANT_ROLE_FOR_SESSION, mode: ASSISTANT_MODE, runId: sessionId, ownerSession: true },
     [...composio.tools, ...infra.tools,
       ...(ASSISTANT_ROLE_FOR_SESSION === ASSISTANT_ROLE ? secretaryThings3Tools({ role: ASSISTANT_ROLE_FOR_SESSION }) : [])],
   ));
