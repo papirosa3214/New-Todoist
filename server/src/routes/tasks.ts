@@ -25,6 +25,7 @@ import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { etagFor, etagMatches } from "../lib/etag.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
+import { closedTaskItems, completedDailyStats } from "../lib/closedTasksFeed.js";
 import {
   getTaskForRead,
   getTaskForWrite,
@@ -934,6 +935,39 @@ export function registerTaskRoutes(app: FastifyInstance) {
   //
   // `full: true` — журнал не покрывает запрошенный момент (курсор старше
   // семи дней или не задан): клиент делает обычную полную перечитку.
+  // Лёгкая выдача для телефона (владелец 13.11.2026): мини-карточки
+  // закрытых задач за 30 дней и снимок «сколько задач в какой день». Полная
+  // карточка на телефон приходит только при восстановлении. С курсором —
+  // только изменения: карточки — по журналу изменений, дни — по версии.
+  app.get("/api/tasks/closed", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) {
+      return reply.code(403).send({ error: "архив доступен только владельцу" });
+    }
+    const since = typeof req.query.since === "string" ? req.query.since : "";
+    const cursor = ledgerCursor();
+    const { rows, full } = since ? listTaskChanges(since) : { rows: [], full: true };
+    if (full) {
+      return { server_time: cursor, full: true, items: closedTaskItems(), removed_ids: [] };
+    }
+    const ids = [...new Set(rows.map((r) => r.task_id))];
+    const items = closedTaskItems(ids);
+    const present = new Set(items.map((i) => i.id));
+    return {
+      server_time: cursor,
+      full: false,
+      items,
+      removed_ids: ids.filter((id) => !present.has(id)),
+    };
+  });
+
+  app.get("/api/stats/completed-daily", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) {
+      return reply.code(403).send({ error: "статистика доступна только владельцу" });
+    }
+    const since = typeof req.query.since === "string" && req.query.since ? req.query.since : null;
+    return completedDailyStats(since);
+  });
+
   app.get("/api/tasks/changes", { preHandler: authPre }, async (req: any) => {
     const userId = req.userId;
     const since = typeof req.query.since === "string" ? req.query.since : "";
