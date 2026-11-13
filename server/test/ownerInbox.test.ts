@@ -104,3 +104,12 @@ it("cancels open questions when the chat closes or the card goes to archive", as
     const остались = db.prepare("SELECT id,status FROM chat_questions WHERE id IN ('q-card-chat','q-wake')").all() as Array<{ id: string; status: string }>;
     expect(остались.map((r) => r.status)).toEqual(["cancelled", "cancelled"]);
 });
+it("показывает вопрос без чата и закрывает его ответом по номеру вопроса (владелец 13.11.2026)", async () => {
+    const payload = { questions: [{ question: "Выдать права?", header: "Права", options: [{ label: "Да" }, { label: "Нет" }] }] };
+    db.prepare("INSERT INTO chat_questions(id,chat_id,role_id,payload_json,status) VALUES ('chatless','','role_qa',?,'open')").run(JSON.stringify(payload));
+    expect((await read()).tickets.map((t: any) => t.id)).toContain("question:chatless");
+    const res = await app.inject({ method: "POST", url: "/api/questions/chatless/answer", headers: { authorization: "Bearer " + app.jwt.sign({ id: "u1" }) }, payload: { answers: [{ questionIndex: 0, selected: ["Да"] }] } });
+    expect(res.statusCode).toBe(200);
+    expect((db.prepare("SELECT status FROM chat_questions WHERE id='chatless'").get() as any).status).toBe("answered");
+    expect((await read()).tickets.map((t: any) => t.id)).not.toContain("question:chatless");
+});

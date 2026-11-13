@@ -1452,6 +1452,56 @@ function parseLimitParam(raw: unknown): { value: number | null } | { error: stri
     },
   );
 
+  // Ответ по номеру вопроса, без чата (владелец 13.11.2026: «сверка идёт по
+  // таблице: изменилась запись — сервер реагирует»). Вопрос — запись в
+  // chat_questions; чат лишь одно из мест показа. Есть чат — ответ ложится
+  // туда сообщением; ждёт ход роли — получает ответ; иначе в чате поднимается
+  // новый ход, а без чата ответ просто записан.
+  app.post<{ Params: { questionId: string }; Body: { answers?: unknown; note?: unknown } }>(
+    "/api/questions/:questionId/answer",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const отправитель = db.prepare("SELECT role FROM users WHERE id = ?").get(req.userId) as { role: string } | undefined;
+      if (!отправитель || отправитель.role !== "owner")
+        return reply.code(403).send({ error: "Отвечать на вопрос может владелец" });
+      const вопрос = questionById(String(req.params.questionId));
+      if (!вопрос) return reply.code(404).send({ error: "Вопрос не найден", code: "question_not_found" });
+      if (вопрос.status !== "open") return reply.code(400).send({ error: "Вопрос уже отвечен", code: "question_closed" });
+      const payload = payloadOf(вопрос);
+      let answer: AnswerPayload;
+      try {
+        answer = validateAnswerPayload(payload, req.body?.answers, req.body?.note);
+      } catch (error) {
+        if (error instanceof QuestionValidationError) return reply.code(400).send({ error: error.message, code: error.code });
+        throw error;
+      }
+      const chatId = вопрос.chat_id || "";
+      const текст = renderAnswerText(payload, answer);
+      const id = uid();
+      let closed = false;
+      db.transaction(() => {
+        closed = answerQuestionRowIfOpen(вопрос.id, answer);
+        if (!closed || !chatId) return;
+        db.prepare(
+          `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, reply_to_message_id)
+           VALUES (?, ?, ?, 'chat', ?, ?)`,
+        ).run(id, req.userId, текст, chatId, вопрос.message_id);
+        db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
+      })();
+      if (!closed) return reply.code(400).send({ error: "Вопрос уже отвечен", code: "question_closed" });
+      if (chatId) broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(id) });
+      if (deliverAnswer(вопрос.id, answer)) return { resumed: true, chat_id: chatId || null };
+      if (chatId) {
+        try {
+          await dispatchRoleReplies({ chatId, messageId: id, fromUserId: req.userId, text: текст, hop: 0, mode: "work" });
+        } catch (error) {
+          console.warn(`[questions] ответ не поднял ход роли chat=${chatId}:`, error instanceof Error ? error.message : error);
+        }
+      }
+      return { resumed: false, chat_id: chatId || null };
+    },
+  );
+
   // Удалить сообщения чата. Два режима, оба входят из меню «…» комнаты
   // (владелец 21.09.2026: «нажать троеточие и либо удалить все, либо выбрать
   // отдельные сообщения и потом удалить их»):

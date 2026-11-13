@@ -50,9 +50,9 @@ export function ownerInbox(userId: string): OwnerInboxTicket[] {
         tickets.push({ id, kind, title, body, created_at, role_id, role, task_id: t.id, chat_id: null, context_title: t.title, project: t.project });
     };
     const questions = db.prepare(`SELECT q.*,c.title AS chat_title,c.task_id,u.name AS role
- FROM chat_questions q JOIN chats c ON c.id=q.chat_id LEFT JOIN users u ON u.id=q.role_id LEFT JOIN projects cp ON cp.id=c.project_id
+ FROM chat_questions q LEFT JOIN chats c ON c.id=q.chat_id LEFT JOIN users u ON u.id=q.role_id LEFT JOIN projects cp ON cp.id=c.project_id
  WHERE cp.archived_at IS NULL AND q.status='open' AND (q.deadline_at IS NULL OR julianday(q.deadline_at)>julianday('now'))
- AND EXISTS(SELECT 1 FROM chat_members cm WHERE cm.chat_id=q.chat_id AND cm.member_id=?)
+ AND (COALESCE(q.chat_id,'')='' OR EXISTS(SELECT 1 FROM chat_members cm WHERE cm.chat_id=q.chat_id AND cm.member_id=?))
  ORDER BY q.created_at DESC`).all(userId) as (QuestionRow & {
         chat_title: string | null;
         task_id: string | null;
@@ -65,7 +65,9 @@ export function ownerInbox(userId: string): OwnerInboxTicket[] {
         // Адресат вопроса должен быть жив: закрытый или убранный чат,
         // удалённая либо архивная карточка означают, что ответить некуда и
         // вопрос не должен висеть в «Нужен ответ» (31.10.2026).
-        if (!questionAddressAlive(q.chat_id))
+        // Вопрос без чата (из карточки, старый) — тоже вопрос: источник правды —
+        // запись в таблице (владелец 13.11.2026). Ответ — /api/questions/:id/answer.
+        if (q.chat_id && !questionAddressAlive(q.chat_id))
             continue;
         try {
             const question = questionEnvelope(q);
