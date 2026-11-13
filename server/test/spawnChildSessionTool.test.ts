@@ -168,3 +168,40 @@ describe("taskflow_spawn_session", () => {
     expect(h.child.promptCalls[0]).toContain("short report");
   });
 });
+
+describe("субагент сессии — роль (владелец 13.11.2026)", () => {
+  function roleTool() {
+    const child = new FakeChild();
+    const requests: ChildSessionSpawnRequest[] = [];
+    const tool = createSpawnChildSessionTool({
+      parentSessionId: "parent-session",
+      parentSessionFile: "/sessions/parent.jsonl",
+      roles: { researcher: "Исследователь", designer: "Дизайнер" },
+      spawn: async (request) => {
+        requests.push(request);
+        return { id: "child-session", parentSession: "/sessions/parent.jsonl", session: child };
+      },
+    });
+    return { tool, requests };
+  }
+
+  it("передаёт роль в запуск дочерней сессии и возвращает её ответ", async () => {
+    const { tool, requests } = roleTool();
+    const result: any = await tool.execute("call", { role: "researcher", task: "найди библиотеки" } as any, undefined, undefined, undefined as any);
+    expect(requests[0].role).toBe("researcher");
+    expect(result.content[0].text).toBe("work complete");
+    expect(result.details.role).toBe("researcher");
+  });
+
+  it("неизвестную роль отклоняет до запуска", async () => {
+    const { tool, requests } = roleTool();
+    await expect(tool.execute("call", { role: "nobody", task: "x" } as any, undefined, undefined, undefined as any))
+      .rejects.toThrow(/НЕИЗВЕСТНАЯ РОЛЬ/);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("в описании перечислены роли", () => {
+    const { tool } = roleTool();
+    expect(tool.description).toContain("researcher — Исследователь");
+  });
+});

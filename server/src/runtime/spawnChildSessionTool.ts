@@ -18,6 +18,8 @@ export interface ChildSessionSpawnRequest {
   cwd?: string;
   expectedOutput?: string;
   tools: readonly string[];
+  /** Роль-субагент: дочерняя сессия с профилем роли. */
+  role?: string;
 }
 
 export interface SpawnedChildSession {
@@ -29,11 +31,14 @@ export interface SpawnedChildSession {
 export interface SpawnChildSessionToolDependencies {
   parentSessionId: string;
   parentSessionFile: string;
+  /** Роли, которых можно звать субагентом (ключ → название). */
+  roles?: Record<string, string>;
   spawn(request: ChildSessionSpawnRequest): Promise<SpawnedChildSession>;
 }
 
 type ChildResultDetails = {
   status: "completed" | "failed" | "aborted";
+  role?: string;
   sessionId: string;
   parentSession: string;
   output?: string;
@@ -63,16 +68,28 @@ export function createSpawnChildSessionTool(dependencies: SpawnChildSessionToolD
   return defineTool({
     name: "taskflow_spawn_session",
     label: "Spawn session",
-    description: "Start an independent persistent child session for a bounded task and return its result.",
-    promptSnippet: "taskflow_spawn_session: delegate a bounded read-only task to a persistent child session",
+    description:
+      "Поручить задачу субагенту и получить его ответ. Субагент — роль команды (role): " +
+      "она работает в своей дочерней сессии со своими инструкцией, навыками и инструментами " +
+      "и возвращает результат сюда. Без role — короткая задача только на чтение." +
+      (dependencies.roles && Object.keys(dependencies.roles).length
+        ? " Роли: " + Object.entries(dependencies.roles).map(([key, title]) => `${key} — ${title}`).join("; ") + "."
+        : ""),
+    promptSnippet: "taskflow_spawn_session: поручить задачу роли-субагенту (role) и получить её ответ",
     parameters: Type.Object({
+      role: Type.Optional(Type.String({ minLength: 1, description: "Ключ роли-субагента (например researcher, designer, builder)" })),
       task: Type.String({ minLength: 1, description: "Concrete task for the child session" }),
       cwd: Type.Optional(Type.String({ minLength: 1, description: "Working directory; defaults to the parent cwd" })),
       expectedOutput: Type.Optional(Type.String({ minLength: 1, description: "Expected result shape" })),
     }),
     executionMode: "parallel",
     execute: async (_toolCallId, params, signal, onUpdate) => {
+      const role = params.role?.trim() || undefined;
+      if (role && dependencies.roles && !(role in dependencies.roles)) {
+        throw new Error(`НЕИЗВЕСТНАЯ РОЛЬ «${role}». Доступные роли: ${Object.keys(dependencies.roles).join(", ")}.`);
+      }
       const child = await dependencies.spawn({
+        role,
         parentSessionId: dependencies.parentSessionId,
         parentSessionFile: dependencies.parentSessionFile,
         task: params.task,
@@ -97,6 +114,7 @@ export function createSpawnChildSessionTool(dependencies: SpawnChildSessionToolD
           details: {
             status: event.type === "agent_settled" && (event as any).aborted ? "aborted" : "completed",
             sessionId: child.id,
+            role,
             parentSession: child.parentSession,
             eventType: event.type,
           } satisfies ChildResultDetails,
@@ -119,6 +137,7 @@ export function createSpawnChildSessionTool(dependencies: SpawnChildSessionToolD
             details: {
               status: "aborted",
               sessionId: child.id,
+            role,
               parentSession: child.parentSession,
             } satisfies ChildResultDetails,
           };
@@ -138,6 +157,7 @@ export function createSpawnChildSessionTool(dependencies: SpawnChildSessionToolD
             details: {
               status: "failed",
               sessionId: child.id,
+            role,
               parentSession: child.parentSession,
               error: message,
             } satisfies ChildResultDetails,
@@ -150,6 +170,7 @@ export function createSpawnChildSessionTool(dependencies: SpawnChildSessionToolD
             details: {
               status: "aborted",
               sessionId: child.id,
+            role,
               parentSession: child.parentSession,
             } satisfies ChildResultDetails,
           };
@@ -159,6 +180,7 @@ export function createSpawnChildSessionTool(dependencies: SpawnChildSessionToolD
           details: {
             status: "completed",
             sessionId: child.id,
+            role,
             parentSession: child.parentSession,
             output: lastOutput,
           } satisfies ChildResultDetails,

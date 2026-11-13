@@ -11,6 +11,7 @@ import { connectRoleComposio } from "./composioRuntime.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
 import { chatSystemPrompt, createTaskResourceLoader } from "./instructionResources.js";
 import { ensureRoleHome } from "./roleHome.js";
+import { runAsSubagent } from "./roleSubagentCall.js";
 import {
   buildRoleToolCatalog,
   installNativeToolCore,
@@ -42,27 +43,28 @@ export interface OwnerSessionProfile {
 const ASSISTANT_ROLE = "secretary";
 const ASSISTANT_MODE = "work";
 
-export async function ownerAssistantProfile(sessionId: string): Promise<OwnerSessionProfile> {
-  const home = ensureRoleHome(ASSISTANT_ROLE);
+export async function ownerAssistantProfile(sessionId: string, role: string = ASSISTANT_ROLE): Promise<OwnerSessionProfile> {
+  const ASSISTANT_ROLE_FOR_SESSION = role;
+  const home = ensureRoleHome(ASSISTANT_ROLE_FOR_SESSION);
   const cwd = home.workspace;
   const systemPrompt = chatTurnSystemText(
-    ASSISTANT_ROLE,
-    await chatSystemPrompt(ASSISTANT_ROLE, ASSISTANT_MODE, cwd, undefined, "session"),
+    ASSISTANT_ROLE_FOR_SESSION,
+    await chatSystemPrompt(ASSISTANT_ROLE_FOR_SESSION, ASSISTANT_MODE, cwd, undefined, "session"),
     [roleToolInstruction()],
   );
-  const resourceLoader = await createTaskResourceLoader(ASSISTANT_ROLE, cwd, systemPrompt, undefined, true);
+  const resourceLoader = await createTaskResourceLoader(ASSISTANT_ROLE_FOR_SESSION, cwd, systemPrompt, undefined, true);
   const none = { tools: [] as any[], close: async () => {} };
-  const composio = await connectRoleComposio(ASSISTANT_ROLE, ASSISTANT_MODE, sessionId).catch((error) => {
+  const composio = await connectRoleComposio(ASSISTANT_ROLE_FOR_SESSION, ASSISTANT_MODE, sessionId).catch((error) => {
     console.warn("[owner-sessions] Composio Помощника не подключился:", error);
     return none;
   });
-  const infra = await connectRoleMcp(ASSISTANT_ROLE, cwd).catch(() => none);
+  const infra = await connectRoleMcp(ASSISTANT_ROLE_FOR_SESSION, cwd).catch(() => none);
 
   const builtin = [
     ...new Map([...createCodingTools(cwd), ...createReadOnlyTools(cwd)].map((tool) => [tool.name, tool])).values(),
   ].map((tool: any) => ({
     ...tool,
-    description: composeLayer(ASSISTANT_ROLE, "tool.builtin." + tool.name)?.effective ?? tool.description,
+    description: composeLayer(ASSISTANT_ROLE_FOR_SESSION, "tool.builtin." + tool.name)?.effective ?? tool.description,
     ...(tool.name === "bash"
       ? {
           // Bash исполняется от пользователя сервера: остановка сервера по
@@ -75,17 +77,22 @@ export async function ownerAssistantProfile(sessionId: string): Promise<OwnerSes
         }
       : {}),
   }));
-  const catalog = buildRoleToolCatalog(
-    { role: ASSISTANT_ROLE, mode: ASSISTANT_MODE, runId: sessionId },
-    [...composio.tools, ...infra.tools, ...secretaryThings3Tools({ role: ASSISTANT_ROLE })],
-  );
+  // Вызова роли через чат (taskflow_call_role и спутники) в сессиях нет:
+  // субагент сессии и есть роль — taskflow_spawn_session с role (владелец
+  // 13.11.2026). Каталог собирается «как у субагента» — тогда этих
+  // инструментов в нём нет с самого начала.
+  const catalog = runAsSubagent({ requesterRole: "owner", recipientRole: ASSISTANT_ROLE_FOR_SESSION }, () => buildRoleToolCatalog(
+    { role: ASSISTANT_ROLE_FOR_SESSION, mode: ASSISTANT_MODE, runId: sessionId },
+    [...composio.tools, ...infra.tools,
+      ...(ASSISTANT_ROLE_FOR_SESSION === ASSISTANT_ROLE ? secretaryThings3Tools({ role: ASSISTANT_ROLE_FOR_SESSION }) : [])],
+  ));
 
   return {
     resourceLoader,
     toolNames: [...builtin.map((tool) => tool.name), ...catalog.registeredNames],
     customTools: [...builtin, ...catalog.customTools] as ToolDefinition[],
     install(session: unknown) {
-      installSecretarySystem(session, ASSISTANT_ROLE, systemPrompt);
+      installSecretarySystem(session, ASSISTANT_ROLE_FOR_SESSION, systemPrompt);
       installNativeToolSchemas(session, catalog);
       installNativeToolCore(session, catalog, builtin.map((tool) => tool.name));
     },

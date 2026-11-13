@@ -17,6 +17,7 @@ import {
 } from "./spawnChildSessionTool.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
 import type { OwnerSessionProfile } from "./ownerAssistantProfile.js";
+import { ROLE_NAMES, roleTitle } from "../roleRouting.js";
 
 export type OwnerSessionPromptMode = "prompt" | "steer" | "follow_up";
 export type OwnerSessionRelation = "root" | "fork" | "subagent";
@@ -67,7 +68,7 @@ export interface OwnerSessionRuntimeOptions {
   sessionDir: string;
   createSession?: (manager: SessionManager, options?: OwnerSessionCreateOptions) => Promise<OwnerAgentSession>;
   /** Профиль Помощника для сессий разговора (корень, новая, ответвление). */
-  assistantProfile?: (sessionId: string) => Promise<OwnerSessionProfile>;
+  assistantProfile?: (sessionId: string, role?: string) => Promise<OwnerSessionProfile>;
 }
 
 export interface OwnerSessionCreateOptions {
@@ -76,6 +77,9 @@ export interface OwnerSessionCreateOptions {
   modelRef?: { provider: string; id: string };
   /** Сессия разговора владельца — с профилем Помощника; субагент — без. */
   assistant?: boolean;
+  /** Субагент-роль (владелец 13.11.2026: «субагенты — это и есть роли»):
+   *  сессия с профилем этой роли — её инструкция, навыки и инструменты. */
+  role?: string;
   profile?: OwnerSessionProfile;
 }
 
@@ -177,8 +181,8 @@ export class OwnerSessionRuntime {
     this.createSession = options.createSession ?? (async (manager, createOptions = {}) => createDefaultSession(manager, {
       ...createOptions,
       customTools: createOptions.customTools ?? [this.childToolFor(manager)],
-      profile: createOptions.assistant && options.assistantProfile
-        ? await options.assistantProfile(manager.getSessionId())
+      profile: (createOptions.assistant || createOptions.role) && options.assistantProfile
+        ? await options.assistantProfile(manager.getSessionId(), createOptions.role)
         : undefined,
     }));
     fs.mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });
@@ -464,6 +468,8 @@ export class OwnerSessionRuntime {
     return createSpawnChildSessionTool({
       parentSessionId: parentManager.getSessionId(),
       get parentSessionFile() { return parentManager.getSessionFile() ?? ""; },
+      // Субагенты — роли команды (владелец 13.11.2026), кроме самого Помощника.
+      roles: Object.fromEntries(ROLE_NAMES.filter(key => key !== "secretary").map(key => [key, roleTitle(key) || key])),
       spawn: request => this.spawnChild(request),
     });
   }
@@ -476,8 +482,11 @@ export class OwnerSessionRuntime {
     }
     const cwd = request.cwd || parent.manager.getCwd();
     const manager = SessionManager.create(cwd, this.sessionDir, { parentSession: parentFile });
-    manager.appendCustomEntry(SESSION_RELATION_ENTRY, { kind: "subagent" });
-    const session = await this.createSession(manager, { tools: request.tools, customTools: [] });
+    manager.appendCustomEntry(SESSION_RELATION_ENTRY, { kind: "subagent", ...(request.role ? { role: request.role } : {}) });
+    // Роль — со своим профилем; вложенных субагентов у субагента нет.
+    const session = await this.createSession(manager, request.role
+      ? { role: request.role, customTools: [] }
+      : { tools: request.tools, customTools: [] });
     const handle: SessionHandle = { manager, session, listeners: new Set() };
     this.handles.set(manager.getSessionId(), handle);
     this.attachSdkSubscription(handle);
@@ -496,7 +505,11 @@ export class OwnerSessionRuntime {
 
   private defaultCreateOptions(manager: SessionManager): OwnerSessionCreateOptions {
     const relation = this.relation(manager);
-    if (relation === "subagent") return {};
+    if (relation === "subagent") {
+      const marker = [...manager.getEntries()].reverse().find(entry => this.isRelationEntry(entry)) as any;
+      const role = typeof marker?.data?.role === "string" ? marker.data.role : undefined;
+      return role ? { role, customTools: [] } : {};
+    }
     if (relation !== "root") return { assistant: true };
     const hasPersistedModel = manager.getBranch().some(entry => entry.type === "model_change");
     return hasPersistedModel ? { assistant: true } : { assistant: true, modelRef: OWNER_ROOT_DEFAULT_MODEL };
