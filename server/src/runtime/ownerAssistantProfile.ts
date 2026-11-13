@@ -51,8 +51,18 @@ const ASSISTANT_ROLE = "secretary";
  *  verify-before-claim (проверить, прежде чем утверждать). subagent,
  *  taskflow-activity, taskflow-todo-mirror, orca-agent-status — для
  *  терминального Pi и карточек, сюда не идут. Субагентам-ролям — без них. */
-const SESSION_PI_EXTENSIONS = ["hesitation-gate.ts", "verify-before-claim.ts"]
-  .map((name) => path.join(os.homedir(), ".pi", "agent", "extensions", name));
+const SESSION_PI_EXTENSIONS = [
+  path.join(os.homedir(), ".pi", "agent", "extensions", "hesitation-gate.ts"),
+  // Своя копия: агент сам перепроверяет, ответ владельцу не подменяется.
+  sessionExtension("verify-before-claim"),
+];
+
+/** Своё расширение сессии: из собранного dist (.js) или из исходников (.ts). */
+function sessionExtension(name: string): string {
+  const here = path.dirname(new URL(import.meta.url).pathname);
+  const built = path.resolve(here, "../sessions/piExtensions", name + ".js");
+  return fs.existsSync(built) ? built : path.resolve(here, "../sessions/piExtensions", name + ".ts");
+}
 const ASSISTANT_MODE = "work";
 
 export async function ownerAssistantProfile(sessionId: string, role: string = ASSISTANT_ROLE): Promise<OwnerSessionProfile> {
