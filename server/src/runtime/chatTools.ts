@@ -50,10 +50,20 @@ function asTasks(payload: any): any[] {
 
 /** Набор инструментов чата для роли. Описания — из реестра инструкций
  *  (`tool.runtime.<имя>`), владелец правит их на экране «Команда». */
+/** Контекст «в чат» для инструментов роли. Пустой chatId — это «чата нет»,
+ *  а не чат: ход по карточке получает от каталога `{chatId: ""}`, и раньше
+ *  это перекрывало чат задачи — вопрос владельцу ложился без чата и без
+ *  задачи, напоминание приходило, а карточку было не найти (владелец
+ *  13.11.2026). Теперь в карточке — чат задачи. */
+export function resolveChatContext<T extends { chatId: string }>(ownerContext: T | undefined, taskChat?: () => T): T | undefined {
+  if (ownerContext?.chatId) return ownerContext;
+  return taskChat ? taskChat() : undefined;
+}
+
 export function chatTools(role: string, ownerContext?: {chatId:string;messageId:string}, taskId?: string) {
   // Инструменты «в чат» есть у роли везде (владелец 07.11.2026): в чате — текущее
   // сообщение, в карточке — чат задачи (находится или заводится при первом вызове).
-  const chatCtx: ChatContext|undefined = ownerContext ?? (taskId ? lazyTaskChatContext(role, taskId) : undefined);
+  const chatCtx: ChatContext|undefined = resolveChatContext(ownerContext, taskId ? () => lazyTaskChatContext(role, taskId) : undefined);
   const T = (name: string, description: string, parameters: any, run: (p: any, signal?: AbortSignal) => Promise<unknown>) => {
     const key = "tool.runtime." + name;
     registerInstructionBlock({
