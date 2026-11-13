@@ -110,7 +110,22 @@ function blocksDue(key: string, delta: unknown, now = Date.now()): boolean {
  * 13.11.2026, скриншот). Недописанный конверт — как есть: блоки сервера
  * покажут его заглушкой до конца.
  */
+/** Упоминание файла в обратных кавычках (`путь/файл.ts:42`, `deploy.sh`) —
+ *  ссылкой на этот файл: клиент рисует ссылку на файл ярлычком с иконкой
+ *  типа (владелец 13.11.2026: «ссылки в тексте не отрисовываются ярлыками»).
+ *  Внутри блоков кода ``` ничего не трогаем. */
+const FILE_REF = /`((?:~|\.{1,2})?\/?[\w.@-]+(?:\/[\w.@-]+)*\.(?:ts|tsx|js|mjs|cjs|jsx|swift|py|sh|zsh|md|json|ya?ml|toml|txt|sql|css|scss|html|plist|xml|rb|go|rs|kt|java|c|h|m|mm|cpp|ini|conf|log|db|csv)(?::\d+(?:-\d+)?)?)`/g;
+export function linkifyFileRefs(text: string): string {
+  return text.split(/(```[\s\S]*?```)/).map((part, index) =>
+    index % 2 === 1 ? part : part.replace(FILE_REF, (_match, ref: string) => `[${ref}](${ref})`),
+  ).join("");
+}
+
 export function sessionDisplayText(raw: string): string {
+  return linkifyFileRefs(sessionDisplayTextInner(raw));
+}
+
+function sessionDisplayTextInner(raw: string): string {
   const body = raw.trim();
   const looksEnvelope = /^```json\s*\{[\s\S]*"schema_version"[\s\S]*\}\s*```$/.test(body)
     || (/^\{[\s\S]*"schema_version"[\s\S]*\}$/.test(body));

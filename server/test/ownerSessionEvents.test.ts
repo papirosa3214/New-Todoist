@@ -208,3 +208,12 @@ describe("ответ конвертом JSON v1 — без сырого JSON (в
     expect(sessionDisplayText("Просто ответ")).toBe("Просто ответ");
   });
 });
+
+describe("файл в обратных кавычках — ссылкой (владелец 13.11.2026)", () => {
+  it("превращает `путь:строка` в ссылку, код в ``` не трогает", async () => {
+    const { linkifyFileRefs } = await import("../src/runtime/ownerSessionEvents.js");
+    expect(linkifyFileRefs("смотри `server/src/a.ts:42` и `deploy.sh`")).toBe("смотри [server/src/a.ts:42](server/src/a.ts:42) и [deploy.sh](deploy.sh)");
+    expect(linkifyFileRefs("```\n`a.ts`\n```")).toBe("```\n`a.ts`\n```");
+    expect(linkifyFileRefs("команда `git log -1`")).toBe("команда `git log -1`");
+  });
+});
