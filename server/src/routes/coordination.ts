@@ -908,6 +908,37 @@ for (const t of activeTaskRows) {
   });
 }
 
+// 5.3б Живые ходы, которых нет выше (владелец 13.11.2026: обзор писал
+// «свободны», а роль работала — карточка уже «на проверке», ход ещё идёт).
+// Занята = открытый ход со свежим пульсом за 10 минут — то же правило, что
+// у сторожа выкладки (deploy-when-idle.py), чтобы «занято» значило одно.
+{
+  const shown = new Set(activeNowOut.map((row) => row.task_id));
+  const liveAttempts = db
+    .prepare(
+      `SELECT a.task_id, a.executor_id, a.routing_role, a.started_at, a.heartbeat_at,
+              t.title AS task_title, t.created_at AS task_created_at
+         FROM attempts a JOIN tasks t ON t.id = a.task_id
+        WHERE a.ended_at IS NULL AND a.heartbeat_at > datetime('now','-10 minutes')
+        ORDER BY a.heartbeat_at DESC`,
+    )
+    .all() as Array<{ task_id: string; executor_id: string | null; routing_role: string | null; started_at: string | null; heartbeat_at: string | null; task_title: string; task_created_at: string }>;
+  for (const a of liveAttempts) {
+    if (shown.has(a.task_id)) continue;
+    shown.add(a.task_id);
+    activeNowOut.push({
+      kind: "task",
+      id: a.task_id,
+      task_id: a.task_id,
+      task_title: a.task_title,
+      task_created_at: a.task_created_at,
+      role_key: a.routing_role ?? userRoleKey(a.executor_id),
+      started_at: a.started_at ? toIsoString(a.started_at) : null,
+      heartbeat_at: a.heartbeat_at ? toIsoString(a.heartbeat_at) : null,
+    });
+  }
+}
+
 // 5.4 Видимые слоты без исполнителя: задачи в работе, у которых
 // assignee_id IS NULL (или же активная попытка без routing_role и
 // assignee — не приписываем произвольно, лучше показать отдельной

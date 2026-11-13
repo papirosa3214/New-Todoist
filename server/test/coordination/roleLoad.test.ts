@@ -456,3 +456,15 @@ describe("task_created_at в слоях role-load", () => {
     }
   });
 });
+
+describe("занята = идёт ход (владелец 13.11.2026)", () => {
+  it("карточка уже «на проверке», а ход ещё идёт — роль в active_now", async () => {
+    const taskId = uid();
+    db.prepare("INSERT INTO tasks(id,title,status,creator_id,agent_state) VALUES (?,?, 'active', ?, 'review')").run(taskId, "Ход ещё идёт", ownerId);
+    db.prepare("INSERT INTO attempts(id,task_id,executor_id,started_at,heartbeat_at,routing_role) VALUES (?,?,?,datetime('now','-5 minutes'),datetime('now'),'infra_engineer')")
+      .run(uid(), taskId, "role_infra_engineer");
+    const res = await serverApp.inject({ method: "GET", url: "/api/coordination/role-load?window=24h", headers: bearer() });
+    const body = res.json() as { active_now: Array<{ task_id: string; role_key: string | null }> };
+    expect(body.active_now).toContainEqual(expect.objectContaining({ task_id: taskId, role_key: "infra_engineer" }));
+  });
+});
