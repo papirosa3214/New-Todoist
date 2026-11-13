@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { recordModelUsage } from "../lib/modelUsage.js";
 import { sourcedChatBlocks } from "../sessions/sessionChatBlocks.js";
+import { extractQuickReplies } from "../sessions/sessionQuickReplies.js";
 import {
   addAnswerToTurn,
   finishTurn,
@@ -104,7 +105,8 @@ export function normalizePiEvent(
       if (stream?.type === "text_delta") {
         // Тонкий клиент (владелец 13.11.2026): к куску — весь текст части и
         // готовые блоки, как у живого хода ролей (liveTurnForClient).
-        const full = partText(raw.message, stream.contentIndex, "text");
+        // Строка БЫСТРО: — не текст, а кнопки: в блоки не идёт.
+        const full = extractQuickReplies(partText(raw.message, stream.contentIndex, "text")).clean;
         return envelope(sessionId, "assistant_text_delta", {
           delta: stream.delta,
           contentIndex: stream.contentIndex,
