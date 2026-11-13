@@ -191,6 +191,8 @@ export interface ParsedRoleAnswer {
   structuredEnvelope: StructuredRoleEnvelopeV1 | null;
   errors: string[];
   warnings: string[];
+  /** При починке конверта отброшены блоки роли — формат лечится повтором. */
+  blocksDropped?: boolean;
 }
 
 export interface RoleContractValidation {
@@ -667,6 +669,7 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
   let envelope: RoleEnvelopeV1 | null = null;
   let structuredEnvelope: StructuredRoleEnvelopeV1 | null = null;
   let replaced = false;
+  let blocksDropped = false;
   const fenced = text.replace(JSON_FENCE, (whole, lang: string, body: string) => {
     if (lang && !/^(json|jsonc|json5)$/i.test(lang)) return whole;
     const candidate = asV1Candidate(body);
@@ -682,6 +685,7 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
           return text ?? BROKEN_CONTRACT_NOTE;
         }
         replaced = true;
+        if (Array.isArray((candidate as any).output) && (candidate as any).output.length > salvaged.output.length) blocksDropped = true;
         structuredEnvelope ??= salvaged;
         return structuredOutputText(salvaged.output);
       }
@@ -701,7 +705,7 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
     return checked.envelope.output;
   });
   if (replaced || errors.length) {
-    return { format: "v1", text: replaced ? fenced : text, envelope, structuredEnvelope, errors, warnings };
+    return { format: "v1", text: replaced ? fenced : text, envelope, structuredEnvelope, errors, warnings, blocksDropped };
   }
 
   const bare = asV1Candidate(text.trim());
@@ -713,7 +717,7 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
       }
       const salvaged = salvageStructured(bare);
       if (salvaged) {
-        return { format: "v1", text: structuredOutputText(salvaged.output), envelope: null, structuredEnvelope: salvaged, errors: checked.errors, warnings: [] };
+        return { format: "v1", text: structuredOutputText(salvaged.output), envelope: null, structuredEnvelope: salvaged, errors: checked.errors, warnings: [], blocksDropped: Array.isArray((bare as any).output) && (bare as any).output.length > salvaged.output.length };
       }
       return { format: "v1", text: brokenEnvelopeText(bare) ?? BROKEN_CONTRACT_NOTE, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: [] };
     }
@@ -876,6 +880,8 @@ export interface NormalizedRoleReplyV1 {
   displayText: string;
   /** True when the server had to wrap an answer that was not valid JSON v1. */
   normalizedByServer: boolean;
+  /** При починке конверта сервер выбросил блоки роли: формат лечится повтором. */
+  contractBlocksDropped: boolean;
   validationErrors: string[];
 }
 
@@ -908,8 +914,13 @@ export function salvageMarkdownFromJsonParseFailure(error: unknown, partialText 
  * прежде чем сервер покажет владельцу безопасно нормализованный fallback.
  */
 export function shouldRetryRoleReply(normalized: NormalizedRoleReplyV1): boolean {
-  // Сервер сам строит канонический конверт, когда смог извлечь смысл ответа.
-  // Повтор роли нужен только при пустом результате: ему не место в чате владельца.
+  // Владелец 13.11.2026: «формат неверный — верни ответ роли на переделку, а не
+  // показывай мне недоразумение». Роль прислала конверт, но он не прошёл
+  // проверку блоков — значит формат лечится одним адресным повтором, и до
+  // владельца такой ответ не доходит. Свободный текст без конверта сюда не
+  // попадает: он не ошибка формы, а обычный ответ.
+  if (normalized.contractBlocksDropped) return true;
+  // Раньше: повтор только при пустом результате — ему не место в чате владельца.
   const hasRecoverableContent = normalized.displayText.trim().length > 0;
   return normalized.normalizedByServer && !hasRecoverableContent;
 }
@@ -967,6 +978,7 @@ export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
       // Спасённый конверт (кривые блоки отброшены) — тоже правка сервера:
       // претензии уходят в журнал, а не теряются.
       normalizedByServer: parsed.errors.length > 0,
+      contractBlocksDropped: parsed.blocksDropped === true,
       validationErrors: parsed.errors,
     };
   }
@@ -984,7 +996,7 @@ export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
       next_hint: legacy.next_hint,
       needs_human: legacy.needs_human,
     };
-    return { envelope, displayText, normalizedByServer: true, validationErrors: parsed.warnings };
+    return { envelope, displayText, normalizedByServer: true, contractBlocksDropped: false, validationErrors: parsed.warnings };
   }
 
   const validationErrors = parsed.errors.length
@@ -1012,5 +1024,5 @@ export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
       needs_human: false,
     });
   if (!validationErrors.includes(ROLE_REPLY_GLASS_REMARK)) validationErrors.push(ROLE_REPLY_GLASS_REMARK);
-  return { envelope, displayText: preservedText, normalizedByServer: true, validationErrors };
+  return { envelope, displayText: preservedText, normalizedByServer: true, contractBlocksDropped: false, validationErrors };
 }
