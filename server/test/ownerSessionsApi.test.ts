@@ -291,3 +291,20 @@ describe("owner session API", () => {
     });
   });
 });
+
+describe("ответ сессии — обработкой ответа роли (владелец 13.11.2026)", () => {
+  it("строку БЫСТРО: превращает в варианты и убирает из текста", async () => {
+    const { roleReplyFields } = await import("../src/routes/owner-sessions.js");
+    const fields: any = roleReplyFields("Готово, что дальше?\nБЫСТРО: Да | Нет | Позже");
+    expect(fields.quick_replies).toEqual(["Да", "Нет", "Позже"]);
+    expect(fields.display_text).not.toContain("БЫСТРО");
+  });
+
+  it("конверт JSON v1 разбирает: текст без JSON, конверт отдельно", async () => {
+    const { roleReplyFields } = await import("../src/routes/owner-sessions.js");
+    const envelope = { schema_version: 1, ok: true, output: [{ type: "text", text: "Привет" }], artifacts: [], plan_artifact: null, error: null, next_hint: null };
+    const fields: any = roleReplyFields("```json\n" + JSON.stringify(envelope) + "\n```");
+    expect(fields.display_text).toBe("Привет");
+    expect(fields.role_envelope?.schema_version).toBe(1);
+  });
+});

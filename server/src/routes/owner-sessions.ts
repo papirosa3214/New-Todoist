@@ -16,6 +16,9 @@ import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
 import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
 import { setOwnerSessionVoiceTarget } from "../lib/secretaryVoiceConversation.js";
 import { chatBlocksCached } from "../lib/chatBlocks.js";
+import { pullQuickReplies } from "../sessions/sessionQuickReplies.js";
+import { normalizeRoleReplyV1, structuredOutputText } from "../sessions/sessionRoleContractV1.js";
+import { normalizeWidgetBlocks } from "../sessions/sessionWidgetNormalize.js";
 import { ownerSessionEntryKey, ownerSessionTurnUsageByEntry } from "../runtime/ownerSessionTurnUsage.js";
 
 /** Ответы Помощника в снимке сессии — с той же разметкой, что в чате
@@ -25,6 +28,34 @@ import { ownerSessionEntryKey, ownerSessionTurnUsageByEntry } from "../runtime/o
  *  turn_usage той же формы, что строка расхода под ответом в чате.
  *  Незаконченный ход тоже получает итог — клиент обновит его по живому
  *  событию agent_settled. */
+/** Ответ Помощника — той же обработкой, что ответ роли в чате
+ *  (routes/chats.ts, владелец 13.11.2026: «скопировать, что делает сервер у
+ *  ролей»): конверт JSON v1 разбирается, строка `БЫСТРО:` превращается в
+ *  варианты, текст для показа — без служебного конверта. Поля — как у
+ *  сообщения роли: display_text, text_blocks, quick_replies, role_envelope. */
+export function roleReplyFields(rawText: string): Record<string, unknown> {
+  try {
+    const normalized = normalizeRoleReplyV1(rawText.trim());
+    const withReplies = pullQuickReplies(
+      normalized.envelope.output.map((block: any) => (
+        typeof block.text === "string" ? { ...block, text: normalizeWidgetBlocks(block.text) } : block
+      )),
+    );
+    normalized.envelope.output = withReplies.output as any;
+    const display = structuredOutputText(normalized.envelope.output).trim() || rawText;
+    return {
+      display_text: display,
+      text_blocks: chatBlocksCached(display),
+      quick_replies: withReplies.replies,
+      // Конверт, который модель написала сама; обёртку сервера не отдаём —
+      // в ней только тот же текст.
+      role_envelope: normalized.normalizedByServer ? null : normalized.envelope,
+    };
+  } catch {
+    return { text_blocks: chatBlocksCached(rawText) };
+  }
+}
+
 export function withAnswerBlocks<T extends { entries: any[] }>(snapshot: T): T {
   const turnUsage = ownerSessionTurnUsageByEntry(snapshot.entries);
   const entries = snapshot.entries.map((entry: any, index: number) => {
@@ -38,7 +69,7 @@ export function withAnswerBlocks<T extends { entries: any[] }>(snapshot: T): T {
     }
     const usage = turnUsage.get(ownerSessionEntryKey(entry, index));
     const patch: Record<string, unknown> = {};
-    if (text.trim()) patch.text_blocks = chatBlocksCached(text);
+    if (text.trim()) Object.assign(patch, roleReplyFields(text));
     if (usage) patch.turn_usage = usage;
     return Object.keys(patch).length ? { ...entry, ...patch } : entry;
   });
