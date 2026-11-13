@@ -44,17 +44,24 @@ it('runtime tool is usable in the current slot and cannot choose another slot',a
  db.prepare("UPDATE subtasks SET done=1,agent_state=NULL WHERE id='work-plan-step'").run();
  expect((await put({base_revision:2,items})).statusCode).toBe(403);
 });
-it('probe heals the stale ledger trigger that broke it on 25.10.2026',()=>{
- // Воспроизводим причину: триггер сборки d96358f9 ссылается на OLD в INSERT,
- // где строки OLD нет. Любая вставка в task_events падает с «no such column: OLD.id»,
- // а проба чек-листа вставляет через журнал изменений задач.
+it('repair restores a ledger trigger broken on a child table',()=>{
+ // Триггер журнала на дочерней таблице (task_events) в сборке d96358f9
+ // ссылался на OLD в INSERT: любая запись в ленту падала с «no such column:
+ // OLD.id». Проверяем именно починку: поломка есть — и после
+ // переустановки триггеров запись в ленту снова проходит.
  db.exec("DROP TRIGGER IF EXISTS tf_task_changes_task_events_insert");
  db.exec(`CREATE TRIGGER tf_task_changes_task_events_insert AFTER INSERT ON task_events
-   WHEN NEW.id IS NOT OLD.id BEGIN SELECT RAISE(ABORT,'no such column: OLD.id'); END`);
- expect(checkWorkPlanStore().ok).toBe(false);
- repairWorkPlanTriggers();
- expect(checkWorkPlanStore()).toEqual({ok:true});
- expect(db.prepare("SELECT COUNT(*) n FROM tasks WHERE id LIKE 'work-plan-probe-%'").get()).toEqual({n:0});
+   WHEN NEW."id" IS NOT OLD."id" BEGIN SELECT RAISE(ABORT,'no such column: OLD.id'); END`);
+ const insertEvent=()=>db.prepare("INSERT INTO task_events(id,task_id,kind) VALUES('work-plan-probe-event','work-plan-task','probe')").run();
+ try{
+  expect(insertEvent).toThrow(/no such column: OLD\.id/);
+  repairWorkPlanTriggers();
+  expect(insertEvent).not.toThrow();
+  expect(checkWorkPlanStore()).toEqual({ok:true});
+ }finally{
+  db.prepare("DELETE FROM task_events WHERE id='work-plan-probe-event'").run();
+  repairWorkPlanTriggers();
+ }
 });
 it('probe heals the stale ledger trigger that broke it on 25.10.2026',()=>{
  // Точная копия сломанного триггера сборки d96358f9: условие «изменилось»
