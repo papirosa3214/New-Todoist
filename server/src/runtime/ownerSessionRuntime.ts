@@ -18,6 +18,7 @@ import {
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
 import type { OwnerSessionProfile } from "./ownerAssistantProfile.js";
 import { ROLE_NAMES, roleTitle } from "../roleRouting.js";
+import { createSessionAskOwnerTool } from "../sessions/sessionAskOwnerTool.js";
 
 export type OwnerSessionPromptMode = "prompt" | "steer" | "follow_up";
 export type OwnerSessionRelation = "root" | "fork" | "subagent";
@@ -180,7 +181,9 @@ export class OwnerSessionRuntime {
     this.sessionDir = options.sessionDir;
     this.createSession = options.createSession ?? (async (manager, createOptions = {}) => createDefaultSession(manager, {
       ...createOptions,
-      customTools: createOptions.customTools ?? [this.childToolFor(manager)],
+      // Сессия разговора: субагенты-роли и вопрос владельцу карточкой.
+      // Субагенту передают customTools: [] — у него ни того, ни другого.
+      customTools: createOptions.customTools ?? [this.childToolFor(manager), createSessionAskOwnerTool() as any],
       profile: (createOptions.assistant || createOptions.role) && options.assistantProfile
         ? await options.assistantProfile(manager.getSessionId(), createOptions.role)
         : undefined,
