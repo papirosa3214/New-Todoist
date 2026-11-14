@@ -56,16 +56,38 @@ const SESSION_SOURCES_INSTRUCTION = [
   "реально прочитал, запустил или открыл. Нет источника — пиши «не проверял», не утверждай.",
 ].join(" ");
 
+/** To Do List Pi — официальное расширение Pi (`@juicesharp/rpiv-todo`),
+ *  то же самое, что в терминале: инструмент `todo` и живой список по сессии.
+ *  Берём готовое, своего списка не заводим (владелец 14.11.2026). Список
+ *  восстанавливается из транскрипта самим расширением (`state/replay.ts`),
+ *  поэтому отдельного хранилища на сервере нет. Пакет стоит на машине как
+ *  пакет Pi; нет пакета — нет и инструмента, сессия работает как раньше. */
+const RPIV_TODO_EXTENSION = path.join(
+  os.homedir(),
+  ".pi",
+  "agent",
+  "npm",
+  "node_modules",
+  "@juicesharp",
+  "rpiv-todo",
+  "index.ts",
+);
+/** Имя инструмента закреплено в самом пакете («DO NOT rename», `tool/types.ts`). */
+const RPIV_TODO_TOOL = "todo";
+
 /** Готовые расширения Pi для сессии Помощника (владелец 13.11.2026: «зачем
  *  самописное, когда есть готовое»). Только те, что имеют смысл в сессии:
  *  hesitation-gate (не буксовать — спросить владельца кнопками) и
  *  verify-before-claim (проверить, прежде чем утверждать). subagent,
  *  taskflow-activity, taskflow-todo-mirror, orca-agent-status — для
- *  терминального Pi и карточек, сюда не идут. Субагентам-ролям — без них. */
+ *  терминального Pi и карточек, сюда не идут. Субагентам-ролям — без них.
+ *  Третье — To Do List Pi (`RPIV_TODO_EXTENSION`, список дел хода, владелец
+ *  14.11.2026): то же готовое расширение, что в терминале. */
 const SESSION_PI_EXTENSIONS = [
   path.join(os.homedir(), ".pi", "agent", "extensions", "hesitation-gate.ts"),
   // Своя копия: агент сам перепроверяет, ответ владельцу не подменяется.
   sessionExtension("verify-before-claim"),
+  RPIV_TODO_EXTENSION,
 ];
 
 /** Своё расширение сессии: из собранного dist (.js) или из исходников (.ts). */
@@ -87,6 +109,11 @@ export async function ownerAssistantProfile(sessionId: string, role: string = AS
   );
   const resourceLoader = await createTaskResourceLoader(ASSISTANT_ROLE_FOR_SESSION, cwd, systemPrompt, undefined, true,
     ASSISTANT_ROLE_FOR_SESSION === ASSISTANT_ROLE ? SESSION_PI_EXTENSIONS.filter((file) => fs.existsSync(file)) : []);
+  /** To Do List Pi есть только у самой сессии владельца: расширение и его
+   *  инструмент идут вместе — одно без другого не работает. */
+  const piTodoTools = ASSISTANT_ROLE_FOR_SESSION === ASSISTANT_ROLE && fs.existsSync(RPIV_TODO_EXTENSION)
+    ? [RPIV_TODO_TOOL]
+    : [];
   const none = { tools: [] as any[], close: async () => {} };
   const composio = await connectRoleComposio(ASSISTANT_ROLE_FOR_SESSION, ASSISTANT_MODE, sessionId).catch((error) => {
     console.warn("[owner-sessions] Composio Помощника не подключился:", error);
@@ -123,12 +150,12 @@ export async function ownerAssistantProfile(sessionId: string, role: string = AS
 
   return {
     resourceLoader,
-    toolNames: [...builtin.map((tool) => tool.name), ...catalog.registeredNames],
+    toolNames: [...builtin.map((tool) => tool.name), ...catalog.registeredNames, ...piTodoTools],
     customTools: [...builtin, ...catalog.customTools] as ToolDefinition[],
     install(session: unknown) {
       installSecretarySystem(session, ASSISTANT_ROLE_FOR_SESSION, systemPrompt);
       installNativeToolSchemas(session, catalog);
-      installNativeToolCore(session, catalog, builtin.map((tool) => tool.name));
+      installNativeToolCore(session, catalog, [...builtin.map((tool) => tool.name), ...piTodoTools]);
     },
     async dispose() {
       (resourceLoader as { disposeResources?: () => void }).disposeResources?.();

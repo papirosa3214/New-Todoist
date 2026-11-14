@@ -94,6 +94,8 @@ import { registerCodeChangesRoutes } from "./routes/code-changes.js";
 import { registerChatWorkspaceRoutes } from "./routes/chat-workspace.js";
 import { registerOwnerControlRoutes } from "./routes/owner-controls.js";
 import { registerOwnerSessionRoutes } from "./routes/owner-sessions.js";
+// To Do List Pi в сессиях владельца — чтение готового списка (14.11.2026).
+import { registerOwnerSessionTodosRoutes } from "./routes/owner-session-todos.js";
 import { reloadServerSettings } from "./lib/serverSettings.js";
 import { registerOwnerCommandRoutes } from "./routes/owner-commands.js";
 import { registerAdminServerSettingsRoutes } from "./routes/admin-server-settings.js";
@@ -619,6 +621,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerChatSessionPreferenceRoutes(app);
   registerOwnerControlRoutes(app);
   registerOwnerSessionRoutes(app);
+  registerOwnerSessionTodosRoutes(app);
   registerAdminServerSettingsRoutes(app);
   registerSecretsRoutes(app);
   registerJevRoutes(app);
