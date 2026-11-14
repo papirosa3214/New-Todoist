@@ -16,7 +16,8 @@ import {
   type SpawnedChildSession,
 } from "./spawnChildSessionTool.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
-import type { OwnerSessionEventBoundary } from "./ownerSessionEvents.js";
+import { isRawEnvelopeText, sessionDisplayText, type OwnerSessionEventBoundary } from "./ownerSessionEvents.js";
+import { sourcedChatBlocks } from "../sessions/sessionChatBlocks.js";
 import type { OwnerSessionProfile } from "./ownerAssistantProfile.js";
 import { ROLE_NAMES, roleTitle } from "../roleRouting.js";
 import { createSessionAskOwnerTool } from "../sessions/sessionAskOwnerTool.js";
@@ -32,9 +33,22 @@ export const OWNER_ROOT_DEFAULT_MODEL = {
   id: "deepseek-v4.1-flash",
 } as const;
 
+/** Состояние установленного Pi-агента, которое нам нужно для живого хвоста.
+ *  Это `AgentSession.state` → `agent.state` (`pi-agent-core/dist/agent.js`,
+ *  `processEvents`): `message_start`/`message_update` кладут сообщение в
+ *  `streamingMessage`, `message_end` очищает его и дописывает в `messages`;
+ *  `tool_execution_start/end` ведут `pendingToolCalls`. Своего состояния мы не
+ *  держим — читаем готовое. */
+export interface OwnerAgentState {
+  readonly streamingMessage?: unknown;
+  readonly pendingToolCalls?: ReadonlySet<string>;
+}
+
 export interface OwnerAgentSession {
   readonly sessionManager: SessionManager;
   readonly isStreaming: boolean;
+  /** Живое состояние Pi (опционально: в тестах и у старых сборок его нет). */
+  readonly state?: OwnerAgentState;
   /// Текущая модель сессии (объект каталога Pi).
   readonly model?: any;
   /// Смена модели: Pi проверяет авторизацию и пишет model_change.
@@ -68,6 +82,55 @@ export interface OwnerSessionSnapshot {
   eventCursorSeq?: number;
   entries: SessionEntry[];
   tree: SessionTreeNode[];
+  /** Ответ, который Pi ещё не записал в транскрипт (сессия стримится).
+   *  Отсутствует — незавершённого ответа нет. */
+  live?: OwnerSessionLive;
+}
+
+/**
+ * Живой хвост хода: ответ, который прямо сейчас печатается.
+ *
+ * Зачем: Pi пишет сообщение в транскрипт только на `message_end`
+ * (`pi-agent-core/dist/agent-loop.js`: `message_start` → куски →
+ * `message_end` → `appendMessage`). Поэтому снимок из одной ветки
+ * (`manager.getBranch()`) незавершённый ход не видит вовсе, и клиент
+ * собирал его сам по своей очереди событий. Готовое состояние агента
+ * (`state.streamingMessage`) содержит тот же текст целиком — серверу
+ * достаточно его прочитать, разметить и отдать рядом с записями.
+ *
+ * Чего здесь нет и не будет: полной истории шагов. `state.messages` —
+ * линейный транскрипт агента, а не дерево записей сессии, и связи
+ * «сообщение → entryId» в нём нет. Живой хвост — только текущий ответ;
+ * всё остальное клиент берёт из `entries`.
+ */
+export interface OwnerSessionLive {
+  /** Ответ идёт: клиенту есть что показать, не дожидаясь событий. */
+  streaming: true;
+  /** Явная граница покрытия: снимок знает ТОЛЬКО текущий ответ ассистента —
+   *  его текст, размышление и вызовы инструментов этого сообщения. Истории
+   *  шагов хода, аргументов и результатов инструментов здесь нет, поэтому
+   *  клиент НЕ имеет права пропускать события по этой границе: `eventCursor`
+   *  снимка (с откатом к началу окна ответа) остаётся точкой возобновления. */
+  coverage: "current_response_only";
+  /** Текст ответа для показа. Служебный конверт v1 разобран, сырого JSON
+   *  здесь не бывает (см. `envelopeHeld`). Пробелы не срезаются: текст как
+   *  его отдаёт Pi. */
+  displayText?: string;
+  /** Готовая серверная разметка `displayText` — клиент только рисует. */
+  textBlocks?: unknown[];
+  /** Размышление этой части ответа с готовой разметкой. */
+  thinkingBlocks?: Array<{ text: string; blocks: unknown[] }>;
+  /** Вызовы инструментов в этом ответе: id и имя. Аргументов нет — они уже
+   *  уходят событиями `tool_start`, а снимок про текст ответа. */
+  toolCalls?: Array<{ id: string; name: string }>;
+  /** Инструменты, которые выполняются прямо сейчас
+   *  (`state.pendingToolCalls`) — только идентификаторы. Ни аргументов, ни
+   *  частичного вывода: незавершённый инструмент снимок не восстанавливает,
+   *  его ход приходит событиями `tool_start` / `tool_update` / `tool_end`. */
+  pendingToolCalls: string[];
+  /** Ответ пишется служебным конвертом v1: пока он не дописан, в чат его не
+   *  отдают (то же правило, что у живых кусков, — `held: "envelope"`). */
+  envelopeHeld?: true;
 }
 
 export interface OwnerSessionRuntimeOptions {
@@ -388,6 +451,11 @@ export class OwnerSessionRuntime {
    * чтением точки и чтением записей нечему. Точку читаем ПЕРВОЙ: если в этот
    * блок когда-нибудь попадёт await, худшее — событие придёт повторно
    * (снимок его уже содержит), а не пропадёт.
+   *
+   * Живой хвост (`live`, см. `OwnerSessionLive`) читается в этом же блоке, но
+   * точки он НЕ двигает: хвост покрывает только текущий ответ ассистента, а
+   * не весь ход, поэтому точка снимка остаётся прежней — с откатом к началу
+   * окна стрима.
    */
   async snapshotWithBoundary(
     id: string,
@@ -402,6 +470,12 @@ export class OwnerSessionRuntime {
     readBoundary?: () => OwnerSessionEventBoundary,
   ): OwnerSessionSnapshot {
     const boundary = readBoundary?.();
+    // Живой хвост читается ПОСЛЕ точки и ДО записей, тем же синхронным
+    // блоком: состояние агента на этот момент не старее ленты (Pi кладёт
+    // `streamingMessage` до вызова слушателей). На точку это не влияет:
+    // хвост покрывает только текущий ответ, окно ответа клиент по-прежнему
+    // доигрывает событиями от `eventCursor`.
+    const live = this.liveSnapshot(handle.session);
     const header = handle.manager.getHeader();
     return {
       id: handle.manager.getSessionId(),
@@ -421,8 +495,52 @@ export class OwnerSessionRuntime {
             eventCursorSeq: boundary.seq,
           }
         : {}),
+      ...(live ? { live } : {}),
       entries: handle.manager.getBranch().filter(entry => !this.isRelationEntry(entry)),
       tree: handle.manager.getTree(),
+    };
+  }
+
+  /**
+   * Живой хвост из состояния Pi: текущий ответ агента, которого ещё нет в
+   * транскрипте. `undefined` — незавершённого ответа нет (или сборка Pi
+   * состояния не отдаёт): тогда снимок работает как раньше, из одной ветки.
+   *
+   * Разметку делает сервер (владелец 13.11.2026, «тонкий клиент без нагрева»):
+   * текст — через `sessionDisplayText`, блоки — `sourcedChatBlocks`. Служебный
+   * конверт v1 в живом ходе не показывается сырым — он либо ещё не дописан
+   * (`envelopeHeld`), либо разобран в текст.
+   */
+  private liveSnapshot(session: OwnerAgentSession): OwnerSessionLive | undefined {
+    const state = session.state;
+    const message = state?.streamingMessage as any;
+    if (!state || !message || message.role !== "assistant") return undefined;
+    const parts: any[] = Array.isArray(message.content) ? message.content : [];
+    const rawText = parts
+      .filter(part => part?.type === "text" && typeof part.text === "string")
+      .map(part => part.text as string)
+      .join("");
+    // Конверт v1 (целый или оборванный) в чат не идёт — как у живых кусков.
+    const held = Boolean(rawText.trim()) && isRawEnvelopeText(rawText);
+    // Пробелы не срезаем: `trim()` ломал отступы в начале ответа и хвост
+    // строки кода (`extractQuickReplies` и так не трогает текст без маркера).
+    const shown = held ? "" : sessionDisplayText(rawText);
+    const displayText = shown.trim() && !isRawEnvelopeText(shown) ? shown : "";
+    const thinkingBlocks = parts
+      .filter(part => part?.type === "thinking" && typeof part.thinking === "string" && part.thinking.trim())
+      .map(part => ({ text: part.thinking as string, blocks: sourcedChatBlocks(part.thinking, true) as unknown[] }));
+    const toolCalls = parts
+      .filter(part => part?.type === "toolCall" && typeof part.name === "string")
+      .map(part => ({ id: typeof part.id === "string" ? part.id : "", name: part.name as string }));
+    const pending = state.pendingToolCalls ? [...state.pendingToolCalls] : [];
+    return {
+      streaming: true,
+      coverage: "current_response_only",
+      ...(displayText ? { displayText, textBlocks: sourcedChatBlocks(displayText, true) as unknown[] } : {}),
+      ...(thinkingBlocks.length ? { thinkingBlocks } : {}),
+      ...(toolCalls.length ? { toolCalls } : {}),
+      pendingToolCalls: pending,
+      ...(held ? { envelopeHeld: true as const } : {}),
     };
   }
 
