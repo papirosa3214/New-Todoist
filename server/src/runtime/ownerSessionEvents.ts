@@ -3,6 +3,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { recordModelUsage } from "../lib/modelUsage.js";
 import { sourcedChatBlocks } from "../sessions/sessionChatBlocks.js";
 import { extractQuickReplies } from "../sessions/sessionQuickReplies.js";
+import { BROKEN_ENVELOPE_DISPLAY, unwrapRoleEnvelopeText } from "../sessions/sessionRoleContractV1.js";
 import {
   addAnswerToTurn,
   finishTurn,
@@ -103,13 +104,6 @@ function blocksDue(key: string, delta: unknown, now = Date.now()): boolean {
   return true;
 }
 
-/**
- * Текст для показа: ответ, написанный служебным конвертом JSON v1 (целиком
- * ```json {"schema_version":…}```), раскладывается так же, как готовый ответ
- * роли — заголовки, таблицы, текст; сырой JSON на экран не идёт (владелец
- * 13.11.2026, скриншот). Недописанный конверт — как есть: блоки сервера
- * покажут его заглушкой до конца.
- */
 /** Упоминание файла в обратных кавычках (`путь/файл.ts:42`, `deploy.sh`) —
  *  ссылкой на этот файл: клиент рисует ссылку на файл ярлычком с иконкой
  *  типа (владелец 13.11.2026: «ссылки в тексте не отрисовываются ярлыками»).
@@ -125,17 +119,24 @@ export function sessionDisplayText(raw: string): string {
   return linkifyFileRefs(sessionDisplayTextInner(raw));
 }
 
-function sessionDisplayTextInner(raw: string): string {
-  const body = raw.trim();
-  const looksEnvelope = /^```json\s*\{[\s\S]*"schema_version"[\s\S]*\}\s*```$/.test(body)
-    || (/^\{[\s\S]*"schema_version"[\s\S]*\}$/.test(body));
-  if (!looksEnvelope) return extractQuickReplies(raw).clean;
-  // Мягкий разбор: модели пишут блоки и без обязательных полей (heading без
-  // level) — строгая проверка конверта такой ответ отбрасывала целиком.
+/** Начало служебного конверта v1 — целого или оборванного посреди потока:
+ *  проверка по началу, а не по закрывающей скобке (владелец 13.11.2026). */
+const ENVELOPE_START = /^\s*(?:```[a-z0-9]*\s*)?\{\s*"schema_version"/i;
+const ENVELOPE_FENCED_COMPLETE = /^```json\s*\{[\s\S]*"schema_version"[\s\S]*\}\s*```$/;
+const ENVELOPE_BARE_COMPLETE = /^\{[\s\S]*"schema_version"[\s\S]*\}$/;
+
+/** Текст — служебный конверт (в том числе недописанный): сырым его не показывают. */
+export function isRawEnvelopeText(text: string): boolean {
+  return ENVELOPE_START.test(text.trim());
+}
+
+/** Разметка целого конверта своей сборкой (статусы, артефакты, next_hint).
+ *  null — конверт не разобрался: дальше мягкая сборка следующей строкой. */
+function renderCompleteEnvelope(body: string): string | null {
   try {
     const json = JSON.parse(body.replace(/^```json\s*/, "").replace(/\s*```$/, ""));
     const output = Array.isArray(json?.output) ? json.output : null;
-    if (!output) return extractQuickReplies(raw).clean;
+    if (!output) return null;
     const parts: string[] = [];
     for (const block of output) {
       const type = String(block?.type ?? "");
@@ -151,11 +152,35 @@ function sessionDisplayTextInner(raw: string): string {
     const artifacts = Array.isArray(json?.artifacts) ? json.artifacts : [];
     for (const a of artifacts) if (a?.title) parts.push(a.ref ? `[${a.title}](${a.ref})` : String(a.title));
     if (typeof json?.next_hint === "string" && json.next_hint.trim()) parts.push(json.next_hint.trim());
-    const text = parts.join("\n\n").trim();
-    return extractQuickReplies(text || raw).clean;
+    return parts.join("\n\n").trim();
   } catch {
-    return extractQuickReplies(raw).clean;
+    return null;
   }
+}
+
+/**
+ * Текст для показа: ответ, написанный служебным конвертом JSON v1 (целиком
+ * ```json {"schema_version":…}```), раскладывается так же, как готовый ответ
+ * роли — заголовки, таблицы, текст; сырой JSON на экран не идёт (владелец
+ * 13.11.2026, скриншот). Оборванный конверт — тот же путь, только сборка
+ * мягкая: владелец жмёт «Стоп» посреди ответа, и в историю/живой ход приходит
+ * недописанный JSON (владелец 13.11.2026: «обрезанный конверт после
+ * остановки»). Сборка одна — из sessionRoleContractV1, что и у ответа роли;
+ * если собрать нечего — честная строка о формате, никогда не JSON.
+ */
+function sessionDisplayTextInner(raw: string): string {
+  const body = raw.trim();
+  const complete = ENVELOPE_FENCED_COMPLETE.test(body) || ENVELOPE_BARE_COMPLETE.test(body);
+  if (!ENVELOPE_START.test(body) && !complete) return extractQuickReplies(raw).clean;
+  // Целый конверт — своей разметкой; пустой результат (одни неизвестные блоки
+  // вроде widget) тоже не повод показать JSON — идём дальше по той же лестнице.
+  const own = (renderCompleteEnvelope(body) ?? "").trim();
+  if (own && !ENVELOPE_START.test(own)) return extractQuickReplies(own).clean;
+  // Оборванный конверт: та же мягкая сборка, что у ответа роли, — без неё
+  // после «Стоп» владельцу уходил недописанный JSON.
+  const salvaged = unwrapRoleEnvelopeText(body).trim();
+  if (salvaged && !ENVELOPE_START.test(salvaged)) return extractQuickReplies(salvaged).clean;
+  return BROKEN_ENVELOPE_DISPLAY;
 }
 
 /** Весь текст части ответа на этот момент (часть contentIndex сообщения). */

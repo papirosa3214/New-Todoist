@@ -619,6 +619,12 @@ function salvageStructured(original: Record<string, unknown>): StructuredRoleEnv
  *  обычный маршрут отправляет роль на однократное исправление. */
 const BROKEN_CONTRACT_NOTE = "";
 
+/** Сырой конверт владельцу не показываем ни при каких условиях (владелец
+ *  13.11.2026). Если из него не удалось вынуть ни одного блока — эта строка,
+ *  одна на сдачу роли, историю и живой ход (routes/owner-sessions.ts,
+ *  runtime/ownerSessionEvents.ts). */
+export const BROKEN_ENVELOPE_DISPLAY = "Ответ пришёл в неверном формате; показываю без разметки.";
+
 /** Из битого JSON-конверта вытащить текст `output` (или `error`), чтобы владелец
  *  видел содержимое, а не сырой объект с ключами. null — текста нет. */
 function brokenEnvelopeText(value: unknown): string | null {

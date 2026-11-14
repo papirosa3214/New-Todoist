@@ -308,3 +308,66 @@ describe("ответ сессии — обработкой ответа роли
     expect(fields.role_envelope?.schema_version).toBe(1);
   });
 });
+
+describe("обрезанный конверт после остановки (13.11.2026)", () => {
+  let api: FastifyInstance;
+  let sessionRuntime: FakeRuntime;
+  const headers = { "x-user-id": "owner" };
+
+  beforeEach(async () => {
+    api = Fastify();
+    sessionRuntime = new FakeRuntime();
+    registerOwnerSessionRoutes(api, {
+      runtime: sessionRuntime as any,
+      events: new OwnerSessionEventBuffer({ capacity: 5, epoch: "test", clock: () => new Date(0) }),
+      broadcast: vi.fn(),
+      authorize: async (request: any, reply: any) => {
+        const userId = request.headers["x-user-id"];
+        if (!userId) return reply.code(401).send({ error: "Unauthorized" });
+        request.userId = userId;
+      },
+      isOwner: (userId: string) => userId === "owner",
+      meta: new InMemoryMeta(),
+    });
+    await api.ready();
+  });
+
+  afterEach(async () => api.close());
+
+  // Настоящий хвост ответа в момент «Стоп»: конверт не дописан, последний блок оборван.
+  const truncatedFenced = '```json\n{"schema_version":1,"ok":true,"output":[{"type":"heading","level":2,"text":"Итог"},{"type":"text","text":"Проверил оба пути: история и живой ход"},{"type":"text","text":"Дальше правлю откос кл';
+  const retryableBroken = '{"schema_version":1,"ok":true,"output":[{"type":"text","text":"ок"},{"type":"widget","widget":{}}],"artifacts":[],"plan_artifact":null,"error":null,"next_hint":null}';
+  const brokenNoContent = '{"schema_version":1,"ok":true,"output":[{"type":';
+
+  it("display_text истории — восстановленный текст, а не сырой конверт", async () => {
+    const { roleReplyFields } = await import("../src/routes/owner-sessions.js");
+    const fields: any = roleReplyFields(truncatedFenced);
+    expect(fields.display_text).toContain("история и живой ход");
+    expect(fields.display_text).not.toContain("schema_version");
+    expect(Array.isArray(fields.text_blocks)).toBe(true);
+  });
+
+  it("снимок сессии с обрезанным ответом тоже без сырого JSON", async () => {
+    const { withAnswerBlocks } = await import("../src/routes/owner-sessions.js");
+    const out: any = withAnswerBlocks({ entries: [{ type: "message", id: "a", message: { role: "assistant", content: [{ type: "text", text: truncatedFenced }] } }] } as any);
+    expect(out.entries[0].display_text).toContain("история и живой ход");
+    expect(out.entries[0].display_text).not.toContain("schema_version");
+  });
+
+  const emitEnd = async (text: string, stopReason: string) => {
+    await api.inject({ method: "POST", url: "/api/sessions/root", headers });
+    sessionRuntime.emit("root-session", { type: "message_end", message: { role: "assistant", content: [{ type: "text", text }], stopReason } });
+    await new Promise(resolve => setTimeout(resolve, 20));
+  };
+
+  it("«Стоп» владельца не запускает новый ход на переделку формата", async () => {
+    await emitEnd(brokenNoContent, "aborted");
+    expect(sessionRuntime.promptCalls).toEqual([]);
+  });
+
+  it("битый конверт без остановки по-прежнему возвращается на переделку", async () => {
+    await emitEnd(retryableBroken, "stop");
+    expect(sessionRuntime.promptCalls.length).toBe(1);
+    expect(sessionRuntime.promptCalls[0][2]).toBe("follow_up");
+  });
+});

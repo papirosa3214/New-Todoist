@@ -17,9 +17,9 @@ import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
 import { setOwnerSessionVoiceTarget } from "../lib/secretaryVoiceConversation.js";
 import { chatBlocksCached, sourcedChatBlocks } from "../sessions/sessionChatBlocks.js";
 import { pullQuickReplies } from "../sessions/sessionQuickReplies.js";
-import { normalizeRoleReplyV1, roleReplyCorrectionPrompt, shouldRetryRoleReply, structuredOutputText } from "../sessions/sessionRoleContractV1.js";
+import { normalizeRoleReplyV1, roleReplyCorrectionPrompt, shouldRetryRoleReply, structuredOutputText, BROKEN_ENVELOPE_DISPLAY } from "../sessions/sessionRoleContractV1.js";
 import { normalizeWidgetBlocks } from "../sessions/sessionWidgetNormalize.js";
-import { sessionDisplayText } from "../runtime/ownerSessionEvents.js";
+import { sessionDisplayText, isRawEnvelopeText } from "../runtime/ownerSessionEvents.js";
 import { ownerSessionEntryKey, ownerSessionTurnUsageByEntry } from "../runtime/ownerSessionTurnUsage.js";
 
 /** Ответы Помощника в снимке сессии — с той же разметкой, что в чате
@@ -45,13 +45,17 @@ export function roleReplyFields(rawText: string): Record<string, unknown> {
     normalized.envelope.output = withReplies.output as any;
     // Тот же мягкий разбор, что в живом ходе: история и живой ход совпадают.
     // Сырой конверт владельцу не показываем ни при каких условиях (владелец
-    // 13.11.2026: «сервер отправлял мне вот это недоразумение»). Если разбор
-    // не дал текста, берём текст блоков, а в последнюю очередь — честную
-    // строку о формате, а не JSON. Карта путей: note://103b08ba-2492-4f0f-b24c-503195786d1e
-    const looksEnvelope = /^\s*(?:```[a-z0-9]*\s*)?\{\s*"schema_version"/i.test(rawText);
-    const display = sessionDisplayText(rawText)
-      || structuredOutputText(normalized.envelope.output).trim()
-      || (looksEnvelope ? "Ответ пришёл в неверном формате; показываю без разметки." : rawText);
+    // 13.11.2026: «сервер отправлял мне вот это недоразумение»). Если показ не
+    // дал текста, берём текст блоков, а в последнюю очередь — честную строку
+    // о формате, а не JSON. Оборванный конверт (остановка посреди ответа)
+    // идёт той же лестницей: восстановленный текст бьёт сырую оболочку.
+    // Карта путей: note://103b08ba-2492-4f0f-b24c-503195786d1e
+    const shown = sessionDisplayText(rawText).trim();
+    const looksEnvelope = isRawEnvelopeText(rawText) || isRawEnvelopeText(shown);
+    const display = shown && !isRawEnvelopeText(shown)
+      ? shown
+      : structuredOutputText(normalized.envelope.output).trim()
+        || (looksEnvelope ? BROKEN_ENVELOPE_DISPLAY : rawText);
     return {
       display_text: display,
       text_blocks: chatBlocksCached(display),
@@ -194,6 +198,9 @@ export function registerOwnerSessionRoutes(
   const retryBrokenReply = (targetSessionId: string, event: any) => {
     try {
       if (!event || event.type !== "message_end") return;
+      // «Стоп» — команда владельца, а не приглашение начать новый ход:
+      // остановленный ответ на переделку формата не отправляем (13.11.2026).
+      if (event.message?.stopReason === "aborted") return;
       const parts = Array.isArray(event.message?.content) ? event.message.content : [];
       const text = parts
         .filter((part: any) => part?.type === "text" && typeof part.text === "string")

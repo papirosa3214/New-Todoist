@@ -209,6 +209,52 @@ describe("ответ конвертом JSON v1 — без сырого JSON (в
   });
 });
 
+describe("обрезанный конверт после остановки — не сырой JSON", () => {
+  // Настоящий хвост ответа в момент «Стоп»: конверт дописан не до конца,
+  // последний блок текста оборван на полуслове.
+  const truncatedFenced = '```json\n{"schema_version":1,"ok":true,"output":[{"type":"heading","level":2,"text":"Итог"},{"type":"text","text":"Проверил оба пути: история и живой ход"},{"type":"text","text":"Дальше правлю откос кл';
+  const truncatedBare = '{"schema_version":1,"ok":true,"output":[{"type":"text","text":"Первый блок готов"}]';
+
+  it("sessionDisplayText возвращает восстановленный текст, а не оболочку", async () => {
+    const { sessionDisplayText } = await import("../src/runtime/ownerSessionEvents.js");
+    for (const raw of [truncatedFenced, truncatedBare]) {
+      const shown = sessionDisplayText(raw);
+      expect(shown).not.toContain("schema_version");
+      expect(shown).not.toContain('"output"');
+      expect(shown).not.toContain("```");
+    }
+    expect(sessionDisplayText(truncatedFenced)).toContain("история и живой ход");
+    expect(sessionDisplayText(truncatedBare)).toBe("Первый блок готов");
+  });
+
+  it("конверт без единого узнаваемого блока — честная строка, а не JSON", async () => {
+    const { sessionDisplayText } = await import("../src/runtime/ownerSessionEvents.js");
+    const shown = sessionDisplayText('{"schema_version":1,"ok":true,"output":[{"type":');
+    expect(shown).not.toContain("schema_version");
+    expect(shown.trim().length).toBeGreaterThan(0);
+  });
+
+  it("message_end после остановки несёт восстановленный текст и блоки", async () => {
+    const { normalizePiEvent } = await import("../src/runtime/ownerSessionEvents.js");
+    const end: any = normalizePiEvent("stop", {
+      type: "message_end",
+      message: { ...assistant(truncatedFenced), stopReason: "aborted" },
+    } as any, { cursor: "c", sequence: 1, epoch: "e" } as any);
+    expect(end.payload.text).toContain("история и живой ход");
+    expect(end.payload.text).not.toContain("schema_version");
+    expect(end.payload.blocks.length).toBeGreaterThan(0);
+  });
+
+  it("обычный текст после остановки остаётся как есть", async () => {
+    const { normalizePiEvent } = await import("../src/runtime/ownerSessionEvents.js");
+    const end: any = normalizePiEvent("stop", {
+      type: "message_end",
+      message: { ...assistant("Оборвался на полуслове, но это обычный текс"), stopReason: "aborted" },
+    } as any, { cursor: "c", sequence: 1, epoch: "e" } as any);
+    expect(end.payload.text).toBe("Оборвался на полуслове, но это обычный текс");
+  });
+});
+
 describe("файл в обратных кавычках — ссылкой (владелец 13.11.2026)", () => {
   it("превращает `путь:строка` в ссылку, код в ``` не трогает", async () => {
     const { linkifyFileRefs } = await import("../src/runtime/ownerSessionEvents.js");
