@@ -99,7 +99,7 @@ export function withAnswerBlocks<T extends { entries: any[] }>(snapshot: T): T {
 import { ownerSessionMeta, type OwnerSessionMetaPatch, type OwnerSessionMetaStore } from "../lib/ownerSessionMeta.js";
 
 type RuntimeContract = Pick<OwnerSessionRuntime,
-  "openRoot" | "createRoot" | "open" | "list" | "contextUsage" | "snapshot" | "prompt" | "abort" | "branch" | "fork" | "subscribe" | "setModel"
+  "openRoot" | "createRoot" | "open" | "list" | "contextUsage" | "snapshot" | "snapshotWithBoundary" | "prompt" | "abort" | "branch" | "fork" | "subscribe" | "setModel"
 > & {
   subscribeAll?: OwnerSessionRuntime["subscribeAll"];
 };
@@ -335,8 +335,10 @@ export function registerOwnerSessionRoutes(
 
   app.get<{ Params: { id: string } }>("/api/sessions/:id", { preHandler: ownerOnly }, async (request: any, reply) => {
     try {
-      const session = await runtime.open(request.params.id);
-      await ensureForwarding(session.id, request.userId);
+      // Лента подключается ДО снимка: иначе события между снимком и подпиской
+      // не попадут ни в снимок, ни в буфер, и клиент про них не узнает.
+      await ensureForwarding(request.params.id, request.userId);
+      const session = await runtime.snapshotWithBoundary(request.params.id, () => events.boundary());
       return { session: withAnswerBlocks(session) };
     } catch (error) {
       return sendRuntimeError(reply, error);
@@ -356,11 +358,17 @@ export function registerOwnerSessionRoutes(
     { preHandler: ownerOnly },
     async (request: any, reply) => {
       try {
-        const session = await runtime.open(request.params.id);
-        await ensureForwarding(session.id, request.userId);
-        const slice = events.eventsAfter(request.query.after, session.id);
+        await ensureForwarding(request.params.id, request.userId);
+        const slice = events.eventsAfter(request.query.after, request.params.id);
         if (!slice.resetRequired) return slice;
-        return { ...slice, snapshot: withAnswerBlocks(await runtime.snapshot(session.id)) };
+        // Сброс (новая эпоха ленты или курсор вытеснен): основа — снимок
+        // вместе с его точкой. События старше точки уже в снимке — не шлём
+        // их повторно, иначе текст задваивается.
+        const snapshot = withAnswerBlocks(
+          await runtime.snapshotWithBoundary(request.params.id, () => events.boundary()),
+        );
+        const gap = events.eventsAfter(snapshot.eventCursor, request.params.id);
+        return { ...gap, resetRequired: true, snapshot };
       } catch (error) {
         return sendRuntimeError(reply, error);
       }

@@ -22,6 +22,7 @@ OUT. Ориентир UI — iOS (`TaskFlowNativeBuild`), не веб.
 | `role-homes.md`                | где живёт роль, её файлы и правила                   |
 | `RULES-large-data.md`          | правило обработки объёмных данных                    |
 | `taskflow-task-route-map.html` | HTML-карта маршрута задачи                           |
+| `owner-session-snapshot-events.md` | граница согласованности снимка сессии и ленты событий |
 
 ## Архив
 

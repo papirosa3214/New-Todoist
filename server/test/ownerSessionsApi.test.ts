@@ -42,6 +42,12 @@ class FakeRuntime {
     if (id === "missing") throw new OwnerSessionNotFoundError(id);
     return id === rootSnapshot.id ? rootSnapshot : { ...rootSnapshot, id };
   }
+  /** Как в рантайме: точка ленты читается до записей и отдаётся со снимком. */
+  async snapshotWithBoundary(id: string, readBoundary: () => { cursor: string; epoch: string; seq: number }) {
+    const boundary = readBoundary();
+    const snapshot = await this.snapshot(id);
+    return { ...snapshot, eventCursor: boundary.cursor, eventCursorEpoch: boundary.epoch, eventCursorSeq: boundary.seq };
+  }
   async prompt(id: string, text: string, mode: string) {
     if (text === "stream-conflict") throw new OwnerSessionStreamingConflictError(id);
     this.promptCalls.push([id, text, mode]);
@@ -138,7 +144,9 @@ describe("owner session API", () => {
     expect(opened.json()).toEqual({ session: rootSnapshot });
     expect(listed.json().sessions).toHaveLength(1);
     expect(listed.json().sessions[0]).toMatchObject({ id: "root-session", cwd: "/workspace", name: "Owner assistant", relation: "root" });
-    expect(snapshot.json()).toEqual({ session: rootSnapshot });
+    expect(snapshot.json()).toMatchObject({
+      session: { ...rootSnapshot, eventCursor: "test:0", eventCursorEpoch: "test", eventCursorSeq: 0 },
+    });
     expect(runtime.listeners.get("root-session")?.size).toBe(1);
   });
 
@@ -284,11 +292,20 @@ describe("owner session API", () => {
     });
 
     expect(known.json()).toMatchObject({ resetRequired: false, events: [{ cursor: "test:2" }] });
+    // Сброс: снимок уже содержит всё до своей точки (test:2) — события старше
+    // её повторно не едут, иначе текст задваивался бы. Годится только стык.
     expect(missing.json()).toMatchObject({
       resetRequired: true,
-      snapshot: rootSnapshot,
-      events: [{ cursor: "test:1" }, { cursor: "test:2" }],
+      snapshot: { ...rootSnapshot, eventCursor: "test:2", eventCursorEpoch: "test", eventCursorSeq: 2 },
+      events: [],
     });
+
+    // Клиент продолжает ровно с точки снимка — ничего не теряется и не двоится.
+    events.push("root-session", { type: "agent_start" } as any);
+    const resumed = await app.inject({
+      method: "GET", url: "/api/sessions/root-session/events?after=test%3A2", headers: ownerHeaders,
+    });
+    expect(resumed.json()).toMatchObject({ resetRequired: false, events: [{ cursor: "test:3" }] });
   });
 });
 

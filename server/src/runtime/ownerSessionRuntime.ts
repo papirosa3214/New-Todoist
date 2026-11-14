@@ -16,6 +16,7 @@ import {
   type SpawnedChildSession,
 } from "./spawnChildSessionTool.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
+import type { OwnerSessionEventBoundary } from "./ownerSessionEvents.js";
 import type { OwnerSessionProfile } from "./ownerAssistantProfile.js";
 import { ROLE_NAMES, roleTitle } from "../roleRouting.js";
 import { createSessionAskOwnerTool } from "../sessions/sessionAskOwnerTool.js";
@@ -60,6 +61,11 @@ export interface OwnerSessionSnapshot {
   leafId: string | null;
   isStreaming: boolean;
   isIdle: boolean;
+  /** Точка в ленте событий на мгновение снимка: всё, что в ленте не новее
+   *  неё, уже есть в entries. Дальше клиент доигрывает события после неё. */
+  eventCursor?: string;
+  eventCursorEpoch?: string;
+  eventCursorSeq?: number;
   entries: SessionEntry[];
   tree: SessionTreeNode[];
 }
@@ -369,6 +375,33 @@ export class OwnerSessionRuntime {
 
   async snapshot(id: string): Promise<OwnerSessionSnapshot> {
     const handle = await this.ensureHandle(id);
+    return this.readSnapshot(handle);
+  }
+
+  /**
+   * Снимок вместе с точкой в ленте событий.
+   *
+   * Точка и записи читаются в одном синхронном блоке, без единого await между
+   * ними. Это и есть граница согласованности: запись в транскрипт Pi делает
+   * синхронно в том же продолжении, что и выдачу события (см.
+   * docs/current/owner-session-snapshot-events.md), поэтому вклиниться между
+   * чтением точки и чтением записей нечему. Точку читаем ПЕРВОЙ: если в этот
+   * блок когда-нибудь попадёт await, худшее — событие придёт повторно
+   * (снимок его уже содержит), а не пропадёт.
+   */
+  async snapshotWithBoundary(
+    id: string,
+    readBoundary: () => OwnerSessionEventBoundary,
+  ): Promise<OwnerSessionSnapshot> {
+    const handle = await this.ensureHandle(id);
+    return this.readSnapshot(handle, readBoundary);
+  }
+
+  private readSnapshot(
+    handle: SessionHandle,
+    readBoundary?: () => OwnerSessionEventBoundary,
+  ): OwnerSessionSnapshot {
+    const boundary = readBoundary?.();
     const header = handle.manager.getHeader();
     return {
       id: handle.manager.getSessionId(),
@@ -381,6 +414,13 @@ export class OwnerSessionRuntime {
       leafId: handle.manager.getLeafId(),
       isStreaming: handle.session.isStreaming,
       isIdle: handle.session.isIdle,
+      ...(boundary
+        ? {
+            eventCursor: boundary.cursor,
+            eventCursorEpoch: boundary.epoch,
+            eventCursorSeq: boundary.seq,
+          }
+        : {}),
       entries: handle.manager.getBranch().filter(entry => !this.isRelationEntry(entry)),
       tree: handle.manager.getTree(),
     };

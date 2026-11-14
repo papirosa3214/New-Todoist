@@ -15,11 +15,31 @@ import {
 
 export interface OwnerSessionEventEnvelope {
   cursor: string;
+  /** Та же точка, разложенная: клиенту не нужно разбирать строку, чтобы
+   *  сравнить живое событие со снимком (одна эпоха — сравниваются seq). */
+  epoch?: string;
+  seq?: number;
   sessionId: string;
   entryId?: string;
   type: string;
   timestamp: string;
   payload: Record<string, any>;
+}
+
+/** Точка в ленте событий: конец того, что уже отдано, и начало того, что
+ *  клиент ещё не видел. Формат cursor — `<epoch>:<seq>`. */
+export interface OwnerSessionEventBoundary {
+  cursor: string;
+  epoch: string;
+  seq: number;
+}
+
+function cursorParts(cursor: string): { epoch: string; seq: number } | null {
+  const at = cursor.lastIndexOf(":");
+  if (at < 0) return null;
+  const seq = Number(cursor.slice(at + 1));
+  if (!Number.isFinite(seq)) return null;
+  return { epoch: cursor.slice(0, at), seq };
 }
 
 export interface OwnerSessionEventMeta {
@@ -61,8 +81,10 @@ function envelope(
   meta: OwnerSessionEventMeta,
   entryId?: string,
 ): OwnerSessionEventEnvelope {
+  const parts = cursorParts(meta.cursor);
   return {
     cursor: meta.cursor,
+    ...(parts ? { epoch: parts.epoch, seq: parts.seq } : {}),
     sessionId,
     ...(entryId ? { entryId } : {}),
     type,
@@ -415,11 +437,21 @@ export class OwnerSessionEventBuffer {
     }
   }
 
+  /** Конец ленты прямо сейчас. Читается вместе со снимком сессии в одном
+   *  синхронном блоке — из этого берётся курсор снимка. */
+  boundary(): OwnerSessionEventBoundary {
+    return { cursor: `${this.epoch}:${this.sequence}`, epoch: this.epoch, seq: this.sequence };
+  }
+
   eventsAfter(cursor?: string, sessionId?: string): OwnerSessionReconnectSlice {
     const belongs = (event: OwnerSessionEventEnvelope) => !sessionId || event.sessionId === sessionId;
     if (!cursor) return { resetRequired: false, events: this.retained.filter(belongs) };
     const index = this.retained.findIndex(event => event.cursor === cursor);
     if (index < 0) {
+      // Начало этой эпохи — ещё не сброс: до первого события ничего не было.
+      if (cursor === `${this.epoch}:0`) {
+        return { resetRequired: false, events: this.retained.filter(belongs) };
+      }
       return { resetRequired: true, events: this.retained.filter(belongs) };
     }
     return {
