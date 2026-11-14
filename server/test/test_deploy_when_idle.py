@@ -4,6 +4,7 @@ import os
 import sqlite3
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -406,6 +407,48 @@ class RuntimeWrittenRoutingTests(unittest.TestCase):
         self._write("server/src/other.ts", "wip\n")
         DEPLOY.main()
         self.assertTrue([m for m in self.logs if "незакоммиченные" in m], self.logs)
+
+    def test_delay_alarm_fires_once_per_day_while_queue_does_not_empty(self):
+        """Тревога задержки: код ждёт выкладки больше суток — раз в сутки.
+
+        14.11.2026 сторож не запускался вообще, поэтому и эта тревога молчала.
+        Проверяем сам порог: старый pending_since + занятость даёт одну
+        тревогу, второй проход в тот же день её не повторяет.
+        """
+        (self.state / "deployed").write_text(self._head())
+        self._write("server/src/index.ts", "two\n")
+        self._git(self.repo, "add", "server/src/index.ts")
+        self._git(self.repo, "commit", "-q", "-m", "server change")
+        head = self._head()
+        (self.state / "pending_since").write_text(f"{head} {int(time.time()) - 90000}")
+        setattr(DEPLOY, "busy", lambda: (1, 0))
+        alerts = []
+        original = DEPLOY.notify
+        setattr(DEPLOY, "notify", alerts.append)
+        try:
+            DEPLOY.main()
+            DEPLOY.main()
+        finally:
+            setattr(DEPLOY, "notify", original)
+        self.assertEqual(len(alerts), 1, alerts)
+        self.assertIn("больше суток", alerts[0])
+
+    def test_no_delay_alarm_before_a_day(self):
+        (self.state / "deployed").write_text(self._head())
+        self._write("server/src/index.ts", "two\n")
+        self._git(self.repo, "add", "server/src/index.ts")
+        self._git(self.repo, "commit", "-q", "-m", "server change")
+        head = self._head()
+        (self.state / "pending_since").write_text(f"{head} {int(time.time()) - 600}")
+        setattr(DEPLOY, "busy", lambda: (1, 0))
+        alerts = []
+        original = DEPLOY.notify
+        setattr(DEPLOY, "notify", alerts.append)
+        try:
+            DEPLOY.main()
+        finally:
+            setattr(DEPLOY, "notify", original)
+        self.assertEqual(alerts, [])
 
 
 if __name__ == "__main__":
