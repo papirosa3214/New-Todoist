@@ -15,7 +15,7 @@ import {
 import { OwnerSessionEventBuffer } from "../runtime/ownerSessionEvents.js";
 import { ownerAssistantProfile } from "../runtime/ownerAssistantProfile.js";
 import { setOwnerSessionVoiceTarget } from "../lib/secretaryVoiceConversation.js";
-import { chatBlocksCached, sourcedChatBlocks } from "../sessions/sessionChatBlocks.js";
+import { chatBlocksCached, sourcedChatBlocks, jsonWithTextBlocks } from "../sessions/sessionChatBlocks.js";
 import { pullQuickReplies } from "../sessions/sessionQuickReplies.js";
 import { normalizeRoleReplyV1, roleReplyCorrectionPrompt, shouldRetryRoleReply, structuredOutputText, BROKEN_ENVELOPE_DISPLAY } from "../sessions/sessionRoleContractV1.js";
 import { normalizeWidgetBlocks } from "../sessions/sessionWidgetNormalize.js";
@@ -65,7 +65,7 @@ export function roleReplyFields(rawText: string): Record<string, unknown> {
       display_text: display,
       text_blocks: normalized.normalizedByServer
         ? chatBlocksCached(display)
-        : [{ type: "structured_json", json: JSON.stringify(normalized.envelope) }],
+        : [{ type: "structured_json", json: jsonWithTextBlocks(JSON.stringify(normalized.envelope)) }],
       quick_replies: withReplies.replies,
       // Конверт, который модель написала сама; обёртку сервера не отдаём —
       // в ней только тот же текст.
