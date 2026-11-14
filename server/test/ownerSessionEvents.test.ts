@@ -16,6 +16,15 @@ const assistant = (text: string) => ({
 });
 
 describe("normalizePiEvent", () => {
+  it("не выдаёт результат инструмента за живой ответ ассистента", () => {
+    const event = normalizePiEvent("session-1", {
+      type: "message_end",
+      message: { role: "toolResult", toolName: "read", content: [{ type: "text", text: "сырой код инструмента" }] },
+    } as any, { cursor: "2", timestamp: "2026-11-06T00:00:01.000Z" });
+    expect(event.payload.message.role).toBe("toolResult");
+    expect(event.payload.text).toBeUndefined();
+    expect(event.payload.blocks).toBeUndefined();
+  });
   it("keeps text deltas transient and message_end authoritative", () => {
     const partial = assistant("Hel");
     const delta = normalizePiEvent("session-1", {

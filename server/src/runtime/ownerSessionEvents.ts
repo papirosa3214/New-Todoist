@@ -257,6 +257,11 @@ export function normalizePiEvent(
       }, meta);
     }
     case "message_end": {
+      // Результат инструмента — не ответ ассистента. Он остаётся в message
+      // для состояния и списка дел, но не должен попадать в живой текст.
+      if (raw.message?.role !== "assistant") {
+        return envelope(sessionId, "message_end", { message: raw.message }, meta);
+      }
       // Хвост ответа: последняя разметка текста — здесь, раз куски шлют её
       // не каждый раз. Клиент кладёт её в живой ход (тонкий клиент).
       const parts = Array.isArray(raw.message?.content) ? raw.message.content : [];
