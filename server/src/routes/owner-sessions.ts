@@ -56,9 +56,16 @@ export function roleReplyFields(rawText: string): Record<string, unknown> {
       ? shown
       : structuredOutputText(normalized.envelope.output).trim()
         || (looksEnvelope ? BROKEN_ENVELOPE_DISPLAY : rawText);
+    // Конверт, который роль прислала сама, отдаём структурным блоком: только
+    // по нему клиент рисует карточку ответа с пометкой «нужно решение
+    // владельца» (`needs_human`) и кнопками. Раньше уходил только doc-блок —
+    // пометка не появлялась никогда (владелец 14.11.2026).
+    // Карта путей: note://103b08ba-2492-4f0f-b24c-503195786d1e
     return {
       display_text: display,
-      text_blocks: chatBlocksCached(display),
+      text_blocks: normalized.normalizedByServer
+        ? chatBlocksCached(display)
+        : [{ type: "structured_json", json: JSON.stringify(normalized.envelope) }],
       quick_replies: withReplies.replies,
       // Конверт, который модель написала сама; обёртку сервера не отдаём —
       // в ней только тот же текст.
