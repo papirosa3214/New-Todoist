@@ -178,6 +178,7 @@ import {
 } from "../runtime/inProcessRun.js";
 import { cancelTelegramProgress, captureTelegramFinal, foldQuestionWidget, startTelegramStream } from "../integrations/telegram.js";
 import { isTelegramRoom } from "../lib/telegramTopics.js";
+import { getSetting } from "../lib/serverSettings.js";
 import {
   attachmentRow,
   saveUploadedFile,
@@ -2889,7 +2890,9 @@ async function postChatMessage(req: any, reply: any, opts: PostMessageOpts = {})
       // чате отвечает, новое сообщение владельца не прерывает ход, а встаёт в
       // очередь. В ленте его нет — оно уйдёт роли после хода, или владелец
       // отправит его сразу («подмешать в ход») либо уберёт.
-      if (!opts.release && !senderRole && isOwner(req.userId) && !chatTaskId && chat.room_kind !== "task" && !isDiscussionChat(chatId)
+      // Тумблер «Откладывать сообщение, пока роль отвечает» (владелец
+      // 14.11.2026): выкл. — сообщение уходит роли сразу, без очереди.
+      if (getSetting("chat_queue_defer_enabled") && !opts.release && !senderRole && isOwner(req.userId) && !chatTaskId && chat.room_kind !== "task" && !isDiscussionChat(chatId)
         && (ownerTurnLive(chatId) || queuedOfChat(chatId).length > 0)) {
         const idemKey = readIdempotencyKey(req);
         const again = idemKey ? queuedByKey(chatId, idemKey) : undefined;
@@ -3448,27 +3451,42 @@ async function dispatchRoleReplies(args: {
     // не вернулся в ответ). Сообщение же продолжаем привязывать
     // по messageId — это ключ для триггера `reply_to_message_id`
     // и history.
+    // Журнал доставки ходов (chat_message_queue) можно выключить тумблером
+    // «Журнал доставки ходов чата» (владелец 14.11.2026): тогда ход идёт без
+    // durable-записи, fence и идемпотентного повтора. Вызовы ниже работают
+    // по id, которого нет, — поэтому вся ветка собирается на месте.
+    const journalEnabled = getSetting("chat_delivery_journal_enabled");
     const idempotencyKey = args.idempotencyKey ?? null;
     const deliveryKey = idempotencyKey ?? args.messageId;
-    const durableRecord = recordDurableDelivery({
-      chatId,
-      roleId: accountId,
-      deliveryId: deliveryKey,
-      messageId: args.messageId,
-      payload: {
-        triggerMessageId: args.messageId,
-        text,
-        subtaskId: selectedSlot ?? message?.recipient_subtask_id,
-        hop: args.hop,
-        mode: args.mode,
-      },
-    });
+    const durableRecord = journalEnabled
+      ? recordDurableDelivery({
+          chatId,
+          roleId: accountId,
+          deliveryId: deliveryKey,
+          messageId: args.messageId,
+          payload: {
+            triggerMessageId: args.messageId,
+            text,
+            subtaskId: selectedSlot ?? message?.recipient_subtask_id,
+            hop: args.hop,
+            mode: args.mode,
+          },
+        })
+      : { id: deliveryKey, generation: currentChatGeneration(chatId, accountId), created: true };
+    const fenced = (): boolean =>
+      journalEnabled && fenceDeliveryIfStale(durableRecord.id, durableRecord.generation);
+    const closeDelivery = (ok: boolean): void => {
+      if (journalEnabled) completeDurableDelivery(durableRecord.id, ok);
+    };
+    const retainDelivery = (): void => {
+      if (journalEnabled) retainForwardedDelivery(durableRecord.id);
+    };
     // Идемпотентный повтор: тот же delivery_id уже в работе. Не
     // дублируем in-memory очередь — это бы создало второй ответ. Но и
     // не молчим: «уже принято» — нормальный сценарий повторной отправки
     // при сетке.
     if (!durableRecord.created) continue;
-    if(fenceDeliveryIfStale(durableRecord.id,durableRecord.generation))continue;
+    if (fenced()) continue;
     const selected=selectedSlot ? resolveTopicSlot(topic!.task_id,role,undefined,selectedSlot) : null;
     const delivery=chatExecutionMode(chatId,args.messageId) === "chat" ? "idle" : selected ? await deliverTopicToWork(selected.task_id,role,args.messageId,text,selected.plan_node_key)
       : await deliverChatToWork(role,chatId,args.messageId,text,message?.recipient_subtask_id ?? undefined);
@@ -3485,7 +3503,7 @@ async function dispatchRoleReplies(args: {
     // `/new-session` ровно в этот момент). Если generation уже
     // другая — fence-им до постановки в in-memory очередь, и
     // никакого Pi-вызова не будет.
-    if (fenceDeliveryIfStale(durableRecord.id, durableRecord.generation)) continue;
+    if (fenced()) continue;
     const replyWork = async () => {
       try {
         const replyId = await deliverAgentReply({
@@ -3502,7 +3520,7 @@ async function dispatchRoleReplies(args: {
         // публиковать нельзя — он пойдёт старой сессии.
         // Закрываем ход как superseded и не светится в
         // result: finishDelivery тут уже не вызываем.
-        if (fenceDeliveryIfStale(durableRecord.id, durableRecord.generation)) {
+        if (fenced()) {
           return null;
         }
         // Pi не выдал ответа (Pi-сбой, общий чат и т.п.) —
@@ -3510,10 +3528,10 @@ async function dispatchRoleReplies(args: {
         // picked-вечно и попал под recovery / обработку
         // ошибки владельцем.
         const ok = replyId !== null;
-        completeDurableDelivery(durableRecord.id, ok);
+        closeDelivery(ok);
         return replyId;
       } catch (error) {
-        if(error instanceof MessageForwardedToWork){retainForwardedDelivery(durableRecord.id);if(error.busy)messengerAmbiguityNotice(chatId,accountId,args.messageId);return null;}
+        if(error instanceof MessageForwardedToWork){retainDelivery();if(error.busy)messengerAmbiguityNotice(chatId,accountId,args.messageId);return null;}
         // Pi-исполнение должно было вернуть null и обработать
         // ошибку внутри (deliverAgentReply ловит Pi-сбои и
         // шлёт сообщение «Ой, что-то пошло не так…»), но если
@@ -3524,7 +3542,7 @@ async function dispatchRoleReplies(args: {
           `[chats] ход ${durableRecord.id} chat=${chatId} role=${role} не закрыт успешно:`,
           error instanceof Error ? error.message : error,
         );
-        completeDurableDelivery(durableRecord.id, false);
+        closeDelivery(false);
         // Context/persistence failures must leave a visible result too.
         try {
           assertCommonChatWritable(chatId, "system");
@@ -3561,21 +3579,21 @@ async function dispatchRoleReplies(args: {
     });
     void enqueueChatReply(chatId,accountId,async () => {
       const receipt=await receiptPromise;
-      if (fenceDeliveryIfStale(durableRecord.id,durableRecord.generation)) return;
+      if (fenced()) return;
       if (!receipt) return replyWork();
       const consumed=await receipt.consumed;
-      if (fenceDeliveryIfStale(durableRecord.id,durableRecord.generation)) return;
+      if (fenced()) return;
       if (!consumed) return replyWork();
       const ok=await receipt.outcome;
-      if (!fenceDeliveryIfStale(durableRecord.id,durableRecord.generation)){
+      if (!fenced()){
         // A consumed input is not a linked answer to a cross-room question.
         const answered=ok && markCoordinationAnswered(args.messageId,accountId);
-        if(ok && hasCoordinationCard(args.messageId,accountId) && !answered)retainForwardedDelivery(durableRecord.id);
-        else completeDurableDelivery(durableRecord.id,ok);
+        if(ok && hasCoordinationCard(args.messageId,accountId) && !answered)retainDelivery();
+        else closeDelivery(ok);
       }
     }, {deliveryId:durableRecord.id}).catch(error => {
       console.warn("[chats] clarification delivery failed",error);
-      completeDurableDelivery(durableRecord.id,false);
+      closeDelivery(false);
     });
   }
 }

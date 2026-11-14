@@ -34,7 +34,8 @@ export type SettingGroup =
   | "лимиты"
   | "режим_приёма"
   | "интеграция"
-  | "память";
+  | "память"
+  | "чаты";
 
 export type SettingKind =
   | "duration_min"
@@ -71,6 +72,7 @@ export const SETTING_GROUP_ORDER: readonly SettingGroup[] = [
   "лимиты",
   "режим_приёма",
   "интеграция",
+  "чаты",
 ] as const;
 
 /**
@@ -85,6 +87,9 @@ export const DEFAULTS = {
   chat_plan_hint_current_pct: 80,
   chat_plan_hint_next_pct: 82,
   chat_item_max_actions: 100,
+  // Чаты: тумблеры поведения очередей (владелец 14.11.2026)
+  chat_queue_defer_enabled: true,
+  chat_delivery_journal_enabled: true,
   role_run_concurrency: 3,
   task_context_timeout_ms: 15000,
   // Тишина
@@ -198,6 +203,14 @@ export const SERVER_SETTINGS: readonly ServerSetting[] = [
 
   // Лимиты
 
+  // Чаты
+  { key: "chat_queue_defer_enabled", label: "Откладывать сообщение, пока роль отвечает", group: "чаты", kind: "bool", default: DEFAULTS.chat_queue_defer_enabled,
+    description: "Вкл. — сообщение, отправленное во время ответа роли, ждёт в очереди и уходит после хода. Выкл. — уходит роли сразу, без плашки «В очереди» в ленте (владелец 14.11.2026).",
+    applies_to: ["routes/chats.ts"] },
+  { key: "chat_delivery_journal_enabled", label: "Журнал доставки ходов чата", group: "чаты", kind: "bool", default: DEFAULTS.chat_delivery_journal_enabled,
+    description: "Вкл. — каждый ход пишется в chat_message_queue: защита от дублей при повторе и от потери при перезапуске сервера, в ленте плашка о доставке. Выкл. — ход не журналируется и плашки нет; при перезапуске сервера ход может потеряться (владелец 14.11.2026).",
+    applies_to: ["routes/chats.ts", "lib/chatMessages.ts"] },
+
   // Наблюдатель
   { key: "activity_observer_enabled", label: "Наблюдатель за действиями включён", group: "лимиты", kind: "bool", default: DEFAULTS.activity_observer_enabled, applies_to: ["routes/activity.ts"] },
   { key: "memory_observer_enabled", label: "Наблюдатель памяти включён", group: "память", kind: "bool", default: DEFAULTS.memory_observer_enabled, applies_to: ["runtime/slotMemoryObserver.ts"] },
@@ -253,6 +266,8 @@ export const DEV_OVERRIDES: Defaults = {
   chat_item_max_actions: envOverride("chat_item_max_actions", DEFAULTS.chat_item_max_actions),
   role_run_concurrency: envOverride("role_run_concurrency", DEFAULTS.role_run_concurrency),
   task_context_timeout_ms: envOverride("task_context_timeout_ms", DEFAULTS.task_context_timeout_ms),
+  chat_queue_defer_enabled: envOverride("chat_queue_defer_enabled", DEFAULTS.chat_queue_defer_enabled),
+  chat_delivery_journal_enabled: envOverride("chat_delivery_journal_enabled", DEFAULTS.chat_delivery_journal_enabled),
 
   stall_after_min: envOverride("stall_after_min", DEFAULTS.stall_after_min),
   provider_probe_interval_ms: envOverride(

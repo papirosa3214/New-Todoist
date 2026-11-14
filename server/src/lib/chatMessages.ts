@@ -22,6 +22,7 @@ import { chatHandoff } from "./chatHandoff.js";
 import { parseRoleContractV1, structuredOutputText, type StructuredRoleEnvelopeV1 } from "./roleContractV1.js";
 import { checklistStateOfMessage } from "./chatChecklist.js";
 import { questionEnvelope } from "./chatQuestions.js";
+import { getSetting } from "./serverSettings.js";
 
 // Ленивая подготовка: db.prepare с колонкой chat_message_id не должен
 // падать на импорте, если миграция 053 ещё не прошла (index.ts импортирует
@@ -191,7 +192,10 @@ export function formatChatMessage(message: any, projection: Projection = "full")
   const senderIsRole = Boolean(
     (roleKeyOfUser!.get(message.from_user_id) as { role_key: string | null } | undefined)?.role_key,
   );
-  if (message.chat_id && !senderIsRole && roleMemberOf!.get(message.chat_id)) {
+  // Признак доставки показывается, только пока журнал ходов ведётся: с
+  // выключенным тумблером «Журнал доставки ходов чата» (владелец 14.11.2026)
+  // таблица пуста, и клиент получал бы вечное «Сохранено»/«Не передано».
+  if (getSetting("chat_delivery_journal_enabled") && message.chat_id && !senderIsRole && roleMemberOf!.get(message.chat_id)) {
     const statuses = (deliveryRowsOf!.all(message.chat_id, message.id) as Array<{ status: string }>).map(
       (row) => row.status,
     );
