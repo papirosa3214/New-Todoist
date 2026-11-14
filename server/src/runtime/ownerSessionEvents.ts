@@ -332,6 +332,10 @@ export interface OwnerSessionEventBufferOptions {
 export interface OwnerSessionReconnectSlice {
   resetRequired: boolean;
   events: OwnerSessionEventEnvelope[];
+  /** Часть хода, которой в ленте уже нет: восстановить её событиями нельзя
+   *  (начало окна вытеснено из буфера). Молча отдать удержанное значило бы
+   *  задвоить уже записанные записи, поэтому отдаётся пусто и честно. */
+  eventsLost?: boolean;
 }
 
 /**
@@ -345,6 +349,12 @@ export class OwnerSessionEventBuffer {
   private readonly epoch: string;
   private sequence = 0;
   private retained: OwnerSessionEventEnvelope[] = [];
+  /** Открытое окно «ответ стримится, в транскрипт не записан»: seq точки,
+   *  до которой записи ещё совпадают с транскриптом. Pi пишет сообщение
+   *  только на `message_end`, поэтому все куски между `message_start` и
+   *  `message_end` в записях отсутствуют — точка снимка не имеет права
+   *  уезжать за начало такого окна. */
+  private readonly openWindows = new Map<string, number>();
   /** Накопитель расхода живого хода по сессии (13.11.2026). */
   private readonly liveTurns = new Map<string, OwnerSessionTurnDraft>();
 
@@ -358,6 +368,18 @@ export class OwnerSessionEventBuffer {
 
   push(sessionId: string, event: AgentSessionEvent): OwnerSessionEventEnvelope {
     const cursor = `${this.epoch}:${++this.sequence}`;
+    // Границы окна стриминга: отдаём событие и пишем запись раздельно только
+    // Pi (`agent-loop.js`: `message_start` → куски → `message_end` →
+    // `appendMessage`). Окно держит начало как «последнюю записанную» точку.
+    const kind = (event as unknown as Record<string, any>).type;
+    if (kind === "message_start") {
+      if (!this.openWindows.has(sessionId)) this.openWindows.set(sessionId, this.sequence - 1);
+    } else if (kind === "message_end" || kind === "agent_end" || kind === "agent_settled") {
+      // Конец хода закрывает окно и тогда, когда message_end не пришёл
+      // (обрыв, ошибка): застывшее окно тянуло бы точку назад и заставляло
+      // клиента доигрывать уже записанное.
+      this.openWindows.delete(sessionId);
+    }
     this.observeTurn(sessionId, event);
     const normalized = normalizePiEvent(sessionId, event, {
       cursor,
@@ -437,10 +459,23 @@ export class OwnerSessionEventBuffer {
     }
   }
 
-  /** Конец ленты прямо сейчас. Читается вместе со снимком сессии в одном
-   *  синхронном блоке — из этого берётся курсор снимка. */
-  boundary(): OwnerSessionEventBoundary {
-    return { cursor: `${this.epoch}:${this.sequence}`, epoch: this.epoch, seq: this.sequence };
+  /** Точка, по которую записи сессии совпадают с транскриптом. Читается
+   *  вместе со снимком в одном синхронном блоке (см. snapshotWithBoundary).
+   *
+   *  Пока ответ стримится, конец ленты записями ещё не подтверждён: куски в
+   *  транскрипт не попадают, Pi пишет только на `message_end`. Поэтому для
+   *  такой сессии точка откатывается к началу окна — всё, что новее, клиент
+   *  обязан доиграть событиями. Само окно в записях отсутствует, так что
+   *  задвоения завершённых записей это не даёт. */
+  boundary(sessionId?: string): OwnerSessionEventBoundary {
+    const open = sessionId ? this.openWindows.get(sessionId) : undefined;
+    const seq = open === undefined ? this.sequence : Math.min(this.sequence, open);
+    return { cursor: `${this.epoch}:${seq}`, epoch: this.epoch, seq };
+  }
+
+  /** Из эпохи что-то вытеснено: удержанное начинается не с первого события. */
+  private evictedFromStart(): boolean {
+    return this.sequence > this.retained.length;
   }
 
   eventsAfter(cursor?: string, sessionId?: string): OwnerSessionReconnectSlice {
@@ -449,8 +484,10 @@ export class OwnerSessionEventBuffer {
     const index = this.retained.findIndex(event => event.cursor === cursor);
     if (index < 0) {
       // Начало этой эпохи — ещё не сброс: до первого события ничего не было.
+      // Но только пока из начала ничего не вытеснено: иначе «доиграй всё
+      // удержанное» скрывает потерю головы ленты — это сброс, и честно.
       if (cursor === `${this.epoch}:0`) {
-        return { resetRequired: false, events: this.retained.filter(belongs) };
+        return { resetRequired: this.evictedFromStart(), events: this.retained.filter(belongs) };
       }
       return { resetRequired: true, events: this.retained.filter(belongs) };
     }

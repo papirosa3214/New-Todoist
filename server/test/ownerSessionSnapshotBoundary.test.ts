@@ -117,4 +117,62 @@ describe("граница снимка сессии и ленты событий"
     // повтор события, а не пропавший текст.
     expect(order).toEqual(["boundary", "entries"]);
   });
+
+  // Ревью 703765cb: снимок посреди ответа не имеет права брать конец ленты.
+  // Pi пишет сообщение только на message_end, поэтому куски между
+  // message_start и message_end в entries отсутствуют; точка на конце ленты
+  // молча теряла голову незавершённого хода.
+  it("снимок посреди стрима: незавершённый ход восстанавливается, записи не двоятся", () => {
+    const buffer = new OwnerSessionEventBuffer({ epoch: "e1", clock: () => new Date(0) });
+
+    buffer.push("s", { type: "message_start", message: { role: "user" } } as any);
+    const userEnd = buffer.push("s", { type: "message_end", message: { role: "user" } } as any);
+    buffer.push("s", { type: "message_start", message: { role: "assistant" } } as any);
+    buffer.push("s", { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "гол", contentIndex: 0 } } as any);
+    buffer.push("s", { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ова", contentIndex: 0 } } as any);
+
+    // Точка снимка — последняя записанная, а не конец ленты.
+    const boundary = buffer.boundary("s");
+    expect(boundary).toMatchObject({ cursor: userEnd.cursor, seq: userEnd.seq });
+    expect(boundary.cursor).not.toBe(buffer.boundary().cursor);
+
+    // Клиент после reset доигрывает ровно окно ответа: сообщение
+    // пользователя уже в снимке и повторно не едет.
+    const gap = buffer.eventsAfter(boundary.cursor, "s");
+    expect(gap.resetRequired).toBe(false);
+    expect(gap.events.map(event => event.cursor)).toEqual(["e1:3", "e1:4", "e1:5"]);
+    expect(gap.events[0]?.type).toBe("message_start");
+    expect(gap.events.some(event => event.cursor === userEnd.cursor)).toBe(false);
+
+    // Ответ дописан: окно закрылось, точка снова на конце ленты.
+    const done = buffer.push("s", { type: "message_end", message: { role: "assistant", content: [] } } as any);
+    expect(buffer.boundary("s").cursor).toBe(done.cursor);
+    expect(buffer.eventsAfter(done.cursor, "s").events).toEqual([]);
+
+    // Чужая сессия стримится — окна этой она не открывает.
+    buffer.push("other", { type: "message_start", message: { role: "assistant" } } as any);
+    expect(buffer.boundary("s").seq).toBe(buffer.boundary().seq);
+
+    // Окно не застывает, если message_end не пришёл вовсе.
+    buffer.push("other", { type: "message_start", message: { role: "assistant" } } as any);
+    expect(buffer.boundary("other").seq).toBeLessThan(buffer.boundary().seq);
+    buffer.push("other", { type: "agent_settled", aborted: true } as any);
+    expect(buffer.boundary("other").seq).toBe(buffer.boundary().seq);
+  });
+
+  it("начало эпохи — сброс только пока из начала ничего не вытеснено", () => {
+    const buffer = new OwnerSessionEventBuffer({ capacity: 2, epoch: "e1", clock: () => new Date(0) });
+
+    buffer.push("s", { type: "agent_start" } as any);
+    buffer.push("s", { type: "agent_start" } as any);
+    // Всё с начала ленты удержано — доиграть можно, сброс не нужен.
+    expect(buffer.eventsAfter("e1:0")).toMatchObject({ resetRequired: false });
+
+    buffer.push("s", { type: "agent_start" } as any);
+    // Начало вытеснено: «доиграй всё удержанное» скрыло бы потерю головы.
+    const lost = buffer.eventsAfter("e1:0");
+    expect(lost.resetRequired).toBe(true);
+    expect(lost.events.map(event => event.cursor)).toEqual(["e1:2", "e1:3"]);
+    expect(buffer.eventsAfter("other:0")).toMatchObject({ resetRequired: true });
+  });
 });

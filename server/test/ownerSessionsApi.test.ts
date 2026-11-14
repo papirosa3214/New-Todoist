@@ -307,6 +307,48 @@ describe("owner session API", () => {
     });
     expect(resumed.json()).toMatchObject({ resetRequired: false, events: [{ cursor: "test:3" }] });
   });
+
+  // Ревью 703765cb: reset посреди стрима отдавал только стык после точки
+  // снимка, а точка стояла на конце ленты — голова незавершённого ответа,
+  // ещё не записанная в entries, терялась. Когда точка уже вытеснена,
+  // полного набора нет — тогда пометка, а не чужой текст в подарок.
+  it("reset посреди стрима: снимок и незавершённый ход; вытесненная голова — eventsLost", async () => {
+    events.push("root-session", { type: "message_start", message: { role: "user" } } as any);
+    const userEnd = events.push("root-session", { type: "message_end", message: { role: "user" } } as any);
+    events.push("root-session", { type: "message_start", message: { role: "assistant" } } as any);
+
+    const reset = await app.inject({
+      method: "GET", url: "/api/sessions/root-session/events?after=old%3A9", headers: ownerHeaders,
+    });
+    const body = reset.json();
+
+    // Снимок несёт точку на последней записанной записи, а не на конце ленты.
+    expect(body).toMatchObject({
+      resetRequired: true,
+      snapshot: { ...rootSnapshot, eventCursor: userEnd.cursor, eventCursorEpoch: "test", eventCursorSeq: userEnd.seq },
+    });
+    expect(body.eventsLost).toBeUndefined();
+    // Доигрывается само окно ответа — с message_start, по которому клиент
+    // открывает живой ход; записанное сообщение пользователя не повторяется.
+    expect(body.events).toEqual([
+      expect.objectContaining({ type: "message_start", cursor: "test:3" }),
+    ]);
+    expect(body.events.some((event: any) => event.cursor === userEnd.cursor)).toBe(false);
+
+    // Ответ идёт дальше и вытесняет начало окна (ёмкость буфера 3): какое из
+    // удержанного уже есть в снимке — не определить, поэтому честно пусто.
+    events.push("root-session", { type: "agent_start" } as any);
+    events.push("root-session", { type: "agent_start" } as any);
+    const evicted = (
+      await app.inject({ method: "GET", url: "/api/sessions/root-session/events?after=old%3A9", headers: ownerHeaders })
+    ).json();
+    expect(evicted).toMatchObject({
+      resetRequired: true,
+      eventsLost: true,
+      events: [],
+      snapshot: { eventCursor: userEnd.cursor, eventCursorSeq: userEnd.seq },
+    });
+  });
 });
 
 describe("ответ сессии — обработкой ответа роли (владелец 13.11.2026)", () => {

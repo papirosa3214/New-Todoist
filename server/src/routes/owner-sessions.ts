@@ -338,7 +338,7 @@ export function registerOwnerSessionRoutes(
       // Лента подключается ДО снимка: иначе события между снимком и подпиской
       // не попадут ни в снимок, ни в буфер, и клиент про них не узнает.
       await ensureForwarding(request.params.id, request.userId);
-      const session = await runtime.snapshotWithBoundary(request.params.id, () => events.boundary());
+      const session = await runtime.snapshotWithBoundary(request.params.id, () => events.boundary(request.params.id));
       return { session: withAnswerBlocks(session) };
     } catch (error) {
       return sendRuntimeError(reply, error);
@@ -365,9 +365,17 @@ export function registerOwnerSessionRoutes(
         // вместе с его точкой. События старше точки уже в снимке — не шлём
         // их повторно, иначе текст задваивается.
         const snapshot = withAnswerBlocks(
-          await runtime.snapshotWithBoundary(request.params.id, () => events.boundary()),
+          await runtime.snapshotWithBoundary(request.params.id, () => events.boundary(request.params.id)),
         );
         const gap = events.eventsAfter(snapshot.eventCursor, request.params.id);
+        if (gap.resetRequired) {
+          // Точку снимка уже вытеснило: какие из удержанных событий не вошли
+          // в снимок, из ленты не определить. Отправить всё удержанное значит
+          // задвоить записи, которые в снимке уже есть; поэтому отдаём только
+          // снимок и говорим честно: часть хода событиями не восстановить
+          // (незавершённый ответ доедет целиком на message_end).
+          return { resetRequired: true, eventsLost: true, events: [], snapshot };
+        }
         return { ...gap, resetRequired: true, snapshot };
       } catch (error) {
         return sendRuntimeError(reply, error);
