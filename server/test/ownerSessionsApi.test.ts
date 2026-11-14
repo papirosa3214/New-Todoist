@@ -236,6 +236,25 @@ describe("owner session API", () => {
     expect(runtime.promptCalls).toHaveLength(1);
   });
 
+  it("deduplicates concurrent retries while a command is still in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const prompt = vi.spyOn(runtime, "prompt").mockImplementation(async () => { await gate; });
+    const request = {
+      method: "POST" as const, url: "/api/sessions/root-session/prompt",
+      headers: ownerHeaders, payload: { requestId: "concurrent", text: "once", mode: "prompt" },
+    };
+    const first = app.inject(request);
+    const second = app.inject(request);
+    const responses = Promise.all([first, second]);
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalled());
+    release();
+    const [a, b] = await responses;
+    expect(a.statusCode).toBe(202);
+    expect(b.json()).toEqual(a.json());
+    expect(prompt).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts, branches, and forks through the runtime", async () => {
     const abort = await app.inject({
       method: "POST", url: "/api/sessions/root-session/abort", headers: ownerHeaders,

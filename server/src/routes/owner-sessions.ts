@@ -186,6 +186,7 @@ export function registerOwnerSessionRoutes(
   const metaStore = dependencies.meta ?? ownerSessionMeta;
   const subscriptions = new Map<string, () => void>();
   const idempotency = new Map<string, CachedResponse>();
+  const inFlight = new Map<string, Promise<CachedResponse>>();
 
   const ownerOnly = async (request: FastifyRequest, reply: FastifyReply) => {
     await authorize(request, reply);
@@ -267,14 +268,25 @@ export function registerOwnerSessionRoutes(
     const key = `${userId}:${action}:${requestId}`;
     const cached = idempotency.get(key);
     if (cached) return reply.code(cached.statusCode).send(cached.body);
+    // Install before executing: concurrent retries share the same effect.
+    let pending = inFlight.get(key);
+    if (!pending) {
+      pending = Promise.resolve().then(async () => {
+        const body = await operation(requestId);
+        const response = { statusCode, body };
+        idempotency.set(key, response);
+        if (idempotency.size > 1000) idempotency.delete(idempotency.keys().next().value!);
+        return response;
+      });
+      inFlight.set(key, pending);
+    }
     try {
-      const body = await operation(requestId);
-      const response = { statusCode, body };
-      idempotency.set(key, response);
-      if (idempotency.size > 1000) idempotency.delete(idempotency.keys().next().value!);
-      return reply.code(statusCode).send(body);
+      const response = await pending;
+      return reply.code(response.statusCode).send(response.body);
     } catch (error) {
       return sendRuntimeError(reply, error);
+    } finally {
+      if (inFlight.get(key) === pending) inFlight.delete(key);
     }
   };
 
